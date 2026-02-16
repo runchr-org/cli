@@ -19,9 +19,10 @@ import (
 
 // Compile-time interface assertions for new interfaces.
 var (
-	_ agent.TranscriptAnalyzer = (*ClaudeCodeAgent)(nil)
-	_ agent.TranscriptPreparer = (*ClaudeCodeAgent)(nil)
-	_ agent.TokenCalculator    = (*ClaudeCodeAgent)(nil)
+	_ agent.TranscriptAnalyzer     = (*ClaudeCodeAgent)(nil)
+	_ agent.TranscriptPreparer     = (*ClaudeCodeAgent)(nil)
+	_ agent.TokenCalculator        = (*ClaudeCodeAgent)(nil)
+	_ agent.SubagentAwareExtractor = (*ClaudeCodeAgent)(nil)
 )
 
 // HookNames returns the hook verbs Claude Code supports.

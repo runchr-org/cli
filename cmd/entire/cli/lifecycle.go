@@ -23,6 +23,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
+	"github.com/entireio/cli/cmd/entire/cli/validation"
 )
 
 // DispatchLifecycleEvent routes a normalized lifecycle event to the appropriate handler.
@@ -67,6 +68,9 @@ func handleLifecycleSessionStart(ag agent.Agent, event *agent.Event) error {
 
 	if event.SessionID == "" {
 		return fmt.Errorf("no session_id in %s event", event.Type)
+	}
+	if err := validation.ValidateSessionID(event.SessionID); err != nil {
+		return fmt.Errorf("invalid %s event: %w", event.Type, err)
 	}
 
 	// Build informational message
@@ -116,6 +120,9 @@ func handleLifecycleTurnStart(ag agent.Agent, event *agent.Event) error {
 	sessionID := event.SessionID
 	if sessionID == "" {
 		return fmt.Errorf("no session_id in %s event", event.Type)
+	}
+	if err := validation.ValidateSessionID(sessionID); err != nil {
+		return fmt.Errorf("invalid %s event: %w", event.Type, err)
 	}
 
 	// Capture pre-prompt state (including transcript position via TranscriptAnalyzer)
@@ -456,10 +463,10 @@ func handleLifecycleSubagentStart(ag agent.Agent, event *agent.Event) error {
 	)
 
 	// Log context
-	fmt.Fprintf(os.Stdout, "[entire] Subagent started\n")
-	fmt.Fprintf(os.Stdout, "  Session ID: %s\n", event.SessionID)
-	fmt.Fprintf(os.Stdout, "  Tool Use ID: %s\n", event.ToolUseID)
-	fmt.Fprintf(os.Stdout, "  Transcript: %s\n", event.SessionRef)
+	fmt.Fprintf(os.Stderr, "[entire] Subagent started\n")
+	fmt.Fprintf(os.Stderr, "  Session ID: %s\n", event.SessionID)
+	fmt.Fprintf(os.Stderr, "  Tool Use ID: %s\n", event.ToolUseID)
+	fmt.Fprintf(os.Stderr, "  Transcript: %s\n", event.SessionRef)
 
 	// Capture pre-task state
 	if err := CapturePreTaskState(event.ToolUseID); err != nil {
@@ -493,14 +500,14 @@ func handleLifecycleSubagentEnd(ag agent.Agent, event *agent.Event) error {
 	}
 
 	// Log context
-	fmt.Fprintf(os.Stdout, "[entire] Subagent completed\n")
-	fmt.Fprintf(os.Stdout, "  Session ID: %s\n", event.SessionID)
-	fmt.Fprintf(os.Stdout, "  Tool Use ID: %s\n", event.ToolUseID)
+	fmt.Fprintf(os.Stderr, "[entire] Subagent completed\n")
+	fmt.Fprintf(os.Stderr, "  Session ID: %s\n", event.SessionID)
+	fmt.Fprintf(os.Stderr, "  Tool Use ID: %s\n", event.ToolUseID)
 	if event.SubagentID != "" {
-		fmt.Fprintf(os.Stdout, "  Agent ID: %s\n", event.SubagentID)
+		fmt.Fprintf(os.Stderr, "  Agent ID: %s\n", event.SubagentID)
 	}
 	if subagentTranscriptPath != "" {
-		fmt.Fprintf(os.Stdout, "  Subagent Transcript: %s\n", subagentTranscriptPath)
+		fmt.Fprintf(os.Stderr, "  Subagent Transcript: %s\n", subagentTranscriptPath)
 	}
 
 	// Extract modified files from subagent transcript
@@ -549,12 +556,7 @@ func handleLifecycleSubagentEnd(ag agent.Agent, event *agent.Event) error {
 
 	// Find checkpoint UUID from main transcript (best-effort)
 	var checkpointUUID string
-	if analyzer, ok := ag.(agent.TranscriptAnalyzer); ok {
-		// Use ExtractModifiedFilesFromOffset on the main transcript to get position info
-		// and then look for checkpoint UUID via the legacy path
-		_ = analyzer // UUID lookup requires transcript parsing — delegate to existing helper
-	}
-	// Fall back to the existing CLI-level checkpoint UUID finder
+	// Use the existing CLI-level checkpoint UUID finder
 	mainLines, _, _ := parseTranscriptForCheckpointUUID(event.SessionRef) //nolint:errcheck // best-effort
 	if mainLines != nil {
 		checkpointUUID, _ = FindCheckpointUUID(mainLines, event.ToolUseID)
