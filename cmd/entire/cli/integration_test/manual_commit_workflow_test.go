@@ -757,7 +757,7 @@ func TestShadow_FullTranscriptContext(t *testing.T) {
 		t.Fatalf("Failed to write transcript: %v", err)
 	}
 
-	// Save checkpoint (triggers SaveChanges)
+	// Save checkpoint (triggers SaveStep)
 	if err := env.SimulateStop(session1.ID, session1.TranscriptPath); err != nil {
 		t.Fatalf("SimulateStop failed: %v", err)
 	}

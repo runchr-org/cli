@@ -79,7 +79,7 @@ func TestPromptAttribution_UsesWorktreeNotStagingArea(t *testing.T) {
 		t.Fatalf("failed to write agent changes: %v", err)
 	}
 
-	err = s.SaveChanges(SaveContext{
+	err = s.SaveStep(StepContext{
 		SessionID:      sessionID,
 		ModifiedFiles:  []string{"test.go"},
 		NewFiles:       []string{},
@@ -91,7 +91,7 @@ func TestPromptAttribution_UsesWorktreeNotStagingArea(t *testing.T) {
 		AuthorEmail:    "test@test.com",
 	})
 	if err != nil {
-		t.Fatalf("SaveChanges() checkpoint 1 error = %v", err)
+		t.Fatalf("SaveStep() checkpoint 1 error = %v", err)
 	}
 
 	// === USER PARTIAL STAGING SCENARIO ===
@@ -144,7 +144,7 @@ func TestPromptAttribution_UsesWorktreeNotStagingArea(t *testing.T) {
 	// === Verify checkpoint captures the same content ===
 	// This demonstrates why we need to read from worktree: the checkpoint will capture
 	// the full worktree content (10 lines), so PromptAttribution must also count 10 lines
-	err = s.SaveChanges(SaveContext{
+	err = s.SaveStep(StepContext{
 		SessionID:      sessionID,
 		ModifiedFiles:  []string{"test.go"},
 		NewFiles:       []string{},
@@ -156,7 +156,7 @@ func TestPromptAttribution_UsesWorktreeNotStagingArea(t *testing.T) {
 		AuthorEmail:    "test@test.com",
 	})
 	if err != nil {
-		t.Fatalf("SaveChanges() checkpoint 2 error = %v", err)
+		t.Fatalf("SaveStep() checkpoint 2 error = %v", err)
 	}
 
 	// Reload state to see final PromptAttributions
@@ -232,7 +232,7 @@ func TestPromptAttribution_UnstagedChanges(t *testing.T) {
 		t.Fatalf("failed to write agent changes: %v", err)
 	}
 
-	err = s.SaveChanges(SaveContext{
+	err = s.SaveStep(StepContext{
 		SessionID:      sessionID,
 		ModifiedFiles:  []string{"test.go"},
 		NewFiles:       []string{},
@@ -244,7 +244,7 @@ func TestPromptAttribution_UnstagedChanges(t *testing.T) {
 		AuthorEmail:    "test@test.com",
 	})
 	if err != nil {
-		t.Fatalf("SaveChanges() checkpoint 1 error = %v", err)
+		t.Fatalf("SaveStep() checkpoint 1 error = %v", err)
 	}
 
 	// === USER UNSTAGED CHANGES ===
@@ -332,7 +332,7 @@ func TestPromptAttribution_AlwaysStored(t *testing.T) {
 		t.Fatalf("failed to write agent changes: %v", err)
 	}
 
-	err = s.SaveChanges(SaveContext{
+	err = s.SaveStep(StepContext{
 		SessionID:      sessionID,
 		ModifiedFiles:  []string{"test.go"},
 		NewFiles:       []string{},
@@ -344,7 +344,7 @@ func TestPromptAttribution_AlwaysStored(t *testing.T) {
 		AuthorEmail:    "test@test.com",
 	})
 	if err != nil {
-		t.Fatalf("SaveChanges() checkpoint 1 error = %v", err)
+		t.Fatalf("SaveStep() checkpoint 1 error = %v", err)
 	}
 
 	// === USER MAKES NO CHANGES ===
@@ -386,7 +386,7 @@ func TestPromptAttribution_AlwaysStored(t *testing.T) {
 		t.Fatalf("failed to write agent changes 2: %v", err)
 	}
 
-	err = s.SaveChanges(SaveContext{
+	err = s.SaveStep(StepContext{
 		SessionID:      sessionID,
 		ModifiedFiles:  []string{"test.go"},
 		NewFiles:       []string{},
@@ -398,7 +398,7 @@ func TestPromptAttribution_AlwaysStored(t *testing.T) {
 		AuthorEmail:    "test@test.com",
 	})
 	if err != nil {
-		t.Fatalf("SaveChanges() checkpoint 2 error = %v", err)
+		t.Fatalf("SaveStep() checkpoint 2 error = %v", err)
 	}
 
 	// Verify PromptAttributions array now contains the zero-value entry
@@ -510,7 +510,7 @@ func TestPromptAttribution_CapturesPrePromptEdits(t *testing.T) {
 		t.Fatalf("failed to write agent changes: %v", err)
 	}
 
-	err = s.SaveChanges(SaveContext{
+	err = s.SaveStep(StepContext{
 		SessionID:      sessionID,
 		ModifiedFiles:  []string{"test.go"},
 		NewFiles:       []string{},
@@ -522,7 +522,7 @@ func TestPromptAttribution_CapturesPrePromptEdits(t *testing.T) {
 		AuthorEmail:    "test@test.com",
 	})
 	if err != nil {
-		t.Fatalf("SaveChanges() error = %v", err)
+		t.Fatalf("SaveStep() error = %v", err)
 	}
 
 	// Reload state to verify PromptAttributions

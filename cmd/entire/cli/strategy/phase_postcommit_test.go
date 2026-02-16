@@ -689,7 +689,7 @@ func TestPostCommit_FilesTouched_ResetsAfterCondensation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "A.txt"), []byte("file A"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "B.txt"), []byte("file B"), 0o644))
 
-	err = s.SaveChanges(SaveContext{
+	err = s.SaveStep(StepContext{
 		SessionID:      sessionID,
 		ModifiedFiles:  []string{},
 		NewFiles:       []string{"A.txt", "B.txt"},
@@ -756,7 +756,7 @@ func TestPostCommit_FilesTouched_ResetsAfterCondensation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "C.txt"), []byte("file C"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "D.txt"), []byte("file D"), 0o644))
 
-	err = s.SaveChanges(SaveContext{
+	err = s.SaveStep(StepContext{
 		SessionID:      sessionID,
 		ModifiedFiles:  []string{},
 		NewFiles:       []string{"C.txt", "D.txt"},
@@ -948,7 +948,7 @@ func TestPostCommit_ActiveSession_CarryForward_PartialCommit(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "C.txt"), []byte("file C"), 0o644))
 
 	// Save checkpoint with all three files
-	err = s.SaveChanges(SaveContext{
+	err = s.SaveStep(StepContext{
 		SessionID:      sessionID,
 		ModifiedFiles:  []string{},
 		NewFiles:       []string{"A.txt", "B.txt", "C.txt"},
@@ -1044,7 +1044,7 @@ func TestPostCommit_ActiveSession_CarryForward_AllCommitted(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "A.txt"), []byte("file A"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "B.txt"), []byte("file B"), 0o644))
 
-	err = s.SaveChanges(SaveContext{
+	err = s.SaveStep(StepContext{
 		SessionID:      sessionID,
 		ModifiedFiles:  []string{},
 		NewFiles:       []string{"A.txt", "B.txt"},
@@ -1270,9 +1270,9 @@ func setupSessionWithCheckpoint(t *testing.T, s *ManualCommitStrategy, _ *git.Re
 		filepath.Join(metadataDirAbs, paths.TranscriptFileName),
 		[]byte(transcript), 0o644))
 
-	// SaveChanges creates the shadow branch and checkpoint
+	// SaveStep creates the shadow branch and checkpoint
 	// Include test.txt as a modified file so it's saved to the shadow branch
-	err := s.SaveChanges(SaveContext{
+	err := s.SaveStep(StepContext{
 		SessionID:      sessionID,
 		ModifiedFiles:  []string{"test.txt"},
 		NewFiles:       []string{},
@@ -1283,7 +1283,7 @@ func setupSessionWithCheckpoint(t *testing.T, s *ManualCommitStrategy, _ *git.Re
 		AuthorName:     "Test",
 		AuthorEmail:    "test@test.com",
 	})
-	require.NoError(t, err, "SaveChanges should succeed to create shadow branch content")
+	require.NoError(t, err, "SaveStep should succeed to create shadow branch content")
 }
 
 // commitWithCheckpointTrailer creates a commit on the current branch with the

@@ -109,8 +109,8 @@ func handleClaudeCodePostTodo() error {
 		agentType = hookAgent.Type()
 	}
 
-	// Build incremental checkpoint context
-	ctx := strategy.TaskCheckpointContext{
+	// Build incremental task step context
+	ctx := strategy.TaskStepContext{
 		SessionID:           sessionID,
 		ToolUseID:           taskToolUseID,
 		ModifiedFiles:       changes.Modified,
@@ -127,9 +127,9 @@ func handleClaudeCodePostTodo() error {
 		AgentType:           agentType,
 	}
 
-	// Save incremental checkpoint
-	if err := strat.SaveTaskCheckpoint(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to save incremental checkpoint: %v\n", err)
+	// Save incremental task step
+	if err := strat.SaveTaskStep(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to save incremental task step: %v\n", err)
 		return nil
 	}
 

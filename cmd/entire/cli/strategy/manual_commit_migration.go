@@ -78,7 +78,7 @@ func (s *ManualCommitStrategy) migrateShadowBranchIfNeeded(repo *git.Repository,
 }
 
 // migrateAndPersistIfNeeded checks for HEAD changes, migrates the shadow branch if needed,
-// and persists the updated session state. Used by SaveChanges and SaveTaskCheckpoint.
+// and persists the updated session state. Used by SaveStep and SaveTaskStep.
 func (s *ManualCommitStrategy) migrateAndPersistIfNeeded(repo *git.Repository, state *SessionState) error {
 	migrated, err := s.migrateShadowBranchIfNeeded(repo, state)
 	if err != nil {

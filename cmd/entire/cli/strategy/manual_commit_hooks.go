@@ -626,7 +626,7 @@ func (s *ManualCommitStrategy) PostCommit() error {
 		// Save FilesTouched BEFORE TransitionAndLog — the handler's condensation
 		// clears it, but we need the original list for carry-forward computation.
 		// For mid-session commits (ACTIVE, no shadow branch), state.FilesTouched may be empty
-		// because no SaveChanges/Stop has been called yet. Extract files from transcript.
+		// because no SaveStep/Stop has been called yet. Extract files from transcript.
 		filesTouchedBefore := make([]string, len(state.FilesTouched))
 		copy(filesTouchedBefore, state.FilesTouched)
 		if len(filesTouchedBefore) == 0 && state.Phase.IsActive() && state.TranscriptPath != "" {

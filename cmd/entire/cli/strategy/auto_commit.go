@@ -120,7 +120,7 @@ func (s *AutoCommitStrategy) PrePush(remote string) error {
 	return pushSessionsBranchCommon(remote, paths.MetadataBranchName)
 }
 
-func (s *AutoCommitStrategy) SaveChanges(ctx SaveContext) error {
+func (s *AutoCommitStrategy) SaveStep(ctx StepContext) error {
 	repo, err := OpenRepository()
 	if err != nil {
 		return fmt.Errorf("failed to open git repository: %w", err)
@@ -182,7 +182,7 @@ type commitCodeResult struct {
 // commitCodeToActive commits code changes to the active branch.
 // Adds an Entire-Checkpoint trailer for metadata lookup that survives amend/rebase.
 // Returns the result containing commit hash and whether a commit was created.
-func (s *AutoCommitStrategy) commitCodeToActive(repo *git.Repository, ctx SaveContext, checkpointID id.CheckpointID) (commitCodeResult, error) {
+func (s *AutoCommitStrategy) commitCodeToActive(repo *git.Repository, ctx StepContext, checkpointID id.CheckpointID) (commitCodeResult, error) {
 	// Check if there are any code changes to commit
 	if len(ctx.ModifiedFiles) == 0 && len(ctx.NewFiles) == 0 && len(ctx.DeletedFiles) == 0 {
 		fmt.Fprintf(os.Stderr, "No code changes to commit to active branch\n")
@@ -234,7 +234,7 @@ func (s *AutoCommitStrategy) commitCodeToActive(repo *git.Repository, ctx SaveCo
 // Metadata is stored at sharded path: <checkpointID[:2]>/<checkpointID[2:]>/
 // This allows direct lookup from the checkpoint ID trailer on the code commit.
 // Uses checkpoint.WriteCommitted for git operations.
-func (s *AutoCommitStrategy) commitMetadataToMetadataBranch(repo *git.Repository, ctx SaveContext, checkpointID id.CheckpointID) (plumbing.Hash, error) {
+func (s *AutoCommitStrategy) commitMetadataToMetadataBranch(repo *git.Repository, ctx StepContext, checkpointID id.CheckpointID) (plumbing.Hash, error) {
 	store, err := s.getCheckpointStore()
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to get checkpoint store: %w", err)
@@ -486,7 +486,7 @@ func (s *AutoCommitStrategy) EnsureSetup() error {
 
 // GetSessionInfo returns session information for linking commits.
 // For auto-commit strategy, we don't track active sessions - metadata is stored on
-// entire/checkpoints/v1 branch when SaveChanges is called. Active branch commits
+// entire/checkpoints/v1 branch when SaveStep is called. Active branch commits
 // are kept clean (no trailers), so this returns ErrNoSession.
 // Use ListSessions() or GetSession() to retrieve session info from the metadata branch.
 func (s *AutoCommitStrategy) GetSessionInfo() (*SessionInfo, error) {
@@ -496,11 +496,11 @@ func (s *AutoCommitStrategy) GetSessionInfo() (*SessionInfo, error) {
 	return nil, ErrNoSession
 }
 
-// SaveTaskCheckpoint creates a checkpoint commit for a completed task.
+// SaveTaskStep creates a checkpoint commit for a completed task.
 // For auto-commit strategy:
 // 1. Commit code changes to active branch (no trailers - clean history)
 // 2. Commit task metadata to entire/checkpoints/v1 branch with checkpoint format
-func (s *AutoCommitStrategy) SaveTaskCheckpoint(ctx TaskCheckpointContext) error {
+func (s *AutoCommitStrategy) SaveTaskStep(ctx TaskStepContext) error {
 	repo, err := OpenRepository()
 	if err != nil {
 		return fmt.Errorf("failed to open git repository: %w", err)
@@ -558,7 +558,7 @@ func (s *AutoCommitStrategy) SaveTaskCheckpoint(ctx TaskCheckpointContext) error
 // commitTaskCodeToActive commits task code changes to the active branch.
 // Adds an Entire-Checkpoint trailer for metadata lookup that survives amend/rebase.
 // Skips commit creation if there are no file changes.
-func (s *AutoCommitStrategy) commitTaskCodeToActive(repo *git.Repository, ctx TaskCheckpointContext, checkpointID id.CheckpointID) (plumbing.Hash, error) {
+func (s *AutoCommitStrategy) commitTaskCodeToActive(repo *git.Repository, ctx TaskStepContext, checkpointID id.CheckpointID) (plumbing.Hash, error) {
 	hasFileChanges := len(ctx.ModifiedFiles) > 0 || len(ctx.NewFiles) > 0 || len(ctx.DeletedFiles) > 0
 
 	// If no file changes, skip code commit
@@ -627,7 +627,7 @@ func (s *AutoCommitStrategy) commitTaskCodeToActive(repo *git.Repository, ctx Ta
 // Returns the metadata commit hash.
 // When IsIncremental is true, only writes the incremental checkpoint file, skipping transcripts.
 // Uses checkpoint.WriteCommitted for git operations.
-func (s *AutoCommitStrategy) commitTaskMetadataToMetadataBranch(repo *git.Repository, ctx TaskCheckpointContext, checkpointID id.CheckpointID) (plumbing.Hash, error) {
+func (s *AutoCommitStrategy) commitTaskMetadataToMetadataBranch(repo *git.Repository, ctx TaskStepContext, checkpointID id.CheckpointID) (plumbing.Hash, error) {
 	store, err := s.getCheckpointStore()
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to get checkpoint store: %w", err)

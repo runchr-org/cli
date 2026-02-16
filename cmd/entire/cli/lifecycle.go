@@ -331,8 +331,8 @@ func handleLifecycleTurnEnd(ag agent.Agent, event *agent.Event) error { //nolint
 		}
 	}
 
-	// Build fully-populated save context and delegate to strategy
-	ctx := strategy.SaveContext{
+	// Build fully-populated step context and delegate to strategy
+	ctx := strategy.StepContext{
 		SessionID:                sessionID,
 		ModifiedFiles:            relModifiedFiles,
 		NewFiles:                 relNewFiles,
@@ -349,8 +349,8 @@ func handleLifecycleTurnEnd(ag agent.Agent, event *agent.Event) error { //nolint
 		TokenUsage:               tokenUsage,
 	}
 
-	if err := strat.SaveChanges(ctx); err != nil {
-		return fmt.Errorf("failed to save changes: %w", err)
+	if err := strat.SaveStep(ctx); err != nil {
+		return fmt.Errorf("failed to save step: %w", err)
 	}
 
 	// Update session state transcript position for auto-commit strategy
@@ -542,7 +542,7 @@ func handleLifecycleSubagentEnd(ag agent.Agent, event *agent.Event) error {
 	strat := GetStrategy()
 	agentType := ag.Type()
 
-	ctx := strategy.TaskCheckpointContext{
+	ctx := strategy.TaskStepContext{
 		SessionID:              event.SessionID,
 		ToolUseID:              event.ToolUseID,
 		AgentID:                event.SubagentID,
@@ -559,8 +559,8 @@ func handleLifecycleSubagentEnd(ag agent.Agent, event *agent.Event) error {
 		AgentType:              agentType,
 	}
 
-	if err := strat.SaveTaskCheckpoint(ctx); err != nil {
-		return fmt.Errorf("failed to save task checkpoint: %w", err)
+	if err := strat.SaveTaskStep(ctx); err != nil {
+		return fmt.Errorf("failed to save task step: %w", err)
 	}
 
 	_ = CleanupPreTaskState(event.ToolUseID) //nolint:errcheck // best-effort cleanup
