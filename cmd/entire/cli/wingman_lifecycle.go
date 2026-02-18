@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/logging"
@@ -36,7 +37,8 @@ func appendWingmanSessionStartStatus(message string) string {
 		return message + "\n  Wingman is active: your changes will be automatically reviewed."
 	}
 
-	if _, statErr := os.Stat(filepath.Join(repoRoot, wingmanReviewFile)); statErr == nil {
+	reviewPath := filepath.Join(repoRoot, wingmanReviewFile)
+	if _, statErr := os.Stat(reviewPath); statErr == nil && reviewHasActionableIssues(reviewPath) {
 		return message + "\n  Wingman: a review is pending and will be addressed on your next prompt."
 	}
 	return message + "\n  Wingman is active: your changes will be automatically reviewed."
@@ -57,19 +59,30 @@ func handleWingmanTurnStart(sessionID string) bool {
 
 	wingmanLogCtx := logging.WithComponent(context.Background(), "wingman")
 
-	// If a review is pending, inject it as additionalContext
-	if _, statErr := os.Stat(filepath.Join(repoRoot, wingmanReviewFile)); statErr == nil {
-		fmt.Fprintf(os.Stderr, "[wingman] Review available: .entire/REVIEW.md — injecting into context\n")
-		logging.Info(wingmanLogCtx, "wingman injecting review instruction on prompt-submit",
-			slog.String("session_id", sessionID),
-		)
-		if err := outputHookResponseWithContextAndMessage(
-			wingmanApplyInstruction,
-			"[Wingman] A code review is pending and will be addressed before your request.",
-		); err != nil {
-			fmt.Fprintf(os.Stderr, "[wingman] Warning: failed to inject review instruction: %v\n", err)
+	// If a review is pending, check if it has actionable issues before injecting
+	reviewPath := filepath.Join(repoRoot, wingmanReviewFile)
+	if _, statErr := os.Stat(reviewPath); statErr == nil {
+		if !reviewHasActionableIssues(reviewPath) {
+			// No actionable issues — clean up and notify the user
+			fmt.Fprintf(os.Stderr, "[wingman] Review has no actionable issues, cleaning up\n")
+			logging.Info(wingmanLogCtx, "wingman review has no actionable issues, skipping injection",
+				slog.String("session_id", sessionID),
+			)
+			_ = os.Remove(reviewPath)
+			_ = outputHookMessage("[Wingman] Reviewed your changes — no issues found.") //nolint:errcheck // best-effort notification
 		} else {
-			return true // Hook response written to stdout — caller must return
+			fmt.Fprintf(os.Stderr, "[wingman] Review available: .entire/REVIEW.md — injecting into context\n")
+			logging.Info(wingmanLogCtx, "wingman injecting review instruction on prompt-submit",
+				slog.String("session_id", sessionID),
+			)
+			if err := outputHookResponseWithContextAndMessage(
+				wingmanApplyInstruction,
+				"[Wingman] A code review is pending and will be addressed before your request.",
+			); err != nil {
+				fmt.Fprintf(os.Stderr, "[wingman] Warning: failed to inject review instruction: %v\n", err)
+			} else {
+				return true // Hook response written to stdout — caller must return
+			}
 		}
 	}
 
@@ -160,6 +173,28 @@ func triggerWingmanAutoApplyIfPending(repoRoot string) {
 		slog.String("review_path", reviewPath),
 	)
 	spawnDetachedWingmanApply(repoRoot)
+}
+
+// reviewHasActionableIssues reads a REVIEW.md and checks if it contains
+// actionable issue markers ([CRITICAL], [WARNING], or [SUGGESTION]).
+// Returns false if the file can't be read or contains no issues.
+func reviewHasActionableIssues(reviewPath string) bool {
+	data, err := os.ReadFile(reviewPath) //nolint:gosec // path is from repo-relative constant
+	if err != nil {
+		return false
+	}
+
+	content := string(data)
+
+	// The review format uses "### [SEVERITY] description" for each issue.
+	// Check for any of the severity markers in heading context.
+	for _, marker := range []string{"[CRITICAL]", "[WARNING]", "[SUGGESTION]"} {
+		if strings.Contains(content, marker) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // outputWingmanStopNotification outputs a systemMessage notification about
