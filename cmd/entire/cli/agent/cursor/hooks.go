@@ -29,8 +29,8 @@ const (
 	HookNamePostTodo           = "post-todo"
 )
 
-// CursorHooksFileName is the hooks file used by Cursor.
-const CursorHooksFileName = "hooks.json"
+// HooksFileName is the hooks file used by Cursor.
+const HooksFileName = "hooks.json"
 
 // entireHookPrefixes are command prefixes that identify Entire hooks
 var entireHookPrefixes = []string{
@@ -64,7 +64,7 @@ func (c *CursorAgent) InstallHooks(localDev bool, force bool) (int, error) {
 		}
 	}
 
-	hooksPath := filepath.Join(repoRoot, ".cursor", CursorHooksFileName)
+	hooksPath := filepath.Join(repoRoot, ".cursor", HooksFileName)
 
 	// Read existing hooks file if it exists
 	var hooksFile CursorHooksFile
@@ -163,7 +163,7 @@ func (c *CursorAgent) UninstallHooks() error {
 	if err != nil {
 		repoRoot = "."
 	}
-	hooksPath := filepath.Join(repoRoot, ".cursor", CursorHooksFileName)
+	hooksPath := filepath.Join(repoRoot, ".cursor", HooksFileName)
 	data, err := os.ReadFile(hooksPath) //nolint:gosec // path is constructed from repo root + fixed path
 	if err != nil {
 		return nil //nolint:nilerr // No hooks file means nothing to uninstall
@@ -200,7 +200,7 @@ func (c *CursorAgent) AreHooksInstalled() bool {
 	if err != nil {
 		repoRoot = "."
 	}
-	hooksPath := filepath.Join(repoRoot, ".cursor", CursorHooksFileName)
+	hooksPath := filepath.Join(repoRoot, ".cursor", HooksFileName)
 	data, err := os.ReadFile(hooksPath) //nolint:gosec // path is constructed from repo root + fixed path
 	if err != nil {
 		return false
