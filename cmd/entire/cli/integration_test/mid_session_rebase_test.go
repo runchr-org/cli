@@ -17,7 +17,7 @@ import (
 // This is a critical scenario because:
 // 1. Claude can run `git rebase` via the Bash tool
 // 2. No new prompt is submitted between the rebase and the next checkpoint
-// 3. Without migration in SaveChanges, checkpoints go to an orphaned shadow branch
+// 3. Without migration in SaveStep, checkpoints go to an orphaned shadow branch
 //
 // The test validates that:
 // - Checkpoints before rebase go to the original shadow branch
@@ -135,7 +135,7 @@ func TestShadow_MidSessionRebaseMigration(t *testing.T) {
 		[]FileChange{{Path: "b.go", Content: fileBContent}},
 	)
 
-	// This is the critical test: SimulateStop calls SaveChanges which should
+	// This is the critical test: SimulateStop calls SaveStep which should
 	// detect HEAD has changed and migrate the shadow branch
 	if err := env.SimulateStop(session.ID, session.TranscriptPath); err != nil {
 		t.Fatalf("SimulateStop (checkpoint 2 after rebase) failed: %v", err)
@@ -246,7 +246,7 @@ func (env *TestEnv) gitCheckout(ref string) {
 // 4. Creates more checkpoints
 //
 // This verifies there's no race condition between shadow branch cleanup
-// (from condensation) and the migration logic in SaveChanges.
+// (from condensation) and the migration logic in SaveStep.
 func TestShadow_CommitThenRebaseMidSession(t *testing.T) {
 	t.Parallel()
 	env := NewTestEnv(t)

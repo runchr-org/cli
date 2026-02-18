@@ -143,9 +143,9 @@ type RewindPreview struct {
 	TrackedChanges []string
 }
 
-// SaveContext contains all information needed for saving changes.
+// StepContext contains all information needed for saving a step checkpoint.
 // All file paths should be pre-filtered and normalized by the CLI layer.
-type SaveContext struct {
+type StepContext struct {
 	// SessionID is the Claude Code session identifier
 	SessionID string
 
@@ -190,11 +190,11 @@ type SaveContext struct {
 	TokenUsage *agent.TokenUsage
 }
 
-// TaskCheckpointContext contains all information needed for saving a task checkpoint.
+// TaskStepContext contains all information needed for saving a task step checkpoint.
 // This is called by the PostToolUse[Task] hook when a subagent completes.
 // The strategy is responsible for creating metadata structures and storing them
 // according to its storage approach.
-type TaskCheckpointContext struct {
+type TaskStepContext struct {
 	// SessionID is the Claude Code session identifier
 	SessionID string
 
@@ -314,7 +314,7 @@ func ReadTaskCheckpoint(taskMetadataDir string) (*TaskCheckpoint, error) {
 //
 // Note: State capture (tracking untracked files before a session) is handled
 // by the CLI layer, not the strategy. The strategy receives pre-computed
-// file lists in SaveContext.
+// file lists in StepContext.
 type Strategy interface {
 	// Name returns the strategy identifier (e.g., "commit", "branch", "stash")
 	Name() string
@@ -326,17 +326,17 @@ type Strategy interface {
 	// for this strategy to operate. Returns an error if validation fails.
 	ValidateRepository() error
 
-	// SaveChanges is called on Stop to save all session changes
+	// SaveStep is called on Stop to save all session changes
 	// using this strategy's approach (commit, branch, stash, etc.)
-	SaveChanges(ctx SaveContext) error
+	SaveStep(ctx StepContext) error
 
-	// SaveTaskCheckpoint is called by PostToolUse[Task] hook when a subagent completes.
+	// SaveTaskStep is called by PostToolUse[Task] hook when a subagent completes.
 	// Creates a checkpoint commit with task metadata for later rewind.
 	// Different strategies may handle this differently:
 	// - Commit strategy: commits to active branch
 	// - Manual-commit strategy: commits to shadow branch
 	// - Auto-commit strategy: commits logs to shadow only (code deferred to Stop)
-	SaveTaskCheckpoint(ctx TaskCheckpointContext) error
+	SaveTaskStep(ctx TaskStepContext) error
 
 	// GetRewindPoints returns available points to rewind to.
 	// The limit parameter controls the maximum number of points to return.

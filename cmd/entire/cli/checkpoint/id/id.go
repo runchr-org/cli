@@ -23,6 +23,10 @@ const EmptyCheckpointID CheckpointID = ""
 // Exported for use in other packages (e.g., trailers) to avoid pattern duplication.
 const Pattern = `[0-9a-f]{12}`
 
+// ShortIDLength is the standard length for truncating IDs for display purposes.
+// Used for tool use IDs, session IDs, and commit hashes in logs and messages.
+const ShortIDLength = 12
+
 // checkpointIDRegex validates the format: exactly 12 lowercase hex characters.
 var checkpointIDRegex = regexp.MustCompile(`^` + Pattern + `$`)
 

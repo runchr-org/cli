@@ -103,6 +103,13 @@ Do each task in order, making the commit after each file creation.`
 			ExpectedTranscriptContent: allFiles, // All checkpoints have full transcript
 		})
 	}
+
+	// No shadow branches should remain after agent committed all files
+	entireBranches := env.ListBranchesWithPrefix("entire/")
+	for _, b := range entireBranches {
+		assert.Equal(t, "entire/checkpoints/v1", b,
+			"Unexpected shadow branch after all files committed: %s", b)
+	}
 }
 
 // TestE2E_Scenario4_UserSplitsCommits tests user splitting agent changes into multiple commits.
@@ -193,6 +200,16 @@ Create all four files, no other files or actions.`
 		FilesTouched:              []string{"fileC.go", "fileD.go"},
 		ExpectedTranscriptContent: allFiles, // Full session transcript
 	})
+
+	// CRITICAL: After all carry-forward files are committed, no shadow branches
+	// should remain. Only entire/checkpoints/v1 should exist. Extra shadow
+	// branches (entire/<hash>-<hash>) indicate a regression in carry-forward cleanup.
+	entireBranches := env.ListBranchesWithPrefix("entire/")
+	for _, b := range entireBranches {
+		assert.Equal(t, "entire/checkpoints/v1", b,
+			"Unexpected shadow branch after all files committed: %s", b)
+	}
+	t.Logf("Entire branches after all commits: %v", entireBranches)
 }
 
 // TestE2E_Scenario5_PartialCommitStashNextPrompt tests partial commit, stash, then new prompt.
@@ -284,6 +301,11 @@ Create both files, nothing else.`
 			FilesTouched: []string{"stash_a.go"},
 		})
 	}
+
+	// Note: stash_b.go and stash_c.go are still stashed (never committed),
+	// so a shadow branch may remain for the session that still has pending files.
+	entireBranches := env.ListBranchesWithPrefix("entire/")
+	t.Logf("Entire branches after commits: %v", entireBranches)
 }
 
 // TestE2E_Scenario6_StashSecondPromptUnstashCommitAll tests stash, new prompt, unstash, commit all.
@@ -388,6 +410,13 @@ Create both files, nothing else.`
 			Strategy:     "manual-commit",
 			FilesTouched: []string{"combo_a.go"},
 		})
+	}
+
+	// No shadow branches should remain after all files committed
+	entireBranches := env.ListBranchesWithPrefix("entire/")
+	for _, b := range entireBranches {
+		assert.Equal(t, "entire/checkpoints/v1", b,
+			"Unexpected shadow branch after all files committed: %s", b)
 	}
 }
 
@@ -873,6 +902,13 @@ Only modify these three files.`
 		Strategy:     "manual-commit",
 		FilesTouched: []string{"controller.go"},
 	})
+
+	// No shadow branches should remain after all files committed
+	entireBranches := env.ListBranchesWithPrefix("entire/")
+	for _, b := range entireBranches {
+		assert.Equal(t, "entire/checkpoints/v1", b,
+			"Unexpected shadow branch after all files committed: %s", b)
+	}
 }
 
 // TestE2E_ExistingFiles_RevertModification tests that modifying an existing file
@@ -990,4 +1026,275 @@ Complete all three tasks.`
 
 	assert.NotEqual(t, checkpoint1, checkpoint2, "Checkpoints should be different")
 	t.Logf("Checkpoint 1 (modified): %s, Checkpoint 2 (new): %s", checkpoint1, checkpoint2)
+}
+
+// TestE2E_EndedSession_UserCommitsAfterExit tests that after agent exits
+// (session naturally ends), user commits still get checkpoint trailers.
+// This exercises the ENDED + GitCommit → ActionCondenseIfFilesTouched path.
+func TestE2E_EndedSession_UserCommitsAfterExit(t *testing.T) {
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t, "manual-commit")
+
+	// Agent creates files A, B, C — session ends when agent exits
+	prompt := `Create these files:
+1. ended_a.go with content: package main; func EndedA() {}
+2. ended_b.go with content: package main; func EndedB() {}
+3. ended_c.go with content: package main; func EndedC() {}
+Create all three files, nothing else.`
+
+	result, err := env.RunAgent(prompt)
+	require.NoError(t, err)
+	AssertAgentSuccess(t, result, err)
+
+	require.True(t, env.FileExists("ended_a.go"), "ended_a.go should exist")
+	require.True(t, env.FileExists("ended_b.go"), "ended_b.go should exist")
+	require.True(t, env.FileExists("ended_c.go"), "ended_c.go should exist")
+
+	// User commits A and B together
+	t.Log("Committing ended_a.go and ended_b.go")
+	env.GitCommitWithShadowHooks("Add ended files A and B", "ended_a.go", "ended_b.go")
+	checkpointIDsAfterFirst := env.GetAllCheckpointIDsFromHistory()
+	require.GreaterOrEqual(t, len(checkpointIDsAfterFirst), 1, "Should have first checkpoint")
+	checkpointAB := checkpointIDsAfterFirst[0]
+	t.Logf("Checkpoint for A,B: %s", checkpointAB)
+
+	// User commits C
+	t.Log("Committing ended_c.go")
+	env.GitCommitWithShadowHooks("Add ended file C", "ended_c.go")
+	checkpointIDsAfterSecond := env.GetAllCheckpointIDsFromHistory()
+	require.GreaterOrEqual(t, len(checkpointIDsAfterSecond), 2, "Should have two checkpoints")
+	checkpointC := checkpointIDsAfterSecond[0]
+	t.Logf("Checkpoint for C: %s", checkpointC)
+
+	// Checkpoint IDs must be unique
+	assert.NotEqual(t, checkpointAB, checkpointC,
+		"Each commit should have its own unique checkpoint ID")
+
+	// Validate both checkpoints
+	env.ValidateCheckpoint(CheckpointValidation{
+		CheckpointID: checkpointAB,
+		Strategy:     "manual-commit",
+		FilesTouched: []string{"ended_a.go", "ended_b.go"},
+	})
+	env.ValidateCheckpoint(CheckpointValidation{
+		CheckpointID: checkpointC,
+		Strategy:     "manual-commit",
+		FilesTouched: []string{"ended_c.go"},
+	})
+
+	// No shadow branches should remain
+	entireBranches := env.ListBranchesWithPrefix("entire/")
+	for _, b := range entireBranches {
+		assert.Equal(t, "entire/checkpoints/v1", b,
+			"Unexpected shadow branch after all files committed: %s", b)
+	}
+}
+
+// TestE2E_DeletedFiles_CommitDeletion tests that deleting a file that was tracked
+// in the session gets handled properly when committed via git rm.
+func TestE2E_DeletedFiles_CommitDeletion(t *testing.T) {
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t, "manual-commit")
+
+	// Pre-commit a file that will be deleted
+	env.WriteFile("to_delete.go", "package main\n\nfunc ToDelete() {}\n")
+	env.GitCommitWithShadowHooks("Add to_delete.go", "to_delete.go")
+
+	// Agent deletes it and creates a replacement
+	prompt := `Do these two tasks:
+1. Delete the file to_delete.go (use: rm to_delete.go)
+2. Create a new file replacement.go with content: package main; func Replacement() {}
+
+Do both tasks.`
+
+	result, err := env.RunAgentWithTools(prompt, []string{"Write", "Bash"})
+	require.NoError(t, err)
+	AssertAgentSuccess(t, result, err)
+
+	// to_delete.go should be gone, replacement.go should exist
+	assert.False(t, env.FileExists("to_delete.go"), "to_delete.go should be deleted")
+	require.True(t, env.FileExists("replacement.go"), "replacement.go should exist")
+
+	// Commit the replacement file first
+	t.Log("Committing replacement.go")
+	env.GitCommitWithShadowHooks("Add replacement", "replacement.go")
+	checkpointIDsAfterFirst := env.GetAllCheckpointIDsFromHistory()
+	require.GreaterOrEqual(t, len(checkpointIDsAfterFirst), 1, "Should have checkpoint for replacement")
+	checkpointReplacement := checkpointIDsAfterFirst[0]
+	t.Logf("Checkpoint for replacement: %s", checkpointReplacement)
+
+	// Commit the deletion via git rm
+	t.Log("Committing deletion of to_delete.go")
+	env.GitRm("to_delete.go")
+	env.GitCommitStagedWithShadowHooks("Remove to_delete.go")
+
+	// Check if deletion got a checkpoint trailer
+	checkpointIDsAfterSecond := env.GetAllCheckpointIDsFromHistory()
+	if len(checkpointIDsAfterSecond) > len(checkpointIDsAfterFirst) {
+		checkpointDeletion := checkpointIDsAfterSecond[0]
+		t.Logf("Checkpoint for deletion: %s (carry-forward for deleted file)", checkpointDeletion)
+		assert.NotEqual(t, checkpointReplacement, checkpointDeletion,
+			"Checkpoint IDs should be unique")
+		env.ValidateCheckpoint(CheckpointValidation{
+			CheckpointID: checkpointDeletion,
+			Strategy:     "manual-commit",
+		})
+	} else {
+		t.Log("Deletion commit has no checkpoint trailer (deleted files may not carry forward)")
+	}
+
+	// Validate the replacement checkpoint
+	env.ValidateCheckpoint(CheckpointValidation{
+		CheckpointID: checkpointReplacement,
+		Strategy:     "manual-commit",
+	})
+}
+
+// TestE2E_AgentCommitsMidTurn_UserCommitsRemainder tests that when the agent
+// commits some files during its turn and the user commits the rest after,
+// both get valid checkpoint trailers.
+func TestE2E_AgentCommitsMidTurn_UserCommitsRemainder(t *testing.T) {
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t, "manual-commit")
+
+	commitsBefore := env.GetCommitCount()
+
+	// Agent creates 3 files and commits 2 mid-turn
+	prompt := `Do these tasks in order:
+1. Create file agent_mid1.go with content: package main; func AgentMid1() {}
+2. Create file agent_mid2.go with content: package main; func AgentMid2() {}
+3. Commit these two files: git add agent_mid1.go agent_mid2.go && git commit -m "Agent adds mid1 and mid2"
+4. Create file user_remainder.go with content: package main; func UserRemainder() {}
+
+Do all tasks in order. Create each file, then commit the first two, then create the third.`
+
+	result, err := env.RunAgentWithTools(prompt, []string{"Write", "Bash"})
+	require.NoError(t, err)
+	AssertAgentSuccess(t, result, err)
+
+	// Verify all files were created
+	require.True(t, env.FileExists("agent_mid1.go"), "agent_mid1.go should exist")
+	require.True(t, env.FileExists("agent_mid2.go"), "agent_mid2.go should exist")
+	require.True(t, env.FileExists("user_remainder.go"), "user_remainder.go should exist")
+
+	// Verify agent made a commit
+	commitsAfter := env.GetCommitCount()
+	assert.Greater(t, commitsAfter, commitsBefore, "Agent should have made a commit")
+
+	// Get agent checkpoint IDs
+	agentCheckpointIDs := env.GetAllCheckpointIDsFromHistory()
+	t.Logf("Agent checkpoint IDs: %v", agentCheckpointIDs)
+
+	// User commits the remaining file
+	t.Log("User committing user_remainder.go")
+	env.GitCommitWithShadowHooks("Add user remainder", "user_remainder.go")
+
+	// Get all checkpoint IDs including user's
+	allCheckpointIDs := env.GetAllCheckpointIDsFromHistory()
+	t.Logf("All checkpoint IDs: %v", allCheckpointIDs)
+
+	// User's checkpoint should exist and be different from agent's
+	require.Greater(t, len(allCheckpointIDs), len(agentCheckpointIDs),
+		"User commit should have added a new checkpoint")
+
+	userCheckpointID := allCheckpointIDs[0] // Most recent
+	t.Logf("User checkpoint ID: %s", userCheckpointID)
+
+	// User checkpoint must be different from all agent checkpoints
+	for _, agentID := range agentCheckpointIDs {
+		assert.NotEqual(t, userCheckpointID, agentID,
+			"User checkpoint should be different from agent checkpoint")
+	}
+
+	// Validate user's checkpoint exists on metadata branch
+	env.ValidateCheckpoint(CheckpointValidation{
+		CheckpointID: userCheckpointID,
+		Strategy:     "manual-commit",
+		FilesTouched: []string{"user_remainder.go"},
+	})
+
+	// No shadow branches should remain
+	entireBranches := env.ListBranchesWithPrefix("entire/")
+	for _, b := range entireBranches {
+		assert.Equal(t, "entire/checkpoints/v1", b,
+			"Unexpected shadow branch after all files committed: %s", b)
+	}
+}
+
+// TestE2E_TrailerRemoval_SkipsCondensation tests that when a user removes the
+// Entire-Checkpoint trailer from the commit message, no condensation happens.
+func TestE2E_TrailerRemoval_SkipsCondensation(t *testing.T) {
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t, "manual-commit")
+
+	// Agent creates a file
+	prompt := `Create a file called trailer_test.go with content:
+package main
+func TrailerTest() {}
+Create only this file.`
+
+	result, err := env.RunAgent(prompt)
+	require.NoError(t, err)
+	AssertAgentSuccess(t, result, err)
+	require.True(t, env.FileExists("trailer_test.go"), "trailer_test.go should exist")
+
+	// Count checkpoints before
+	checkpointsBefore := env.GetAllCheckpointIDsFromHistory()
+
+	// User commits with trailer removed (simulating user editing out the trailer)
+	t.Log("Committing with trailer removed")
+	env.GitCommitWithTrailerRemoved("Add trailer_test (no checkpoint)", "trailer_test.go")
+
+	// Verify the commit message does NOT have the trailer
+	headMsg := env.GetCommitMessage(env.GetHeadHash())
+	assert.NotContains(t, headMsg, "Entire-Checkpoint:",
+		"Commit message should not have Entire-Checkpoint trailer")
+
+	// No new checkpoint should have been created
+	checkpointsAfter := env.GetAllCheckpointIDsFromHistory()
+	assert.Equal(t, len(checkpointsBefore), len(checkpointsAfter),
+		"No new checkpoint should have been created when trailer is removed")
+}
+
+// TestE2E_SessionDepleted_ManualEditNoCheckpoint tests that once all session
+// files are committed, subsequent manual edits do NOT get checkpoint trailers.
+func TestE2E_SessionDepleted_ManualEditNoCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t, "manual-commit")
+
+	// Agent creates a file
+	prompt := `Create a file called depleted.go with content:
+package main
+func Depleted() {}
+Create only this file.`
+
+	result, err := env.RunAgent(prompt)
+	require.NoError(t, err)
+	AssertAgentSuccess(t, result, err)
+	require.True(t, env.FileExists("depleted.go"), "depleted.go should exist")
+
+	// User commits the agent's file → gets checkpoint
+	t.Log("Committing agent's file")
+	env.GitCommitWithShadowHooks("Add depleted.go", "depleted.go")
+	checkpointIDs := env.GetAllCheckpointIDsFromHistory()
+	require.GreaterOrEqual(t, len(checkpointIDs), 1, "Should have checkpoint for agent's file")
+	t.Logf("Checkpoint for agent's file: %s", checkpointIDs[0])
+
+	// User manually edits the file (not from agent)
+	env.WriteFile("depleted.go", "package main\n\n// Manual user edit\nfunc Depleted() { return }\n")
+
+	// User commits the manual edit
+	t.Log("Committing manual edit")
+	env.GitCommitWithShadowHooks("Manual edit to depleted.go", "depleted.go")
+
+	// This commit should NOT have a new checkpoint — the session is depleted
+	// (all agent files were already committed) and the new edit is purely manual.
+	allCheckpointIDs := env.GetAllCheckpointIDsFromHistory()
+	assert.Equal(t, len(checkpointIDs), len(allCheckpointIDs),
+		"Manual edit after session depletion should not create a new checkpoint")
 }

@@ -76,9 +76,9 @@ func TestSubdirectory_EntireDirCreatedAtRepoRoot(t *testing.T) {
 	})
 }
 
-// TestSubdirectory_SaveChangesFromSubdir verifies that SaveChanges (stop hook)
+// TestSubdirectory_SaveStepFromSubdir verifies that SaveStep (stop hook)
 // works correctly when run from a subdirectory.
-func TestSubdirectory_SaveChangesFromSubdir(t *testing.T) {
+func TestSubdirectory_SaveStepFromSubdir(t *testing.T) {
 	t.Parallel()
 	RunForAllStrategies(t, func(t *testing.T, env *TestEnv, strategyName string) {
 		// Create a subdirectory

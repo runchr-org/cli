@@ -178,11 +178,11 @@ func FormatTaskMetadataWithStrategy(message, taskMetadataDir, strategy string) s
 }
 
 // FormatSourceRef creates a formatted source ref string for the trailer.
-// Format: "<branch>@<commit-hash-prefix>" (hash truncated to 12 chars)
+// Format: "<branch>@<commit-hash-prefix>" (hash truncated to ShortIDLength chars)
 func FormatSourceRef(branch, commitHash string) string {
 	shortHash := commitHash
-	if len(shortHash) > 12 {
-		shortHash = shortHash[:12]
+	if len(shortHash) > checkpointID.ShortIDLength {
+		shortHash = shortHash[:checkpointID.ShortIDLength]
 	}
 	return fmt.Sprintf("%s@%s", branch, shortHash)
 }

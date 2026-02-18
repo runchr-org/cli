@@ -444,6 +444,11 @@ func filesWithRemainingAgentChanges(
 // subtractFilesByName returns files from filesTouched that are NOT in committedFiles.
 // This is a fallback when content-aware comparison isn't possible.
 func subtractFilesByName(filesTouched []string, committedFiles map[string]struct{}) []string {
+	logCtx := logging.WithComponent(context.Background(), "checkpoint")
+	logging.Debug(logCtx, "subtractFilesByName: ",
+		slog.Any("filesTouched", filesTouched),
+		slog.Any("committedFiles", committedFiles),
+	)
 	var remaining []string
 	for _, f := range filesTouched {
 		if _, committed := committedFiles[f]; !committed {

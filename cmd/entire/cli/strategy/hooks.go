@@ -176,15 +176,7 @@ func InstallGitHook(silent bool) (int, error) {
 		return 0, fmt.Errorf("failed to create hooks directory: %w", err)
 	}
 
-	// Determine command prefix based on local_dev setting
-	var cmdPrefix string
-	if isLocalDev() {
-		cmdPrefix = "go run ./cmd/entire/main.go"
-	} else {
-		cmdPrefix = "entire"
-	}
-
-	specs := buildHookSpecs(cmdPrefix)
+	specs := buildHookSpecs(hookCmdPrefix())
 	installedCount := 0
 
 	for _, spec := range specs {
@@ -302,6 +294,15 @@ if [ -x "$_entire_hook_dir/%s%s" ]; then
     "$_entire_hook_dir/%s%s" "$@"
 fi
 `, chainComment, hookName, backupSuffix, hookName, backupSuffix)
+}
+
+// hookCmdPrefix returns the command prefix for hook scripts and warning messages.
+// Returns "go run ./cmd/entire/main.go" when local_dev is enabled, "entire" otherwise.
+func hookCmdPrefix() string {
+	if isLocalDev() {
+		return "go run ./cmd/entire/main.go"
+	}
+	return "entire"
 }
 
 // isLocalDev reads the local_dev setting from .entire/settings.json

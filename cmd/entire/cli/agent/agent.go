@@ -10,7 +10,16 @@ import (
 // Agent defines the interface for interacting with a coding agent.
 // Each agent implementation (Claude Code, Cursor, Aider, etc.) converts its
 // native format to the normalized types defined in this package.
+//
+// The interface is organized into four groups:
+//
+//   - Identity (5 methods): Name, Type, Description, DetectPresence, ProtectedDirs
+//   - Event Mapping (2 methods): HookNames, ParseHookEvent
+//   - Transcript Storage (3 methods): ReadTranscript, ChunkTranscript, ReassembleTranscript
+//   - Legacy (8 methods): Will be moved to optional interfaces or removed in a future phase
 type Agent interface {
+	// --- Identity ---
+
 	// Name returns the agent registry key (e.g., "claude-code", "gemini")
 	Name() AgentName
 
@@ -24,46 +33,64 @@ type Agent interface {
 	// DetectPresence checks if this agent is configured in the repository
 	DetectPresence() (bool, error)
 
-	// GetHookConfigPath returns path to hook config file (empty if none)
-	GetHookConfigPath() string
-
-	// SupportsHooks returns true if agent supports lifecycle hooks
-	SupportsHooks() bool
-
-	// ParseHookInput parses hook callback input from stdin
-	ParseHookInput(hookType HookType, reader io.Reader) (*HookInput, error)
-
-	// GetSessionID extracts session ID from hook input
-	GetSessionID(input *HookInput) string
-
 	// ProtectedDirs returns repo-root-relative directories that should never be
 	// modified or deleted during rewind or other destructive operations.
 	// Examples: [".claude"] for Claude, [".gemini"] for Gemini.
 	ProtectedDirs() []string
 
+	// --- Event Mapping ---
+
+	// HookNames returns the hook verbs this agent supports.
+	// These become subcommands under `entire hooks <agent>`.
+	// e.g., ["stop", "user-prompt-submit", "session-start", "session-end"]
+	HookNames() []string
+
+	// ParseHookEvent translates an agent-native hook into a normalized lifecycle Event.
+	// Returns nil if the hook has no lifecycle significance (e.g., pass-through hooks).
+	// This is the core contribution surface for new agent implementations.
+	ParseHookEvent(hookName string, stdin io.Reader) (*Event, error)
+
+	// --- Transcript Storage ---
+
+	// ReadTranscript reads the raw transcript bytes for a session.
+	ReadTranscript(sessionRef string) ([]byte, error)
+
+	// ChunkTranscript splits a transcript into chunks if it exceeds maxSize.
+	// Returns a slice of chunks. If the transcript fits in one chunk, returns single-element slice.
+	// The chunking is format-aware: JSONL splits at line boundaries, JSON splits message arrays.
+	ChunkTranscript(content []byte, maxSize int) ([][]byte, error)
+
+	// ReassembleTranscript combines chunks back into a single transcript.
+	// Handles format-specific reassembly (JSONL concatenation, JSON message merging).
+	ReassembleTranscript(chunks [][]byte) ([]byte, error)
+
+	// --- Legacy methods (will move to optional interfaces in Phase 4) ---
+
+	// GetHookConfigPath returns path to hook config file (empty if none).
+	GetHookConfigPath() string
+
+	// SupportsHooks returns true if agent supports lifecycle hooks.
+	SupportsHooks() bool
+
+	// ParseHookInput parses hook callback input from stdin.
+	ParseHookInput(hookType HookType, reader io.Reader) (*HookInput, error)
+
+	// GetSessionID extracts session ID from hook input.
+	GetSessionID(input *HookInput) string
+
 	// GetSessionDir returns where agent stores session data for this repo.
-	// Examples:
-	//   Claude: ~/.claude/projects/<sanitized-repo-path>/
-	//   Aider: current working directory (returns repoPath)
-	//   Cursor: ~/Library/Application Support/Cursor/User/globalStorage/
 	GetSessionDir(repoPath string) (string, error)
 
-	// ResolveSessionFile returns the path to the session transcript file for a given
-	// agent session ID. Agents use different naming conventions:
-	//   Claude: <sessionDir>/<id>.jsonl
-	//   Gemini: <sessionDir>/session-<date>-<shortid>.json (searches for existing file)
-	// If no existing file is found, returns a sensible default path.
+	// ResolveSessionFile returns the path to the session transcript file.
 	ResolveSessionFile(sessionDir, agentSessionID string) string
 
 	// ReadSession reads session data from agent's storage.
-	// Handles different formats: JSONL (Claude), SQLite (Cursor), Markdown (Aider)
 	ReadSession(input *HookInput) (*AgentSession, error)
 
 	// WriteSession writes session data for resumption.
-	// Agent handles format conversion (JSONL, SQLite, etc.)
 	WriteSession(session *AgentSession) error
 
-	// FormatResumeCommand returns command to resume a session
+	// FormatResumeCommand returns command to resume a session.
 	FormatResumeCommand(sessionID string) string
 }
 
@@ -90,18 +117,12 @@ type HookSupport interface {
 }
 
 // HookHandler is implemented by agents that define their own hook vocabulary.
-// Each agent defines its own hook names (verbs) which become subcommands
-// under `entire hooks <agent>`. The actual handling is done by handlers
-// registered in the CLI package to avoid circular dependencies.
-//
-// This allows different agents to have completely different hook vocabularies
-// (e.g., Claude Code has "stop", Cursor might have "completion").
+// HookNames() is now part of the core Agent interface.
+// This interface is kept for backward compatibility during migration.
 type HookHandler interface {
 	Agent
 
 	// GetHookNames returns the hook verbs this agent supports.
-	// These are the subcommand names that will appear under `entire hooks <agent>`.
-	// e.g., ["stop", "user-prompt-submit", "pre-task", "post-task", "post-todo"]
 	GetHookNames() []string
 }
 
@@ -118,8 +139,10 @@ type FileWatcher interface {
 	OnFileChange(path string) (*SessionChange, error)
 }
 
-// TranscriptAnalyzer is implemented by agents that support transcript analysis.
-// This allows agent-agnostic detection of work done between checkpoints.
+// TranscriptAnalyzer provides format-specific transcript parsing.
+// Agents that implement this get richer checkpoints (transcript-derived file lists,
+// prompts, summaries). Agents that don't still participate in the checkpoint lifecycle
+// via git-status-based file detection and raw transcript storage.
 type TranscriptAnalyzer interface {
 	Agent
 
@@ -127,7 +150,6 @@ type TranscriptAnalyzer interface {
 	// For JSONL formats (Claude Code), this is the line count.
 	// For JSON formats (Gemini CLI), this is the message count.
 	// Returns 0 if the file doesn't exist or is empty.
-	// Use this to efficiently check if the transcript has grown since last checkpoint.
 	GetTranscriptPosition(path string) (int, error)
 
 	// ExtractModifiedFilesFromOffset extracts files modified since a given offset.
@@ -138,20 +160,46 @@ type TranscriptAnalyzer interface {
 	//   - currentPosition: the current position (line count or message count)
 	//   - error: any error encountered during reading
 	ExtractModifiedFilesFromOffset(path string, startOffset int) (files []string, currentPosition int, err error)
+
+	// ExtractPrompts extracts user prompts from the transcript starting at the given offset.
+	ExtractPrompts(sessionRef string, fromOffset int) ([]string, error)
+
+	// ExtractSummary extracts a summary of the session from the transcript.
+	ExtractSummary(sessionRef string) (string, error)
 }
 
-// TranscriptChunker is implemented by agents that support transcript chunking.
-// This allows agents to split large transcripts into chunks for storage (GitHub has
-// a 100MB blob limit) and reassemble them when reading.
-type TranscriptChunker interface {
+// TranscriptPreparer is called before ReadTranscript to handle agent-specific
+// flush/sync requirements (e.g., Claude Code's async transcript writing).
+// The framework calls PrepareTranscript before ReadTranscript if implemented.
+type TranscriptPreparer interface {
 	Agent
 
-	// ChunkTranscript splits a transcript into chunks if it exceeds maxSize.
-	// Returns a slice of chunks. If the transcript fits in one chunk, returns single-element slice.
-	// The chunking is format-aware: JSONL splits at line boundaries, JSON splits message arrays.
-	ChunkTranscript(content []byte, maxSize int) ([][]byte, error)
+	// PrepareTranscript ensures the transcript is ready to read.
+	// For Claude Code, this waits for the async transcript flush to complete.
+	PrepareTranscript(sessionRef string) error
+}
 
-	// ReassembleTranscript combines chunks back into a single transcript.
-	// Handles format-specific reassembly (JSONL concatenation, JSON message merging).
-	ReassembleTranscript(chunks [][]byte) ([]byte, error)
+// TokenCalculator provides token usage calculation for a session.
+// The framework calls this during step save and checkpoint if implemented.
+type TokenCalculator interface {
+	Agent
+
+	// CalculateTokenUsage computes token usage from the transcript starting at the given offset.
+	CalculateTokenUsage(sessionRef string, fromOffset int) (*TokenUsage, error)
+}
+
+// SubagentAwareExtractor provides methods for extracting files and tokens including subagents.
+// Agents that support spawning subagents (like Claude Code's Task tool) should implement this
+// to ensure subagent contributions are included in checkpoints.
+type SubagentAwareExtractor interface {
+	Agent
+
+	// ExtractAllModifiedFiles extracts files modified by both the main agent and any spawned subagents.
+	// The subagentsDir parameter specifies where subagent transcripts are stored.
+	// Returns a deduplicated list of all modified file paths.
+	ExtractAllModifiedFiles(sessionRef string, fromOffset int, subagentsDir string) ([]string, error)
+
+	// CalculateTotalTokenUsage computes token usage including all spawned subagents.
+	// The subagentsDir parameter specifies where subagent transcripts are stored.
+	CalculateTotalTokenUsage(sessionRef string, fromOffset int, subagentsDir string) (*TokenUsage, error)
 }

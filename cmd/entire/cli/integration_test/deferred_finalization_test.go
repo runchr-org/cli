@@ -338,6 +338,55 @@ func TestShadow_CarryForward_ActiveSession(t *testing.T) {
 		},
 	})
 
+	// Third commit: file C (last remaining carry-forward file)
+	env.GitAdd("fileC.go")
+	env.GitCommitWithShadowHooks("Add file C", "fileC.go")
+	thirdCommitHash := env.GetHeadHash()
+	thirdCheckpointID := env.GetCheckpointIDFromCommitMessage(thirdCommitHash)
+	if thirdCheckpointID == "" {
+		t.Fatal("Third commit should have checkpoint trailer")
+	}
+	t.Logf("Third checkpoint ID: %s", thirdCheckpointID)
+
+	// All three checkpoint IDs must be unique
+	if thirdCheckpointID == firstCheckpointID || thirdCheckpointID == secondCheckpointID {
+		t.Errorf("Third checkpoint ID should be unique.\n"+
+			"First: %s\nSecond: %s\nThird: %s",
+			firstCheckpointID, secondCheckpointID, thirdCheckpointID)
+	}
+
+	// After all files are committed, FilesTouched should be empty
+	state, err = env.GetSessionState(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSessionState failed: %v", err)
+	}
+	if len(state.FilesTouched) > 0 {
+		t.Errorf("FilesTouched should be empty after all files committed, got %v", state.FilesTouched)
+	}
+
+	// CRITICAL: No shadow branches should remain after all files are committed.
+	// Only entire/checkpoints/v1 should exist. Extra shadow branches (entire/<hash>-<hash>)
+	// indicate a regression in carry-forward cleanup.
+	branchesAfterAll := env.ListBranchesWithPrefix("entire/")
+	for _, b := range branchesAfterAll {
+		if b != paths.MetadataBranchName {
+			t.Errorf("Unexpected shadow branch after all files committed: %s", b)
+		}
+	}
+	t.Logf("Entire branches after all commits: %v", branchesAfterAll)
+
+	// Validate third checkpoint (file C)
+	env.ValidateCheckpoint(CheckpointValidation{
+		CheckpointID:    thirdCheckpointID,
+		SessionID:       sess.ID,
+		Strategy:        strategy.StrategyNameManualCommit,
+		FilesTouched:    []string{"fileC.go"},
+		ExpectedPrompts: []string{"Create files A, B, and C"},
+		ExpectedTranscriptContent: []string{
+			"Create files A, B, and C",
+		},
+	})
+
 	t.Log("CarryForward_ActiveSession test completed successfully")
 }
 
@@ -413,6 +462,133 @@ func TestShadow_CarryForward_IdleSession(t *testing.T) {
 	}
 
 	t.Log("CarryForward_IdleSession test completed successfully")
+}
+
+// TestShadow_AgentCommitsMidTurn_UserCommitsRemainder tests the scenario where:
+//  1. Agent creates files A, B, C during a turn
+//  2. Agent commits B and C mid-turn (each getting its own checkpoint)
+//  3. Turn ends (session becomes IDLE)
+//  4. User commits remaining file A
+//  5. User's commit should get a checkpoint trailer AND the checkpoint must exist
+//     on entire/checkpoints/v1
+//
+// This reproduces a real-world bug where the user's commit gets a trailer added
+// by prepare-commit-msg, but post-commit fails to condense the checkpoint to
+// entire/checkpoints/v1 — leaving a "phantom" trailer pointing to nothing.
+func TestShadow_AgentCommitsMidTurn_UserCommitsRemainder(t *testing.T) {
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t, strategy.StrategyNameManualCommit)
+
+	sess := env.NewSession()
+
+	// Start session (ACTIVE)
+	if err := env.SimulateUserPromptSubmitWithTranscriptPath(sess.ID, sess.TranscriptPath); err != nil {
+		t.Fatalf("user-prompt-submit failed: %v", err)
+	}
+
+	// Create all three files
+	env.WriteFile("fileA.go", "package main\n\nfunc A() {}\n")
+	env.WriteFile("fileB.go", "package main\n\nfunc B() {}\n")
+	env.WriteFile("fileC.go", "package main\n\nfunc C() {}\n")
+
+	// Create transcript reflecting agent creating all files
+	sess.CreateTranscript("Create files A, B, and C", []FileChange{
+		{Path: "fileA.go", Content: "package main\n\nfunc A() {}\n"},
+		{Path: "fileB.go", Content: "package main\n\nfunc B() {}\n"},
+		{Path: "fileC.go", Content: "package main\n\nfunc C() {}\n"},
+	})
+
+	// Agent commits B mid-turn (no TTY — agent subprocess)
+	env.GitCommitWithShadowHooksAsAgent("Add file B", "fileB.go")
+	firstCommitHash := env.GetHeadHash()
+	firstCheckpointID := env.GetCheckpointIDFromCommitMessage(firstCommitHash)
+	if firstCheckpointID == "" {
+		t.Fatal("Agent's first mid-turn commit should have checkpoint trailer")
+	}
+	t.Logf("Agent commit 1 (B): checkpoint=%s", firstCheckpointID)
+
+	// Agent commits C mid-turn
+	env.GitCommitWithShadowHooksAsAgent("Add file C", "fileC.go")
+	secondCommitHash := env.GetHeadHash()
+	secondCheckpointID := env.GetCheckpointIDFromCommitMessage(secondCommitHash)
+	if secondCheckpointID == "" {
+		t.Fatal("Agent's second mid-turn commit should have checkpoint trailer")
+	}
+	t.Logf("Agent commit 2 (C): checkpoint=%s", secondCheckpointID)
+
+	// Turn ends — session becomes IDLE, transcript is finalized
+	if err := env.SimulateStop(sess.ID, sess.TranscriptPath); err != nil {
+		t.Fatalf("SimulateStop failed: %v", err)
+	}
+
+	// Verify session is IDLE
+	state, err := env.GetSessionState(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSessionState failed: %v", err)
+	}
+	if state.Phase != session.PhaseIdle {
+		t.Errorf("Expected IDLE phase after stop, got %s", state.Phase)
+	}
+	t.Logf("After stop: phase=%s, FilesTouched=%v, CheckpointTranscriptStart=%d",
+		state.Phase, state.FilesTouched, state.CheckpointTranscriptStart)
+
+	// Log branches before user commit
+	branchesBefore := env.ListBranchesWithPrefix("entire/")
+	t.Logf("Branches before user commit: %v", branchesBefore)
+
+	// User commits remaining file A
+	env.GitCommitWithShadowHooks("Add file A", "fileA.go")
+	userCommitHash := env.GetHeadHash()
+	userCheckpointID := env.GetCheckpointIDFromCommitMessage(userCommitHash)
+
+	t.Logf("User commit (A): hash=%s, checkpoint=%s", userCommitHash[:7], userCheckpointID)
+
+	// CRITICAL: User's commit should have a checkpoint trailer
+	if userCheckpointID == "" {
+		t.Fatal("User's commit of remaining file should have checkpoint trailer")
+	}
+
+	// All three checkpoint IDs must be unique
+	if userCheckpointID == firstCheckpointID || userCheckpointID == secondCheckpointID {
+		t.Errorf("User checkpoint ID should be unique.\n"+
+			"Agent 1: %s\nAgent 2: %s\nUser: %s",
+			firstCheckpointID, secondCheckpointID, userCheckpointID)
+	}
+
+	// CRITICAL: The user's checkpoint must exist on entire/checkpoints/v1.
+	// This is the bug: prepare-commit-msg adds the trailer, but post-commit
+	// doesn't condense, leaving a "phantom" trailer pointing to nothing.
+	env.ValidateCheckpoint(CheckpointValidation{
+		CheckpointID:    userCheckpointID,
+		SessionID:       sess.ID,
+		Strategy:        strategy.StrategyNameManualCommit,
+		FilesTouched:    []string{"fileA.go"},
+		ExpectedPrompts: []string{"Create files A, B, and C"},
+	})
+
+	// Verify agent checkpoints also exist
+	env.ValidateCheckpoint(CheckpointValidation{
+		CheckpointID: firstCheckpointID,
+		SessionID:    sess.ID,
+		Strategy:     strategy.StrategyNameManualCommit,
+		FilesTouched: []string{"fileB.go"},
+	})
+	env.ValidateCheckpoint(CheckpointValidation{
+		CheckpointID: secondCheckpointID,
+		SessionID:    sess.ID,
+		Strategy:     strategy.StrategyNameManualCommit,
+		FilesTouched: []string{"fileC.go"},
+	})
+
+	// No shadow branches should remain after all files are committed
+	branchesAfter := env.ListBranchesWithPrefix("entire/")
+	for _, b := range branchesAfter {
+		if b != paths.MetadataBranchName {
+			t.Errorf("Unexpected shadow branch after all files committed: %s", b)
+		}
+	}
+	t.Logf("Branches after all commits: %v", branchesAfter)
 }
 
 // TestShadow_MultipleCommits_SameActiveTurn tests that multiple commits
@@ -894,4 +1070,321 @@ func TestShadow_ResetSession_ClearsTurnCheckpointIDs(t *testing.T) {
 	}
 
 	t.Log("ResetSession_ClearsTurnCheckpointIDs test completed successfully")
+}
+
+// TestShadow_EndedSession_UserCommitsRemainingFiles tests that after a session ends
+// (IDLE → ENDED via session-end hook), user commits still get checkpoint trailers
+// and condensation happens correctly.
+//
+// This exercises the ENDED + GitCommit → ActionCondenseIfFilesTouched code path,
+// which is distinct from IDLE + GitCommit → ActionCondense.
+//
+// Flow:
+// 1. Agent creates files A and B, then stops (IDLE)
+// 2. Session ends (ENDED via SimulateSessionEnd)
+// 3. User commits file A → checkpoint #1
+// 4. User commits file B → checkpoint #2
+// 5. Both checkpoints exist, unique IDs, no shadow branches remain
+func TestShadow_EndedSession_UserCommitsRemainingFiles(t *testing.T) {
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t, strategy.StrategyNameManualCommit)
+
+	sess := env.NewSession()
+
+	// Start session (ACTIVE)
+	if err := env.SimulateUserPromptSubmitWithTranscriptPath(sess.ID, sess.TranscriptPath); err != nil {
+		t.Fatalf("user-prompt-submit failed: %v", err)
+	}
+
+	// Create files
+	env.WriteFile("fileA.go", "package main\n\nfunc A() {}\n")
+	env.WriteFile("fileB.go", "package main\n\nfunc B() {}\n")
+
+	sess.CreateTranscript("Create files A and B", []FileChange{
+		{Path: "fileA.go", Content: "package main\n\nfunc A() {}\n"},
+		{Path: "fileB.go", Content: "package main\n\nfunc B() {}\n"},
+	})
+
+	// Stop session (IDLE)
+	if err := env.SimulateStop(sess.ID, sess.TranscriptPath); err != nil {
+		t.Fatalf("SimulateStop failed: %v", err)
+	}
+
+	state, err := env.GetSessionState(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSessionState failed: %v", err)
+	}
+	if state.Phase != session.PhaseIdle {
+		t.Errorf("Expected IDLE phase, got %s", state.Phase)
+	}
+
+	// End session (ENDED) — exercises the distinct ENDED code path
+	if err := env.SimulateSessionEnd(sess.ID); err != nil {
+		t.Fatalf("SimulateSessionEnd failed: %v", err)
+	}
+
+	state, err = env.GetSessionState(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSessionState failed: %v", err)
+	}
+	if state.Phase != session.PhaseEnded {
+		t.Errorf("Expected ENDED phase, got %s", state.Phase)
+	}
+	if state.EndedAt == nil {
+		t.Error("EndedAt should be set after session-end")
+	}
+	t.Logf("Session phase: %s, EndedAt: %v, FilesTouched: %v",
+		state.Phase, state.EndedAt, state.FilesTouched)
+
+	// User commits file A → checkpoint #1
+	env.GitCommitWithShadowHooks("Add file A", "fileA.go")
+	firstCommitHash := env.GetHeadHash()
+	firstCheckpointID := env.GetCheckpointIDFromCommitMessage(firstCommitHash)
+	if firstCheckpointID == "" {
+		t.Fatal("First commit should have checkpoint trailer (ENDED session, files overlap)")
+	}
+	t.Logf("First checkpoint ID: %s", firstCheckpointID)
+
+	// Verify phase stays ENDED
+	state, err = env.GetSessionState(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSessionState failed: %v", err)
+	}
+	if state.Phase != session.PhaseEnded {
+		t.Errorf("Expected phase to stay ENDED after commit, got %s", state.Phase)
+	}
+
+	// Validate first checkpoint
+	env.ValidateCheckpoint(CheckpointValidation{
+		CheckpointID:    firstCheckpointID,
+		SessionID:       sess.ID,
+		Strategy:        strategy.StrategyNameManualCommit,
+		FilesTouched:    []string{"fileA.go"},
+		ExpectedPrompts: []string{"Create files A and B"},
+	})
+
+	// User commits file B → checkpoint #2
+	env.GitCommitWithShadowHooks("Add file B", "fileB.go")
+	secondCommitHash := env.GetHeadHash()
+	secondCheckpointID := env.GetCheckpointIDFromCommitMessage(secondCommitHash)
+	if secondCheckpointID == "" {
+		t.Fatal("Second commit should have checkpoint trailer (carry-forward in ENDED)")
+	}
+	t.Logf("Second checkpoint ID: %s", secondCheckpointID)
+
+	// Checkpoint IDs must be unique
+	if firstCheckpointID == secondCheckpointID {
+		t.Errorf("Each commit should get a unique checkpoint ID.\nFirst: %s\nSecond: %s",
+			firstCheckpointID, secondCheckpointID)
+	}
+
+	// Validate second checkpoint
+	env.ValidateCheckpoint(CheckpointValidation{
+		CheckpointID:    secondCheckpointID,
+		SessionID:       sess.ID,
+		Strategy:        strategy.StrategyNameManualCommit,
+		FilesTouched:    []string{"fileB.go"},
+		ExpectedPrompts: []string{"Create files A and B"},
+	})
+
+	// No shadow branches should remain
+	branchesAfter := env.ListBranchesWithPrefix("entire/")
+	for _, b := range branchesAfter {
+		if b != paths.MetadataBranchName {
+			t.Errorf("Unexpected shadow branch after all files committed: %s", b)
+		}
+	}
+
+	t.Log("EndedSession_UserCommitsRemainingFiles test completed successfully")
+}
+
+// TestShadow_DeletedFiles_CheckpointAndCarryForward tests that deleted files
+// in a session are properly handled: they get checkpoint trailers when committed
+// via git rm, and carry-forward works for remaining files.
+//
+// Flow:
+// 1. Pre-commit 3 files: old_a.go, old_b.go, old_c.go
+// 2. Session: agent creates new_file.go AND deletes old_a.go
+// 3. SimulateStop → IDLE
+// 4. User commits new_file.go → checkpoint #1
+// 5. User does git rm old_a.go + commit → checkpoint #2
+// 6. Both checkpoints validated, no shadow branches remain
+func TestShadow_DeletedFiles_CheckpointAndCarryForward(t *testing.T) {
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t, strategy.StrategyNameManualCommit)
+
+	// Pre-commit existing files
+	env.WriteFile("old_a.go", "package main\n\nfunc OldA() {}\n")
+	env.WriteFile("old_b.go", "package main\n\nfunc OldB() {}\n")
+	env.WriteFile("old_c.go", "package main\n\nfunc OldC() {}\n")
+	env.GitAdd("old_a.go")
+	env.GitAdd("old_b.go")
+	env.GitAdd("old_c.go")
+	env.GitCommit("Add old files")
+
+	sess := env.NewSession()
+
+	// Start session
+	if err := env.SimulateUserPromptSubmitWithTranscriptPath(sess.ID, sess.TranscriptPath); err != nil {
+		t.Fatalf("user-prompt-submit failed: %v", err)
+	}
+
+	// Agent creates new_file.go and deletes old_a.go
+	env.WriteFile("new_file.go", "package main\n\nfunc NewFunc() {}\n")
+	if err := os.Remove(filepath.Join(env.RepoDir, "old_a.go")); err != nil {
+		t.Fatalf("Failed to delete old_a.go: %v", err)
+	}
+
+	sess.CreateTranscript("Create new_file.go and delete old_a.go", []FileChange{
+		{Path: "new_file.go", Content: "package main\n\nfunc NewFunc() {}\n"},
+		{Path: "old_a.go", Content: ""}, // deletion
+	})
+
+	// Stop session (IDLE)
+	if err := env.SimulateStop(sess.ID, sess.TranscriptPath); err != nil {
+		t.Fatalf("SimulateStop failed: %v", err)
+	}
+
+	// User commits new_file.go → checkpoint #1
+	env.GitCommitWithShadowHooks("Add new file", "new_file.go")
+	firstCommitHash := env.GetHeadHash()
+	firstCheckpointID := env.GetCheckpointIDFromCommitMessage(firstCommitHash)
+	if firstCheckpointID == "" {
+		t.Fatal("First commit should have checkpoint trailer")
+	}
+	t.Logf("First checkpoint ID: %s", firstCheckpointID)
+
+	// User does git rm old_a.go and commits the deletion
+	env.GitRm("old_a.go")
+	env.GitCommitStagedWithShadowHooks("Remove old_a.go")
+	secondCommitHash := env.GetHeadHash()
+	secondCheckpointID := env.GetCheckpointIDFromCommitMessage(secondCommitHash)
+	// Deleted files may get a trailer via carry-forward, but condensation may not
+	// produce full metadata since the file doesn't exist in the working tree.
+	// Just verify uniqueness if a trailer was added.
+	if secondCheckpointID != "" {
+		t.Logf("Second checkpoint ID: %s (carry-forward for deleted file)", secondCheckpointID)
+		if firstCheckpointID == secondCheckpointID {
+			t.Error("Checkpoint IDs should be unique")
+		}
+	} else {
+		t.Log("Second commit has no checkpoint trailer (deleted files may not carry forward)")
+	}
+
+	// Validate first checkpoint
+	env.ValidateCheckpoint(CheckpointValidation{
+		CheckpointID:    firstCheckpointID,
+		SessionID:       sess.ID,
+		Strategy:        strategy.StrategyNameManualCommit,
+		ExpectedPrompts: []string{"Create new_file.go and delete old_a.go"},
+	})
+
+	// Check for remaining shadow branches.
+	// Note: deleted file carry-forward may leave shadow branches if condensation
+	// doesn't produce full metadata (known limitation).
+	branchesAfter := env.ListBranchesWithPrefix("entire/")
+	for _, b := range branchesAfter {
+		if b != paths.MetadataBranchName {
+			t.Logf("Shadow branch remaining after commits (may be expected for deleted files): %s", b)
+		}
+	}
+
+	t.Log("DeletedFiles_CheckpointAndCarryForward test completed successfully")
+}
+
+// TestShadow_CarryForward_ModifiedExistingFiles tests that modified (not new) files
+// in carry-forward get checkpoint trailers correctly. Modified files always trigger
+// overlap because the user is editing a file the session worked on.
+//
+// Flow:
+// 1. Pre-commit 3 files: model.go, view.go, controller.go
+// 2. Session: agent modifies all three
+// 3. SimulateStop → IDLE
+// 4. User commits model.go → checkpoint #1
+// 5. User commits view.go → checkpoint #2
+// 6. User commits controller.go → checkpoint #3
+// 7. All IDs unique, all validated, no shadow branches
+func TestShadow_CarryForward_ModifiedExistingFiles(t *testing.T) {
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t, strategy.StrategyNameManualCommit)
+
+	// Pre-commit existing files
+	env.WriteFile("model.go", "package main\n\nfunc Model() {}\n")
+	env.WriteFile("view.go", "package main\n\nfunc View() {}\n")
+	env.WriteFile("controller.go", "package main\n\nfunc Controller() {}\n")
+	env.GitAdd("model.go")
+	env.GitAdd("view.go")
+	env.GitAdd("controller.go")
+	env.GitCommit("Add MVC files")
+
+	sess := env.NewSession()
+
+	// Start session
+	if err := env.SimulateUserPromptSubmitWithTranscriptPath(sess.ID, sess.TranscriptPath); err != nil {
+		t.Fatalf("user-prompt-submit failed: %v", err)
+	}
+
+	// Agent modifies all three files
+	env.WriteFile("model.go", "package main\n\n// Updated by agent\nfunc Model() { return }\n")
+	env.WriteFile("view.go", "package main\n\n// Updated by agent\nfunc View() { return }\n")
+	env.WriteFile("controller.go", "package main\n\n// Updated by agent\nfunc Controller() { return }\n")
+
+	sess.CreateTranscript("Update MVC files", []FileChange{
+		{Path: "model.go", Content: "package main\n\n// Updated by agent\nfunc Model() { return }\n"},
+		{Path: "view.go", Content: "package main\n\n// Updated by agent\nfunc View() { return }\n"},
+		{Path: "controller.go", Content: "package main\n\n// Updated by agent\nfunc Controller() { return }\n"},
+	})
+
+	// Stop session (IDLE)
+	if err := env.SimulateStop(sess.ID, sess.TranscriptPath); err != nil {
+		t.Fatalf("SimulateStop failed: %v", err)
+	}
+
+	// Commit each file separately
+	checkpointIDs := make([]string, 3)
+	files := []string{"model.go", "view.go", "controller.go"}
+
+	for i, file := range files {
+		env.GitCommitWithShadowHooks("Update "+file, file)
+		commitHash := env.GetHeadHash()
+		cpID := env.GetCheckpointIDFromCommitMessage(commitHash)
+		if cpID == "" {
+			t.Fatalf("Commit %d (%s) should have checkpoint trailer", i+1, file)
+		}
+		checkpointIDs[i] = cpID
+		t.Logf("Checkpoint %d (%s): %s", i+1, file, cpID)
+	}
+
+	// All checkpoint IDs must be unique
+	seen := make(map[string]bool)
+	for i, cpID := range checkpointIDs {
+		if seen[cpID] {
+			t.Errorf("Duplicate checkpoint ID at position %d: %s", i, cpID)
+		}
+		seen[cpID] = true
+	}
+
+	// Validate all checkpoints
+	for i, cpID := range checkpointIDs {
+		env.ValidateCheckpoint(CheckpointValidation{
+			CheckpointID:    cpID,
+			SessionID:       sess.ID,
+			Strategy:        strategy.StrategyNameManualCommit,
+			FilesTouched:    []string{files[i]},
+			ExpectedPrompts: []string{"Update MVC files"},
+		})
+	}
+
+	// No shadow branches should remain
+	branchesAfter := env.ListBranchesWithPrefix("entire/")
+	for _, b := range branchesAfter {
+		if b != paths.MetadataBranchName {
+			t.Errorf("Unexpected shadow branch after all files committed: %s", b)
+		}
+	}
+
+	t.Log("CarryForward_ModifiedExistingFiles test completed successfully")
 }

@@ -787,32 +787,6 @@ func restoreTaskCheckpointTranscript(strat strategy.Strategy, point strategy.Rew
 	return nil
 }
 
-// createContextFileMinimal creates a context file without staged files info
-// (since the strategy will handle staging)
-func createContextFileMinimal(contextFile, commitMessage, sessionID, promptFile, summaryFile string, transcript []transcriptLine) error {
-	prompt, _ := os.ReadFile(promptFile)   //nolint:errcheck,gosec // Best-effort loading of optional context files
-	summary, _ := os.ReadFile(summaryFile) //nolint:errcheck,gosec // Best-effort loading of optional context files
-	keyActions := extractKeyActions(transcript, 10)
-
-	var content strings.Builder
-	content.WriteString("# Session Context\n\n")
-	content.WriteString(fmt.Sprintf("**Session ID:** %s\n\n", sessionID))
-	content.WriteString(fmt.Sprintf("**Commit Message:** %s\n\n", commitMessage))
-	content.WriteString("## Prompt\n\n")
-	content.Write(prompt)
-	content.WriteString("\n\n## Summary\n\n")
-	content.Write(summary)
-	content.WriteString("\n\n## Key Actions\n\n")
-	for _, action := range keyActions {
-		content.WriteString(fmt.Sprintf("- %s\n", action))
-	}
-
-	if err := os.WriteFile(contextFile, []byte(content.String()), 0o600); err != nil {
-		return fmt.Errorf("failed to write context file: %w", err)
-	}
-	return nil
-}
-
 // handleLogsOnlyRewindInteractive handles rewind for logs-only points with a sub-choice menu.
 func handleLogsOnlyRewindInteractive(start strategy.Strategy, point strategy.RewindPoint, shortID string) error {
 	var action string

@@ -195,7 +195,7 @@ func TestResumeFromCurrentBranch_WithEntireCheckpointTrailer(t *testing.T) {
 		t.Fatalf("Failed to ensure setup: %v", err)
 	}
 
-	// Create metadata directory with session log (required for SaveChanges)
+	// Create metadata directory with session log (required for SaveStep)
 	sessionID := "4f8c1176-7025-4530-a860-c6fc4c63a150"
 	sessionLogContent := `{"type":"test"}`
 	metadataDir := filepath.Join(tmpDir, paths.EntireMetadataDir, sessionID)
@@ -213,8 +213,8 @@ func TestResumeFromCurrentBranch_WithEntireCheckpointTrailer(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	// Use SaveChanges to create a commit with checkpoint metadata on entire/checkpoints/v1 branch
-	ctx := strategy.SaveContext{
+	// Use SaveStep to create a commit with checkpoint metadata on entire/checkpoints/v1 branch
+	ctx := strategy.StepContext{
 		CommitMessage:  "test commit with checkpoint",
 		MetadataDir:    filepath.Join(paths.EntireMetadataDir, sessionID),
 		MetadataDirAbs: metadataDir,
@@ -224,7 +224,7 @@ func TestResumeFromCurrentBranch_WithEntireCheckpointTrailer(t *testing.T) {
 		AuthorName:     "Test User",
 		AuthorEmail:    "test@example.com",
 	}
-	if err := strat.SaveChanges(ctx); err != nil {
+	if err := strat.SaveStep(ctx); err != nil {
 		t.Fatalf("Failed to save changes: %v", err)
 	}
 

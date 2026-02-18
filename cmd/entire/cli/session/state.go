@@ -133,7 +133,7 @@ type State struct {
 	PromptAttributions []PromptAttribution `json:"prompt_attributions,omitempty"`
 
 	// PendingPromptAttribution holds attribution calculated at prompt start (before agent runs).
-	// This is moved to PromptAttributions when SaveChanges is called.
+	// This is moved to PromptAttributions when SaveStep is called.
 	PendingPromptAttribution *PromptAttribution `json:"pending_prompt_attribution,omitempty"`
 }
 

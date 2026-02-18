@@ -199,6 +199,7 @@ func TransitionAndLog(state *SessionState, event session.Event, ctx session.Tran
 			slog.String("session_id", state.SessionID),
 			slog.String("event", event.String()),
 			slog.String("phase", string(result.NewPhase)),
+			slog.Any("result", result),
 		)
 	}
 

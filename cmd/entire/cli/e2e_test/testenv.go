@@ -328,6 +328,177 @@ func (env *TestEnv) GitCommitWithShadowHooks(message string, files ...string) {
 	}
 }
 
+// GitRm stages file deletions using git rm.
+func (env *TestEnv) GitRm(paths ...string) {
+	env.T.Helper()
+
+	args := append([]string{"rm", "--"}, paths...)
+	//nolint:gosec // test code, args are from trusted test setup
+	cmd := exec.Command("git", args...)
+	cmd.Dir = env.RepoDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		env.T.Fatalf("git rm failed: %v\nOutput: %s", err, output)
+	}
+}
+
+// GitCommitStagedWithShadowHooks commits whatever is already staged (without adding files first),
+// running the prepare-commit-msg and post-commit hooks like a real workflow.
+// Use this after GitRm or when files are already staged.
+func (env *TestEnv) GitCommitStagedWithShadowHooks(message string) {
+	env.T.Helper()
+
+	// Create a temp file for the commit message
+	msgFile := filepath.Join(env.RepoDir, ".git", "COMMIT_EDITMSG")
+	//nolint:gosec // test code, permissions are intentionally standard
+	if err := os.WriteFile(msgFile, []byte(message), 0o644); err != nil {
+		env.T.Fatalf("failed to write commit message file: %v", err)
+	}
+
+	// Run prepare-commit-msg hook
+	//nolint:gosec,noctx // test code, args are from trusted test setup, no context needed
+	prepCmd := exec.Command(getTestBinary(), "hooks", "git", "prepare-commit-msg", msgFile, "message")
+	prepCmd.Dir = env.RepoDir
+	prepCmd.Env = append(os.Environ(),
+		"ENTIRE_TEST_TTY=1",
+		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+filepath.Join(env.RepoDir, ".claude"),
+		"ENTIRE_TEST_GEMINI_PROJECT_DIR="+filepath.Join(env.RepoDir, ".gemini"),
+	)
+	if output, err := prepCmd.CombinedOutput(); err != nil {
+		env.T.Logf("prepare-commit-msg output: %s", output)
+	}
+
+	// Read the modified message
+	//nolint:gosec // test code, path is from test setup
+	modifiedMsg, err := os.ReadFile(msgFile)
+	if err != nil {
+		env.T.Fatalf("failed to read modified commit message: %v", err)
+	}
+
+	// Create the commit using go-git with the modified message
+	repo, err := git.PlainOpen(env.RepoDir)
+	if err != nil {
+		env.T.Fatalf("failed to open git repo: %v", err)
+	}
+
+	worktree, err := repo.Worktree()
+	if err != nil {
+		env.T.Fatalf("failed to get worktree: %v", err)
+	}
+
+	_, err = worktree.Commit(string(modifiedMsg), &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "E2E Test User",
+			Email: "e2e-test@example.com",
+			When:  time.Now(),
+		},
+	})
+	if err != nil {
+		env.T.Fatalf("failed to commit: %v", err)
+	}
+
+	// Run post-commit hook
+	//nolint:gosec,noctx // test code, args are from trusted test setup, no context needed
+	postCmd := exec.Command(getTestBinary(), "hooks", "git", "post-commit")
+	postCmd.Dir = env.RepoDir
+	postCmd.Env = append(os.Environ(),
+		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+filepath.Join(env.RepoDir, ".claude"),
+		"ENTIRE_TEST_GEMINI_PROJECT_DIR="+filepath.Join(env.RepoDir, ".gemini"),
+	)
+	if output, err := postCmd.CombinedOutput(); err != nil {
+		env.T.Logf("post-commit output: %s", output)
+	}
+}
+
+// GitCommitWithTrailerRemoved stages and commits files, simulating what happens when
+// a user removes the Entire-Checkpoint trailer during commit message editing.
+// This tests the opt-out behavior where removing the trailer skips condensation.
+func (env *TestEnv) GitCommitWithTrailerRemoved(message string, files ...string) {
+	env.T.Helper()
+
+	// Stage files using go-git
+	for _, file := range files {
+		env.GitAdd(file)
+	}
+
+	// Create a temp file for the commit message
+	msgFile := filepath.Join(env.RepoDir, ".git", "COMMIT_EDITMSG")
+	//nolint:gosec // test code, permissions are intentionally standard
+	if err := os.WriteFile(msgFile, []byte(message), 0o644); err != nil {
+		env.T.Fatalf("failed to write commit message file: %v", err)
+	}
+
+	// Run prepare-commit-msg hook
+	//nolint:gosec,noctx // test code, args are from trusted test setup, no context needed
+	prepCmd := exec.Command(getTestBinary(), "hooks", "git", "prepare-commit-msg", msgFile)
+	prepCmd.Dir = env.RepoDir
+	prepCmd.Env = append(os.Environ(),
+		"ENTIRE_TEST_TTY=1",
+		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+filepath.Join(env.RepoDir, ".claude"),
+		"ENTIRE_TEST_GEMINI_PROJECT_DIR="+filepath.Join(env.RepoDir, ".gemini"),
+	)
+	if output, err := prepCmd.CombinedOutput(); err != nil {
+		env.T.Logf("prepare-commit-msg output: %s", output)
+	}
+
+	// Read the modified message (with trailer added by hook)
+	//nolint:gosec // test code, path is from test setup
+	modifiedMsg, err := os.ReadFile(msgFile)
+	if err != nil {
+		env.T.Fatalf("failed to read modified commit message: %v", err)
+	}
+
+	// REMOVE the Entire-Checkpoint trailer (simulating user editing the message)
+	lines := strings.Split(string(modifiedMsg), "\n")
+	var cleanedLines []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Entire-Checkpoint:") {
+			continue
+		}
+		if strings.Contains(line, "Remove the Entire-Checkpoint trailer") {
+			continue
+		}
+		if strings.Contains(line, "trailer will be added to your next commit") {
+			continue
+		}
+		cleanedLines = append(cleanedLines, line)
+	}
+	cleanedMsg := strings.TrimRight(strings.Join(cleanedLines, "\n"), "\n") + "\n"
+
+	// Create the commit using go-git with the cleaned message (no trailer)
+	repo, err := git.PlainOpen(env.RepoDir)
+	if err != nil {
+		env.T.Fatalf("failed to open git repo: %v", err)
+	}
+
+	worktree, err := repo.Worktree()
+	if err != nil {
+		env.T.Fatalf("failed to get worktree: %v", err)
+	}
+
+	_, err = worktree.Commit(cleanedMsg, &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "E2E Test User",
+			Email: "e2e-test@example.com",
+			When:  time.Now(),
+		},
+	})
+	if err != nil {
+		env.T.Fatalf("failed to commit: %v", err)
+	}
+
+	// Run post-commit hook - since trailer was removed, no condensation should happen
+	//nolint:gosec,noctx // test code, args are from trusted test setup, no context needed
+	postCmd := exec.Command(getTestBinary(), "hooks", "git", "post-commit")
+	postCmd.Dir = env.RepoDir
+	postCmd.Env = append(os.Environ(),
+		"ENTIRE_TEST_CLAUDE_PROJECT_DIR="+filepath.Join(env.RepoDir, ".claude"),
+		"ENTIRE_TEST_GEMINI_PROJECT_DIR="+filepath.Join(env.RepoDir, ".gemini"),
+	)
+	if output, err := postCmd.CombinedOutput(); err != nil {
+		env.T.Logf("post-commit output: %s", output)
+	}
+}
+
 // GitCheckoutNewBranch creates and checks out a new branch.
 func (env *TestEnv) GitCheckoutNewBranch(branchName string) {
 	env.T.Helper()
@@ -458,6 +629,33 @@ func (env *TestEnv) BranchExists(branchName string) bool {
 	})
 
 	return found
+}
+
+// ListBranchesWithPrefix returns all branches that start with the given prefix.
+func (env *TestEnv) ListBranchesWithPrefix(prefix string) []string {
+	env.T.Helper()
+
+	repo, err := git.PlainOpen(env.RepoDir)
+	if err != nil {
+		env.T.Fatalf("failed to open git repo: %v", err)
+	}
+
+	refs, err := repo.References()
+	if err != nil {
+		env.T.Fatalf("failed to get references: %v", err)
+	}
+
+	var branches []string
+	//nolint:errcheck,gosec // ForEach callback doesn't return errors we need to handle
+	refs.ForEach(func(ref *plumbing.Reference) error {
+		name := ref.Name().Short()
+		if strings.HasPrefix(name, prefix) {
+			branches = append(branches, name)
+		}
+		return nil
+	})
+
+	return branches
 }
 
 // GetCommitMessage returns the commit message for the given commit hash.

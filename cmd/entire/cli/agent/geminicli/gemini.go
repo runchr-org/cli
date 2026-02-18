@@ -375,8 +375,6 @@ func (g *GeminiCLIAgent) ExtractModifiedFilesFromOffset(path string, startOffset
 	return files, totalMessages, nil
 }
 
-// TranscriptChunker interface implementation
-
 // ChunkTranscript splits a Gemini JSON transcript by distributing messages across chunks.
 // Gemini uses JSON format with a {"messages": [...]} structure, so chunking splits
 // the messages array while preserving the JSON structure in each chunk.

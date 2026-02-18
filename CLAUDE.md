@@ -278,8 +278,8 @@ The CLI uses a strategy pattern for managing session data and checkpoints. Each 
 
 #### Core Interface
 All strategies implement:
-- `SaveChanges()` - Save session checkpoint (code + metadata)
-- `SaveTaskCheckpoint()` - Save subagent task checkpoint
+- `SaveStep()` - Save session step checkpoint (code + metadata)
+- `SaveTaskStep()` - Save subagent task step checkpoint
 - `GetRewindPoints()` / `Rewind()` - List and restore to checkpoints
 - `GetSessionLog()` / `GetSessionInfo()` - Retrieve session data
 - `ListSessions()` / `GetSession()` - Session discovery
@@ -319,7 +319,7 @@ All strategies implement:
 
 #### Key Files
 
-- `strategy.go` - Interface definition and context structs (`SaveContext`, `RewindPoint`, etc.)
+- `strategy.go` - Interface definition and context structs (`StepContext`, `TaskStepContext`, `RewindPoint`, etc.)
 - `registry.go` - Strategy registration/discovery (factory pattern with `Get()`, `List()`, `Default()`)
 - `common.go` - Shared helpers for metadata extraction, tree building, rewind validation, `ListCheckpoints()`
 - `session.go` - Session/checkpoint data structures

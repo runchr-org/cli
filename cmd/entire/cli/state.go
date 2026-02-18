@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -22,18 +23,26 @@ type PrePromptState struct {
 	Timestamp      string   `json:"timestamp"`
 	UntrackedFiles []string `json:"untracked_files"`
 
-	// StartMessageIndex is the message count in the transcript when this state
-	// was captured. Used for calculating token usage since the prompt started.
-	// Only set for Gemini sessions. Zero means not set or session just started.
+	// TranscriptOffset is the unified transcript position when this state was captured.
+	// For Claude Code (JSONL), this is the line count.
+	// For Gemini CLI (JSON), this is the message count.
+	// Zero means not set or session just started.
+	TranscriptOffset int `json:"transcript_offset,omitempty"`
+
+	// LastTranscriptIdentifier is the agent-specific identifier at the transcript position.
+	// UUID for Claude Code, message ID for Gemini CLI. Optional metadata.
+	LastTranscriptIdentifier string `json:"last_transcript_identifier,omitempty"`
+
+	// Deprecated: StartMessageIndex is the old Gemini-specific field.
+	// Migrated to TranscriptOffset on load.
 	StartMessageIndex int `json:"start_message_index,omitempty"`
 
-	// Transcript position at prompt start - tracks what was added during this step/turn.
-	// Used for Claude Code sessions.
-	LastTranscriptIdentifier string `json:"last_transcript_identifier,omitempty"` // Last identifier when prompt started (UUID for Claude, message ID for Gemini)
-	StepTranscriptStart      int    `json:"step_transcript_start,omitempty"`      // Transcript line count when this step/turn started
+	// Deprecated: StepTranscriptStart is the old Claude-specific field.
+	// Migrated to TranscriptOffset on load.
+	StepTranscriptStart int `json:"step_transcript_start,omitempty"`
 
-	// Deprecated: LastTranscriptLineCount is the old name for StepTranscriptStart.
-	// Kept for backward compatibility when reading state files written by older CLI versions.
+	// Deprecated: LastTranscriptLineCount is the oldest name for transcript position.
+	// Migrated to TranscriptOffset on load.
 	LastTranscriptLineCount int `json:"last_transcript_line_count,omitempty"`
 }
 
@@ -54,17 +63,33 @@ func (s *PrePromptState) PreUntrackedFiles() []string {
 
 // normalizePrePromptState migrates deprecated fields after loading from JSON.
 func (s *PrePromptState) normalizePrePromptState() {
+	// Migrate the oldest field to the intermediate field first
 	if s.StepTranscriptStart == 0 && s.LastTranscriptLineCount > 0 {
 		s.StepTranscriptStart = s.LastTranscriptLineCount
 	}
 	s.LastTranscriptLineCount = 0
+
+	// Migrate all deprecated fields to the unified TranscriptOffset
+	if s.TranscriptOffset == 0 {
+		if s.StepTranscriptStart > 0 {
+			s.TranscriptOffset = s.StepTranscriptStart
+		} else if s.StartMessageIndex > 0 {
+			s.TranscriptOffset = s.StartMessageIndex
+		}
+	}
+	s.StepTranscriptStart = 0
+	s.StartMessageIndex = 0
 }
 
 // CapturePrePromptState captures current untracked files and transcript position before a prompt
 // and saves them to a state file.
+//
+// The agent parameter is used to determine the transcript position via TranscriptAnalyzer.
+// If the agent does not implement TranscriptAnalyzer, the transcript offset will be 0.
+// The sessionRef parameter is optional — if empty, transcript position won't be captured.
+//
 // Works correctly from any subdirectory within the repository.
-// The transcriptPath parameter is optional - if empty, transcript position won't be captured.
-func CapturePrePromptState(sessionID, transcriptPath string) error {
+func CapturePrePromptState(ag agent.Agent, sessionID, sessionRef string) error {
 	if sessionID == "" {
 		sessionID = unknownSessionID
 	}
@@ -86,24 +111,24 @@ func CapturePrePromptState(sessionID, transcriptPath string) error {
 		return fmt.Errorf("failed to get untracked files: %w", err)
 	}
 
-	// Get transcript position (last UUID and line count)
-	var transcriptPos TranscriptPosition
-	if transcriptPath != "" {
-		transcriptPos, err = GetTranscriptPosition(transcriptPath)
-		if err != nil {
-			// Log warning but don't fail - transcript position is optional
-			fmt.Fprintf(os.Stderr, "Warning: failed to get transcript position: %v\n", err)
+	// Get transcript position using TranscriptAnalyzer if available
+	var transcriptOffset int
+	if analyzer, ok := ag.(agent.TranscriptAnalyzer); ok && sessionRef != "" {
+		pos, posErr := analyzer.GetTranscriptPosition(sessionRef)
+		if posErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to get transcript position: %v\n", posErr)
+		} else {
+			transcriptOffset = pos
 		}
 	}
 
 	// Create state file
 	stateFile := prePromptStateFile(sessionID)
 	state := PrePromptState{
-		SessionID:                sessionID,
-		Timestamp:                time.Now().UTC().Format(time.RFC3339),
-		UntrackedFiles:           untrackedFiles,
-		LastTranscriptIdentifier: transcriptPos.LastUUID,
-		StepTranscriptStart:      transcriptPos.LineCount,
+		SessionID:        sessionID,
+		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+		UntrackedFiles:   untrackedFiles,
+		TranscriptOffset: transcriptOffset,
 	}
 
 	data, err := jsonutil.MarshalIndentWithNewline(state, "", "  ")
@@ -115,78 +140,8 @@ func CapturePrePromptState(sessionID, transcriptPath string) error {
 		return fmt.Errorf("failed to write state file: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Captured state before prompt: %d untracked files, transcript at line %d (uuid: %s)\n",
-		len(untrackedFiles), transcriptPos.LineCount, transcriptPos.LastUUID)
-	return nil
-}
-
-// CaptureGeminiPrePromptState captures current untracked files and transcript position
-// before a prompt for Gemini sessions. This is called by the BeforeAgent hook.
-// The transcriptPath is the path to the Gemini session transcript (JSON format).
-func CaptureGeminiPrePromptState(sessionID, transcriptPath string) error {
-	if sessionID == "" {
-		sessionID = unknownSessionID
-	}
-
-	// Get absolute path for tmp directory
-	tmpDirAbs, err := paths.AbsPath(paths.EntireTmpDir)
-	if err != nil {
-		tmpDirAbs = paths.EntireTmpDir // Fallback to relative
-	}
-
-	// Create tmp directory if it doesn't exist
-	if err := os.MkdirAll(tmpDirAbs, 0o750); err != nil {
-		return fmt.Errorf("failed to create tmp directory: %w", err)
-	}
-
-	// Get list of untracked files (excluding .entire directory itself)
-	untrackedFiles, err := getUntrackedFilesForState()
-	if err != nil {
-		return fmt.Errorf("failed to get untracked files: %w", err)
-	}
-
-	// Get transcript position (message count and last message ID) for Gemini
-	var startMessageIndex int
-	var lastMessageID string
-	if transcriptPath != "" {
-		// Read transcript and extract both message count and last message ID
-		if data, readErr := os.ReadFile(transcriptPath); readErr == nil && len(data) > 0 { //nolint:gosec // Reading from controlled transcript path
-			var transcript struct {
-				Messages []struct {
-					ID string `json:"id"`
-				} `json:"messages"`
-			}
-			if jsonErr := json.Unmarshal(data, &transcript); jsonErr == nil {
-				startMessageIndex = len(transcript.Messages)
-				if startMessageIndex > 0 {
-					lastMessageID = transcript.Messages[startMessageIndex-1].ID
-				}
-			} else {
-				fmt.Fprintf(os.Stderr, "Warning: failed to parse transcript for message tracking: %v\n", jsonErr)
-			}
-		}
-	}
-
-	// Create state file
-	stateFile := prePromptStateFile(sessionID)
-	state := PrePromptState{
-		SessionID:                sessionID,
-		Timestamp:                time.Now().UTC().Format(time.RFC3339),
-		UntrackedFiles:           untrackedFiles,
-		StartMessageIndex:        startMessageIndex,
-		LastTranscriptIdentifier: lastMessageID,
-	}
-
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal state: %w", err)
-	}
-
-	if err := os.WriteFile(stateFile, data, 0o600); err != nil {
-		return fmt.Errorf("failed to write state file: %w", err)
-	}
-
-	fmt.Fprintf(os.Stderr, "Captured Gemini state before prompt: %d untracked files, transcript position: %d (last msg id: %s)\n", len(untrackedFiles), startMessageIndex, lastMessageID)
+	fmt.Fprintf(os.Stderr, "Captured state before prompt: %d untracked files, transcript offset: %d\n",
+		len(untrackedFiles), transcriptOffset)
 	return nil
 }
 
@@ -288,6 +243,70 @@ func DetectFileChanges(previouslyUntracked []string) (*FileChanges, error) {
 	}
 
 	return &changes, nil
+}
+
+// filterToUncommittedFiles removes files from the list that are already committed to HEAD
+// with matching content. This prevents re-adding files that an agent committed mid-turn
+// (already condensed by PostCommit) back to FilesTouched via SaveStep. Files not in
+// HEAD or with different content in the working tree are kept. Fails open: if any git
+// operation errors, returns the original list unchanged.
+func filterToUncommittedFiles(files []string, repoRoot string) []string {
+	if len(files) == 0 {
+		return files
+	}
+
+	repo, err := openRepository()
+	if err != nil {
+		return files // fail open
+	}
+
+	head, err := repo.Head()
+	if err != nil {
+		return files // fail open (empty repo, detached HEAD, etc.)
+	}
+
+	commit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		return files // fail open
+	}
+
+	headTree, err := commit.Tree()
+	if err != nil {
+		return files // fail open
+	}
+
+	var result []string
+	for _, relPath := range files {
+		headFile, err := headTree.File(relPath)
+		if err != nil {
+			// File not in HEAD — it's uncommitted
+			result = append(result, relPath)
+			continue
+		}
+
+		// File is in HEAD — compare content with working tree
+		absPath := filepath.Join(repoRoot, relPath)
+		workingContent, err := os.ReadFile(absPath) //nolint:gosec // path from controlled source
+		if err != nil {
+			// Can't read working tree file (deleted?) — keep it
+			result = append(result, relPath)
+			continue
+		}
+
+		headContent, err := headFile.Contents()
+		if err != nil {
+			result = append(result, relPath)
+			continue
+		}
+
+		if string(workingContent) != headContent {
+			// Working tree differs from HEAD — uncommitted changes
+			result = append(result, relPath)
+		}
+		// else: content matches HEAD — already committed, skip
+	}
+
+	return result
 }
 
 // FilterAndNormalizePaths converts absolute paths to relative and filters out

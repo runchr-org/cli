@@ -3,9 +3,13 @@
 package session
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 )
 
 // Phase represents the lifecycle stage of a session.
@@ -53,10 +57,11 @@ const (
 	EventGitCommit                 // A git commit was made (PostCommit hook)
 	EventSessionStart              // Session process started (SessionStart hook)
 	EventSessionStop               // Session process ended (SessionStop hook)
+	EventCompaction                // Agent compacted context mid-turn (PreCompress hook)
 )
 
 // allEvents is the canonical list of events for enumeration.
-var allEvents = []Event{EventTurnStart, EventTurnEnd, EventGitCommit, EventSessionStart, EventSessionStop}
+var allEvents = []Event{EventTurnStart, EventTurnEnd, EventGitCommit, EventSessionStart, EventSessionStop, EventCompaction}
 
 // String returns a human-readable name for the event.
 func (e Event) String() string {
@@ -71,6 +76,8 @@ func (e Event) String() string {
 		return "SessionStart"
 	case EventSessionStop:
 		return "SessionStop"
+	case EventCompaction:
+		return "Compaction"
 	default:
 		return fmt.Sprintf("Event(%d)", int(e))
 	}
@@ -171,6 +178,12 @@ func transitionFromIdle(event Event, ctx TransitionContext) TransitionResult {
 			NewPhase: PhaseEnded,
 			Actions:  []Action{ActionUpdateLastInteraction},
 		}
+	case EventCompaction:
+		// Compaction while idle shouldn't happen, but condense if there's work.
+		return TransitionResult{
+			NewPhase: PhaseIdle,
+			Actions:  []Action{ActionCondenseIfFilesTouched, ActionUpdateLastInteraction},
+		}
 	default:
 		return TransitionResult{NewPhase: PhaseIdle}
 	}
@@ -206,6 +219,13 @@ func transitionFromActive(event Event, ctx TransitionContext) TransitionResult {
 		return TransitionResult{
 			NewPhase: PhaseEnded,
 			Actions:  []Action{ActionUpdateLastInteraction},
+		}
+	case EventCompaction:
+		// Compaction mid-turn: save current progress but stay active.
+		// The transcript offset will be reset by the compaction handler.
+		return TransitionResult{
+			NewPhase: PhaseActive,
+			Actions:  []Action{ActionCondenseIfFilesTouched, ActionUpdateLastInteraction},
 		}
 	default:
 		return TransitionResult{NewPhase: PhaseActive}
@@ -244,6 +264,9 @@ func transitionFromEnded(event Event, ctx TransitionContext) TransitionResult {
 	case EventSessionStop:
 		// Already ended, no-op.
 		return TransitionResult{NewPhase: PhaseEnded}
+	case EventCompaction:
+		// Compaction while ended shouldn't happen, no-op.
+		return TransitionResult{NewPhase: PhaseEnded}
 	default:
 		return TransitionResult{NewPhase: PhaseEnded}
 	}
@@ -275,6 +298,19 @@ func (NoOpActionHandler) HandleWarnStaleSession(_ *State) error       { return n
 // handler actions are skipped but common actions continue. Returns the
 // first handler error, or nil.
 func ApplyTransition(state *State, result TransitionResult, handler ActionHandler) error {
+	logCtx := logging.WithComponent(context.Background(), "session")
+
+	actionStrs := make([]string, len(result.Actions))
+	for i, a := range result.Actions {
+		actionStrs[i] = a.String()
+	}
+	logging.Debug(logCtx, "ApplyTransition",
+		slog.String("session_id", state.SessionID),
+		slog.String("old_phase", string(state.Phase)),
+		slog.String("new_phase", string(result.NewPhase)),
+		slog.String("actions", strings.Join(actionStrs, ",")),
+	)
+
 	state.Phase = result.NewPhase
 
 	var handlerErr error

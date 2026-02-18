@@ -387,7 +387,7 @@ func hasAnyLiveSession(repoRoot string) bool {
 		// PostCommit saves all session files on every commit, refreshing
 		// modtime even for stale sessions.
 		// IDLE sessions are always considered live (user may just be away).
-		if session.Phase(info.Phase).IsActive() {
+		if session.PhaseFromString(info.Phase).IsActive() {
 			if info.LastInteractionTime != nil && time.Since(*info.LastInteractionTime) > staleActiveSessionThreshold {
 				wingmanLog("skipping stale active session %s (phase=%s, last_interaction=%s ago)", sid, info.Phase, time.Since(*info.LastInteractionTime).Round(time.Second))
 				continue
@@ -496,7 +496,7 @@ func runWingmanApply(repoRoot string) error {
 		sessDir := findSessionStateDir(repoRoot)
 		if sessDir != "" {
 			phaseInfo := readSessionPhaseInfo(sessDir, state.SessionID)
-			if phaseInfo.Phase != "" && session.Phase(phaseInfo.Phase).IsActive() {
+			if phaseInfo.Phase != "" && session.PhaseFromString(phaseInfo.Phase).IsActive() {
 				wingmanLog("session is active (phase=%s), aborting (next stop hook will retry)", phaseInfo.Phase)
 				return nil
 			}

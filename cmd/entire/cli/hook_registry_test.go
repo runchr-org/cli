@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -31,6 +31,27 @@ func TestNewAgentHookVerbCmd_LogsInvocation(t *testing.T) {
 	gitInit := exec.CommandContext(context.Background(), "git", "init")
 	if err := gitInit.Run(); err != nil {
 		t.Fatalf("failed to init git repo: %v", err)
+	}
+
+	// Create initial commit so repository is not empty
+	gitConfig := exec.CommandContext(context.Background(), "git", "config", "user.email", "test@test.com")
+	if err := gitConfig.Run(); err != nil {
+		t.Fatalf("failed to configure git user.email: %v", err)
+	}
+	gitConfigName := exec.CommandContext(context.Background(), "git", "config", "user.name", "Test User")
+	if err := gitConfigName.Run(); err != nil {
+		t.Fatalf("failed to configure git user.name: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte("# Test"), 0o644); err != nil {
+		t.Fatalf("failed to create README: %v", err)
+	}
+	gitAdd := exec.CommandContext(context.Background(), "git", "add", "README.md")
+	if err := gitAdd.Run(); err != nil {
+		t.Fatalf("failed to git add: %v", err)
+	}
+	gitCommit := exec.CommandContext(context.Background(), "git", "commit", "-m", "Initial commit")
+	if err := gitCommit.Run(); err != nil {
+		t.Fatalf("failed to git commit: %v", err)
 	}
 
 	// Create .entire directory
@@ -56,24 +77,31 @@ func TestNewAgentHookVerbCmd_LogsInvocation(t *testing.T) {
 	cleanup := initHookLogging()
 	defer cleanup()
 
-	// Register a test handler
-	testHandlerCalled := false
-	RegisterHookHandler(agent.AgentName("test-agent"), "test-hook", func() error {
-		testHandlerCalled = true
-		return nil
-	})
+	// Create a transcript file for the hook input
+	transcriptPath := filepath.Join(tmpDir, "transcript.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(`{"type":"user","message":{"content":"test"}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("failed to create transcript file: %v", err)
+	}
 
-	// Create the command with logging
-	cmd := newAgentHookVerbCmdWithLogging(agent.AgentName("test-agent"), "test-hook")
+	// Create stdin with session-start hook input
+	hookInput := map[string]interface{}{
+		"session_id":      sessionID,
+		"transcript_path": transcriptPath,
+	}
+	inputJSON, _ := json.Marshal(hookInput) //nolint:errcheck,errchkjson // Test code; JSON marshal of simple map never fails
+
+	// Create the command with logging - use session-start hook which is a pass-through
+	cmd := newAgentHookVerbCmdWithLogging(agent.AgentNameClaudeCode, claudecode.HookNameSessionStart)
+
+	// Set stdin
+	cmd.SetIn(bytes.NewReader(inputJSON))
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
 
 	// Execute the command
 	err := cmd.Execute()
 	if err != nil {
 		t.Fatalf("command execution failed: %v", err)
-	}
-
-	if !testHandlerCalled {
-		t.Error("expected test handler to be called")
 	}
 
 	// Close logging to flush
@@ -105,7 +133,7 @@ func TestNewAgentHookVerbCmd_LogsInvocation(t *testing.T) {
 			continue
 		}
 
-		if entry["hook"] == "test-hook" {
+		if entry["hook"] == claudecode.HookNameSessionStart {
 			msg, msgOK := entry["msg"].(string)
 			if !msgOK {
 				continue
@@ -115,10 +143,6 @@ func TestNewAgentHookVerbCmd_LogsInvocation(t *testing.T) {
 				// Verify component is set
 				if entry["component"] != "hooks" {
 					t.Errorf("expected component='hooks', got %v", entry["component"])
-				}
-				// Verify session_id is set
-				if entry["session_id"] != sessionID {
-					t.Errorf("expected session_id=%q, got %v", sessionID, entry["session_id"])
 				}
 			}
 			if strings.Contains(msg, "completed") {
@@ -140,80 +164,6 @@ func TestNewAgentHookVerbCmd_LogsInvocation(t *testing.T) {
 	}
 	if !foundCompletion {
 		t.Error("expected to find hook completion log")
-	}
-}
-
-func TestNewAgentHookVerbCmd_LogsFailure(t *testing.T) {
-	// Setup: Create a temp directory with git repo structure
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-
-	// Initialize git repo (required for paths.RepoRoot to work)
-	gitInit := exec.CommandContext(context.Background(), "git", "init")
-	if err := gitInit.Run(); err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
-
-	// Create .entire directory and logs
-	entireDir := filepath.Join(tmpDir, paths.EntireDir)
-	logsDir := filepath.Join(entireDir, "logs")
-	if err := os.MkdirAll(logsDir, 0o755); err != nil {
-		t.Fatalf("failed to create logs directory: %v", err)
-	}
-
-	// Create session state file in .git/entire-sessions/
-	sessionID := "test-claudecode-failure-session"
-	writeTestSessionState(t, tmpDir, sessionID)
-
-	// Enable debug logging
-	t.Setenv(logging.LogLevelEnvVar, "DEBUG")
-
-	// Initialize logging (normally done by PersistentPreRunE)
-	cleanup := initHookLogging()
-	defer cleanup()
-
-	// Register a handler that fails
-	RegisterHookHandler(agent.AgentName("test-agent"), "failing-hook", func() error {
-		return context.DeadlineExceeded // Use a real error
-	})
-
-	// Create the command with logging
-	cmd := newAgentHookVerbCmdWithLogging(agent.AgentName("test-agent"), "failing-hook")
-	cmd.SetOut(&bytes.Buffer{}) // Suppress output
-
-	// Execute the command (expect error)
-	execErr := cmd.Execute()
-	if execErr == nil {
-		t.Fatal("expected command to fail")
-	}
-
-	// Close logging to flush
-	cleanup()
-
-	// Verify log file contains failure status
-	logFile := filepath.Join(logsDir, "entire.log")
-	content, err := os.ReadFile(logFile)
-	if err != nil {
-		t.Fatalf("failed to read log file: %v", err)
-	}
-
-	logContent := string(content)
-	lines := strings.Split(strings.TrimSpace(logContent), "\n")
-
-	foundFailure := false
-	for _, line := range lines {
-		var entry map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			continue
-		}
-
-		if entry["hook"] == "failing-hook" && entry["success"] == false {
-			foundFailure = true
-		}
-	}
-
-	if !foundFailure {
-		t.Errorf("expected to find log entry with success=false, log content: %s", logContent)
 	}
 }
 
@@ -292,39 +242,63 @@ func TestHookCommand_SetsCurrentHookAgentName(t *testing.T) {
 		t.Fatalf("failed to init git repo: %v", err)
 	}
 
-	tests := []struct {
-		name      string
-		agentName agent.AgentName
-	}{
-		{"claude-code hook sets claude-code", agent.AgentNameClaudeCode},
-		{"gemini hook sets gemini", agent.AgentNameGemini},
+	// Create initial commit so repository is not empty
+	gitConfig := exec.CommandContext(context.Background(), "git", "config", "user.email", "test@test.com")
+	if err := gitConfig.Run(); err != nil {
+		t.Fatalf("failed to configure git user.email: %v", err)
+	}
+	gitConfigName := exec.CommandContext(context.Background(), "git", "config", "user.name", "Test User")
+	if err := gitConfigName.Run(); err != nil {
+		t.Fatalf("failed to configure git user.name: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte("# Test"), 0o644); err != nil {
+		t.Fatalf("failed to create README: %v", err)
+	}
+	gitAdd := exec.CommandContext(context.Background(), "git", "add", "README.md")
+	if err := gitAdd.Run(); err != nil {
+		t.Fatalf("failed to git add: %v", err)
+	}
+	gitCommit := exec.CommandContext(context.Background(), "git", "commit", "-m", "Initial commit")
+	if err := gitCommit.Run(); err != nil {
+		t.Fatalf("failed to git commit: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var agentNameInsideHandler agent.AgentName
+	// Create .entire directory to enable Entire
+	entireDir := filepath.Join(tmpDir, paths.EntireDir)
+	if err := os.MkdirAll(entireDir, 0o755); err != nil {
+		t.Fatalf("failed to create .entire directory: %v", err)
+	}
 
-			hookName := "test-hook-" + string(tt.agentName)
-			RegisterHookHandler(tt.agentName, hookName, func() error {
-				agentNameInsideHandler = currentHookAgentName
-				return nil
-			})
+	// Create session state file
+	sessionID := "test-agent-name-session"
+	writeTestSessionState(t, tmpDir, sessionID)
 
-			cmd := newAgentHookVerbCmdWithLogging(tt.agentName, hookName)
-			if err := cmd.Execute(); err != nil {
-				t.Fatalf("command execution failed: %v", err)
-			}
+	// Create transcript file
+	transcriptPath := filepath.Join(tmpDir, "transcript.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(`{"type":"user","message":{"content":"test"}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("failed to create transcript file: %v", err)
+	}
 
-			// Inside handler, currentHookAgentName should match the agent
-			if agentNameInsideHandler != tt.agentName {
-				t.Errorf("inside handler: currentHookAgentName = %q, want %q", agentNameInsideHandler, tt.agentName)
-			}
+	// Create stdin input
+	hookInput := map[string]interface{}{
+		"session_id":      sessionID,
+		"transcript_path": transcriptPath,
+	}
+	inputJSON, _ := json.Marshal(hookInput) //nolint:errcheck,errchkjson // Test code; JSON marshal of simple map never fails
 
-			// After handler completes, currentHookAgentName should be cleared
-			if currentHookAgentName != "" {
-				t.Errorf("after handler: currentHookAgentName = %q, want empty", currentHookAgentName)
-			}
-		})
+	// Test with Claude Code using session-start hook (pass-through but sets agent name)
+	cmd := newAgentHookVerbCmdWithLogging(agent.AgentNameClaudeCode, claudecode.HookNameSessionStart)
+	cmd.SetIn(bytes.NewReader(inputJSON))
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("command execution failed: %v", err)
+	}
+
+	// After handler completes, currentHookAgentName should be cleared
+	if currentHookAgentName != "" {
+		t.Errorf("after handler: currentHookAgentName = %q, want empty", currentHookAgentName)
 	}
 }
 

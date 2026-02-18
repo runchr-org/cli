@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -35,8 +36,8 @@ func hasSuffix(path, suffix string) bool {
 }
 
 func TestPrePromptState_BackwardCompat_LastTranscriptLineCount(t *testing.T) {
-	// Verify that state files written by older CLI versions with "last_transcript_line_count"
-	// are correctly migrated to StepTranscriptStart on load.
+	// Verify that state files written by older CLI versions with deprecated fields
+	// are correctly migrated to TranscriptOffset on load.
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
@@ -55,7 +56,7 @@ func TestPrePromptState_BackwardCompat_LastTranscriptLineCount(t *testing.T) {
 	sessionID := "test-backward-compat"
 	stateFile := prePromptStateFile(sessionID)
 
-	// Write a state file using the OLD JSON tag (last_transcript_line_count)
+	// Test 1: Oldest format (last_transcript_line_count) migrates to TranscriptOffset
 	oldFormatJSON := `{
 		"session_id": "test-backward-compat",
 		"timestamp": "2026-01-01T00:00:00Z",
@@ -67,7 +68,6 @@ func TestPrePromptState_BackwardCompat_LastTranscriptLineCount(t *testing.T) {
 		t.Fatalf("Failed to write old-format state file: %v", err)
 	}
 
-	// Load should migrate the deprecated field
 	state, err := LoadPrePromptState(sessionID)
 	if err != nil {
 		t.Fatalf("LoadPrePromptState() error = %v", err)
@@ -76,34 +76,82 @@ func TestPrePromptState_BackwardCompat_LastTranscriptLineCount(t *testing.T) {
 		t.Fatal("LoadPrePromptState() returned nil")
 	}
 
-	if state.StepTranscriptStart != 42 {
-		t.Errorf("StepTranscriptStart = %d, want 42 (migrated from last_transcript_line_count)", state.StepTranscriptStart)
+	if state.TranscriptOffset != 42 {
+		t.Errorf("TranscriptOffset = %d, want 42 (migrated from last_transcript_line_count)", state.TranscriptOffset)
 	}
 	if state.LastTranscriptLineCount != 0 {
 		t.Errorf("LastTranscriptLineCount = %d, want 0 (should be cleared after migration)", state.LastTranscriptLineCount)
+	}
+	if state.StepTranscriptStart != 0 {
+		t.Errorf("StepTranscriptStart = %d, want 0 (should be cleared after migration)", state.StepTranscriptStart)
 	}
 	if state.LastTranscriptIdentifier != "user-5" {
 		t.Errorf("LastTranscriptIdentifier = %q, want %q", state.LastTranscriptIdentifier, "user-5")
 	}
 
-	// Also test: new format takes precedence over old
-	bothFieldsJSON := `{
+	// Test 2: step_transcript_start migrates to TranscriptOffset (takes precedence over oldest)
+	stepFormatJSON := `{
 		"session_id": "test-backward-compat",
 		"timestamp": "2026-01-01T00:00:00Z",
 		"untracked_files": [],
 		"step_transcript_start": 100,
 		"last_transcript_line_count": 42
 	}`
-	if err := os.WriteFile(stateFile, []byte(bothFieldsJSON), 0o644); err != nil {
-		t.Fatalf("Failed to write both-fields state file: %v", err)
+	if err := os.WriteFile(stateFile, []byte(stepFormatJSON), 0o644); err != nil {
+		t.Fatalf("Failed to write step-format state file: %v", err)
 	}
 
 	state, err = LoadPrePromptState(sessionID)
 	if err != nil {
 		t.Fatalf("LoadPrePromptState() error = %v", err)
 	}
-	if state.StepTranscriptStart != 100 {
-		t.Errorf("StepTranscriptStart = %d, want 100 (new field should take precedence)", state.StepTranscriptStart)
+	if state.TranscriptOffset != 100 {
+		t.Errorf("TranscriptOffset = %d, want 100 (step_transcript_start takes precedence)", state.TranscriptOffset)
+	}
+
+	// Test 3: start_message_index (Gemini format) migrates to TranscriptOffset
+	geminiFormatJSON := `{
+		"session_id": "test-backward-compat",
+		"timestamp": "2026-01-01T00:00:00Z",
+		"untracked_files": [],
+		"start_message_index": 25,
+		"last_transcript_identifier": "msg-42"
+	}`
+	if err := os.WriteFile(stateFile, []byte(geminiFormatJSON), 0o644); err != nil {
+		t.Fatalf("Failed to write gemini-format state file: %v", err)
+	}
+
+	state, err = LoadPrePromptState(sessionID)
+	if err != nil {
+		t.Fatalf("LoadPrePromptState() error = %v", err)
+	}
+	if state.TranscriptOffset != 25 {
+		t.Errorf("TranscriptOffset = %d, want 25 (migrated from start_message_index)", state.TranscriptOffset)
+	}
+	if state.StartMessageIndex != 0 {
+		t.Errorf("StartMessageIndex = %d, want 0 (should be cleared after migration)", state.StartMessageIndex)
+	}
+
+	// Test 4: transcript_offset (new format) takes precedence over all deprecated fields
+	newFormatJSON := `{
+		"session_id": "test-backward-compat",
+		"timestamp": "2026-01-01T00:00:00Z",
+		"untracked_files": [],
+		"transcript_offset": 200,
+		"step_transcript_start": 100,
+		"start_message_index": 50,
+		"last_transcript_line_count": 42
+	}`
+	if err := os.WriteFile(stateFile, []byte(newFormatJSON), 0o644); err != nil {
+		t.Fatalf("Failed to write new-format state file: %v", err)
+	}
+
+	state, err = LoadPrePromptState(sessionID)
+	if err != nil {
+		t.Fatalf("LoadPrePromptState() error = %v", err)
+	}
+	if state.TranscriptOffset != 200 {
+		t.Errorf("TranscriptOffset = %d, want 200 (new field takes precedence)", state.TranscriptOffset)
 	}
 
 	// Cleanup
@@ -277,17 +325,17 @@ func setupTestRepoWithTranscript(t *testing.T, transcriptContent string, transcr
 }
 
 func TestPrePromptState_WithTranscriptPosition(t *testing.T) {
-	const expectedUUID = "user-2"
 	transcriptContent := `{"type":"user","uuid":"user-1","message":{"content":"Hello"}}
 {"type":"assistant","uuid":"asst-1","message":{"content":[{"type":"text","text":"Hi"}]}}
-{"type":"user","uuid":"` + expectedUUID + `","message":{"content":"How are you?"}}`
+{"type":"user","uuid":"user-2","message":{"content":"How are you?"}}`
 
 	transcriptPath := setupTestRepoWithTranscript(t, transcriptContent, "transcript.jsonl")
 
 	sessionID := "test-session-123"
+	ag := claudecode.NewClaudeCodeAgent()
 
-	// Capture state with transcript path
-	if err := CapturePrePromptState(sessionID, transcriptPath); err != nil {
+	// Capture state with transcript path using Claude agent (JSONL format)
+	if err := CapturePrePromptState(ag, sessionID, transcriptPath); err != nil {
 		t.Fatalf("CapturePrePromptState() error = %v", err)
 	}
 
@@ -301,12 +349,9 @@ func TestPrePromptState_WithTranscriptPosition(t *testing.T) {
 		return // unreachable but satisfies staticcheck
 	}
 
-	// Verify transcript position was captured
-	if state.LastTranscriptIdentifier != expectedUUID {
-		t.Errorf("LastTranscriptIdentifier = %q, want %q", state.LastTranscriptIdentifier, expectedUUID)
-	}
-	if state.StepTranscriptStart != 3 {
-		t.Errorf("StepTranscriptStart = %d, want 3", state.StepTranscriptStart)
+	// Verify transcript offset was captured (3 JSONL lines)
+	if state.TranscriptOffset != 3 {
+		t.Errorf("TranscriptOffset = %d, want 3", state.TranscriptOffset)
 	}
 
 	// Cleanup
@@ -319,9 +364,10 @@ func TestPrePromptState_WithEmptyTranscriptPath(t *testing.T) {
 	setupTestRepoWithTranscript(t, "", "") // No transcript file
 
 	sessionID := "test-session-empty-transcript"
+	ag := claudecode.NewClaudeCodeAgent()
 
 	// Capture state with empty transcript path
-	if err := CapturePrePromptState(sessionID, ""); err != nil {
+	if err := CapturePrePromptState(ag, sessionID, ""); err != nil {
 		t.Fatalf("CapturePrePromptState() error = %v", err)
 	}
 
@@ -335,12 +381,9 @@ func TestPrePromptState_WithEmptyTranscriptPath(t *testing.T) {
 		return // unreachable but satisfies staticcheck
 	}
 
-	// Transcript position should be empty/zero when no transcript provided
-	if state.LastTranscriptIdentifier != "" {
-		t.Errorf("LastTranscriptIdentifier = %q, want empty", state.LastTranscriptIdentifier)
-	}
-	if state.StepTranscriptStart != 0 {
-		t.Errorf("StepTranscriptStart = %d, want 0", state.StepTranscriptStart)
+	// Transcript position should be zero when no transcript provided
+	if state.TranscriptOffset != 0 {
+		t.Errorf("TranscriptOffset = %d, want 0", state.TranscriptOffset)
 	}
 
 	// Cleanup
@@ -357,9 +400,10 @@ func TestPrePromptState_WithSummaryOnlyTranscript(t *testing.T) {
 	transcriptPath := setupTestRepoWithTranscript(t, transcriptContent, "transcript-summary.jsonl")
 
 	sessionID := "test-session-summary-only"
+	ag := claudecode.NewClaudeCodeAgent()
 
 	// Capture state
-	if err := CapturePrePromptState(sessionID, transcriptPath); err != nil {
+	if err := CapturePrePromptState(ag, sessionID, transcriptPath); err != nil {
 		t.Fatalf("CapturePrePromptState() error = %v", err)
 	}
 
@@ -372,12 +416,9 @@ func TestPrePromptState_WithSummaryOnlyTranscript(t *testing.T) {
 		t.Fatal("LoadPrePromptState() returned nil")
 	}
 
-	// Line count should be 2, but UUID should be empty (summary rows don't have uuid)
-	if state.StepTranscriptStart != 2 {
-		t.Errorf("StepTranscriptStart = %d, want 2", state.StepTranscriptStart)
-	}
-	if state.LastTranscriptIdentifier != "" {
-		t.Errorf("LastTranscriptIdentifier = %q, want empty (summary rows don't have uuid)", state.LastTranscriptIdentifier)
+	// TranscriptOffset should be 2 (2 JSONL lines counted by ClaudeCodeAgent)
+	if state.TranscriptOffset != 2 {
+		t.Errorf("TranscriptOffset = %d, want 2", state.TranscriptOffset)
 	}
 
 	// Cleanup

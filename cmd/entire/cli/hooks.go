@@ -1,20 +1,12 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
-	"path/filepath"
 
-	"github.com/entireio/cli/cmd/entire/cli/agent"
-	"github.com/entireio/cli/cmd/entire/cli/logging"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/session"
-	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 )
 
@@ -240,77 +232,6 @@ func logPostTaskHookContext(w io.Writer, input *PostTaskHookInput, subagentTrans
 	}
 }
 
-// handleSessionStartCommon is the shared implementation for session start hooks.
-// Used by both Claude Code and Gemini CLI handlers.
-func handleSessionStartCommon() error {
-	ag, err := GetCurrentHookAgent()
-	if err != nil {
-		return fmt.Errorf("failed to get agent: %w", err)
-	}
-
-	input, err := ag.ParseHookInput(agent.HookSessionStart, os.Stdin)
-	if err != nil {
-		return fmt.Errorf("failed to parse hook input: %w", err)
-	}
-
-	logCtx := logging.WithAgent(logging.WithComponent(context.Background(), "hooks"), ag.Name())
-	logging.Info(logCtx, "session-start",
-		slog.String("hook", "session-start"),
-		slog.String("hook_type", "agent"),
-		slog.String("model_session_id", input.SessionID),
-		slog.String("transcript_path", input.SessionRef),
-	)
-
-	if input.SessionID == "" {
-		return errors.New("no session_id in input")
-	}
-
-	// Build informational message
-	message := "\n\nPowered by Entire:\n  This conversation will be linked to your next commit."
-
-	// Append wingman note if enabled, with pending review indication
-	if settings.IsWingmanEnabled() {
-		if repoRoot, rootErr := paths.RepoRoot(); rootErr == nil {
-			if _, statErr := os.Stat(filepath.Join(repoRoot, wingmanReviewFile)); statErr == nil {
-				message += "\n  Wingman: a review is pending and will be addressed on your next prompt."
-			} else {
-				message += "\n  Wingman is active: your changes will be automatically reviewed."
-			}
-		} else {
-			message += "\n  Wingman is active: your changes will be automatically reviewed."
-		}
-	}
-
-	// Check for concurrent sessions and append count if any
-	strat := GetStrategy()
-	if concurrentChecker, ok := strat.(strategy.ConcurrentSessionChecker); ok {
-		if count, err := concurrentChecker.CountOtherActiveSessionsWithCheckpoints(input.SessionID); err == nil && count > 0 {
-			message += fmt.Sprintf("\n  %d other active conversation(s) in this workspace will also be included.\n  Use 'entire status' for more information.", count)
-		}
-	}
-
-	// Output informational message using agent-specific format
-	if err := outputHookResponse(message); err != nil {
-		return err
-	}
-
-	// Fire EventSessionStart for the current session (if state exists).
-	// This handles ENDED → IDLE (re-entering a session).
-	// TODO(ENT-221): dispatch ActionWarnStaleSession for ACTIVE sessions.
-	if state, loadErr := strategy.LoadSessionState(input.SessionID); loadErr != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to load session state on start: %v\n", loadErr)
-	} else if state != nil {
-		if transErr := strategy.TransitionAndLog(state, session.EventSessionStart, session.TransitionContext{}, session.NoOpActionHandler{}); transErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: session start transition failed: %v\n", transErr)
-		}
-		if saveErr := strategy.SaveSessionState(state); saveErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to update session state on start: %v\n", saveErr)
-		}
-	}
-
-	return nil
-}
-
 // hookSpecificOutput contains event-specific fields nested under hookSpecificOutput
 // in the hook response JSON. Claude Code requires this nesting for additionalContext
 // to be injected into the agent's conversation.
@@ -319,7 +240,7 @@ type hookSpecificOutput struct {
 	AdditionalContext string `json:"additionalContext,omitempty"`
 }
 
-// hookResponse represents a JSON response to a Claude Code hook.
+// hookResponse represents a JSON response to a hook.
 // systemMessage is shown to the user as a warning/info message.
 // hookSpecificOutput contains event-specific fields like additionalContext.
 type hookResponse struct {

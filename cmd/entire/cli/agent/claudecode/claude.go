@@ -362,9 +362,12 @@ func (c *ClaudeCodeAgent) GetTranscriptPosition(path string) (int, error) {
 	lineCount := 0
 
 	for {
-		_, err := reader.ReadBytes('\n')
+		line, err := reader.ReadBytes('\n')
 		if err != nil {
 			if err == io.EOF {
+				if len(line) > 0 {
+					lineCount++ // Count final line without trailing newline
+				}
 				break
 			}
 			return 0, fmt.Errorf("failed to read transcript: %w", err)
@@ -422,8 +425,6 @@ func (c *ClaudeCodeAgent) ExtractModifiedFilesFromOffset(path string, startOffse
 	return ExtractModifiedFiles(lines), lineNum, nil
 }
 
-// TranscriptChunker interface implementation
-
 // ChunkTranscript splits a JSONL transcript at line boundaries.
 // Claude Code uses JSONL format (one JSON object per line), so chunking
 // is done at newline boundaries to preserve message integrity.
@@ -437,7 +438,22 @@ func (c *ClaudeCodeAgent) ChunkTranscript(content []byte, maxSize int) ([][]byte
 
 // ReassembleTranscript concatenates JSONL chunks with newlines.
 //
-//nolint:unparam // error return is required by interface, kept for consistency
+
 func (c *ClaudeCodeAgent) ReassembleTranscript(chunks [][]byte) ([]byte, error) {
 	return agent.ReassembleJSONL(chunks), nil
+}
+
+// SubagentAwareExtractor interface implementation
+
+// ExtractAllModifiedFiles extracts files modified by both the main agent and any spawned subagents.
+// Claude Code spawns subagents via the Task tool; their transcripts are stored in subagentsDir.
+// Returns a deduplicated list of all modified file paths.
+func (c *ClaudeCodeAgent) ExtractAllModifiedFiles(sessionRef string, fromOffset int, subagentsDir string) ([]string, error) {
+	return ExtractAllModifiedFiles(sessionRef, fromOffset, subagentsDir)
+}
+
+// CalculateTotalTokenUsage computes token usage including all spawned subagents.
+// Claude Code spawns subagents via the Task tool; their transcripts are stored in subagentsDir.
+func (c *ClaudeCodeAgent) CalculateTotalTokenUsage(sessionRef string, fromOffset int, subagentsDir string) (*agent.TokenUsage, error) {
+	return CalculateTotalTokenUsage(sessionRef, fromOffset, subagentsDir)
 }

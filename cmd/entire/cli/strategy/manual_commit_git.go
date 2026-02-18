@@ -11,6 +11,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
@@ -18,9 +19,9 @@ import (
 	"github.com/go-git/go-git/v5"
 )
 
-// SaveChanges saves a checkpoint to the shadow branch.
+// SaveStep saves a checkpoint to the shadow branch.
 // Uses checkpoint.GitStore.WriteTemporary for git operations.
-func (s *ManualCommitStrategy) SaveChanges(ctx SaveContext) error {
+func (s *ManualCommitStrategy) SaveStep(ctx StepContext) error {
 	repo, err := OpenRepository()
 	if err != nil {
 		return fmt.Errorf("failed to open git repository: %w", err)
@@ -162,9 +163,9 @@ func (s *ManualCommitStrategy) SaveChanges(ctx SaveContext) error {
 	return nil
 }
 
-// SaveTaskCheckpoint saves a task checkpoint to the shadow branch.
+// SaveTaskStep saves a task step checkpoint to the shadow branch.
 // Uses checkpoint.GitStore.WriteTemporaryTask for git operations.
-func (s *ManualCommitStrategy) SaveTaskCheckpoint(ctx TaskCheckpointContext) error {
+func (s *ManualCommitStrategy) SaveTaskStep(ctx TaskStepContext) error {
 	repo, err := OpenRepository()
 	if err != nil {
 		return fmt.Errorf("failed to open git repository: %w", err)
@@ -201,8 +202,8 @@ func (s *ManualCommitStrategy) SaveTaskCheckpoint(ctx TaskCheckpointContext) err
 
 	// Generate commit message
 	shortToolUseID := ctx.ToolUseID
-	if len(shortToolUseID) > 12 {
-		shortToolUseID = shortToolUseID[:12]
+	if len(shortToolUseID) > id.ShortIDLength {
+		shortToolUseID = shortToolUseID[:id.ShortIDLength]
 	}
 
 	var messageSubject string

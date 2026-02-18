@@ -117,6 +117,19 @@ func (r *HookRunner) SimulateStop(sessionID, transcriptPath string) error {
 	return r.runHookWithInput("stop", input)
 }
 
+// SimulateSessionEnd simulates the Claude Code session-end hook.
+// This transitions a session from IDLE (or ACTIVE) to ENDED phase.
+func (r *HookRunner) SimulateSessionEnd(sessionID string) error {
+	r.T.Helper()
+
+	input := map[string]string{
+		"session_id":      sessionID,
+		"transcript_path": "",
+	}
+
+	return r.runHookWithInput("session-end", input)
+}
+
 // PreTaskInput contains the input for PreToolUse[Task] hook.
 type PreTaskInput struct {
 	SessionID      string
@@ -287,6 +300,13 @@ func (env *TestEnv) SimulateStop(sessionID, transcriptPath string) error {
 	env.T.Helper()
 	runner := NewHookRunner(env.RepoDir, env.ClaudeProjectDir, env.T)
 	return runner.SimulateStop(sessionID, transcriptPath)
+}
+
+// SimulateSessionEnd is a convenience method on TestEnv.
+func (env *TestEnv) SimulateSessionEnd(sessionID string) error {
+	env.T.Helper()
+	runner := NewHookRunner(env.RepoDir, env.ClaudeProjectDir, env.T)
+	return runner.SimulateSessionEnd(sessionID)
 }
 
 // SimulatePreTask is a convenience method on TestEnv.

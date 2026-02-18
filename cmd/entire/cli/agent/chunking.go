@@ -17,24 +17,21 @@ const (
 )
 
 // ChunkTranscript splits a transcript into chunks using the appropriate agent.
-// If agentType is empty or the agent doesn't implement TranscriptChunker,
-// falls back to JSONL (line-based) chunking.
+// If agentType is empty or the agent is not found, falls back to JSONL (line-based) chunking.
 func ChunkTranscript(content []byte, agentType AgentType) ([][]byte, error) {
 	if len(content) <= MaxChunkSize {
 		return [][]byte{content}, nil
 	}
 
-	// Try to get the agent by type
+	// Try to get the agent by type and use its format-aware chunking
 	if agentType != "" {
 		ag, err := GetByAgentType(agentType)
 		if err == nil {
-			if chunker, ok := ag.(TranscriptChunker); ok {
-				chunks, chunkErr := chunker.ChunkTranscript(content, MaxChunkSize)
-				if chunkErr != nil {
-					return nil, fmt.Errorf("agent chunking failed: %w", chunkErr)
-				}
-				return chunks, nil
+			chunks, chunkErr := ag.ChunkTranscript(content, MaxChunkSize)
+			if chunkErr != nil {
+				return nil, fmt.Errorf("agent chunking failed: %w", chunkErr)
 			}
+			return chunks, nil
 		}
 	}
 
@@ -43,8 +40,7 @@ func ChunkTranscript(content []byte, agentType AgentType) ([][]byte, error) {
 }
 
 // ReassembleTranscript combines chunks back into a single transcript.
-// If agentType is empty or the agent doesn't implement TranscriptChunker,
-// falls back to JSONL (line-based) reassembly.
+// If agentType is empty or the agent is not found, falls back to JSONL (line-based) reassembly.
 func ReassembleTranscript(chunks [][]byte, agentType AgentType) ([]byte, error) {
 	if len(chunks) == 0 {
 		return nil, nil
@@ -53,17 +49,15 @@ func ReassembleTranscript(chunks [][]byte, agentType AgentType) ([]byte, error) 
 		return chunks[0], nil
 	}
 
-	// Try to get the agent by type
+	// Try to get the agent by type and use its format-aware reassembly
 	if agentType != "" {
 		ag, err := GetByAgentType(agentType)
 		if err == nil {
-			if chunker, ok := ag.(TranscriptChunker); ok {
-				result, reassembleErr := chunker.ReassembleTranscript(chunks)
-				if reassembleErr != nil {
-					return nil, fmt.Errorf("agent reassembly failed: %w", reassembleErr)
-				}
-				return result, nil
+			result, reassembleErr := ag.ReassembleTranscript(chunks)
+			if reassembleErr != nil {
+				return nil, fmt.Errorf("agent reassembly failed: %w", reassembleErr)
 			}
+			return result, nil
 		}
 	}
 

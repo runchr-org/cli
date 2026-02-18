@@ -27,7 +27,7 @@ func TestAutoCommitStrategy_Registration(t *testing.T) {
 	}
 }
 
-func TestAutoCommitStrategy_SaveChanges_CommitHasMetadataRef(t *testing.T) {
+func TestAutoCommitStrategy_SaveStep_CommitHasMetadataRef(t *testing.T) {
 	// Setup temp git repo
 	dir := t.TempDir()
 	repo, err := git.PlainInit(dir, false)
@@ -84,8 +84,8 @@ func TestAutoCommitStrategy_SaveChanges_CommitHasMetadataRef(t *testing.T) {
 		metadataDirAbs = metadataDir
 	}
 
-	// Call SaveChanges
-	ctx := SaveContext{
+	// Call SaveStep
+	ctx := StepContext{
 		CommitMessage:  "Test session commit",
 		MetadataDir:    metadataDir,
 		MetadataDirAbs: metadataDirAbs,
@@ -96,8 +96,8 @@ func TestAutoCommitStrategy_SaveChanges_CommitHasMetadataRef(t *testing.T) {
 		AuthorEmail:    "test@test.com",
 	}
 
-	if err := s.SaveChanges(ctx); err != nil {
-		t.Fatalf("SaveChanges() error = %v", err)
+	if err := s.SaveStep(ctx); err != nil {
+		t.Fatalf("SaveStep() error = %v", err)
 	}
 
 	// Verify the code commit on active branch has NO trailers (clean history)
@@ -141,7 +141,7 @@ func TestAutoCommitStrategy_SaveChanges_CommitHasMetadataRef(t *testing.T) {
 	}
 }
 
-func TestAutoCommitStrategy_SaveChanges_MetadataRefPointsToValidCommit(t *testing.T) {
+func TestAutoCommitStrategy_SaveStep_MetadataRefPointsToValidCommit(t *testing.T) {
 	// Setup temp git repo
 	dir := t.TempDir()
 	repo, err := git.PlainInit(dir, false)
@@ -198,8 +198,8 @@ func TestAutoCommitStrategy_SaveChanges_MetadataRefPointsToValidCommit(t *testin
 		metadataDirAbs = metadataDir
 	}
 
-	// Call SaveChanges
-	ctx := SaveContext{
+	// Call SaveStep
+	ctx := StepContext{
 		CommitMessage:  "Test session commit",
 		MetadataDir:    metadataDir,
 		MetadataDirAbs: metadataDirAbs,
@@ -210,8 +210,8 @@ func TestAutoCommitStrategy_SaveChanges_MetadataRefPointsToValidCommit(t *testin
 		AuthorEmail:    "test@test.com",
 	}
 
-	if err := s.SaveChanges(ctx); err != nil {
-		t.Fatalf("SaveChanges() error = %v", err)
+	if err := s.SaveStep(ctx); err != nil {
+		t.Fatalf("SaveStep() error = %v", err)
 	}
 
 	// Get the code commit
@@ -256,7 +256,7 @@ func TestAutoCommitStrategy_SaveChanges_MetadataRefPointsToValidCommit(t *testin
 	}
 }
 
-func TestAutoCommitStrategy_SaveTaskCheckpoint_CommitHasMetadataRef(t *testing.T) {
+func TestAutoCommitStrategy_SaveTaskStep_CommitHasMetadataRef(t *testing.T) {
 	// Setup temp git repo
 	dir := t.TempDir()
 	repo, err := git.PlainInit(dir, false)
@@ -304,8 +304,8 @@ func TestAutoCommitStrategy_SaveTaskCheckpoint_CommitHasMetadataRef(t *testing.T
 		t.Fatalf("failed to write transcript: %v", err)
 	}
 
-	// Call SaveTaskCheckpoint
-	ctx := TaskCheckpointContext{
+	// Call SaveTaskStep
+	ctx := TaskStepContext{
 		SessionID:      "test-session-789",
 		ToolUseID:      "toolu_abc123",
 		CheckpointUUID: "checkpoint-uuid-456",
@@ -318,8 +318,8 @@ func TestAutoCommitStrategy_SaveTaskCheckpoint_CommitHasMetadataRef(t *testing.T
 		AuthorEmail:    "test@test.com",
 	}
 
-	if err := s.SaveTaskCheckpoint(ctx); err != nil {
-		t.Fatalf("SaveTaskCheckpoint() error = %v", err)
+	if err := s.SaveTaskStep(ctx); err != nil {
+		t.Fatalf("SaveTaskStep() error = %v", err)
 	}
 
 	// Verify the code commit is clean (no trailers)
@@ -357,7 +357,7 @@ func TestAutoCommitStrategy_SaveTaskCheckpoint_CommitHasMetadataRef(t *testing.T
 	}
 }
 
-func TestAutoCommitStrategy_SaveTaskCheckpoint_NoChangesSkipsCommit(t *testing.T) {
+func TestAutoCommitStrategy_SaveTaskStep_NoChangesSkipsCommit(t *testing.T) {
 	// Setup temp git repo
 	dir := t.TempDir()
 	repo, err := git.PlainInit(dir, false)
@@ -393,7 +393,7 @@ func TestAutoCommitStrategy_SaveTaskCheckpoint_NoChangesSkipsCommit(t *testing.T
 	}
 
 	// Create an incremental checkpoint with NO file changes
-	ctx := TaskCheckpointContext{
+	ctx := TaskStepContext{
 		SessionID:           "test-session-nochanges",
 		ToolUseID:           "toolu_nochanges456",
 		IsIncremental:       true,
@@ -408,8 +408,8 @@ func TestAutoCommitStrategy_SaveTaskCheckpoint_NoChangesSkipsCommit(t *testing.T
 		AuthorEmail:   "test@test.com",
 	}
 
-	if err := s.SaveTaskCheckpoint(ctx); err != nil {
-		t.Fatalf("SaveTaskCheckpoint() error = %v", err)
+	if err := s.SaveTaskStep(ctx); err != nil {
+		t.Fatalf("SaveTaskStep() error = %v", err)
 	}
 
 	// Get HEAD after the operation
@@ -516,7 +516,7 @@ func TestAutoCommitStrategy_GetSessionContext(t *testing.T) {
 	}
 
 	// Save changes - this creates a checkpoint on entire/checkpoints/v1
-	ctx := SaveContext{
+	ctx := StepContext{
 		CommitMessage:  "Test checkpoint",
 		MetadataDir:    metadataDir,
 		MetadataDirAbs: metadataDirAbs,
@@ -526,8 +526,8 @@ func TestAutoCommitStrategy_GetSessionContext(t *testing.T) {
 		AuthorName:     "Test",
 		AuthorEmail:    "test@test.com",
 	}
-	if err := s.SaveChanges(ctx); err != nil {
-		t.Fatalf("SaveChanges() error = %v", err)
+	if err := s.SaveStep(ctx); err != nil {
+		t.Fatalf("SaveStep() error = %v", err)
 	}
 
 	// Now retrieve the context using GetSessionContext
@@ -605,7 +605,7 @@ func TestAutoCommitStrategy_ListSessions_HasDescription(t *testing.T) {
 	}
 
 	// Save changes - this creates a checkpoint on entire/checkpoints/v1
-	ctx := SaveContext{
+	ctx := StepContext{
 		CommitMessage:  "Test checkpoint",
 		MetadataDir:    metadataDir,
 		MetadataDirAbs: metadataDirAbs,
@@ -616,8 +616,8 @@ func TestAutoCommitStrategy_ListSessions_HasDescription(t *testing.T) {
 		AuthorEmail:    "test@test.com",
 		SessionID:      sessionID,
 	}
-	if err := s.SaveChanges(ctx); err != nil {
-		t.Fatalf("SaveChanges() error = %v", err)
+	if err := s.SaveStep(ctx); err != nil {
+		t.Fatalf("SaveStep() error = %v", err)
 	}
 
 	sessions, err := ListSessions()
@@ -775,8 +775,8 @@ func TestAutoCommitStrategy_GetCheckpointLog_ReadsFullJsonl(t *testing.T) {
 
 	sessionID := "2025-12-12-test-checkpoint-jsonl"
 
-	// Call SaveTaskCheckpoint (final, not incremental - this includes full.jsonl)
-	ctx := TaskCheckpointContext{
+	// Call SaveTaskStep (final, not incremental - this includes full.jsonl)
+	ctx := TaskStepContext{
 		SessionID:      sessionID,
 		ToolUseID:      "toolu_jsonl_test",
 		CheckpointUUID: "checkpoint-uuid-jsonl",
@@ -789,8 +789,8 @@ func TestAutoCommitStrategy_GetCheckpointLog_ReadsFullJsonl(t *testing.T) {
 		AuthorEmail:    "test@test.com",
 	}
 
-	if err := s.SaveTaskCheckpoint(ctx); err != nil {
-		t.Fatalf("SaveTaskCheckpoint() error = %v", err)
+	if err := s.SaveTaskStep(ctx); err != nil {
+		t.Fatalf("SaveTaskStep() error = %v", err)
 	}
 
 	sessions, err := ListSessions()
@@ -824,10 +824,10 @@ func TestAutoCommitStrategy_GetCheckpointLog_ReadsFullJsonl(t *testing.T) {
 	}
 }
 
-// TestAutoCommitStrategy_SaveChanges_FilesAlreadyCommitted verifies that SaveChanges
+// TestAutoCommitStrategy_SaveStep_FilesAlreadyCommitted verifies that SaveStep
 // skips creating metadata when files are listed but already committed by the user.
 // This handles the case where git.ErrEmptyCommit occurs during commit.
-func TestAutoCommitStrategy_SaveChanges_FilesAlreadyCommitted(t *testing.T) {
+func TestAutoCommitStrategy_SaveStep_FilesAlreadyCommitted(t *testing.T) {
 	// Setup temp git repo
 	dir := t.TempDir()
 	repo, err := git.PlainInit(dir, false)
@@ -900,9 +900,9 @@ func TestAutoCommitStrategy_SaveChanges_FilesAlreadyCommitted(t *testing.T) {
 		metadataDirAbs = metadataDir
 	}
 
-	// Call SaveChanges with the file that was already committed
+	// Call SaveStep with the file that was already committed
 	// This simulates the hook running after the user already committed the changes
-	ctx := SaveContext{
+	ctx := StepContext{
 		CommitMessage:  "Should be skipped - file already committed",
 		MetadataDir:    metadataDir,
 		MetadataDirAbs: metadataDirAbs,
@@ -913,9 +913,9 @@ func TestAutoCommitStrategy_SaveChanges_FilesAlreadyCommitted(t *testing.T) {
 		AuthorEmail:    "test@test.com",
 	}
 
-	// SaveChanges should succeed without error (skip is not an error)
-	if err := s.SaveChanges(ctx); err != nil {
-		t.Fatalf("SaveChanges() error = %v", err)
+	// SaveStep should succeed without error (skip is not an error)
+	if err := s.SaveStep(ctx); err != nil {
+		t.Fatalf("SaveStep() error = %v", err)
 	}
 
 	// Verify HEAD is still the user's commit (no new code commit created)
@@ -930,7 +930,7 @@ func TestAutoCommitStrategy_SaveChanges_FilesAlreadyCommitted(t *testing.T) {
 	// Verify entire/checkpoints/v1 branch has no new commits (metadata not created)
 	sessionsRefAfter, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
 	if err != nil {
-		t.Fatalf("entire/checkpoints/v1 branch not found after SaveChanges: %v", err)
+		t.Fatalf("entire/checkpoints/v1 branch not found after SaveStep: %v", err)
 	}
 	if sessionsRefAfter.Hash() != sessionsCommitBefore {
 		t.Errorf("entire/checkpoints/v1 should not have new commits when files already committed, before=%s after=%s",
@@ -938,10 +938,10 @@ func TestAutoCommitStrategy_SaveChanges_FilesAlreadyCommitted(t *testing.T) {
 	}
 }
 
-// TestAutoCommitStrategy_SaveChanges_NoChangesSkipped verifies that SaveChanges
+// TestAutoCommitStrategy_SaveStep_NoChangesSkipped verifies that SaveStep
 // skips creating metadata when there are no code changes to commit.
 // This ensures 1:1 mapping between code commits and metadata commits.
-func TestAutoCommitStrategy_SaveChanges_NoChangesSkipped(t *testing.T) {
+func TestAutoCommitStrategy_SaveStep_NoChangesSkipped(t *testing.T) {
 	// Setup temp git repo
 	dir := t.TempDir()
 	repo, err := git.PlainInit(dir, false)
@@ -999,8 +999,8 @@ func TestAutoCommitStrategy_SaveChanges_NoChangesSkipped(t *testing.T) {
 		metadataDirAbs = metadataDir
 	}
 
-	// Call SaveChanges with NO file changes (empty lists)
-	ctx := SaveContext{
+	// Call SaveStep with NO file changes (empty lists)
+	ctx := StepContext{
 		CommitMessage:  "Should be skipped",
 		MetadataDir:    metadataDir,
 		MetadataDirAbs: metadataDirAbs,
@@ -1011,9 +1011,9 @@ func TestAutoCommitStrategy_SaveChanges_NoChangesSkipped(t *testing.T) {
 		AuthorEmail:    "test@test.com",
 	}
 
-	// SaveChanges should succeed without error (skip is not an error)
-	if err := s.SaveChanges(ctx); err != nil {
-		t.Fatalf("SaveChanges() error = %v", err)
+	// SaveStep should succeed without error (skip is not an error)
+	if err := s.SaveStep(ctx); err != nil {
+		t.Fatalf("SaveStep() error = %v", err)
 	}
 
 	// Verify HEAD is still the initial commit (no new code commit)
@@ -1028,7 +1028,7 @@ func TestAutoCommitStrategy_SaveChanges_NoChangesSkipped(t *testing.T) {
 	// Verify entire/checkpoints/v1 branch has no new commits (metadata not created)
 	sessionsRefAfter, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
 	if err != nil {
-		t.Fatalf("entire/checkpoints/v1 branch not found after SaveChanges: %v", err)
+		t.Fatalf("entire/checkpoints/v1 branch not found after SaveStep: %v", err)
 	}
 	if sessionsRefAfter.Hash() != sessionsCommitBefore {
 		t.Errorf("entire/checkpoints/v1 should not have new commits when no code changes, before=%s after=%s",

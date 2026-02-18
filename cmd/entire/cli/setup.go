@@ -98,11 +98,32 @@ Strategies: manual-commit (default), auto-commit`,
 				}
 				return setupAgentHooksNonInteractive(cmd.OutOrStdout(), ag, strategyFlag, localDev, forceHooks, skipPushSessions, telemetry)
 			}
-			// If strategy is specified via flag, skip interactive selection
-			if strategyFlag != "" {
-				return runEnableWithStrategy(cmd.OutOrStdout(), strategyFlag, localDev, ignoreUntracked, useLocalSettings, useProjectSettings, forceHooks, skipPushSessions, telemetry)
+			// Check if already fully enabled before prompting for agents.
+			// Only applies to interactive path (no --strategy flag) with no config flags.
+			if strategyFlag == "" {
+				hasConfigFlags := forceHooks || skipPushSessions || !telemetry || useLocalSettings || useProjectSettings || localDev
+				if !hasConfigFlags {
+					if fullyEnabled, agentDesc, configPath := isFullyEnabled(); fullyEnabled {
+						w := cmd.OutOrStdout()
+						fmt.Fprintln(w, "Already enabled. Everything looks good.")
+						fmt.Fprintln(w)
+						fmt.Fprintf(w, "  Agent: %s\n", agentDesc)
+						fmt.Fprintf(w, "  Config: %s\n", configPath)
+						return nil
+					}
+				}
 			}
-			return runEnableInteractive(cmd.OutOrStdout(), localDev, ignoreUntracked, useLocalSettings, useProjectSettings, forceHooks, skipPushSessions, telemetry)
+
+			// Detect or prompt for agents
+			agents, err := detectOrSelectAgent(cmd.OutOrStdout(), nil)
+			if err != nil {
+				return fmt.Errorf("agent selection failed: %w", err)
+			}
+
+			if strategyFlag != "" {
+				return runEnableWithStrategy(cmd.OutOrStdout(), agents, strategyFlag, localDev, useLocalSettings, useProjectSettings, forceHooks, skipPushSessions, telemetry)
+			}
+			return runEnableInteractive(cmd.OutOrStdout(), agents, localDev, useLocalSettings, useProjectSettings, forceHooks, skipPushSessions, telemetry)
 		},
 	}
 
@@ -221,7 +242,8 @@ func isFullyEnabled() (enabled bool, agentDesc string, configPath string) {
 // runEnableWithStrategy enables Entire with a specified strategy (non-interactive).
 // The selectedStrategy can be either a display name (manual-commit, auto-commit)
 // or an internal name (manual-commit, auto-commit).
-func runEnableWithStrategy(w io.Writer, selectedStrategy string, localDev, _, useLocalSettings, useProjectSettings, forceHooks, skipPushSessions, telemetry bool) error {
+// agents must be provided by the caller (via detectOrSelectAgent).
+func runEnableWithStrategy(w io.Writer, agents []agent.Agent, selectedStrategy string, localDev, useLocalSettings, useProjectSettings, forceHooks, skipPushSessions, telemetry bool) error {
 	// Map the strategy to internal name if it's a display name
 	internalStrategy := selectedStrategy
 	if mapped, ok := strategyDisplayToInternal[selectedStrategy]; ok {
@@ -234,17 +256,11 @@ func runEnableWithStrategy(w io.Writer, selectedStrategy string, localDev, _, us
 		return fmt.Errorf("unknown strategy: %s (use manual-commit or auto-commit)", selectedStrategy)
 	}
 
-	// Detect default agent
-	ag := agent.Default()
-	agentType := string(agent.AgentTypeClaudeCode)
-	if ag != nil {
-		agentType = string(ag.Type())
-	}
-	fmt.Fprintf(w, "Agent: %s (use --agent to change)\n\n", agentType)
-
-	// Setup Claude Code hooks (agent hooks don't depend on settings)
-	if _, err := setupClaudeCodeHook(localDev, forceHooks); err != nil {
-		return fmt.Errorf("failed to setup Claude Code hooks: %w", err)
+	// Setup agent hooks for all selected agents
+	for _, ag := range agents {
+		if _, err := setupAgentHooks(ag, localDev, forceHooks); err != nil {
+			return fmt.Errorf("failed to setup %s hooks: %w", ag.Type(), err)
+		}
 	}
 
 	// Setup .entire directory
@@ -306,6 +322,7 @@ func runEnableWithStrategy(w io.Writer, selectedStrategy string, localDev, _, us
 	if _, err := strategy.InstallGitHook(true); err != nil {
 		return fmt.Errorf("failed to install git hooks: %w", err)
 	}
+	strategy.CheckAndWarnHookManagers(w)
 	fmt.Fprintln(w, "✓ Hooks installed")
 	fmt.Fprintf(w, "✓ Project configured (%s)\n", configDisplay)
 
@@ -320,31 +337,14 @@ func runEnableWithStrategy(w io.Writer, selectedStrategy string, localDev, _, us
 }
 
 // runEnableInteractive runs the interactive enable flow.
-func runEnableInteractive(w io.Writer, localDev, _, useLocalSettings, useProjectSettings, forceHooks, skipPushSessions, telemetry bool) error {
-	// Check if already fully enabled — show summary and return early.
-	// Skip early return if any configuration flags are set (user wants to reconfigure).
-	hasConfigFlags := forceHooks || skipPushSessions || !telemetry || useLocalSettings || useProjectSettings || localDev
-	if !hasConfigFlags {
-		if fullyEnabled, agentDesc, configPath := isFullyEnabled(); fullyEnabled {
-			fmt.Fprintln(w, "Already enabled. Everything looks good.")
-			fmt.Fprintln(w)
-			fmt.Fprintf(w, "  Agent: %s\n", agentDesc)
-			fmt.Fprintf(w, "  Config: %s\n", configPath)
-			return nil
+// agents must be provided by the caller (via detectOrSelectAgent).
+// The isFullyEnabled check is handled by the caller before agent detection.
+func runEnableInteractive(w io.Writer, agents []agent.Agent, localDev, useLocalSettings, useProjectSettings, forceHooks, skipPushSessions, telemetry bool) error {
+	// Setup agent hooks for all selected agents
+	for _, ag := range agents {
+		if _, err := setupAgentHooks(ag, localDev, forceHooks); err != nil {
+			return fmt.Errorf("failed to setup %s hooks: %w", ag.Type(), err)
 		}
-	}
-
-	// Detect default agent
-	ag := agent.Default()
-	agentType := string(agent.AgentTypeClaudeCode)
-	if ag != nil {
-		agentType = string(ag.Type())
-	}
-	fmt.Fprintf(w, "Agent: %s (use --agent to change)\n\n", agentType)
-
-	// Setup Claude Code hooks (agent hooks don't depend on settings)
-	if _, err := setupClaudeCodeHook(localDev, forceHooks); err != nil {
-		return fmt.Errorf("failed to setup Claude Code hooks: %w", err)
 	}
 
 	// Setup .entire directory
@@ -404,6 +404,7 @@ func runEnableInteractive(w io.Writer, localDev, _, useLocalSettings, useProject
 	if _, err := strategy.InstallGitHook(true); err != nil {
 		return fmt.Errorf("failed to install git hooks: %w", err)
 	}
+	strategy.CheckAndWarnHookManagers(w)
 	fmt.Fprintln(w, "✓ Hooks installed")
 
 	configDisplay := configDisplayProject
@@ -495,26 +496,170 @@ func checkDisabledGuard(w io.Writer) bool {
 	return false
 }
 
-// setupClaudeCodeHook sets up Claude Code hooks.
-// This is a convenience wrapper that uses the agent package.
+// setupAgentHooks sets up hooks for a given agent.
 // Returns the number of hooks installed (0 if already installed).
-func setupClaudeCodeHook(localDev, forceHooks bool) (int, error) { //nolint:unparam // already present in codebase
-	ag, err := agent.Get(agent.AgentNameClaudeCode)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get claude-code agent: %w", err)
-	}
-
+func setupAgentHooks(ag agent.Agent, localDev, forceHooks bool) (int, error) { //nolint:unparam // return value used by setupAgentHooksNonInteractive
 	hookAgent, ok := ag.(agent.HookSupport)
 	if !ok {
-		return 0, errors.New("claude-code agent does not support hooks")
+		return 0, fmt.Errorf("agent %s does not support hooks", ag.Name())
 	}
 
 	count, err := hookAgent.InstallHooks(localDev, forceHooks)
 	if err != nil {
-		return 0, fmt.Errorf("failed to install claude-code hooks: %w", err)
+		return 0, fmt.Errorf("failed to install %s hooks: %w", ag.Name(), err)
 	}
 
 	return count, nil
+}
+
+// detectOrSelectAgent tries to auto-detect agents, or prompts the user to select.
+// Returns the detected/selected agents and any error.
+// When exactly one agent is detected, it is used automatically.
+// When multiple agents are detected, the user is prompted to confirm.
+// If no agent is detected and no TTY is available, falls back to the default agent.
+//
+// selectFn overrides the interactive prompt for testing. When nil, the real form is used.
+// It receives available agent names and returns the selected names.
+func detectOrSelectAgent(w io.Writer, selectFn func(available []string) ([]string, error)) ([]agent.Agent, error) {
+	// Try auto-detection first
+	detected := agent.DetectAll()
+
+	switch {
+	case len(detected) == 1:
+		// Single agent detected — use it directly
+		fmt.Fprintf(w, "Detected agent: %s\n\n", detected[0].Type())
+		return detected, nil
+
+	case len(detected) > 1:
+		// Multiple agents detected — prompt the user to confirm which to enable
+		agentTypes := make([]string, 0, len(detected))
+		for _, ag := range detected {
+			agentTypes = append(agentTypes, string(ag.Type()))
+		}
+		fmt.Fprintf(w, "Detected multiple agents: %s\n", strings.Join(agentTypes, ", "))
+		fmt.Fprintln(w)
+		// Fall through to the interactive multi-select below
+	}
+
+	// No agent detected (or multiple detected) — check if we can prompt interactively
+	if !canPromptInteractively() {
+		if len(detected) > 0 {
+			// Multiple agents detected but no TTY — use all of them
+			return detected, nil
+		}
+		// No TTY available (e.g., running in CI or tests) - fall back to default agent
+		defaultAgent := agent.Default()
+		if defaultAgent == nil {
+			return nil, errors.New("no default agent available")
+		}
+		fmt.Fprintf(w, "Agent: %s (use --agent to change)\n\n", defaultAgent.Type())
+		return []agent.Agent{defaultAgent}, nil
+	}
+
+	if len(detected) == 0 {
+		// Show message only when nothing was detected
+		fmt.Fprintln(w, "No agent configuration detected (e.g., .claude or .gemini directory).")
+		fmt.Fprintln(w, "This is normal - some agents don't require a config directory.")
+		fmt.Fprintln(w)
+	}
+
+	// Build a set of detected agent names for pre-selection
+	detectedSet := make(map[agent.AgentName]struct{}, len(detected))
+	for _, ag := range detected {
+		detectedSet[ag.Name()] = struct{}{}
+	}
+
+	// Build options from registered agents
+	agentNames := agent.List()
+	options := make([]huh.Option[string], 0, len(agentNames))
+	for _, name := range agentNames {
+		ag, err := agent.Get(name)
+		if err != nil {
+			continue
+		}
+		// Only show agents that support hooks
+		if _, ok := ag.(agent.HookSupport); !ok {
+			continue
+		}
+		label := string(ag.Type())
+		if name == agent.DefaultAgentName {
+			label += " (default)"
+		}
+		opt := huh.NewOption(label, string(name))
+		if _, isDetected := detectedSet[name]; isDetected {
+			opt = opt.Selected(true)
+		}
+		options = append(options, opt)
+	}
+
+	if len(options) == 0 {
+		return nil, errors.New("no agents with hook support available")
+	}
+
+	// Collect available agent names for the selector
+	availableNames := make([]string, 0, len(options))
+	for _, opt := range options {
+		availableNames = append(availableNames, opt.Value)
+	}
+
+	var selectedAgentNames []string
+	if selectFn != nil {
+		var err error
+		selectedAgentNames, err = selectFn(availableNames)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		form := NewAccessibleForm(
+			huh.NewGroup(
+				huh.NewMultiSelect[string]().
+					Title("Which agents are you using?").
+					Description("Use space to select, enter to confirm.").
+					Options(options...).
+					Value(&selectedAgentNames),
+			),
+		)
+		if err := form.Run(); err != nil {
+			return nil, fmt.Errorf("agent selection cancelled: %w", err)
+		}
+	}
+
+	if len(selectedAgentNames) == 0 {
+		return nil, errors.New("no agents selected")
+	}
+
+	selectedAgents := make([]agent.Agent, 0, len(selectedAgentNames))
+	for _, name := range selectedAgentNames {
+		selectedAgent, err := agent.Get(agent.AgentName(name))
+		if err != nil {
+			return nil, fmt.Errorf("failed to get selected agent %s: %w", name, err)
+		}
+		selectedAgents = append(selectedAgents, selectedAgent)
+	}
+
+	agentTypes := make([]string, 0, len(selectedAgents))
+	for _, ag := range selectedAgents {
+		agentTypes = append(agentTypes, string(ag.Type()))
+	}
+	fmt.Fprintf(w, "\nSelected agents: %s\n\n", strings.Join(agentTypes, ", "))
+	return selectedAgents, nil
+}
+
+// canPromptInteractively checks if we can show interactive prompts.
+// Returns false when running in CI, tests, or other non-interactive environments.
+func canPromptInteractively() bool {
+	// Check for test environment
+	if os.Getenv("ENTIRE_TEST_TTY") != "" {
+		return os.Getenv("ENTIRE_TEST_TTY") == "1"
+	}
+
+	// Check if /dev/tty is available
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return false
+	}
+	_ = tty.Close()
+	return true
 }
 
 // printAgentError writes an error message followed by available agents and usage.
@@ -614,6 +759,7 @@ func setupAgentHooksNonInteractive(w io.Writer, ag agent.Agent, strategyName str
 	if _, err := strategy.InstallGitHook(true); err != nil {
 		return fmt.Errorf("failed to install git hooks: %w", err)
 	}
+	strategy.CheckAndWarnHookManagers(w)
 
 	if installedHooks == 0 {
 		msg := fmt.Sprintf("Hooks for %s already installed", ag.Description())
@@ -716,6 +862,7 @@ func setupGitHook() error {
 	if err != nil {
 		return fmt.Errorf("failed to install git hook: %w", err)
 	}
+	strategy.CheckAndWarnHookManagers(os.Stderr)
 	return nil
 }
 

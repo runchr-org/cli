@@ -181,7 +181,7 @@ func TestManualCommit_Attribution(t *testing.T) {
 
 	// Verify attribution was calculated and has reasonable values
 	// Note: The shadow branch includes all worktree changes (agent + user),
-	// so base→shadow diff includes user edits that were present during SaveChanges.
+	// so base→shadow diff includes user edits that were present during SaveStep.
 	// The attribution separates them using PromptAttributions.
 	//
 	// Expected: agent=13 (base→shadow includes user comments in worktree)

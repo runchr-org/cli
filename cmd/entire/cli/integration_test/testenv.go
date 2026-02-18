@@ -1137,6 +1137,84 @@ func (env *TestEnv) GitCommitWithTrailerRemoved(message string, files ...string)
 	}
 }
 
+// GitRm stages file deletions using git rm.
+func (env *TestEnv) GitRm(paths ...string) {
+	env.T.Helper()
+
+	args := append([]string{"rm", "--"}, paths...)
+	cmd := exec.Command("git", args...)
+	cmd.Dir = env.RepoDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		env.T.Fatalf("git rm failed: %v\nOutput: %s", err, output)
+	}
+}
+
+// GitCommitStagedWithShadowHooks commits whatever is already staged (without adding files first),
+// running the prepare-commit-msg and post-commit hooks like a real workflow.
+// Use this after GitRm or when files are already staged.
+func (env *TestEnv) GitCommitStagedWithShadowHooks(message string) {
+	env.T.Helper()
+	env.gitCommitStagedWithShadowHooks(message, true)
+}
+
+// gitCommitStagedWithShadowHooks is the shared implementation for committing staged changes with hooks.
+func (env *TestEnv) gitCommitStagedWithShadowHooks(message string, simulateTTY bool) {
+	env.T.Helper()
+
+	// Create a temp file for the commit message (prepare-commit-msg hook modifies this)
+	msgFile := filepath.Join(env.RepoDir, ".git", "COMMIT_EDITMSG")
+	if err := os.WriteFile(msgFile, []byte(message), 0o644); err != nil {
+		env.T.Fatalf("failed to write commit message file: %v", err)
+	}
+
+	// Run prepare-commit-msg hook using the shared binary.
+	prepCmd := exec.Command(getTestBinary(), "hooks", "git", "prepare-commit-msg", msgFile, "message")
+	prepCmd.Dir = env.RepoDir
+	if simulateTTY {
+		prepCmd.Env = append(os.Environ(), "ENTIRE_TEST_TTY=1")
+	} else {
+		prepCmd.Env = append(os.Environ(), "ENTIRE_TEST_TTY=0")
+	}
+	if output, err := prepCmd.CombinedOutput(); err != nil {
+		env.T.Logf("prepare-commit-msg output: %s", output)
+	}
+
+	// Read the modified message
+	modifiedMsg, err := os.ReadFile(msgFile)
+	if err != nil {
+		env.T.Fatalf("failed to read modified commit message: %v", err)
+	}
+
+	// Create the commit using go-git with the modified message
+	repo, err := git.PlainOpen(env.RepoDir)
+	if err != nil {
+		env.T.Fatalf("failed to open git repo: %v", err)
+	}
+
+	worktree, err := repo.Worktree()
+	if err != nil {
+		env.T.Fatalf("failed to get worktree: %v", err)
+	}
+
+	_, err = worktree.Commit(string(modifiedMsg), &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Test User",
+			Email: "test@example.com",
+			When:  time.Now(),
+		},
+	})
+	if err != nil {
+		env.T.Fatalf("failed to commit: %v", err)
+	}
+
+	// Run post-commit hook
+	postCmd := exec.Command(getTestBinary(), "hooks", "git", "post-commit")
+	postCmd.Dir = env.RepoDir
+	if output, err := postCmd.CombinedOutput(); err != nil {
+		env.T.Logf("post-commit output: %s", output)
+	}
+}
+
 // ListBranchesWithPrefix returns all branches that start with the given prefix.
 func (env *TestEnv) ListBranchesWithPrefix(prefix string) []string {
 	env.T.Helper()
