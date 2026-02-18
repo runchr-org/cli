@@ -153,6 +153,12 @@ func triggerWingmanAutoApplyIfPending(repoRoot string) {
 		logging.Debug(logCtx, "wingman auto-apply skip: no REVIEW.md pending")
 		return
 	}
+	// Skip auto-apply if the review has no actionable issues
+	if !reviewHasActionableIssues(reviewPath) {
+		logging.Info(logCtx, "wingman auto-apply skip: review has no actionable issues, cleaning up")
+		_ = os.Remove(reviewPath)
+		return
+	}
 	wingmanState := loadWingmanStateDirect(repoRoot)
 	if wingmanState != nil && wingmanState.ApplyAttemptedAt != nil {
 		logging.Debug(logCtx, "wingman auto-apply already attempted, skipping",
@@ -216,7 +222,7 @@ func outputWingmanStopNotification(repoRoot string) {
 	}
 
 	reviewPath := filepath.Join(repoRoot, wingmanReviewFile)
-	if _, err := os.Stat(reviewPath); err == nil {
+	if _, err := os.Stat(reviewPath); err == nil && reviewHasActionableIssues(reviewPath) {
 		_ = outputHookMessage("[Wingman] Review pending \u2014 will be addressed on your next prompt") //nolint:errcheck // best-effort notification
 		return
 	}

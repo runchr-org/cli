@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/session"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/spf13/cobra"
 )
 
@@ -28,8 +30,9 @@ const (
 	// letting the agent turn fully settle.
 	wingmanInitialDelay = 10 * time.Second
 
-	// wingmanReviewModel is the Claude model used for reviews.
-	wingmanReviewModel = "opus"
+	// wingmanDefaultReviewModel is the default model used for wingman reviews.
+	// Can be overridden via strategy_options.wingman.model in settings.
+	wingmanDefaultReviewModel = "opus"
 
 	// wingmanGitTimeout is the timeout for git diff operations.
 	wingmanGitTimeout = 60 * time.Second
@@ -40,11 +43,6 @@ const (
 	// wingmanApplyTimeout is the timeout for the claude --continue auto-apply call.
 	wingmanApplyTimeout = 15 * time.Minute
 )
-
-// wingmanCLIResponse represents the JSON response from the Claude CLI --output-format json.
-type wingmanCLIResponse struct {
-	Result string `json:"result"`
-}
 
 func newWingmanReviewCmd() *cobra.Command {
 	return &cobra.Command{
@@ -138,13 +136,14 @@ func runWingmanReview(payloadPath string) error {
 	prompt := buildReviewPrompt(payload.Prompts, payload.CommitMessage, sessionContext, payload.SessionID, fileList, diff)
 	wingmanLog("review prompt built: %d bytes", len(prompt))
 
-	// Call Claude CLI for review
-	wingmanLog("calling claude CLI (model=%s, timeout=%s)", wingmanReviewModel, wingmanReviewTimeout)
+	// Call agent for review
+	model := resolveWingmanModel()
+	wingmanLog("calling agent for review (model=%s, timeout=%s)", model, wingmanReviewTimeout)
 	reviewStart := time.Now()
-	reviewText, err := callClaudeForReview(repoRoot, prompt)
+	reviewText, err := callAgentForReview(repoRoot, prompt, model)
 	if err != nil {
-		wingmanLog("ERROR claude CLI failed after %s: %v", time.Since(reviewStart).Round(time.Millisecond), err)
-		return fmt.Errorf("failed to get review from Claude: %w", err)
+		wingmanLog("ERROR agent review failed after %s: %v", time.Since(reviewStart).Round(time.Millisecond), err)
+		return fmt.Errorf("failed to get review from agent: %w", err)
 	}
 	wingmanLog("review received: %d bytes in %s", len(reviewText), time.Since(reviewStart).Round(time.Millisecond))
 
@@ -269,55 +268,64 @@ func gitDiff(ctx context.Context, repoRoot string, args ...string) (string, erro
 	return stdout.String(), nil
 }
 
-// callClaudeForReview calls the claude CLI to perform the review.
+// resolveWingmanModel returns the model to use for wingman reviews,
+// reading from settings with a fallback to the default.
+func resolveWingmanModel() string {
+	s, err := settings.Load()
+	if err != nil {
+		return wingmanDefaultReviewModel
+	}
+	if m := s.WingmanModel(); m != "" {
+		return m
+	}
+	return wingmanDefaultReviewModel
+}
+
+// resolveWingmanAgent returns the agent name to use for wingman reviews,
+// reading from settings with a fallback to the default agent.
+func resolveWingmanAgent() agent.AgentName {
+	s, err := settings.Load()
+	if err != nil {
+		return agent.DefaultAgentName
+	}
+	if a := s.WingmanAgent(); a != "" {
+		return agent.AgentName(a)
+	}
+	return agent.DefaultAgentName
+}
+
+// callAgentForReview invokes the configured agent's Prompter to perform a review.
 // repoRoot is the repository root so the reviewer can access the full codebase.
-func callClaudeForReview(repoRoot, prompt string) (string, error) {
+func callAgentForReview(repoRoot, prompt, model string) (string, error) {
+	agentName := resolveWingmanAgent()
+
+	ag, err := agent.Get(agentName)
+	if err != nil {
+		return "", fmt.Errorf("wingman agent %q not found: %w", agentName, err)
+	}
+
+	prompter, ok := ag.(agent.Prompter)
+	if !ok {
+		return "", fmt.Errorf("agent %q does not support prompting (does not implement agent.Prompter)", agentName)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), wingmanReviewTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "claude",
-		"--print",
-		"--output-format", "json",
-		"--model", wingmanReviewModel,
-		"--setting-sources", "",
-		// Grant read-only tool access so the reviewer can inspect source files
-		// beyond just the diff. Permission bypass is safe here since tools are
-		// restricted to read-only operations.
-		"--allowedTools", "Read,Glob,Grep",
-		"--permission-mode", "bypassPermissions",
-	)
-
-	// Run from repo root so the reviewer can read source files for context.
-	// Loop-breaking is handled by --setting-sources "" (disables hooks) and
-	// wingmanStripGitEnv (prevents git index pollution).
-	cmd.Dir = repoRoot
-	cmd.Env = wingmanStripGitEnv(os.Environ())
-
-	cmd.Stdin = strings.NewReader(prompt)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		var execErr *exec.Error
-		if errors.As(err, &execErr) {
-			return "", fmt.Errorf("claude CLI not found: %w", err)
-		}
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return "", fmt.Errorf("claude CLI failed (exit %d): %s", exitErr.ExitCode(), stderr.String())
-		}
-		return "", fmt.Errorf("failed to run claude CLI: %w", err)
+	// Grant read-only tool access so the reviewer can inspect source files
+	// beyond just the diff. Permission bypass is safe here since tools are
+	// restricted to read-only operations.
+	result, err := prompter.Prompt(ctx, prompt, agent.PromptOptions{
+		Model:          model,
+		WorkDir:        repoRoot,
+		AllowedTools:   "Read,Glob,Grep",
+		PermissionMode: "bypassPermissions",
+	})
+	if err != nil {
+		return "", fmt.Errorf("agent review prompt failed: %w", err)
 	}
 
-	// Parse the CLI response
-	var cliResponse wingmanCLIResponse
-	if err := json.Unmarshal(stdout.Bytes(), &cliResponse); err != nil {
-		return "", fmt.Errorf("failed to parse claude CLI response: %w", err)
-	}
-
-	return cliResponse.Result, nil
+	return result.Text, nil
 }
 
 // readSessionContext reads the context.md file from the session's checkpoint
@@ -523,7 +531,16 @@ func runWingmanApply(repoRoot string) error {
 }
 
 // triggerAutoApply spawns claude --continue to apply the review suggestions.
+// NOTE: This uses --continue which is Claude-specific and not part of the
+// Prompter interface. If the wingman agent is not claude-code, auto-apply
+// is skipped.
 func triggerAutoApply(repoRoot string) error {
+	agentName := resolveWingmanAgent()
+	if agentName != agent.AgentNameClaudeCode {
+		wingmanLog("auto-apply skipped: --continue is only supported for claude-code (agent=%s)", agentName)
+		return nil
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), wingmanApplyTimeout)
 	defer cancel()
 
@@ -540,7 +557,7 @@ func triggerAutoApply(repoRoot string) error {
 	// Strip GIT_* env vars to prevent hook interference, and set
 	// ENTIRE_WINGMAN_APPLY=1 so git hooks (post-commit) know not to
 	// trigger another wingman review (prevents infinite recursion).
-	env := wingmanStripGitEnv(os.Environ())
+	env := agent.StripGitEnv(os.Environ())
 	env = append(env, "ENTIRE_WINGMAN_APPLY=1")
 	cmd.Env = env
 
@@ -549,21 +566,6 @@ func triggerAutoApply(repoRoot string) error {
 	cmd.Stderr = &stderr
 
 	return cmd.Run() //nolint:wrapcheck // caller wraps
-}
-
-// wingmanStripGitEnv returns a copy of env with all GIT_* variables removed
-// and the CLAUDECODE variable unset. GIT_* removal prevents a subprocess from
-// discovering or modifying the parent's git repo. CLAUDECODE removal prevents
-// the Claude CLI from refusing to start due to nested-session detection.
-func wingmanStripGitEnv(env []string) []string {
-	filtered := make([]string, 0, len(env))
-	for _, e := range env {
-		if strings.HasPrefix(e, "GIT_") || strings.HasPrefix(e, "CLAUDECODE=") {
-			continue
-		}
-		filtered = append(filtered, e)
-	}
-	return filtered
 }
 
 // saveWingmanStateDirect writes the wingman state file directly to a known path
