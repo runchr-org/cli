@@ -295,6 +295,47 @@ func (s *EntireSettings) IsPushSessionsDisabled() bool {
 	return false
 }
 
+// WingmanAgent returns the configured agent for wingman reviews.
+// Returns empty string if not configured (callers should default to the default agent).
+func (s *EntireSettings) WingmanAgent() string {
+	return s.strategyOptionString("wingman", "agent")
+}
+
+// WingmanModel returns the configured model for wingman reviews.
+// Returns empty string if not configured (callers should default to their own default).
+func (s *EntireSettings) WingmanModel() string {
+	return s.strategyOptionString("wingman", "model")
+}
+
+// SummarizeAgent returns the configured agent for summarization.
+// Returns empty string if not configured (callers should default to the default agent).
+func (s *EntireSettings) SummarizeAgent() string {
+	return s.strategyOptionString("summarize", "agent")
+}
+
+// SummarizeModel returns the configured model for summarization.
+// Returns empty string if not configured (callers should default to their own default).
+func (s *EntireSettings) SummarizeModel() string {
+	return s.strategyOptionString("summarize", "model")
+}
+
+// strategyOptionString extracts a string value from a nested strategy option.
+// Returns empty string if the option doesn't exist or isn't a string.
+func (s *EntireSettings) strategyOptionString(section, key string) string {
+	if s.StrategyOptions == nil {
+		return ""
+	}
+	sectionOpts, ok := s.StrategyOptions[section].(map[string]any)
+	if !ok {
+		return ""
+	}
+	val, ok := sectionOpts[key].(string)
+	if !ok {
+		return ""
+	}
+	return val
+}
+
 // Save saves the settings to .entire/settings.json.
 func Save(settings *EntireSettings) error {
 	return saveToFile(settings, EntireSettingsFile)

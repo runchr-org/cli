@@ -140,3 +140,102 @@ func containsUnknownField(msg string) bool {
 	// Go's json package reports unknown fields with this message format
 	return strings.Contains(msg, "unknown field")
 }
+
+func TestStrategyOptionString(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		options  map[string]any
+		section  string
+		key      string
+		expected string
+	}{
+		{
+			name:     "nil options",
+			options:  nil,
+			section:  "wingman",
+			key:      "agent",
+			expected: "",
+		},
+		{
+			name:     "missing section",
+			options:  map[string]any{},
+			section:  "wingman",
+			key:      "agent",
+			expected: "",
+		},
+		{
+			name:     "section wrong type",
+			options:  map[string]any{"wingman": "invalid"},
+			section:  "wingman",
+			key:      "agent",
+			expected: "",
+		},
+		{
+			name:     "missing key",
+			options:  map[string]any{"wingman": map[string]any{"enabled": true}},
+			section:  "wingman",
+			key:      "agent",
+			expected: "",
+		},
+		{
+			name:     "key wrong type",
+			options:  map[string]any{"wingman": map[string]any{"agent": 123}},
+			section:  "wingman",
+			key:      "agent",
+			expected: "",
+		},
+		{
+			name:     "wingman agent",
+			options:  map[string]any{"wingman": map[string]any{"agent": "claude-code", "model": "opus"}},
+			section:  "wingman",
+			key:      "agent",
+			expected: "claude-code",
+		},
+		{
+			name:     "wingman model",
+			options:  map[string]any{"wingman": map[string]any{"agent": "claude-code", "model": "opus"}},
+			section:  "wingman",
+			key:      "model",
+			expected: "opus",
+		},
+		{
+			name:     "summarize agent",
+			options:  map[string]any{"summarize": map[string]any{"agent": "gemini"}},
+			section:  "summarize",
+			key:      "agent",
+			expected: "gemini",
+		},
+		{
+			name:     "summarize model",
+			options:  map[string]any{"summarize": map[string]any{"model": "sonnet"}},
+			section:  "summarize",
+			key:      "model",
+			expected: "sonnet",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := &EntireSettings{StrategyOptions: tt.options}
+
+			var got string
+			switch {
+			case tt.section == "wingman" && tt.key == "agent":
+				got = s.WingmanAgent()
+			case tt.section == "wingman" && tt.key == "model":
+				got = s.WingmanModel()
+			case tt.section == "summarize" && tt.key == "agent":
+				got = s.SummarizeAgent()
+			case tt.section == "summarize" && tt.key == "model":
+				got = s.SummarizeModel()
+			}
+
+			if got != tt.expected {
+				t.Errorf("%s.%s = %q, want %q", tt.section, tt.key, got, tt.expected)
+			}
+		})
+	}
+}
