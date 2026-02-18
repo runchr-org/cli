@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 	"time"
 )
 
@@ -264,28 +263,16 @@ func (r *GeminiCLIRunner) RunPrompt(ctx context.Context, workDir string, prompt 
 }
 
 func (r *GeminiCLIRunner) RunPromptWithTools(ctx context.Context, workDir string, prompt string, tools []string) (*AgentResult, error) {
-	// Build command: gemini -m <model> -p "<prompt>" --approval-mode auto_edit --allowed-tools <tools>
-	// --approval-mode auto_edit: auto-approves edit tools (write_file, replace) while prompting for others
-	// --allowed-tools: comma-separated list of tools that bypass confirmation (e.g., git commands)
+	// Build command: gemini -m <model> -p "<prompt>" --yolo
+	// --yolo (-y): auto-approves all tools, required for non-interactive e2e tests
+	// Note: --approval-mode auto_edit + --allowed-tools doesn't work because
+	// tool matching is exact (e.g., "ShellTool(git commit)" won't match
+	// "ShellTool(git commit -m "msg")"), causing the agent to hang waiting
+	// for approval in a non-interactive context.
 	args := []string{
 		"-m", r.Model,
 		"-p", prompt,
-		"--approval-mode", "auto_edit",
-	}
-
-	// Add default git tools that should be allowed without confirmation
-	defaultAllowedTools := []string{
-		"ShellTool(git status)",
-		"ShellTool(git add)",
-		"ShellTool(git commit)",
-		"ShellTool(git diff)",
-		"ShellTool(git log)",
-	}
-
-	// Merge with any additional tools passed in
-	allTools := append(defaultAllowedTools, tools...)
-	if len(allTools) > 0 {
-		args = append(args, "--allowed-tools", strings.Join(allTools, ","))
+		"-y",
 	}
 
 	// Create context with timeout
@@ -295,6 +282,9 @@ func (r *GeminiCLIRunner) RunPromptWithTools(ctx context.Context, workDir string
 	//nolint:gosec // args are constructed from trusted config, not user input
 	cmd := exec.CommandContext(ctx, "gemini", args...)
 	cmd.Dir = workDir
+	// ENTIRE_TEST_TTY=0 prevents git hooks (prepare-commit-msg) from trying to
+	// read /dev/tty for interactive confirmation, which hangs in non-interactive tests.
+	cmd.Env = append(os.Environ(), "ENTIRE_TEST_TTY=0")
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
