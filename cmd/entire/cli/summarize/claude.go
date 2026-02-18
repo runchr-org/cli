@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 )
 
@@ -51,7 +51,41 @@ Guidelines:
 // to handle long transcripts without truncation.
 const DefaultModel = "sonnet"
 
-// ClaudeGenerator generates summaries using the Claude CLI.
+// PrompterGenerator generates summaries using any agent that implements agent.Prompter.
+type PrompterGenerator struct {
+	// Prompter is the agent's Prompter interface to invoke.
+	Prompter agent.Prompter
+
+	// Model overrides the default model for summarization.
+	// If empty, defaults to DefaultModel ("sonnet").
+	Model string
+}
+
+// Generate creates a summary by calling the agent's Prompter interface.
+func (g *PrompterGenerator) Generate(ctx context.Context, input Input) (*checkpoint.Summary, error) {
+	transcriptText := FormatCondensedTranscript(input)
+	prompt := buildSummarizationPrompt(transcriptText)
+
+	model := g.Model
+	if model == "" {
+		model = DefaultModel
+	}
+
+	result, err := g.Prompter.Prompt(ctx, prompt, agent.PromptOptions{
+		Model:        model,
+		OutputFormat: "json",
+		// WorkDir defaults to os.TempDir() in the Prompter implementation,
+		// isolating the subprocess from the user's git repo.
+	})
+	if err != nil {
+		return nil, fmt.Errorf("summarize prompt failed: %w", err)
+	}
+
+	return parseSummaryFromResult(result.Text)
+}
+
+// ClaudeGenerator generates summaries using the Claude CLI directly.
+// Kept for backward compatibility and test injection via CommandRunner.
 type ClaudeGenerator struct {
 	// ClaudePath is the path to the claude CLI executable.
 	// If empty, defaults to "claude" (expects it to be in PATH).
@@ -64,11 +98,6 @@ type ClaudeGenerator struct {
 	// CommandRunner allows injection of the command execution for testing.
 	// If nil, uses exec.CommandContext directly.
 	CommandRunner func(ctx context.Context, name string, args ...string) *exec.Cmd
-}
-
-// claudeCLIResponse represents the JSON response from the Claude CLI.
-type claudeCLIResponse struct {
-	Result string `json:"result"`
 }
 
 // Generate creates a summary from checkpoint data by calling the Claude CLI.
@@ -107,7 +136,7 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, input Input) (*checkpoin
 	// git hooks set GIT_DIR which lets Claude Code find the repo regardless of cwd.
 	// This also prevents recursive triggering of Entire's own git hooks.
 	cmd.Dir = os.TempDir()
-	cmd.Env = stripGitEnv(os.Environ())
+	cmd.Env = agent.StripGitEnv(os.Environ())
 
 	// Pass prompt via stdin
 	cmd.Stdin = strings.NewReader(prompt)
@@ -118,32 +147,22 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, input Input) (*checkpoin
 
 	err := cmd.Run()
 	if err != nil {
-		// Check if the command was not found
-		var execErr *exec.Error
-		if errors.As(err, &execErr) {
-			return nil, fmt.Errorf("claude CLI not found: %w", err)
-		}
-
-		// Check for exit error
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return nil, fmt.Errorf("claude CLI failed (exit %d): %s", exitErr.ExitCode(), stderr.String())
-		}
-
-		return nil, fmt.Errorf("failed to run claude CLI: %w", err)
+		return nil, fmt.Errorf("summarize CLI failed: %w", agent.FormatExecError(err, "claude", stderr.String()))
 	}
 
 	// Parse the CLI response
-	var cliResponse claudeCLIResponse
+	var cliResponse agent.CLIResponse
 	if err := json.Unmarshal(stdout.Bytes(), &cliResponse); err != nil {
 		return nil, fmt.Errorf("failed to parse claude CLI response: %w", err)
 	}
 
-	// The result field contains the actual JSON summary
-	resultJSON := cliResponse.Result
+	return parseSummaryFromResult(cliResponse.Result)
+}
 
+// parseSummaryFromResult parses the JSON summary from an agent's text result.
+func parseSummaryFromResult(resultText string) (*checkpoint.Summary, error) {
 	// Try to extract JSON if it's wrapped in markdown code blocks
-	resultJSON = extractJSONFromMarkdown(resultJSON)
+	resultJSON := extractJSONFromMarkdown(resultText)
 
 	// Parse the summary from the result
 	var summary checkpoint.Summary
@@ -157,21 +176,6 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, input Input) (*checkpoin
 // buildSummarizationPrompt creates the prompt for the Claude CLI.
 func buildSummarizationPrompt(transcriptText string) string {
 	return fmt.Sprintf(summarizationPromptTemplate, transcriptText)
-}
-
-// stripGitEnv returns a copy of env with all GIT_* variables removed and the
-// CLAUDECODE variable unset. GIT_* removal prevents a subprocess from discovering
-// or modifying the parent's git repo. CLAUDECODE removal prevents the Claude CLI
-// from refusing to start due to nested-session detection.
-func stripGitEnv(env []string) []string {
-	filtered := make([]string, 0, len(env))
-	for _, e := range env {
-		if strings.HasPrefix(e, "GIT_") || strings.HasPrefix(e, "CLAUDECODE=") {
-			continue
-		}
-		filtered = append(filtered, e)
-	}
-	return filtered
 }
 
 // extractJSONFromMarkdown attempts to extract JSON from markdown code blocks.

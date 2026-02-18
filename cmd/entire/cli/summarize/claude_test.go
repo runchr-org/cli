@@ -60,36 +60,6 @@ func TestClaudeGenerator_GitIsolation(t *testing.T) {
 	}
 }
 
-func TestStripGitEnv(t *testing.T) {
-	env := []string{
-		"HOME=/Users/test",
-		"GIT_DIR=/repo/.git",
-		"PATH=/usr/bin",
-		"GIT_WORK_TREE=/repo",
-		"GIT_INDEX_FILE=/repo/.git/index",
-		"SHELL=/bin/zsh",
-		"CLAUDECODE=1",
-	}
-
-	filtered := stripGitEnv(env)
-
-	expected := []string{
-		"HOME=/Users/test",
-		"PATH=/usr/bin",
-		"SHELL=/bin/zsh",
-	}
-
-	if len(filtered) != len(expected) {
-		t.Fatalf("got %d entries, want %d", len(filtered), len(expected))
-	}
-
-	for i, e := range filtered {
-		if e != expected[i] {
-			t.Errorf("filtered[%d] = %q, want %q", i, e, expected[i])
-		}
-	}
-}
-
 func TestClaudeGenerator_CommandNotFound(t *testing.T) {
 	gen := &ClaudeGenerator{
 		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {

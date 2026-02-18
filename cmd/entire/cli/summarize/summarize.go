@@ -11,6 +11,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 )
 
@@ -22,7 +23,7 @@ import (
 //   - transcriptBytes: raw transcript bytes (JSONL or JSON format depending on agent)
 //   - filesTouched: list of files modified during the session
 //   - agentType: the agent type to determine transcript format
-//   - generator: summary generator to use (if nil, uses default ClaudeGenerator)
+//   - generator: summary generator to use (if nil, resolves from settings)
 //
 // Returns nil, error if transcript is empty or cannot be parsed.
 func GenerateFromTranscript(ctx context.Context, transcriptBytes []byte, filesTouched []string, agentType agent.AgentType, generator Generator) (*checkpoint.Summary, error) {
@@ -46,7 +47,7 @@ func GenerateFromTranscript(ctx context.Context, transcriptBytes []byte, filesTo
 
 	// Use default generator if none provided
 	if generator == nil {
-		generator = &ClaudeGenerator{}
+		generator = resolveGenerator()
 	}
 
 	summary, err := generator.Generate(ctx, input)
@@ -55,6 +56,37 @@ func GenerateFromTranscript(ctx context.Context, transcriptBytes []byte, filesTo
 	}
 
 	return summary, nil
+}
+
+// resolveGenerator creates a Generator based on settings.
+// If the configured agent supports the Prompter interface, uses PrompterGenerator.
+// Falls back to ClaudeGenerator for backward compatibility.
+func resolveGenerator() Generator {
+	s, err := settings.Load()
+	if err != nil {
+		return &ClaudeGenerator{}
+	}
+
+	agentName := agent.AgentName(s.SummarizeAgent())
+	if agentName == "" {
+		agentName = agent.DefaultAgentName
+	}
+
+	ag, err := agent.Get(agentName)
+	if err != nil {
+		return &ClaudeGenerator{}
+	}
+
+	prompter, ok := ag.(agent.Prompter)
+	if !ok {
+		// Agent doesn't support Prompter, fall back to ClaudeGenerator
+		return &ClaudeGenerator{}
+	}
+
+	return &PrompterGenerator{
+		Prompter: prompter,
+		Model:    s.SummarizeModel(),
+	}
 }
 
 // Generator generates checkpoint summaries using an LLM.
