@@ -109,14 +109,15 @@ func (c *ClaudeCodeAgent) InstallHooks(localDev bool, force bool) (int, error) {
 		rawPermissions = make(map[string]json.RawMessage)
 	}
 
-	// Parse only the hook types we need to modify
+	// Parse only the hook types we need to modify.
+	// Track which types parsed successfully — unparseable types are left untouched.
 	var sessionStart, sessionEnd, stop, userPromptSubmit, preToolUse, postToolUse []ClaudeHookMatcher
-	parseHookType(rawHooks, "SessionStart", &sessionStart)
-	parseHookType(rawHooks, "SessionEnd", &sessionEnd)
-	parseHookType(rawHooks, "Stop", &stop)
-	parseHookType(rawHooks, "UserPromptSubmit", &userPromptSubmit)
-	parseHookType(rawHooks, "PreToolUse", &preToolUse)
-	parseHookType(rawHooks, "PostToolUse", &postToolUse)
+	parsedSessionStart := parseHookType(rawHooks, "SessionStart", &sessionStart)
+	parsedSessionEnd := parseHookType(rawHooks, "SessionEnd", &sessionEnd)
+	parsedStop := parseHookType(rawHooks, "Stop", &stop)
+	parsedUserPromptSubmit := parseHookType(rawHooks, "UserPromptSubmit", &userPromptSubmit)
+	parsedPreToolUse := parseHookType(rawHooks, "PreToolUse", &preToolUse)
+	parsedPostToolUse := parseHookType(rawHooks, "PostToolUse", &postToolUse)
 
 	// If force is true, remove all existing Entire hooks first
 	if force {
@@ -203,12 +204,12 @@ func (c *ClaudeCodeAgent) InstallHooks(localDev bool, force bool) (int, error) {
 	}
 
 	// Marshal modified hook types back to rawHooks
-	marshalHookType(rawHooks, "SessionStart", sessionStart)
-	marshalHookType(rawHooks, "SessionEnd", sessionEnd)
-	marshalHookType(rawHooks, "Stop", stop)
-	marshalHookType(rawHooks, "UserPromptSubmit", userPromptSubmit)
-	marshalHookType(rawHooks, "PreToolUse", preToolUse)
-	marshalHookType(rawHooks, "PostToolUse", postToolUse)
+	marshalHookType(rawHooks, "SessionStart", sessionStart, parsedSessionStart)
+	marshalHookType(rawHooks, "SessionEnd", sessionEnd, parsedSessionEnd)
+	marshalHookType(rawHooks, "Stop", stop, parsedStop)
+	marshalHookType(rawHooks, "UserPromptSubmit", userPromptSubmit, parsedUserPromptSubmit)
+	marshalHookType(rawHooks, "PreToolUse", preToolUse, parsedPreToolUse)
+	marshalHookType(rawHooks, "PostToolUse", postToolUse, parsedPostToolUse)
 
 	// Marshal hooks and update raw settings
 	hooksJSON, err := json.Marshal(rawHooks)
@@ -242,17 +243,25 @@ func (c *ClaudeCodeAgent) InstallHooks(localDev bool, force bool) (int, error) {
 }
 
 // parseHookType parses a specific hook type from rawHooks into the target slice.
-// Silently ignores parse errors (leaves target unchanged).
-func parseHookType(rawHooks map[string]json.RawMessage, hookType string, target *[]ClaudeHookMatcher) {
+// Returns true if the hook type was successfully parsed (or didn't exist).
+// Returns false if parsing failed — caller should NOT marshal this type back,
+// to avoid replacing the original (unparseable) data with an empty array.
+func parseHookType(rawHooks map[string]json.RawMessage, hookType string, target *[]ClaudeHookMatcher) bool {
 	if data, ok := rawHooks[hookType]; ok {
-		//nolint:errcheck,gosec // Intentionally ignoring parse errors - leave target as nil/empty
-		json.Unmarshal(data, target)
+		if err := json.Unmarshal(data, target); err != nil {
+			return false
+		}
 	}
+	return true
 }
 
 // marshalHookType marshals a hook type back to rawHooks.
+// If parsed is false, the original data couldn't be parsed and is left untouched.
 // If the slice is empty, removes the key from rawHooks.
-func marshalHookType(rawHooks map[string]json.RawMessage, hookType string, matchers []ClaudeHookMatcher) {
+func marshalHookType(rawHooks map[string]json.RawMessage, hookType string, matchers []ClaudeHookMatcher, parsed bool) {
+	if !parsed {
+		return // Don't overwrite unparseable data
+	}
 	if len(matchers) == 0 {
 		delete(rawHooks, hookType)
 		return
@@ -293,14 +302,15 @@ func (c *ClaudeCodeAgent) UninstallHooks() error {
 		rawHooks = make(map[string]json.RawMessage)
 	}
 
-	// Parse only the hook types we need to modify
+	// Parse only the hook types we need to modify.
+	// Track which types parsed successfully — unparseable types are left untouched.
 	var sessionStart, sessionEnd, stop, userPromptSubmit, preToolUse, postToolUse []ClaudeHookMatcher
-	parseHookType(rawHooks, "SessionStart", &sessionStart)
-	parseHookType(rawHooks, "SessionEnd", &sessionEnd)
-	parseHookType(rawHooks, "Stop", &stop)
-	parseHookType(rawHooks, "UserPromptSubmit", &userPromptSubmit)
-	parseHookType(rawHooks, "PreToolUse", &preToolUse)
-	parseHookType(rawHooks, "PostToolUse", &postToolUse)
+	parsedSessionStart := parseHookType(rawHooks, "SessionStart", &sessionStart)
+	parsedSessionEnd := parseHookType(rawHooks, "SessionEnd", &sessionEnd)
+	parsedStop := parseHookType(rawHooks, "Stop", &stop)
+	parsedUserPromptSubmit := parseHookType(rawHooks, "UserPromptSubmit", &userPromptSubmit)
+	parsedPreToolUse := parseHookType(rawHooks, "PreToolUse", &preToolUse)
+	parsedPostToolUse := parseHookType(rawHooks, "PostToolUse", &postToolUse)
 
 	// Remove Entire hooks from all hook types
 	sessionStart = removeEntireHooks(sessionStart)
@@ -311,12 +321,12 @@ func (c *ClaudeCodeAgent) UninstallHooks() error {
 	postToolUse = removeEntireHooksFromMatchers(postToolUse)
 
 	// Marshal modified hook types back to rawHooks
-	marshalHookType(rawHooks, "SessionStart", sessionStart)
-	marshalHookType(rawHooks, "SessionEnd", sessionEnd)
-	marshalHookType(rawHooks, "Stop", stop)
-	marshalHookType(rawHooks, "UserPromptSubmit", userPromptSubmit)
-	marshalHookType(rawHooks, "PreToolUse", preToolUse)
-	marshalHookType(rawHooks, "PostToolUse", postToolUse)
+	marshalHookType(rawHooks, "SessionStart", sessionStart, parsedSessionStart)
+	marshalHookType(rawHooks, "SessionEnd", sessionEnd, parsedSessionEnd)
+	marshalHookType(rawHooks, "Stop", stop, parsedStop)
+	marshalHookType(rawHooks, "UserPromptSubmit", userPromptSubmit, parsedUserPromptSubmit)
+	marshalHookType(rawHooks, "PreToolUse", preToolUse, parsedPreToolUse)
+	marshalHookType(rawHooks, "PostToolUse", postToolUse, parsedPostToolUse)
 
 	// Also remove the metadata deny rule from permissions
 	var rawPermissions map[string]json.RawMessage
