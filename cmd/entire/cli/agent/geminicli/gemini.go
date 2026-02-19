@@ -3,6 +3,8 @@ package geminicli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,7 +12,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -46,6 +47,8 @@ func (g *GeminiCLIAgent) Type() agent.AgentType {
 func (g *GeminiCLIAgent) Description() string {
 	return "Gemini CLI - Google's AI coding assistant"
 }
+
+func (g *GeminiCLIAgent) IsPreview() bool { return true }
 
 // DetectPresence checks if Gemini CLI is configured in the repository.
 func (g *GeminiCLIAgent) DetectPresence() (bool, error) {
@@ -162,7 +165,7 @@ func (g *GeminiCLIAgent) ProtectedDirs() []string { return []string{".gemini"} }
 // ResolveSessionFile returns the path to a Gemini session file.
 // Gemini names files as session-<date>-<shortid>.json where shortid is the first 8 chars
 // of the session UUID. This searches for an existing file matching the pattern, falling
-// back to <dir>/<id>.json if no match is found.
+// back to constructing a filename matching Gemini's convention if no match is found.
 func (g *GeminiCLIAgent) ResolveSessionFile(sessionDir, agentSessionID string) string {
 	// Try to find existing file matching Gemini's naming convention:
 	// session-*-<first8chars>.json
@@ -178,8 +181,9 @@ func (g *GeminiCLIAgent) ResolveSessionFile(sessionDir, agentSessionID string) s
 		return matches[len(matches)-1]
 	}
 
-	// Fallback: construct a default path
-	return filepath.Join(sessionDir, agentSessionID+".json")
+	// Fallback: construct filename matching Gemini's convention: session-<timestamp>-<id[:8]>.json
+	timestamp := time.Now().UTC().Format("2006-01-02T15-04")
+	return filepath.Join(sessionDir, "session-"+timestamp+"-"+shortID+".json")
 }
 
 // GetSessionDir returns the directory where Gemini stores session transcripts.
@@ -195,8 +199,8 @@ func (g *GeminiCLIAgent) GetSessionDir(repoPath string) (string, error) {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	// Gemini uses a hash of the project path for the directory name
-	projectDir := SanitizePathForGemini(repoPath)
+	// Gemini uses a SHA256 hash of the project path for the directory name
+	projectDir := GetProjectHash(repoPath)
 	return filepath.Join(homeDir, ".gemini", "tmp", projectDir, "chats"), nil
 }
 
@@ -263,12 +267,11 @@ func (g *GeminiCLIAgent) FormatResumeCommand(sessionID string) string {
 	return "gemini --resume " + sessionID
 }
 
-// SanitizePathForGemini converts a path to Gemini's project directory format.
-// Gemini uses a hash-like sanitization similar to Claude.
-var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9]`)
-
-func SanitizePathForGemini(path string) string {
-	return nonAlphanumericRegex.ReplaceAllString(path, "-")
+// GetProjectHash generates a unique hash for a project based on its root path.
+// This matches Gemini CLI's getProjectHash() which uses SHA256 of the project root.
+func GetProjectHash(projectRoot string) string {
+	hash := sha256.Sum256([]byte(projectRoot))
+	return hex.EncodeToString(hash[:])
 }
 
 // TranscriptAnalyzer interface implementation

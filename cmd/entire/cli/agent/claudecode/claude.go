@@ -53,6 +53,8 @@ func (c *ClaudeCodeAgent) Description() string {
 	return "Claude Code - Anthropic's CLI coding assistant"
 }
 
+func (c *ClaudeCodeAgent) IsPreview() bool { return false }
+
 // DetectPresence checks if Claude Code is configured in the repository.
 func (c *ClaudeCodeAgent) DetectPresence() (bool, error) {
 	// Get repo root to check for .claude directory

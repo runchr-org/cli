@@ -30,6 +30,9 @@ type Agent interface {
 	// Description returns a human-readable description for UI
 	Description() string
 
+	// IsPreview returns whether the agent integration is in preview or stable
+	IsPreview() bool
+
 	// DetectPresence checks if this agent is configured in the repository
 	DetectPresence() (bool, error)
 

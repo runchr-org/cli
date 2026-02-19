@@ -238,24 +238,6 @@ var (
 	protectedDirsCache []string
 )
 
-// homeRelativePath strips the $HOME/ prefix from an absolute path,
-// returning a home-relative path suitable for persisting in metadata.
-// Returns "" if the path is empty or not under $HOME.
-func homeRelativePath(absPath string) string {
-	if absPath == "" {
-		return ""
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ""
-	}
-	prefix := home + string(filepath.Separator)
-	if !strings.HasPrefix(absPath, prefix) {
-		return ""
-	}
-	return absPath[len(prefix):]
-}
-
 // isSpecificAgentType returns true if the agent type is a known, specific value
 // (not empty and not the generic "Agent" fallback).
 func isSpecificAgentType(t agent.AgentType) bool {
@@ -532,31 +514,6 @@ func ReadAllSessionPromptsFromTree(tree *object.Tree, checkpointPath string, ses
 	prompts[len(prompts)-1] = ReadSessionPromptFromTree(tree, checkpointPath)
 
 	return prompts
-}
-
-// ReadSessionPromptFromShadow reads the first prompt for a session from the shadow branch.
-// Returns an empty string if the prompt cannot be read.
-func ReadSessionPromptFromShadow(repo *git.Repository, baseCommit, worktreeID, sessionID string) string {
-	// Get shadow branch for this base commit using worktree-specific naming
-	shadowBranchName := checkpoint.ShadowBranchNameForCommit(baseCommit, worktreeID)
-	ref, err := repo.Reference(plumbing.NewBranchReferenceName(shadowBranchName), true)
-	if err != nil {
-		return ""
-	}
-
-	commit, err := repo.CommitObject(ref.Hash())
-	if err != nil {
-		return ""
-	}
-
-	tree, err := commit.Tree()
-	if err != nil {
-		return ""
-	}
-
-	// Build the path to prompt.txt: .entire/metadata/<session-id>/prompt.txt
-	checkpointPath := paths.EntireMetadataDir + "/" + sessionID
-	return ReadSessionPromptFromTree(tree, checkpointPath)
 }
 
 // GetRemoteMetadataBranchTree returns the tree object for origin/entire/checkpoints/v1.

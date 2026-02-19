@@ -704,19 +704,13 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(point RewindPoint, force bool) ([
 			continue
 		}
 
-		// Prefer transcript path from checkpoint metadata (works for all agents).
-		// Fall back to agent-based resolution for old checkpoints without this field.
-		var sessionFile string
-		if resolved := resolveTranscriptPathFromMetadata(content.Metadata.TranscriptPath); resolved != "" {
-			sessionFile = resolved
-		} else {
-			sessionAgentDir, dirErr := sessionAgent.GetSessionDir(repoRoot)
-			if dirErr != nil {
-				fmt.Fprintf(os.Stderr, "  Warning: failed to get session dir for session %d: %v\n", i, dirErr)
-				continue
-			}
-			sessionFile = ResolveSessionFilePath(sessionID, sessionAgent, sessionAgentDir)
+		// Compute transcript path from current repo location for cross-machine portability.
+		sessionAgentDir, dirErr := sessionAgent.GetSessionDir(repoRoot)
+		if dirErr != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: failed to get session dir for session %d: %v\n", i, dirErr)
+			continue
 		}
+		sessionFile := sessionAgent.ResolveSessionFile(sessionAgentDir, sessionID)
 
 		// Get first prompt for display
 		promptPreview := ExtractFirstPrompt(content.Prompts)
@@ -759,19 +753,6 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(point RewindPoint, force bool) ([
 	return restored, nil
 }
 
-// resolveTranscriptPathFromMetadata expands a home-relative transcript path
-// from checkpoint metadata to an absolute path. Returns "" if the path is empty.
-func resolveTranscriptPathFromMetadata(homeRelPath string) string {
-	if homeRelPath == "" {
-		return ""
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ""
-	}
-	return filepath.Join(home, homeRelPath)
-}
-
 // ResolveAgentForRewind resolves the agent from checkpoint metadata.
 // Falls back to the default agent (Claude) for old checkpoints that lack agent info.
 func ResolveAgentForRewind(agentType agent.AgentType) (agent.Agent, error) {
@@ -787,19 +768,6 @@ func ResolveAgentForRewind(agentType agent.AgentType) (agent.Agent, error) {
 		return nil, fmt.Errorf("resolving agent %q: %w", agentType, err)
 	}
 	return ag, nil
-}
-
-// ResolveSessionFilePath determines the correct file path for an agent's session transcript.
-// Checks session state for transcript_path first (needed for agents like Gemini that store
-// transcripts at paths that GetSessionDir can't reconstruct, e.g. SHA-256 hashed directories).
-// Falls back to the agent's ExtractAgentSessionID + ResolveSessionFile with fallbackSessionDir.
-func ResolveSessionFilePath(sessionID string, ag agent.Agent, fallbackSessionDir string) string {
-	state, err := LoadSessionState(sessionID)
-	if err == nil && state != nil && state.TranscriptPath != "" {
-		return state.TranscriptPath
-	}
-
-	return ag.ResolveSessionFile(fallbackSessionDir, sessionID)
 }
 
 // readSessionPrompt reads the first prompt from the session's prompt.txt file stored in git.
@@ -875,17 +843,12 @@ func (s *ManualCommitStrategy) classifySessionsForRestore(ctx context.Context, r
 			continue
 		}
 
-		// Prefer transcript path from checkpoint metadata, fall back to agent-based resolution.
-		var localPath string
-		if resolved := resolveTranscriptPathFromMetadata(content.Metadata.TranscriptPath); resolved != "" {
-			localPath = resolved
-		} else {
-			sessionAgentDir, dirErr := sessionAgent.GetSessionDir(repoRoot)
-			if dirErr != nil {
-				continue
-			}
-			localPath = ResolveSessionFilePath(sessionID, sessionAgent, sessionAgentDir)
+		// Compute transcript path from current repo location for cross-machine portability.
+		sessionAgentDir, dirErr := sessionAgent.GetSessionDir(repoRoot)
+		if dirErr != nil {
+			continue
 		}
+		localPath := sessionAgent.ResolveSessionFile(sessionAgentDir, sessionID)
 
 		localTime := paths.GetLastTimestampFromFile(localPath)
 		checkpointTime := paths.GetLastTimestampFromBytes(content.Transcript)
