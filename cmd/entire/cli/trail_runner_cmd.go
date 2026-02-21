@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trail"
 
@@ -51,7 +52,7 @@ func newTrailRunnerStartCmd() *cobra.Command {
 	var (
 		daemon       bool
 		pollInterval time.Duration
-		agent        string
+		agentName    string
 		model        string
 		timeout      time.Duration
 		dryRun       bool
@@ -70,13 +71,13 @@ After each agent run, validation is performed using 'entire validate'.
 If validation fails, the agent is run again with feedback about the
 failures, up to --max-attempts times.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runTrailRunnerStart(cmd, daemon, pollInterval, agent, model, timeout, dryRun, maxAttempts)
+			return runTrailRunnerStart(cmd, daemon, pollInterval, agentName, model, timeout, dryRun, maxAttempts)
 		},
 	}
 
 	cmd.Flags().BoolVar(&daemon, "daemon", false, "Run in daemon mode (continuous polling)")
 	cmd.Flags().DurationVar(&pollInterval, "poll-interval", 30*time.Second, "Polling interval in daemon mode")
-	cmd.Flags().StringVar(&agent, "agent", "claude", "Agent CLI to use")
+	cmd.Flags().StringVar(&agentName, "agent", string(agent.DefaultAgentName), "Agent to use (e.g., claude-code)")
 	cmd.Flags().StringVar(&model, "model", "", "Model override for the agent")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "Timeout per trail execution")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print what would be done without executing")
@@ -87,7 +88,7 @@ failures, up to --max-attempts times.`,
 
 func newTrailRunnerRunOnceCmd() *cobra.Command {
 	var (
-		agent       string
+		agentName   string
 		model       string
 		timeout     time.Duration
 		dryRun      bool
@@ -103,11 +104,11 @@ After each agent run, validation is performed using 'entire validate'.
 If validation fails, the agent is run again with feedback about the
 failures, up to --max-attempts times.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runTrailRunnerRunOnce(cmd, agent, model, timeout, dryRun, maxAttempts)
+			return runTrailRunnerRunOnce(cmd, agentName, model, timeout, dryRun, maxAttempts)
 		},
 	}
 
-	cmd.Flags().StringVar(&agent, "agent", "claude", "Agent CLI to use")
+	cmd.Flags().StringVar(&agentName, "agent", string(agent.DefaultAgentName), "Agent to use (e.g., claude-code)")
 	cmd.Flags().StringVar(&model, "model", "", "Model override for the agent")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "Timeout per trail execution")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print what would be done without executing")
@@ -118,7 +119,7 @@ failures, up to --max-attempts times.`,
 
 func newTrailRunCmd() *cobra.Command {
 	var (
-		agent       string
+		agentName   string
 		model       string
 		timeout     time.Duration
 		dryRun      bool
@@ -138,11 +139,11 @@ If validation fails, the agent is run again with feedback about the
 failures, up to --max-attempts times.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTrailRun(cmd, args[0], agent, model, timeout, dryRun, maxAttempts)
+			return runTrailRun(cmd, args[0], agentName, model, timeout, dryRun, maxAttempts)
 		},
 	}
 
-	cmd.Flags().StringVar(&agent, "agent", "claude", "Agent CLI to use")
+	cmd.Flags().StringVar(&agentName, "agent", string(agent.DefaultAgentName), "Agent to use (e.g., claude-code)")
 	cmd.Flags().StringVar(&model, "model", "", "Model override for the agent")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "Timeout per trail execution")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print what would be done without executing")
@@ -151,7 +152,7 @@ failures, up to --max-attempts times.`,
 	return cmd
 }
 
-func runTrailRunnerStart(cmd *cobra.Command, daemon bool, pollInterval time.Duration, agent, model string, timeout time.Duration, dryRun bool, maxAttempts int) error {
+func runTrailRunnerStart(cmd *cobra.Command, daemon bool, pollInterval time.Duration, agentName, model string, timeout time.Duration, dryRun bool, maxAttempts int) error {
 	repo, err := openRepository()
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
@@ -166,7 +167,7 @@ func runTrailRunnerStart(cmd *cobra.Command, daemon bool, pollInterval time.Dura
 		PollInterval:  pollInterval,
 		MaxConcurrent: 1,
 		Daemon:        daemon,
-		Agent:         agent,
+		AgentName:     agent.AgentName(agentName),
 		Model:         model,
 		Timeout:       timeout,
 		DryRun:        dryRun,
@@ -189,7 +190,7 @@ func runTrailRunnerStart(cmd *cobra.Command, daemon bool, pollInterval time.Dura
 	return nil
 }
 
-func runTrailRunnerRunOnce(cmd *cobra.Command, agent, model string, timeout time.Duration, dryRun bool, maxAttempts int) error {
+func runTrailRunnerRunOnce(cmd *cobra.Command, agentName, model string, timeout time.Duration, dryRun bool, maxAttempts int) error {
 	repo, err := openRepository()
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
@@ -203,7 +204,7 @@ func runTrailRunnerRunOnce(cmd *cobra.Command, agent, model string, timeout time
 	config := trail.RunnerConfig{
 		MaxConcurrent: 1,
 		Daemon:        false,
-		Agent:         agent,
+		AgentName:     agent.AgentName(agentName),
 		Model:         model,
 		Timeout:       timeout,
 		DryRun:        dryRun,
@@ -236,7 +237,7 @@ func runTrailRunnerRunOnce(cmd *cobra.Command, agent, model string, timeout time
 	return nil
 }
 
-func runTrailRun(cmd *cobra.Command, idStr, agent, model string, timeout time.Duration, dryRun bool, maxAttempts int) error {
+func runTrailRun(cmd *cobra.Command, idStr, agentName, model string, timeout time.Duration, dryRun bool, maxAttempts int) error {
 	id, err := trail.NewTrailID(idStr)
 	if err != nil {
 		return err //nolint:wrapcheck // validation error
@@ -255,7 +256,7 @@ func runTrailRun(cmd *cobra.Command, idStr, agent, model string, timeout time.Du
 	config := trail.RunnerConfig{
 		MaxConcurrent: 1,
 		Daemon:        false,
-		Agent:         agent,
+		AgentName:     agent.AgentName(agentName),
 		Model:         model,
 		Timeout:       timeout,
 		DryRun:        dryRun,

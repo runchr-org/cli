@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 
 	"github.com/go-git/go-git/v5"
@@ -30,8 +30,9 @@ type RunnerConfig struct {
 	// Daemon enables continuous polling mode.
 	Daemon bool
 
-	// Agent is the agent CLI to use (e.g., "claude").
-	Agent string
+	// AgentName is the agent to use (e.g., "claude-code").
+	// The agent must implement the Prompter interface.
+	AgentName agent.AgentName
 
 	// Model is the optional model override for the agent.
 	Model string
@@ -58,7 +59,7 @@ func DefaultRunnerConfig() RunnerConfig {
 		PollInterval:  30 * time.Second,
 		MaxConcurrent: 1,
 		Daemon:        false,
-		Agent:         "claude",
+		AgentName:     agent.DefaultAgentName,
 		Model:         "",
 		Timeout:       30 * time.Minute,
 		DryRun:        false,
@@ -228,10 +229,7 @@ func (r *Runner) RunTrail(ctx context.Context, trail *Trail) RunResult {
 	}
 
 	// Run agent with validation loop
-	maxAttempts := r.config.MaxAttempts
-	if maxAttempts < 1 {
-		maxAttempts = 1
-	}
+	maxAttempts := max(r.config.MaxAttempts, 1)
 
 	var allOutput strings.Builder
 	var lastValidationOutput string
@@ -386,18 +384,19 @@ func (r *Runner) setupWorktree(ctx context.Context, trail *Trail) (string, plumb
 	return worktreePath, plumbing.NewHash(headCommit), nil
 }
 
-// runAgentWithPrompt executes the agent CLI with the given prompt.
+// runAgentWithPrompt executes the agent with the given prompt using the Prompter interface.
 func (r *Runner) runAgentWithPrompt(ctx context.Context, prompt string, worktreePath string) (string, error) {
-	// Build command arguments
-	args := []string{}
-
-	// Add model if specified
-	if r.config.Model != "" {
-		args = append(args, "--model", r.config.Model)
+	// Get the agent from the registry
+	ag, err := agent.Get(r.config.AgentName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get agent %q: %w", r.config.AgentName, err)
 	}
 
-	// Add prompt
-	args = append(args, "-p", prompt)
+	// Check if the agent implements Prompter
+	prompter, ok := ag.(agent.Prompter)
+	if !ok {
+		return "", fmt.Errorf("agent %q does not support prompting (does not implement agent.Prompter)", r.config.AgentName)
+	}
 
 	// Create context with timeout
 	if r.config.Timeout > 0 {
@@ -407,40 +406,30 @@ func (r *Runner) runAgentWithPrompt(ctx context.Context, prompt string, worktree
 	}
 
 	logging.Debug(ctx, "running agent",
-		slog.String("agent", r.config.Agent),
+		slog.String("agent", string(r.config.AgentName)),
 		slog.String("worktree", worktreePath),
 	)
 
-	//nolint:gosec // args are constructed from trusted config
-	cmd := exec.CommandContext(ctx, r.config.Agent, args...)
-	cmd.Dir = worktreePath
-	cmd.Env = append(os.Environ(),
-		// Ensure entire hooks are enabled in the worktree
-		"ENTIRE_ENABLED=1",
-	)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		if output != "" {
-			output += "\n"
-		}
-		output += stderr.String()
+	// Build prompt options
+	opts := agent.PromptOptions{
+		Model:   r.config.Model,
+		WorkDir: worktreePath,
+		ExtraEnv: []string{
+			// Ensure entire hooks are enabled in the worktree
+			"ENTIRE_ENABLED=1",
+		},
 	}
 
+	// Run the prompt
+	result, err := prompter.Prompt(ctx, prompt, opts)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return output, fmt.Errorf("agent timed out after %s", r.config.Timeout)
+			return "", fmt.Errorf("agent timed out after %s", r.config.Timeout)
 		}
-		return output, fmt.Errorf("agent failed: %s: %w", strings.TrimSpace(stderr.String()), err)
+		return "", fmt.Errorf("agent failed: %w", err)
 	}
 
-	return output, nil
+	return result.Text, nil
 }
 
 // runValidation runs "entire validate --json" and returns whether validation passed.
