@@ -1,6 +1,12 @@
 {
   "checkpoints": [
     {
+      "checkpoint_id": "710851ce13d8",
+      "commit_sha": "c6ff70263c77b746701e344528d0881b1110138d",
+      "created_at": "2026-02-23T11:20:13.396562Z",
+      "summary": "Yes and commit"
+    },
+    {
       "checkpoint_id": "f96123e0ece4",
       "commit_sha": "ab7673e1e74db36a0dd7b2ffe3a9385e1e394fed",
       "created_at": "2026-02-23T11:20:08.323819Z",
