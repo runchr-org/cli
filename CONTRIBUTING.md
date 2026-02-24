@@ -219,7 +219,7 @@ These are markdown files that define specialized behaviors for Claude Code (e.g.
 
 ### 2. Coding Agent Integrations (Go)
 
-These are Go implementations that integrate Entire with different AI coding tools (Claude, Cursor, Aider, etc.) using the Agent abstraction layer.
+These are Go implementations that integrate Entire with different AI coding tools (Claude Code, Gemini CLI, OpenCode, etc.) using the Agent abstraction layer.
 
 - **Location:** `cmd/entire/cli/agent/`
 - **Steps:**
@@ -337,7 +337,8 @@ Join the Entire community:
 ## Additional Resources
 
 - [README](README.md) - Setup and usage documentation
-- [CLAUDE.md](CLAUDE.md) - Architecture and development reference
+- [CLAUDE.md](CLAUDE.md) - Architecture and development reference (Claude Code)
+- [AGENTS.md](AGENTS.md) - Architecture and development reference (Gemini CLI, OpenCode)
 - [Code of Conduct](CODE_OF_CONDUCT.md) - Community guidelines
 - [Security Policy](SECURITY.md) - Reporting security vulnerabilities
 

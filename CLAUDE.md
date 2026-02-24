@@ -4,7 +4,7 @@ This repo contains the CLI for Entire.
 
 ## Architecture
 
-- CLI build with github.com/spf13/cobra and github.com/charmbracelet/huh 
+- CLI built with github.com/spf13/cobra and github.com/charmbracelet/huh
 
 ## Key Directories
 
@@ -12,7 +12,7 @@ This repo contains the CLI for Entire.
 - `entire/`: Main CLI entry point
 - `entire/cli`: CLI utilities and helpers
 - `entire/cli/commands`: actual command implementations
-- `entire/cli/agent`: agent implementations (Claude Code, Gemini CLI, OpenCode) - see [Agent Integration Checklist](docs/architecture/agent-integration-checklist.md)
+- `entire/cli/agent`: agent implementations (Claude Code, Gemini CLI) - see [Agent Integration Checklist](docs/architecture/agent-integration-checklist.md) and [Agent Implementation Guide](docs/architecture/agent-guide.md)
 - `entire/cli/strategy`: strategy implementations - see section below
 - `entire/cli/checkpoint`: checkpoint storage abstractions (temporary and committed)
 - `entire/cli/session`: session state management
@@ -46,10 +46,10 @@ Integration tests use the `//go:build integration` build tag and are located in 
 
 ### Running E2E Tests (Only When Explicitly Requested)
 
-**IMPORTANT: Do NOT run E2E tests proactively.** E2E tests make real API calls to Claude Code, which consume tokens and cost money. Only run them when the user explicitly asks for E2E testing.
+**IMPORTANT: Do NOT run E2E tests proactively.** E2E tests make real API calls through AI agents, which consume tokens and cost money. Only run them when the user explicitly asks for E2E testing.
 
 ```bash
-# Requires Claude Code to be installed and authenticated
+# Requires the agent to be installed and authenticated
 E2E_AGENT=claude-code go test -tags=e2e ./cmd/entire/cli/e2e_test/...
 
 # Run a specific test
@@ -59,9 +59,9 @@ E2E_AGENT=claude-code go test -tags=e2e -run TestE2E_BasicWorkflow ./cmd/entire/
 E2E tests:
 - Use the `//go:build e2e` build tag
 - Located in `cmd/entire/cli/e2e_test/`
-- Test real agent interactions (Claude Code creating files, committing, etc.)
+- Test real agent interactions (Claude Code, Gemini CLI, or OpenCode creating files, committing, etc.)
 - Validate checkpoint scenarios documented in `docs/architecture/checkpoint-scenarios.md`
-- Support multiple agents via `E2E_AGENT` env var (currently `claude-code`, `gemini-cli` stub)
+- Support multiple agents via `E2E_AGENT` env var (`claude-code`, `gemini`, `opencode`)
 
 **Environment variables:**
 - `E2E_AGENT` - Agent to test with (default: `claude-code`)
@@ -243,7 +243,7 @@ Regression tests in `hard_reset_test.go` verify this behavior - if go-git v6 fix
 
 **Always use repo root (not `os.Getwd()`) when working with git-relative paths.**
 
-Git commands like `git status` and `worktree.Status()` return paths relative to the **repository root**, not the current working directory. When Claude runs from a subdirectory (e.g., `/repo/frontend`), using `os.Getwd()` to construct absolute paths will produce incorrect results for files in sibling directories.
+Git commands like `git status` and `worktree.Status()` return paths relative to the **repository root**, not the current working directory. When an agent runs from a subdirectory (e.g., `/repo/frontend`), using `os.Getwd()` to construct absolute paths will produce incorrect results for files in sibling directories.
 
 ```go
 // WRONG - breaks when running from subdirectory
@@ -535,7 +535,7 @@ Trailers:
 - All strategies must implement the full `Strategy` interface
 - Register new strategies in `init()` using `Register()`
 - Test with `mise run test` - strategy tests are in `*_test.go` files
-- **Update this CLAUDE.md** when adding or modifying strategies to keep documentation current
+- **Update both CLAUDE.md and AGENTS.md** when adding or modifying strategies to keep documentation current
 
 # Important Notes
 

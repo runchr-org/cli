@@ -128,7 +128,7 @@ func (s *ManualCommitStrategy) CondenseSession(repo *git.Repository, checkpointI
 		// potentially stale shadow branch copy (SaveStep may have been skipped if the
 		// last turn had no code changes).
 		// Pass CheckpointTranscriptStart for accurate token calculation (line offset for Claude, message index for Gemini).
-		sessionData, err = s.extractSessionData(repo, ref.Hash(), state.SessionID, state.FilesTouched, state.AgentType, state.TranscriptPath, state.CheckpointTranscriptStart)
+		sessionData, err = s.extractSessionData(repo, ref.Hash(), state.SessionID, state.FilesTouched, state.AgentType, state.TranscriptPath, state.CheckpointTranscriptStart, state.Phase.IsActive())
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract session data: %w", err)
 		}
@@ -138,8 +138,12 @@ func (s *ManualCommitStrategy) CondenseSession(repo *git.Repository, checkpointI
 		if state.TranscriptPath == "" {
 			return nil, errors.New("shadow branch not found and no live transcript available")
 		}
-		// Ensure transcript file exists (OpenCode creates it lazily via `opencode export`)
-		prepareTranscriptIfNeeded(state.AgentType, state.TranscriptPath)
+		// Ensure transcript file exists (OpenCode creates it lazily via `opencode export`).
+		// Only wait for flush when the session is active — for idle/ended sessions the
+		// transcript is already fully flushed (the Stop hook completed the flush).
+		if state.Phase.IsActive() {
+			prepareTranscriptIfNeeded(state.AgentType, state.TranscriptPath)
+		}
 		sessionData, err = s.extractSessionDataFromLiveTranscript(state)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract session data from live transcript: %w", err)
@@ -392,7 +396,7 @@ func calculateSessionAttributions(repo *git.Repository, shadowRef *plumbing.Refe
 // This handles the case where SaveStep was skipped (no code changes) but the transcript
 // continued growing — the shadow branch copy would be stale.
 // checkpointTranscriptStart is the line offset (Claude) or message index (Gemini) where the current checkpoint began.
-func (s *ManualCommitStrategy) extractSessionData(repo *git.Repository, shadowRef plumbing.Hash, sessionID string, filesTouched []string, agentType agent.AgentType, liveTranscriptPath string, checkpointTranscriptStart int) (*ExtractedSessionData, error) {
+func (s *ManualCommitStrategy) extractSessionData(repo *git.Repository, shadowRef plumbing.Hash, sessionID string, filesTouched []string, agentType agent.AgentType, liveTranscriptPath string, checkpointTranscriptStart int, isActive bool) (*ExtractedSessionData, error) {
 	commit, err := repo.CommitObject(shadowRef)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get commit object: %w", err)
@@ -412,8 +416,12 @@ func (s *ManualCommitStrategy) extractSessionData(repo *git.Repository, shadowRe
 	// (SaveStep is only called when there are file modifications).
 	var fullTranscript string
 	if liveTranscriptPath != "" {
-		// Ensure transcript file exists (OpenCode creates it lazily via `opencode export`)
-		prepareTranscriptIfNeeded(agentType, liveTranscriptPath)
+		// Ensure transcript file exists (OpenCode creates it lazily via `opencode export`).
+		// Only wait for flush when the session is active — for idle/ended sessions the
+		// transcript is already fully flushed (the Stop hook completed the flush).
+		if isActive {
+			prepareTranscriptIfNeeded(agentType, liveTranscriptPath)
+		}
 		if liveData, readErr := os.ReadFile(liveTranscriptPath); readErr == nil && len(liveData) > 0 { //nolint:gosec // path from session state
 			fullTranscript = string(liveData)
 		}

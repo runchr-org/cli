@@ -195,6 +195,10 @@ func (a *OpenCodeAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession
 	modifiedFiles, err := ExtractModifiedFiles(data)
 	if err != nil {
 		// Non-fatal: we can still return the session without modified files
+		logging.Warn(context.Background(), "failed to extract modified files from opencode session",
+			slog.String("session_ref", input.SessionRef),
+			slog.String("error", err.Error()),
+		)
 		modifiedFiles = nil
 	}
 

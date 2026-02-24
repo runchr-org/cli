@@ -1145,15 +1145,19 @@ func (s *ManualCommitStrategy) extractNewModifiedFilesFromLiveTranscript(state *
 	}
 
 	// Ensure transcript file is up-to-date (OpenCode creates/refreshes it via `opencode export`).
-	// Use the already-resolved agent to avoid a redundant lookup.
-	if preparer, ok := ag.(agent.TranscriptPreparer); ok {
-		if prepErr := preparer.PrepareTranscript(state.TranscriptPath); prepErr != nil {
-			logging.Debug(logCtx, "prepare transcript failed",
-				slog.String("session_id", state.SessionID),
-				slog.String("agent_type", string(state.AgentType)),
-				slog.String("transcript_path", state.TranscriptPath),
-				slog.Any("error", prepErr),
-			)
+	// Only wait for flush when the session is active — for idle/ended sessions the
+	// transcript is already fully flushed (the Stop hook completed the flush).
+	// Skipping the wait avoids a 3s timeout per session in prepare-commit-msg/post-commit hooks.
+	if state.Phase.IsActive() {
+		if preparer, ok := ag.(agent.TranscriptPreparer); ok {
+			if prepErr := preparer.PrepareTranscript(state.TranscriptPath); prepErr != nil {
+				logging.Debug(logCtx, "prepare transcript failed",
+					slog.String("session_id", state.SessionID),
+					slog.String("agent_type", string(state.AgentType)),
+					slog.String("transcript_path", state.TranscriptPath),
+					slog.Any("error", prepErr),
+				)
+			}
 		}
 	}
 
@@ -1195,15 +1199,18 @@ func (s *ManualCommitStrategy) extractModifiedFilesFromLiveTranscript(state *Ses
 	}
 
 	// Ensure transcript file is up-to-date (OpenCode creates/refreshes it via `opencode export`).
-	// Use the already-resolved agent to avoid a redundant lookup.
-	if preparer, ok := ag.(agent.TranscriptPreparer); ok {
-		if prepErr := preparer.PrepareTranscript(state.TranscriptPath); prepErr != nil {
-			logging.Debug(logCtx, "prepare transcript failed",
-				slog.String("session_id", state.SessionID),
-				slog.String("agent_type", string(state.AgentType)),
-				slog.String("transcript_path", state.TranscriptPath),
-				slog.Any("error", prepErr),
-			)
+	// Only wait for flush when the session is active — for idle/ended sessions the
+	// transcript is already fully flushed (the Stop hook completed the flush).
+	if state.Phase.IsActive() {
+		if preparer, ok := ag.(agent.TranscriptPreparer); ok {
+			if prepErr := preparer.PrepareTranscript(state.TranscriptPath); prepErr != nil {
+				logging.Debug(logCtx, "prepare transcript failed",
+					slog.String("session_id", state.SessionID),
+					slog.String("agent_type", string(state.AgentType)),
+					slog.String("transcript_path", state.TranscriptPath),
+					slog.Any("error", prepErr),
+				)
+			}
 		}
 	}
 
@@ -1658,7 +1665,7 @@ func (s *ManualCommitStrategy) getLastPrompt(repo *git.Repository, state *Sessio
 	// Extract session data to get prompts for commit message generation
 	// Pass agent type to handle different transcript formats (JSONL for Claude, JSON for Gemini)
 	// Pass 0 for checkpointTranscriptStart since we're extracting all prompts, not calculating token usage
-	sessionData, err := s.extractSessionData(repo, ref.Hash(), state.SessionID, nil, state.AgentType, "", 0)
+	sessionData, err := s.extractSessionData(repo, ref.Hash(), state.SessionID, nil, state.AgentType, "", 0, state.Phase.IsActive())
 	if err != nil || len(sessionData.Prompts) == 0 {
 		return ""
 	}
