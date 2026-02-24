@@ -134,14 +134,10 @@ func handleClaudeCodePostTodoFromReader(reader io.Reader) error {
 	}
 
 	// Save incremental task step
-	configBefore := snapshotLocalGitConfig()
-
 	if err := strat.SaveTaskStep(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to save incremental task step: %v\n", err)
 		return nil
 	}
-
-	checkConfigIntegrity(logCtx, "post-todo/SaveTaskStep", configBefore, snapshotLocalGitConfig())
 
 	fmt.Fprintf(os.Stderr, "[entire] Created incremental checkpoint #%d for %s (task: %s)\n",
 		seq, input.ToolName, taskToolUseID[:min(12, len(taskToolUseID))])

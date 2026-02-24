@@ -189,14 +189,10 @@ func newHooksGitPostCommitCmd() *cobra.Command {
 			g := newGitHookContext("post-commit")
 			g.logInvoked()
 
-			configBefore := snapshotLocalGitConfig()
-
 			if handler, ok := g.strategy.(strategy.PostCommitHandler); ok {
 				hookErr := handler.PostCommit()
 				g.logCompleted(hookErr)
 			}
-
-			checkConfigIntegrity(g.ctx, "post-commit", configBefore, snapshotLocalGitConfig())
 
 			return nil
 		},
@@ -218,14 +214,10 @@ func newHooksGitPrePushCmd() *cobra.Command {
 			g := newGitHookContext("pre-push")
 			g.logInvoked(slog.String("remote", remote))
 
-			configBefore := snapshotLocalGitConfig()
-
 			if handler, ok := g.strategy.(strategy.PrePushHandler); ok {
 				hookErr := handler.PrePush(remote)
 				g.logCompleted(hookErr, slog.String("remote", remote))
 			}
-
-			checkConfigIntegrity(g.ctx, "pre-push", configBefore, snapshotLocalGitConfig())
 
 			return nil
 		},
