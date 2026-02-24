@@ -9,6 +9,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
 )
@@ -114,7 +115,7 @@ func FindMostRecentSession() string {
 	}
 
 	// Scope to current worktree to prevent cross-worktree pollution.
-	worktreePath, wpErr := GetWorktreePath()
+	worktreePath, wpErr := paths.WorktreeRoot()
 	if wpErr == nil && worktreePath != "" {
 		var filtered []*SessionState
 		for _, s := range states {

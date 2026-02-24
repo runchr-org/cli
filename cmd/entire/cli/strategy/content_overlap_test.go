@@ -597,7 +597,7 @@ func TestStagedFilesOverlapWithContent_DeletedFile(t *testing.T) {
 }
 
 // createShadowBranchWithContent creates a shadow branch with the given file contents.
-// This helper directly uses go-git APIs to avoid paths.RepoRoot() dependency.
+// This helper directly uses go-git APIs to avoid paths.WorktreeRoot() dependency.
 //
 //nolint:unparam // worktreeID is kept as a parameter for flexibility even if tests currently use same value
 func createShadowBranchWithContent(t *testing.T, repo *git.Repository, baseCommit, worktreeID string, fileContents map[string][]byte) {

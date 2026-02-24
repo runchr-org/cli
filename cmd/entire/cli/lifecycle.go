@@ -288,10 +288,10 @@ func handleLifecycleTurnEnd(ag agent.Agent, event *agent.Event) error {
 	commitMessage := generateCommitMessage(lastPrompt)
 	fmt.Fprintf(os.Stderr, "Using commit message: %s\n", commitMessage)
 
-	// Get repo root for path normalization
-	repoRoot, err := paths.RepoRoot()
+	// Get worktree root for path normalization
+	repoRoot, err := paths.WorktreeRoot()
 	if err != nil {
-		return fmt.Errorf("failed to get repo root: %w", err)
+		return fmt.Errorf("failed to get worktree root: %w", err)
 	}
 
 	var preUntrackedFiles []string
@@ -559,10 +559,10 @@ func handleLifecycleSubagentEnd(ag agent.Agent, event *agent.Event) error {
 		fmt.Fprintf(os.Stderr, "Warning: failed to compute file changes: %v\n", err)
 	}
 
-	// Get repo root and normalize paths
-	repoRoot, err := paths.RepoRoot()
+	// Get worktree root and normalize paths
+	repoRoot, err := paths.WorktreeRoot()
 	if err != nil {
-		return fmt.Errorf("failed to get repo root: %w", err)
+		return fmt.Errorf("failed to get worktree root: %w", err)
 	}
 
 	relModifiedFiles := FilterAndNormalizePaths(modifiedFiles, repoRoot)

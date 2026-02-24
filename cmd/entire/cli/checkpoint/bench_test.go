@@ -53,7 +53,7 @@ func benchWriteTemporaryFirstCheckpoint(fileCount, fileSizeLines int) func(*test
 			b.Fatalf("mkdir metadata: %v", err)
 		}
 
-		// WriteTemporary uses paths.RepoRoot() which requires cwd to be in the repo.
+		// WriteTemporary uses paths.WorktreeRoot() which requires cwd to be in the repo.
 		b.Chdir(repo.Dir)
 
 		ctx := context.Background()

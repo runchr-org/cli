@@ -69,7 +69,7 @@ Strategies: manual-commit (default), auto-commit`,
 			// Check if we're in a git repository first - this is a prerequisite error,
 			// not a usage error, so we silence Cobra's output and use SilentError
 			// to prevent duplicate error output in main.go
-			if _, err := paths.RepoRoot(); err != nil {
+			if _, err := paths.WorktreeRoot(); err != nil {
 				fmt.Fprintln(cmd.ErrOrStderr(), "Not a git repository. Please run 'entire enable' from within a git repository.")
 				return NewSilentError(errors.New("not a git repository"))
 			}
@@ -1070,7 +1070,7 @@ func promptTelemetryConsent(settings *EntireSettings, telemetryFlag bool) error 
 // runUninstall completely removes Entire from the repository.
 func runUninstall(w, errW io.Writer, force bool) error {
 	// Check if we're in a git repository
-	if _, err := paths.RepoRoot(); err != nil {
+	if _, err := paths.WorktreeRoot(); err != nil {
 		fmt.Fprintln(errW, "Not a git repository. Nothing to uninstall.")
 		return NewSilentError(errors.New("not a git repository"))
 	}

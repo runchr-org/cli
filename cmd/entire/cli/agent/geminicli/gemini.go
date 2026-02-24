@@ -51,9 +51,9 @@ func (g *GeminiCLIAgent) IsPreview() bool { return true }
 
 // DetectPresence checks if Gemini CLI is configured in the repository.
 func (g *GeminiCLIAgent) DetectPresence() (bool, error) {
-	// Get repo root to check for .gemini directory
+	// Get worktree root to check for .gemini directory
 	// This is needed because the CLI may be run from a subdirectory
-	repoRoot, err := paths.RepoRoot()
+	repoRoot, err := paths.WorktreeRoot()
 	if err != nil {
 		// Not in a git repo, fall back to CWD-relative check
 		repoRoot = "."

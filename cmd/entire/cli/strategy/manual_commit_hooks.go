@@ -265,7 +265,7 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(commitMsgFile string, source str
 		return nil //nolint:nilerr // Hook must be silent on failure
 	}
 
-	worktreePath, err := GetWorktreePath()
+	worktreePath, err := paths.WorktreeRoot()
 	if err != nil {
 		return nil //nolint:nilerr // Hook must be silent on failure
 	}
@@ -409,7 +409,7 @@ func (s *ManualCommitStrategy) handleAmendCommitMsg(logCtx context.Context, comm
 	}
 
 	// No trailer in message — check if any session has LastCheckpointID to restore
-	worktreePath, err := GetWorktreePath()
+	worktreePath, err := paths.WorktreeRoot()
 	if err != nil {
 		return nil //nolint:nilerr // Hook must be silent on failure
 	}
@@ -627,7 +627,7 @@ func (s *ManualCommitStrategy) PostCommit() error {
 		return nil
 	}
 
-	worktreePath, err := GetWorktreePath()
+	worktreePath, err := paths.WorktreeRoot()
 	if err != nil {
 		return nil //nolint:nilerr // Hook must be silent on failure
 	}
@@ -885,7 +885,7 @@ func (s *ManualCommitStrategy) updateBaseCommitIfChanged(logCtx context.Context,
 // Unlike the full PostCommit flow, this does NOT fire EventGitCommit or trigger
 // condensation — it only keeps BaseCommit in sync with HEAD.
 func (s *ManualCommitStrategy) postCommitUpdateBaseCommitOnly(logCtx context.Context, head *plumbing.Reference) {
-	worktreePath, err := GetWorktreePath()
+	worktreePath, err := paths.WorktreeRoot()
 	if err != nil {
 		return // Silent failure — hooks must be resilient
 	}
@@ -1255,7 +1255,7 @@ func (s *ManualCommitStrategy) extractModifiedFilesFromLiveTranscript(state *Ses
 	// but getStagedFiles/committedFiles use repo-relative paths (e.g., src/main.go).
 	basePath := state.WorktreePath
 	if basePath == "" {
-		if wp, wpErr := GetWorktreePath(); wpErr == nil {
+		if wp, wpErr := paths.WorktreeRoot(); wpErr == nil {
 			basePath = wp
 		}
 	}

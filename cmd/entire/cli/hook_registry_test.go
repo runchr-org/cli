@@ -27,7 +27,7 @@ func TestNewAgentHookVerbCmd_LogsInvocation(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	// Initialize git repo (required for paths.RepoRoot to work)
+	// Initialize git repo (required for paths.WorktreeRoot to work)
 	gitInit := exec.CommandContext(context.Background(), "git", "init")
 	if err := gitInit.Run(); err != nil {
 		t.Fatalf("failed to init git repo: %v", err)
@@ -242,7 +242,7 @@ func TestHookCommand_SetsCurrentHookAgentName(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	// Initialize git repo (required for paths.RepoRoot to work)
+	// Initialize git repo (required for paths.WorktreeRoot to work)
 	gitInit := exec.CommandContext(context.Background(), "git", "init")
 	if err := gitInit.Run(); err != nil {
 		t.Fatalf("failed to init git repo: %v", err)

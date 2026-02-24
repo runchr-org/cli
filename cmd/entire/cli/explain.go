@@ -795,7 +795,7 @@ var errStopIteration = errors.New("stop iteration")
 // getCurrentWorktreeHash returns the hashed worktree ID for the current working directory.
 // This is used to filter shadow branches to only those belonging to this worktree.
 func getCurrentWorktreeHash() string {
-	repoRoot, err := paths.RepoRoot()
+	repoRoot, err := paths.WorktreeRoot()
 	if err != nil {
 		return ""
 	}

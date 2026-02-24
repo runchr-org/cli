@@ -149,7 +149,7 @@ Use `NewSilentError()` when you want to print a custom, user-friendly error mess
 
 ```go
 // In a command's RunE function:
-if _, err := paths.RepoRoot(); err != nil {
+if _, err := paths.WorktreeRoot(); err != nil {
     cmd.SilenceUsage = true  // Don't show usage for prerequisite errors
     fmt.Fprintln(cmd.ErrOrStderr(), "Not a git repository. Please run 'entire enable' from within a git repository.")
     return NewSilentError(errors.New("not a git repository"))
@@ -251,7 +251,7 @@ cwd, _ := os.Getwd()  // e.g., /repo/frontend
 absPath := filepath.Join(cwd, file)  // file="api/src/types.ts" → /repo/frontend/api/src/types.ts (WRONG)
 
 // CORRECT - use repo root
-repoRoot, _ := paths.RepoRoot()  // or strategy.GetWorktreePath()
+repoRoot, _ := paths.WorktreeRoot()
 absPath := filepath.Join(repoRoot, file)  // → /repo/api/src/types.ts (CORRECT)
 ```
 
@@ -263,7 +263,7 @@ cwd, _ := os.Getwd()  // /repo/frontend
 relPath := paths.ToRelativePath("/repo/api/file.ts", cwd)  // returns "" (filtered out as "../api/file.ts")
 
 // CORRECT - keeps all repo files
-repoRoot, _ := paths.RepoRoot()
+repoRoot, _ := paths.WorktreeRoot()
 relPath := paths.ToRelativePath("/repo/api/file.ts", repoRoot)  // returns "api/file.ts"
 ```
 

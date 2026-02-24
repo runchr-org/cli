@@ -40,7 +40,7 @@ func newStatusCmd() *cobra.Command {
 
 func runStatus(w io.Writer, detailed bool) error {
 	// Check if we're in a git repository
-	if _, repoErr := paths.RepoRoot(); repoErr != nil {
+	if _, repoErr := paths.WorktreeRoot(); repoErr != nil {
 		fmt.Fprintln(w, "✕ not a git repository")
 		return nil //nolint:nilerr // Not being in a git repo is a valid status, not an error
 	}
@@ -154,7 +154,7 @@ func formatSettingsStatusShort(s *EntireSettings, sty statusStyles) string {
 	b.WriteString(displayName)
 
 	// Resolve branch from repo root
-	if repoRoot, err := paths.RepoRoot(); err == nil {
+	if repoRoot, err := paths.WorktreeRoot(); err == nil {
 		if branch := resolveWorktreeBranch(repoRoot); branch != "" {
 			b.WriteString(sty.render(sty.dim, " · "))
 			b.WriteString("branch ")

@@ -384,7 +384,7 @@ func (s *StateStore) stateFilePath(sessionID string) string {
 }
 
 // gitCommonDirCache caches the git common dir to avoid repeated subprocess calls.
-// Keyed by working directory to handle directory changes (same pattern as paths.RepoRoot).
+// Keyed by working directory to handle directory changes (same pattern as paths.WorktreeRoot).
 var (
 	gitCommonDirMu       sync.RWMutex
 	gitCommonDirCache    string

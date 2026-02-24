@@ -113,7 +113,7 @@ func extractCommandLine(hookContent string) string {
 // to w if any are found.
 // localDev controls whether the warning references "go run" or the "entire" binary.
 func CheckAndWarnHookManagers(w io.Writer, localDev bool) {
-	repoRoot, err := paths.RepoRoot()
+	repoRoot, err := paths.WorktreeRoot()
 	if err != nil {
 		return
 	}

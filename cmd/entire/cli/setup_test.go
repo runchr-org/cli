@@ -27,7 +27,7 @@ func setupTestDir(t *testing.T) string {
 	t.Helper()
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
-	paths.ClearRepoRootCache()
+	paths.ClearWorktreeRootCache()
 	session.ClearGitCommonDirCache()
 	return tmpDir
 }
@@ -515,7 +515,7 @@ func TestRunUninstall_NotAGitRepo(t *testing.T) {
 	// Create a temp directory without git init
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
-	paths.ClearRepoRootCache()
+	paths.ClearWorktreeRootCache()
 
 	var stdout, stderr bytes.Buffer
 	err := runUninstall(&stdout, &stderr, true)

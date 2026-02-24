@@ -24,7 +24,7 @@ func initHooksTestRepo(t *testing.T) (string, string) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to init git repo: %v", err)
 	}
-	paths.ClearRepoRootCache()
+	paths.ClearWorktreeRootCache()
 
 	return tmpDir, filepath.Join(tmpDir, ".git", "hooks")
 }
@@ -272,7 +272,7 @@ func TestGetHooksDirInPath_CoreHooksPath(t *testing.T) {
 func TestInstallGitHook_WorktreeInstallsInCommonHooks(t *testing.T) {
 	mainRepo, worktreeDir := initHooksWorktreeRepo(t)
 	t.Chdir(worktreeDir)
-	paths.ClearRepoRootCache()
+	paths.ClearWorktreeRootCache()
 
 	count, err := InstallGitHook(true, false)
 	if err != nil {
@@ -800,7 +800,7 @@ func TestRemoveGitHook_NotAGitRepo(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Clear cache so paths resolve correctly
-	paths.ClearRepoRootCache()
+	paths.ClearWorktreeRootCache()
 
 	// Remove hooks in non-git directory - should return error
 	_, err := RemoveGitHook()

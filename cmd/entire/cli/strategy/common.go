@@ -558,7 +558,7 @@ func GetRemoteMetadataBranchTree(repo *git.Repository) (*object.Tree, error) {
 // The function first uses 'git rev-parse --show-toplevel' to find the repository
 // root, which works correctly even when called from a subdirectory within the repo.
 func OpenRepository() (*git.Repository, error) {
-	repoRoot, err := paths.RepoRoot()
+	repoRoot, err := paths.WorktreeRoot()
 	if err != nil {
 		// Fallback to current directory if git command fails
 		// (e.g., if git is not installed or we're not in a repo)
@@ -580,7 +580,7 @@ func OpenRepository() (*git.Repository, error) {
 // This function works correctly from any subdirectory within the repository.
 func IsInsideWorktree() bool {
 	// First find the repository root
-	repoRoot, err := GetWorktreePath()
+	repoRoot, err := paths.WorktreeRoot()
 	if err != nil {
 		return false
 	}
@@ -603,7 +603,7 @@ func IsInsideWorktree() bool {
 // See: https://git-scm.com/docs/gitrepository-layout
 func GetMainRepoRoot() (string, error) {
 	// First find the worktree/repo root
-	repoRoot, err := GetWorktreePath()
+	repoRoot, err := paths.WorktreeRoot()
 	if err != nil {
 		return "", fmt.Errorf("failed to get worktree path: %w", err)
 	}
@@ -652,18 +652,6 @@ func GetGitCommonDir() (string, error) {
 	}
 
 	return filepath.Clean(commonDir), nil
-}
-
-// GetWorktreePath returns the absolute path to the current worktree root.
-// This is the working directory path, not the git directory.
-func GetWorktreePath() (string, error) {
-	ctx := context.Background()
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get worktree path: %w", err)
-	}
-	return strings.TrimSpace(string(output)), nil
 }
 
 // EnsureEntireGitignore ensures all required entries are in .entire/.gitignore
@@ -833,9 +821,9 @@ func checkCanRewindWithWarning() (bool, string, error) {
 
 	var changes []fileChange
 	// Use repo root, not cwd - git status returns paths relative to repo root
-	repoRoot, err := GetWorktreePath()
+	repoRoot, err := paths.WorktreeRoot()
 	if err != nil {
-		return true, "", nil //nolint:nilerr // Rewind allowed even if repo root lookup fails
+		return true, "", nil //nolint:nilerr // Rewind allowed even if worktree root lookup fails
 	}
 
 	for file, st := range status {
@@ -1021,7 +1009,7 @@ const (
 // The stageCtx parameter is used for user-facing messages to indicate whether
 // this is staging for a session checkpoint or a task checkpoint.
 func StageFiles(worktree *git.Worktree, modified, newFiles, deleted []string, stageCtx StageFilesContext) {
-	// Get repo root for resolving file paths
+	// Get worktree root for resolving file paths
 	// This is critical because fileExists() uses os.Stat() which resolves relative to CWD,
 	// but worktree.Add/Remove resolve relative to repo root. If CWD != repo root,
 	// fileExists() could return false for existing files, causing worktree.Remove()
@@ -1230,7 +1218,7 @@ func HardResetWithProtection(commitHash plumbing.Hash) (shortID string, err erro
 // avoiding bloated session state from large ignored directories like node_modules/.
 // Returns paths relative to the repository root.
 func collectUntrackedFiles() ([]string, error) {
-	repoRoot, err := GetWorktreePath()
+	repoRoot, err := paths.WorktreeRoot()
 	if err != nil {
 		repoRoot = "."
 	}

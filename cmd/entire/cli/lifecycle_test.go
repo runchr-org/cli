@@ -224,7 +224,7 @@ func TestHandleLifecycleTurnEnd_EmptyRepository(t *testing.T) {
 	if err := os.WriteFile(".git/HEAD", []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 		t.Fatalf("Failed to create HEAD: %v", err)
 	}
-	paths.ClearRepoRootCache()
+	paths.ClearWorktreeRootCache()
 
 	// Create a transcript file
 	transcriptPath := filepath.Join(tmpDir, "transcript.jsonl")
@@ -264,7 +264,7 @@ func TestHandleLifecycleCompaction_ResetsTranscriptOffset(t *testing.T) {
 
 	// Initialize git repo with a commit (not empty)
 	setupGitRepoWithCommit(t, tmpDir)
-	paths.ClearRepoRootCache()
+	paths.ClearWorktreeRootCache()
 
 	// Create .entire directory structure
 	if err := os.MkdirAll(paths.EntireDir, 0o755); err != nil {

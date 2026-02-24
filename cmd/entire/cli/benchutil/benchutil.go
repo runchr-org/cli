@@ -350,14 +350,14 @@ func (br *BenchRepo) WriteTranscriptFile(b *testing.B, sessionID string, data []
 // prior checkpoints saved.
 //
 // Temporarily changes cwd to br.Dir because WriteTemporary uses
-// paths.RepoRoot() which depends on os.Getwd().
+// paths.WorktreeRoot() which depends on os.Getwd().
 func (br *BenchRepo) SeedShadowBranch(b *testing.B, sessionID string, checkpointCount int, filesPerCheckpoint int) {
 	b.Helper()
 
-	// WriteTemporary internally calls paths.RepoRoot() which uses os.Getwd().
+	// WriteTemporary internally calls paths.WorktreeRoot() which uses os.Getwd().
 	// Switch cwd so it resolves to the bench repo.
 	b.Chdir(br.Dir)
-	paths.ClearRepoRootCache()
+	paths.ClearWorktreeRootCache()
 
 	for i := range checkpointCount {
 		var modified []string

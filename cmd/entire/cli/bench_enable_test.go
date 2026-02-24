@@ -29,7 +29,7 @@ func BenchmarkEnableCommand(b *testing.B) {
 			if err := os.Chdir(repo.Dir); err != nil {
 				b.Fatalf("chdir: %v", err)
 			}
-			paths.ClearRepoRootCache()
+			paths.ClearWorktreeRootCache()
 			strategy.ClearHooksDirCache()
 			b.StartTimer()
 
@@ -44,7 +44,7 @@ func BenchmarkEnableCommand(b *testing.B) {
 		b.StopTimer()
 		repo := benchutil.NewBenchRepo(b, benchutil.RepoOpts{})
 		b.Chdir(repo.Dir)
-		paths.ClearRepoRootCache()
+		paths.ClearWorktreeRootCache()
 		strategy.ClearHooksDirCache()
 
 		// First enable to set up everything
@@ -56,7 +56,7 @@ func BenchmarkEnableCommand(b *testing.B) {
 
 		for b.Loop() {
 			b.StopTimer()
-			paths.ClearRepoRootCache()
+			paths.ClearWorktreeRootCache()
 			strategy.ClearHooksDirCache()
 			b.StartTimer()
 

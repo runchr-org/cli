@@ -21,7 +21,7 @@ and then go to http://localhost:8089/ui/flamegraph
 // This is the top-level entry point for understanding status command latency.
 //
 // Key I/O operations measured:
-//   - git rev-parse --show-toplevel (RepoRoot, cached after first call)
+//   - git rev-parse --show-toplevel (WorktreeRoot, cached after first call)
 //   - git rev-parse --git-common-dir (NewStateStore, per invocation)
 //   - git rev-parse --abbrev-ref HEAD (resolveWorktreeBranch, per unique worktree)
 //   - os.ReadFile for settings.json, each session state file
@@ -62,15 +62,15 @@ func benchStatus(sessionCount int, detailed, useGitCommonDirCache bool) func(*te
 			repo.CreateSessionState(b, benchutil.SessionOpts{})
 		}
 
-		// runStatus uses paths.RepoRoot() which requires cwd to be in the repo.
+		// runStatus uses paths.WorktreeRoot() which requires cwd to be in the repo.
 		b.Chdir(repo.Dir)
-		paths.ClearRepoRootCache()
+		paths.ClearWorktreeRootCache()
 		session.ClearGitCommonDirCache()
 
 		b.ResetTimer()
 		for range b.N {
-			// Always clear RepoRoot to simulate a fresh CLI invocation.
-			paths.ClearRepoRootCache()
+			// Always clear WorktreeRoot to simulate a fresh CLI invocation.
+			paths.ClearWorktreeRootCache()
 
 			if !useGitCommonDirCache {
 				// Simulate old behavior: no git common dir cache.

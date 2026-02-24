@@ -54,7 +54,7 @@ var (
 // directory when called from a linked worktree.
 // The result is cached per working directory.
 func GetHooksDir() (string, error) {
-	cwd, err := os.Getwd() //nolint:forbidigo // cache key for hooks dir, same pattern as paths.RepoRoot()
+	cwd, err := os.Getwd() //nolint:forbidigo // cache key for hooks dir, same pattern as paths.WorktreeRoot()
 	if err != nil {
 		cwd = ""
 	}

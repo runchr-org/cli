@@ -39,7 +39,7 @@ func (a *OpenCodeAgent) IsPreview() bool         { return true }
 func (a *OpenCodeAgent) ProtectedDirs() []string { return []string{".opencode"} }
 
 func (a *OpenCodeAgent) DetectPresence() (bool, error) {
-	repoRoot, err := paths.RepoRoot()
+	repoRoot, err := paths.WorktreeRoot()
 	if err != nil {
 		repoRoot = "."
 	}

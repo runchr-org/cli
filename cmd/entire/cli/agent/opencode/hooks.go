@@ -26,10 +26,10 @@ const (
 
 // getPluginPath returns the absolute path to the plugin file.
 func getPluginPath() (string, error) {
-	repoRoot, err := paths.RepoRoot()
+	repoRoot, err := paths.WorktreeRoot()
 	if err != nil {
 		// Fallback to CWD if not in a git repo (e.g., during tests)
-		//nolint:forbidigo // Intentional fallback when RepoRoot() fails (tests run outside git repos)
+		//nolint:forbidigo // Intentional fallback when WorktreeRoot() fails (tests run outside git repos)
 		repoRoot, err = os.Getwd()
 		if err != nil {
 			return "", fmt.Errorf("failed to get current directory: %w", err)

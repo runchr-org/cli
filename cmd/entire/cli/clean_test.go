@@ -23,7 +23,7 @@ func setupCleanTestRepo(t *testing.T) (*git.Repository, plumbing.Hash) {
 	}
 
 	t.Chdir(dir)
-	paths.ClearRepoRootCache()
+	paths.ClearWorktreeRootCache()
 
 	// Create initial commit
 	emptyTree := &object.Tree{Entries: []object.TreeEntry{}}
@@ -208,7 +208,7 @@ func TestRunClean_SessionsBranchPreserved(t *testing.T) {
 func TestRunClean_NotGitRepository(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	paths.ClearRepoRootCache()
+	paths.ClearWorktreeRootCache()
 
 	var stdout bytes.Buffer
 	err := runClean(&stdout, false)
@@ -240,7 +240,7 @@ func TestRunClean_Subdirectory(t *testing.T) {
 	}
 
 	t.Chdir(subDir)
-	paths.ClearRepoRootCache()
+	paths.ClearWorktreeRootCache()
 
 	var stdout bytes.Buffer
 	err = runClean(&stdout, false)
