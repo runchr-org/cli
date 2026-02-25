@@ -296,13 +296,14 @@ func SliceFromMessage(data []byte, startMessageIndex int) ([]byte, error) {
 // This is specific to Gemini's API format where each message may have a tokens object
 // with input, output, cached, thoughts, tool, and total counts.
 // Only processes messages from startMessageIndex onwards (0-indexed).
-func CalculateTokenUsage(data []byte, startMessageIndex int) *agent.TokenUsage {
+// CalculateTokenUsage computes token usage from the transcript bytes starting at the given message offset.
+func (g *GeminiCLIAgent) CalculateTokenUsage(data []byte, startMessageIndex int) (*agent.TokenUsage, error) {
 	var transcript struct {
 		Messages []geminiMessageWithTokens `json:"messages"`
 	}
 
 	if err := json.Unmarshal(data, &transcript); err != nil {
-		return &agent.TokenUsage{}
+		return &agent.TokenUsage{}, err
 	}
 
 	usage := &agent.TokenUsage{}
@@ -328,23 +329,5 @@ func CalculateTokenUsage(data []byte, startMessageIndex int) *agent.TokenUsage {
 		usage.CacheReadTokens += msg.Tokens.Cached
 	}
 
-	return usage
-}
-
-// CalculateTokenUsageFromFile calculates token usage from a Gemini transcript file.
-// If startMessageIndex > 0, only considers messages from that index onwards.
-func CalculateTokenUsageFromFile(path string, startMessageIndex int) (*agent.TokenUsage, error) {
-	if path == "" {
-		return &agent.TokenUsage{}, nil
-	}
-
-	data, err := os.ReadFile(path) //nolint:gosec // Reading from controlled transcript path
-	if err != nil {
-		if os.IsNotExist(err) {
-			return &agent.TokenUsage{}, nil
-		}
-		return nil, fmt.Errorf("failed to read transcript: %w", err)
-	}
-
-	return CalculateTokenUsage(data, startMessageIndex), nil
+	return usage, nil
 }

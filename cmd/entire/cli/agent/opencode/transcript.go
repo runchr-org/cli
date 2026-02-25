@@ -292,31 +292,7 @@ func CalculateTokenUsageFromBytes(data []byte, startMessageIndex int) *agent.Tok
 	return usage
 }
 
-// CalculateTokenUsage computes token usage from assistant messages starting at the given offset.
-func (a *OpenCodeAgent) CalculateTokenUsage(sessionRef string, fromOffset int) (*agent.TokenUsage, error) {
-	session, err := parseExportSessionFromFile(sessionRef)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil //nolint:nilnil // nil usage for nonexistent file is expected
-		}
-		return nil, fmt.Errorf("failed to parse transcript for token usage: %w", err)
-	}
-	if session == nil {
-		return nil, nil //nolint:nilnil // nil usage for empty file is expected
-	}
-
-	usage := &agent.TokenUsage{}
-	for i := fromOffset; i < len(session.Messages); i++ {
-		msg := session.Messages[i]
-		if msg.Info.Role != roleAssistant || msg.Info.Tokens == nil {
-			continue
-		}
-		usage.InputTokens += msg.Info.Tokens.Input
-		usage.OutputTokens += msg.Info.Tokens.Output
-		usage.CacheReadTokens += msg.Info.Tokens.Cache.Read
-		usage.CacheCreationTokens += msg.Info.Tokens.Cache.Write
-		usage.APICallCount++
-	}
-
-	return usage, nil
+// CalculateTokenUsage computes token usage from the transcript bytes starting at the given message offset.
+func (a *OpenCodeAgent) CalculateTokenUsage(data []byte, fromOffset int) (*agent.TokenUsage, error) {
+	return CalculateTokenUsageFromBytes(data, fromOffset), nil
 }

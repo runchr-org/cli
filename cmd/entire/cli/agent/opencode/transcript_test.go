@@ -341,10 +341,9 @@ func TestExtractSummary_EmptyTranscript(t *testing.T) {
 func TestCalculateTokenUsage(t *testing.T) {
 	t.Parallel()
 	ag := &OpenCodeAgent{}
-	path := writeTestTranscript(t, testExportJSON)
 
 	// From offset 0 — both assistant messages
-	usage, err := ag.CalculateTokenUsage(path, 0)
+	usage, err := ag.CalculateTokenUsage([]byte(testExportJSON), 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -371,9 +370,8 @@ func TestCalculateTokenUsage(t *testing.T) {
 func TestCalculateTokenUsage_FromOffset(t *testing.T) {
 	t.Parallel()
 	ag := &OpenCodeAgent{}
-	path := writeTestTranscript(t, testExportJSON)
 
-	usage, err := ag.CalculateTokenUsage(path, 2)
+	usage, err := ag.CalculateTokenUsage([]byte(testExportJSON), 2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -388,16 +386,24 @@ func TestCalculateTokenUsage_FromOffset(t *testing.T) {
 	}
 }
 
-func TestCalculateTokenUsage_NonexistentFile(t *testing.T) {
+func TestCalculateTokenUsage_EmptyData(t *testing.T) {
 	t.Parallel()
 	ag := &OpenCodeAgent{}
 
-	usage, err := ag.CalculateTokenUsage("/nonexistent/path.json", 0)
+	usage, err := ag.CalculateTokenUsage(nil, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if usage != nil {
-		t.Errorf("expected nil usage for nonexistent file, got %+v", usage)
+	if usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.APICallCount != 0 {
+		t.Errorf("expected zero usage for nil data, got %+v", usage)
+	}
+
+	usage, err = ag.CalculateTokenUsage([]byte{}, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.APICallCount != 0 {
+		t.Errorf("expected zero usage for empty data, got %+v", usage)
 	}
 }
 

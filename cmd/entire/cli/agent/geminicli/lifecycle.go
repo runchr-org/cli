@@ -96,11 +96,6 @@ func (g *GeminiCLIAgent) ExtractSummary(sessionRef string) (string, error) {
 	return ExtractLastAssistantMessage(data)
 }
 
-// CalculateTokenUsage computes token usage from the transcript starting at the given message offset.
-func (g *GeminiCLIAgent) CalculateTokenUsage(sessionRef string, fromOffset int) (*agent.TokenUsage, error) {
-	return CalculateTokenUsageFromFile(sessionRef, fromOffset)
-}
-
 // --- Internal hook parsing functions ---
 
 func (g *GeminiCLIAgent) parseSessionStart(stdin io.Reader) (*agent.Event, error) {

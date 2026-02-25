@@ -356,7 +356,7 @@ func handleLifecycleTurnEnd(ag agent.Agent, event *agent.Event) error {
 		}
 	} else if calculator, ok := ag.(agent.TokenCalculator); ok {
 		// Fall back to basic token calculation (main transcript only)
-		usage, tokenErr := calculator.CalculateTokenUsage(transcriptRef, transcriptLinesAtStart)
+		usage, tokenErr := calculator.CalculateTokenUsage(transcriptData, transcriptLinesAtStart)
 		if tokenErr != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to calculate token usage: %v\n", tokenErr)
 		} else {

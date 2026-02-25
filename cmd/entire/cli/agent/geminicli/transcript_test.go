@@ -616,7 +616,11 @@ func TestCalculateTokenUsage_BasicMessages(t *testing.T) {
   ]
 }`)
 
-	usage := CalculateTokenUsage(data, 0)
+	ag := &GeminiCLIAgent{}
+	usage, err := ag.CalculateTokenUsage(data, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// Should have 2 API calls (2 gemini messages)
 	if usage.APICallCount != 2 {
@@ -653,7 +657,11 @@ func TestCalculateTokenUsage_StartIndex(t *testing.T) {
 }`)
 
 	// Start from index 2 - should only count the last gemini message
-	usage := CalculateTokenUsage(data, 2)
+	ag := &GeminiCLIAgent{}
+	usage, err := ag.CalculateTokenUsage(data, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// Should have 1 API call (only the gemini message at index 3)
 	if usage.APICallCount != 1 {
@@ -685,7 +693,11 @@ func TestCalculateTokenUsage_IgnoresUserMessages(t *testing.T) {
   ]
 }`)
 
-	usage := CalculateTokenUsage(data, 0)
+	ag := &GeminiCLIAgent{}
+	usage, err := ag.CalculateTokenUsage(data, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// Should only count gemini message tokens
 	if usage.APICallCount != 1 {
@@ -705,7 +717,11 @@ func TestCalculateTokenUsage_EmptyTranscript(t *testing.T) {
 	t.Parallel()
 
 	data := []byte(`{"messages": []}`)
-	usage := CalculateTokenUsage(data, 0)
+	ag := &GeminiCLIAgent{}
+	usage, err := ag.CalculateTokenUsage(data, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if usage.APICallCount != 0 {
 		t.Errorf("APICallCount = %d, want 0", usage.APICallCount)
@@ -725,7 +741,11 @@ func TestCalculateTokenUsage_InvalidJSON(t *testing.T) {
 	t.Parallel()
 
 	data := []byte(`not valid json`)
-	usage := CalculateTokenUsage(data, 0)
+	ag := &GeminiCLIAgent{}
+	usage, err := ag.CalculateTokenUsage(data, 0)
+	if err == nil {
+		t.Error("expected error for invalid JSON")
+	}
 
 	// Should return empty usage on parse error
 	if usage.APICallCount != 0 {
@@ -744,7 +764,11 @@ func TestCalculateTokenUsage_MissingTokensField(t *testing.T) {
   ]
 }`)
 
-	usage := CalculateTokenUsage(data, 0)
+	ag := &GeminiCLIAgent{}
+	usage, err := ag.CalculateTokenUsage(data, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// No tokens to count
 	if usage.APICallCount != 0 {

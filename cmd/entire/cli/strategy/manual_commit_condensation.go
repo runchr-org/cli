@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
-	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/agent/opencode"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
@@ -599,36 +598,19 @@ func calculateTokenUsage(agentType agent.AgentType, data []byte, startOffset int
 	if len(data) == 0 {
 		return &agent.TokenUsage{}
 	}
-
-	// OpenCode uses JSONL with token info on assistant messages (different schema from Claude Code)
-	if agentType == agent.AgentTypeOpenCode {
-		return opencode.CalculateTokenUsageFromBytes(data, startOffset)
-	}
-
-	// Try Gemini format first if agentType is Gemini, or as fallback if Unknown
-	if agentType == agent.AgentTypeGemini || agentType == agent.AgentTypeUnknown {
-		// Attempt to parse as Gemini JSON
-		transcript, err := geminicli.ParseTranscript(data)
-		if err == nil && transcript != nil && len(transcript.Messages) > 0 {
-			return geminicli.CalculateTokenUsage(data, startOffset)
-		}
-		// If agentType is explicitly Gemini but parsing failed, return empty usage
-		if agentType == agent.AgentTypeGemini {
-			return &agent.TokenUsage{}
-		}
-		// Otherwise fall through to JSONL parsing for Unknown type
-	}
-
-	// Claude Code and other JSONL-based agents
-	lines, err := transcript.ParseFromBytes(data)
-	if err != nil || len(lines) == 0 {
+	ag, err := agent.GetByAgentType(agentType)
+	if err != nil {
 		return &agent.TokenUsage{}
 	}
-	// Slice transcript lines to only include checkpoint portion
-	if startOffset > 0 && startOffset < len(lines) {
-		lines = lines[startOffset:]
+	calculator, ok := ag.(agent.TokenCalculator)
+	if !ok {
+		return nil
 	}
-	return claudecode.CalculateTokenUsage(lines)
+	usage, err := calculator.CalculateTokenUsage(data, startOffset)
+	if err != nil {
+		return &agent.TokenUsage{}
+	}
+	return usage
 }
 
 // extractUserPromptsFromLines extracts user prompts from JSONL transcript lines.

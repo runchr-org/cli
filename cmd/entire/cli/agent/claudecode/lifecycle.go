@@ -128,13 +128,16 @@ func (c *ClaudeCodeAgent) PrepareTranscript(sessionRef string) error {
 	return nil
 }
 
-// CalculateTokenUsage computes token usage from the transcript starting at the given line offset.
-func (c *ClaudeCodeAgent) CalculateTokenUsage(sessionRef string, fromOffset int) (*agent.TokenUsage, error) {
-	// Subagent transcripts live in <transcriptDir>/<sessionID>/subagents/
-	// but we don't have the sessionID here. The caller should pass the transcript path
-	// which may contain the session ID in its directory structure.
-	// For now, compute subagentsDir from the transcript path structure.
-	return CalculateTotalTokenUsage(sessionRef, fromOffset, "")
+// CalculateTokenUsage computes token usage from the transcript bytes starting at the given line offset.
+func (c *ClaudeCodeAgent) CalculateTokenUsage(data []byte, fromOffset int) (*agent.TokenUsage, error) {
+	lines, err := transcript.ParseFromBytes(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse transcript: %w", err)
+	}
+	if fromOffset > 0 && fromOffset < len(lines) {
+		lines = lines[fromOffset:]
+	}
+	return CalculateTokenUsage(lines), nil
 }
 
 // --- Internal hook parsing functions ---

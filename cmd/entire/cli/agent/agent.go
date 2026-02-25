@@ -165,8 +165,8 @@ type TranscriptPreparer interface {
 type TokenCalculator interface {
 	Agent
 
-	// CalculateTokenUsage computes token usage from the transcript starting at the given offset.
-	CalculateTokenUsage(sessionRef string, fromOffset int) (*TokenUsage, error)
+	// CalculateTokenUsage computes token usage from the transcript bytes starting at the given offset.
+	CalculateTokenUsage(data []byte, fromOffset int) (*TokenUsage, error)
 }
 
 // SubagentAwareExtractor provides methods for extracting files and tokens including subagents.
