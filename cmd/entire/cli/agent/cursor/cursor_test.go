@@ -98,13 +98,63 @@ func TestCursorAgent_GetSessionID(t *testing.T) {
 
 // --- ResolveSessionFile ---
 
-func TestCursorAgent_ResolveSessionFile(t *testing.T) {
+func TestCursorAgent_ResolveSessionFile_FlatLayout(t *testing.T) {
 	t.Parallel()
 	ag := &CursorAgent{}
-	result := ag.ResolveSessionFile("/tmp/sessions", "abc123")
-	expected := "/tmp/sessions/abc123.jsonl"
+	// When no nested dir exists, returns flat path (CLI pattern)
+	tmpDir := t.TempDir()
+	result := ag.ResolveSessionFile(tmpDir, "abc123")
+	expected := filepath.Join(tmpDir, "abc123.jsonl")
 	if result != expected {
-		t.Errorf("ResolveSessionFile() = %q, want %q", result, expected)
+		t.Errorf("ResolveSessionFile() flat = %q, want %q", result, expected)
+	}
+}
+
+func TestCursorAgent_ResolveSessionFile_NestedLayout(t *testing.T) {
+	t.Parallel()
+	ag := &CursorAgent{}
+	// When nested dir exists, returns nested path (IDE pattern)
+	tmpDir := t.TempDir()
+	nestedDir := filepath.Join(tmpDir, "abc123")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("failed to create nested dir: %v", err)
+	}
+	nestedFile := filepath.Join(nestedDir, "abc123.jsonl")
+	if err := os.WriteFile(nestedFile, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("failed to write nested file: %v", err)
+	}
+
+	result := ag.ResolveSessionFile(tmpDir, "abc123")
+	if result != nestedFile {
+		t.Errorf("ResolveSessionFile() nested = %q, want %q", result, nestedFile)
+	}
+}
+
+func TestCursorAgent_ResolveSessionFile_PrefersNested(t *testing.T) {
+	t.Parallel()
+	ag := &CursorAgent{}
+	// When both flat and nested exist, prefers nested
+	tmpDir := t.TempDir()
+
+	// Create flat file
+	flatFile := filepath.Join(tmpDir, "abc123.jsonl")
+	if err := os.WriteFile(flatFile, []byte("flat"), 0o644); err != nil {
+		t.Fatalf("failed to write flat file: %v", err)
+	}
+
+	// Create nested file
+	nestedDir := filepath.Join(tmpDir, "abc123")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("failed to create nested dir: %v", err)
+	}
+	nestedFile := filepath.Join(nestedDir, "abc123.jsonl")
+	if err := os.WriteFile(nestedFile, []byte("nested"), 0o644); err != nil {
+		t.Fatalf("failed to write nested file: %v", err)
+	}
+
+	result := ag.ResolveSessionFile(tmpDir, "abc123")
+	if result != nestedFile {
+		t.Errorf("ResolveSessionFile() should prefer nested = %q, got %q", nestedFile, result)
 	}
 }
 
@@ -136,6 +186,9 @@ func TestCursorAgent_GetSessionDir_DefaultPath(t *testing.T) {
 	}
 	if !strings.Contains(dir, ".cursor") {
 		t.Errorf("GetSessionDir() = %q, expected path containing .cursor", dir)
+	}
+	if !strings.HasSuffix(dir, "agent-transcripts") {
+		t.Errorf("GetSessionDir() = %q, expected path ending with agent-transcripts", dir)
 	}
 }
 

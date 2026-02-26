@@ -66,8 +66,14 @@ func (c *CursorAgent) GetSessionID(input *agent.HookInput) string {
 }
 
 // ResolveSessionFile returns the path to a Cursor session file.
-// Cursor uses JSONL format like Claude Code.
+// Cursor IDE uses a nested layout: <dir>/<id>/<id>.jsonl
+// Cursor CLI uses a flat layout: <dir>/<id>.jsonl
+// We prefer the nested path if it exists, otherwise fall back to flat.
 func (c *CursorAgent) ResolveSessionFile(sessionDir, agentSessionID string) string {
+	nested := filepath.Join(sessionDir, agentSessionID, agentSessionID+".jsonl")
+	if _, err := os.Stat(nested); err == nil {
+		return nested
+	}
 	return filepath.Join(sessionDir, agentSessionID+".jsonl")
 }
 
@@ -86,7 +92,7 @@ func (c *CursorAgent) GetSessionDir(repoPath string) (string, error) {
 	}
 
 	projectDir := sanitizePathForCursor(repoPath)
-	return filepath.Join(homeDir, ".cursor", "projects", projectDir), nil
+	return filepath.Join(homeDir, ".cursor", "projects", projectDir, "agent-transcripts"), nil
 }
 
 // ReadSession reads a session from Cursor's storage (JSONL transcript file).

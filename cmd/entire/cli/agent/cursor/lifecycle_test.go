@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -104,6 +106,98 @@ func TestParseHookEvent_SessionEnd(t *testing.T) {
 	}
 	if event.SessionID != "ending-session" {
 		t.Errorf("expected conversation_id 'ending-session', got %q", event.SessionID)
+	}
+}
+
+func TestParseHookEvent_TurnEnd_CLINoTranscriptPath(t *testing.T) {
+	ag := &CursorAgent{}
+	// Set up a temp dir that simulates the Cursor project dir with a flat transcript
+	tmpDir := t.TempDir()
+	transcriptDir := filepath.Join(tmpDir, "agent-transcripts")
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatalf("failed to create transcript dir: %v", err)
+	}
+	transcriptFile := filepath.Join(transcriptDir, "cli-session-id.jsonl")
+	if err := os.WriteFile(transcriptFile, []byte(`{"role":"user"}`), 0o644); err != nil {
+		t.Fatalf("failed to write transcript: %v", err)
+	}
+	t.Setenv("ENTIRE_TEST_CURSOR_PROJECT_DIR", transcriptDir)
+
+	// CLI stop hook: no transcript_path
+	input := `{"conversation_id": "cli-session-id", "status": "completed", "loop_count": 3}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameStop, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if event.Type != agent.TurnEnd {
+		t.Errorf("expected event type %v, got %v", agent.TurnEnd, event.Type)
+	}
+	if event.SessionID != "cli-session-id" {
+		t.Errorf("expected session_id 'cli-session-id', got %q", event.SessionID)
+	}
+	if event.SessionRef != transcriptFile {
+		t.Errorf("expected computed session_ref %q, got %q", transcriptFile, event.SessionRef)
+	}
+}
+
+func TestParseHookEvent_SessionEnd_CLINoTranscriptPath(t *testing.T) {
+	ag := &CursorAgent{}
+	// Set up a temp dir that simulates the Cursor project dir with a flat transcript
+	tmpDir := t.TempDir()
+	transcriptDir := filepath.Join(tmpDir, "agent-transcripts")
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatalf("failed to create transcript dir: %v", err)
+	}
+	transcriptFile := filepath.Join(transcriptDir, "cli-end-session.jsonl")
+	if err := os.WriteFile(transcriptFile, []byte(`{"role":"user"}`), 0o644); err != nil {
+		t.Fatalf("failed to write transcript: %v", err)
+	}
+	t.Setenv("ENTIRE_TEST_CURSOR_PROJECT_DIR", transcriptDir)
+
+	// CLI sessionEnd hook: no transcript_path, has richer fields
+	input := `{"conversation_id": "cli-end-session", "reason": "user_closed", "duration_ms": 45000, "is_background_agent": false, "final_status": "completed"}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameSessionEnd, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if event.Type != agent.SessionEnd {
+		t.Errorf("expected event type %v, got %v", agent.SessionEnd, event.Type)
+	}
+	if event.SessionID != "cli-end-session" {
+		t.Errorf("expected session_id 'cli-end-session', got %q", event.SessionID)
+	}
+	if event.SessionRef != transcriptFile {
+		t.Errorf("expected computed session_ref %q, got %q", transcriptFile, event.SessionRef)
+	}
+}
+
+func TestParseHookEvent_TurnEnd_IDEWithTranscriptPath(t *testing.T) {
+	t.Parallel()
+
+	ag := &CursorAgent{}
+	// IDE stop hook: transcript_path provided — should use it as-is
+	input := `{"conversation_id": "ide-session", "transcript_path": "/home/user/.cursor/projects/proj/agent-transcripts/ide-session/ide-session.jsonl", "status": "completed", "loop_count": 5}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameStop, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if event.SessionRef != "/home/user/.cursor/projects/proj/agent-transcripts/ide-session/ide-session.jsonl" {
+		t.Errorf("expected IDE-provided session_ref, got %q", event.SessionRef)
 	}
 }
 
