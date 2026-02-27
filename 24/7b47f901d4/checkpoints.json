@@ -1,6 +1,12 @@
 {
   "checkpoints": [
     {
+      "checkpoint_id": "c71f63ac5806",
+      "commit_sha": "9b93ae6e33f4bd3f2db72afddf66efc2fef5bdb4",
+      "created_at": "2026-02-27T09:40:21.041367Z",
+      "summary": "Push and update the PR description/docs"
+    },
+    {
       "checkpoint_id": "c33d8f528b3d",
       "commit_sha": "9d64e48767d5a653df1537ac8856a7a7c10098f5",
       "created_at": "2026-02-24T13:15:41.788697Z",
