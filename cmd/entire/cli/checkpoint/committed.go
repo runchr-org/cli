@@ -423,6 +423,19 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 	}
 	filePaths.Metadata = "/" + sessionPath + paths.MetadataFileName
 
+	// Write agent-contributed extra files
+	for relPath, content := range opts.ExtraFiles {
+		blobHash, err := CreateBlobFromContent(s.repo, content)
+		if err != nil {
+			return filePaths, fmt.Errorf("failed to create blob for extra file %s: %w", relPath, err)
+		}
+		entries[sessionPath+relPath] = object.TreeEntry{
+			Name: sessionPath + relPath,
+			Mode: filemode.Regular,
+			Hash: blobHash,
+		}
+	}
+
 	return filePaths, nil
 }
 

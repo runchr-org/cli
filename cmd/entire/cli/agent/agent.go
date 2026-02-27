@@ -267,6 +267,18 @@ type SessionBaseDirProvider interface {
 	GetSessionBaseDir() (string, error)
 }
 
+// CheckpointContributor is an optional interface for agents that contribute
+// custom files to checkpoint metadata. Files are written to the session
+// metadata directory and automatically included in the checkpoint tree.
+type CheckpointContributor interface {
+	Agent
+
+	// ContributeCheckpointFiles writes agent-specific files to metadataDir.
+	// Called before SaveStep; any files written are automatically included.
+	// Errors are non-fatal (logged as warnings, checkpoint still proceeds).
+	ContributeCheckpointFiles(ctx context.Context, sessionID string, metadataDir string) error
+}
+
 // SubagentAwareExtractor provides methods for extracting files and tokens including subagents.
 // Agents that support spawning subagents (like Claude Code's Task tool) should implement this
 // to ensure subagent contributions are included in checkpoints.

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent/cursor"
 	"github.com/spf13/cobra"
 )
 
@@ -53,7 +54,7 @@ func runCursorImport(cmd *cobra.Command, archivePath, workspaceHash, projectSlug
 		return fmt.Errorf("reading archive: %w", err)
 	}
 
-	var archive cursorChatArchive
+	var archive cursor.ChatArchive
 	if err := json.Unmarshal(data, &archive); err != nil {
 		return fmt.Errorf("parsing archive: %w", err)
 	}
@@ -134,7 +135,7 @@ func cursorWorkspaceHash(projectPath string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func importCursorDB(ctx context.Context, store cursorStoreData, targetPath string, force bool) error {
+func importCursorDB(ctx context.Context, store cursor.StoreData, targetPath string, force bool) error {
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o750); err != nil {
 		return fmt.Errorf("creating directory: %w", err)
 	}

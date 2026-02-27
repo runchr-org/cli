@@ -66,4 +66,9 @@ type ExtractedSessionData struct {
 	Prompts             []string // User prompts from the current checkpoint portion
 	FilesTouched        []string
 	TokenUsage          *agent.TokenUsage // Token usage calculated from transcript (since CheckpointTranscriptStart)
+
+	// ExtraFiles contains agent-contributed files from the shadow branch metadata directory.
+	// These are files not part of the standard set (transcript, prompt, context, summary).
+	// Keys are relative paths within the metadata dir; values are raw file contents.
+	ExtraFiles map[string][]byte
 }
