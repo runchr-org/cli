@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -71,7 +72,7 @@ modifying your active branch.`,
 			}
 
 			if agentName != "" {
-				ag, err := agent.Get(agent.AgentName(agentName))
+				ag, err := agent.Get(types.AgentName(agentName))
 				if err != nil {
 					printWrongAgentError(cmd.ErrOrStderr(), agentName)
 					return NewSilentError(errors.New("wrong agent name"))
@@ -204,15 +205,13 @@ func runEnableInteractive(ctx context.Context, w io.Writer, agents []agent.Agent
 		fmt.Fprintln(w, "  Use --project to update the project settings file.")
 	}
 
-	// Helper to save settings to the appropriate file
+	// Save settings to the appropriate file.
 	saveSettings := func() error {
 		if shouldUseLocal {
 			return SaveEntireSettingsLocal(ctx, settings)
 		}
 		return SaveEntireSettings(ctx, settings)
 	}
-
-	// Save settings before telemetry prompt so config is persisted even if the user cancels
 	if err := saveSettings(); err != nil {
 		return fmt.Errorf("failed to save settings: %w", err)
 	}
@@ -316,7 +315,7 @@ func uninstallDeselectedAgentHooks(ctx context.Context, w io.Writer, selectedAge
 		return nil
 	}
 
-	selectedSet := make(map[agent.AgentName]struct{}, len(selectedAgents))
+	selectedSet := make(map[types.AgentName]struct{}, len(selectedAgents))
 	for _, ag := range selectedAgents {
 		selectedSet[ag.Name()] = struct{}{}
 	}
@@ -431,7 +430,7 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 	// Build pre-selection set.
 	// On re-run: only pre-select agents with hooks installed (respect prior deselection).
 	// On first run: pre-select all detected agents.
-	preSelectedSet := make(map[agent.AgentName]struct{})
+	preSelectedSet := make(map[types.AgentName]struct{})
 	if hasInstalledHooks {
 		for _, name := range installedAgentNames {
 			preSelectedSet[name] = struct{}{}
@@ -504,7 +503,7 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 
 	selectedAgents := make([]agent.Agent, 0, len(selectedAgentNames))
 	for _, name := range selectedAgentNames {
-		selectedAgent, err := agent.Get(agent.AgentName(name))
+		selectedAgent, err := agent.Get(types.AgentName(name))
 		if err != nil {
 			return nil, fmt.Errorf("failed to get selected agent %s: %w", name, err)
 		}

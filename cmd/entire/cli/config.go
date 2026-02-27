@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 
@@ -60,11 +61,8 @@ func IsEnabled(ctx context.Context) (bool, error) {
 	return s.Enabled, nil
 }
 
-// GetStrategy returns the configured strategy instance.
-// Falls back to default if the configured strategy is not found.
-//
-
-func GetStrategy(_ context.Context) strategy.Strategy {
+// GetStrategy returns the manual-commit strategy instance.
+func GetStrategy(_ context.Context) *strategy.ManualCommitStrategy {
 	return strategy.NewManualCommitStrategy()
 }
 
@@ -80,8 +78,8 @@ func GetLogLevel() string {
 }
 
 // GetAgentsWithHooksInstalled returns names of agents that have hooks installed.
-func GetAgentsWithHooksInstalled(ctx context.Context) []agent.AgentName {
-	var installed []agent.AgentName
+func GetAgentsWithHooksInstalled(ctx context.Context) []types.AgentName {
+	var installed []types.AgentName
 	for _, name := range agent.List() {
 		ag, err := agent.Get(name)
 		if err != nil {
@@ -95,7 +93,7 @@ func GetAgentsWithHooksInstalled(ctx context.Context) []agent.AgentName {
 }
 
 // JoinAgentNames joins agent names into a comma-separated string.
-func JoinAgentNames(names []agent.AgentName) string {
+func JoinAgentNames(names []types.AgentName) string {
 	strs := make([]string, len(names))
 	for i, n := range names {
 		strs[i] = string(n)

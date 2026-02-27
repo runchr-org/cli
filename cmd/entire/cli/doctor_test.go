@@ -1,9 +1,6 @@
 package cli
 
 import (
-	"bytes"
-	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +11,6 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -289,35 +285,4 @@ func TestClassifySession_WorktreeIDInShadowBranch(t *testing.T) {
 	assert.True(t, result.HasShadowBranch)
 	expectedBranch := checkpoint.ShadowBranchNameForCommit(baseCommit, worktreeID)
 	assert.Equal(t, expectedBranch, result.ShadowBranch)
-}
-
-func TestRunSessionsFix_DeprecatedStrategyWarning(t *testing.T) {
-	dir := setupGitRepoForPhaseTest(t)
-	t.Chdir(dir)
-
-	writeSettings(t, `{"enabled": true, "strategy": "auto-commit"}`)
-
-	var stdout bytes.Buffer
-	cmd := &cobra.Command{Use: "doctor"}
-	cmd.SetContext(context.Background())
-	cmd.SetOut(&stdout)
-
-	// runSessionsFix should show warning after "No stuck sessions found."
-	err := runSessionsFix(cmd, false)
-	require.NoError(t, err)
-
-	output := stdout.String()
-	if !strings.Contains(output, "no longer needed") {
-		t.Errorf("Expected deprecation warning, got: %s", output)
-	}
-	if !strings.Contains(output, "strategy") {
-		t.Errorf("Expected warning to mention 'strategy', got: %s", output)
-	}
-
-	// Warning should appear after the main output
-	noStuckIdx := strings.Index(output, "No stuck sessions found.")
-	warningIdx := strings.Index(output, "no longer needed")
-	if noStuckIdx >= warningIdx {
-		t.Errorf("Expected warning after main output, got: %s", output)
-	}
 }

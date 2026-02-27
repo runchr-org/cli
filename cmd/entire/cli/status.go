@@ -86,7 +86,6 @@ func runStatus(ctx context.Context, w io.Writer, detailed bool) error {
 	}
 
 	fmt.Fprintln(w)
-	settings.WriteDeprecatedStrategyWarnings(ctx, w)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, formatSettingsStatusShort(ctx, s, sty))
 	if s.Enabled {
@@ -104,7 +103,6 @@ func runStatusDetailed(ctx context.Context, w io.Writer, sty statusStyles, setti
 		return fmt.Errorf("failed to load settings: %w", err)
 	}
 	fmt.Fprintln(w)
-	settings.WriteDeprecatedStrategyWarnings(ctx, w)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, formatSettingsStatusShort(ctx, effectiveSettings, sty))
 	fmt.Fprintln(w) // blank line

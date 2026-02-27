@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/session"
-	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 
 	"github.com/go-git/go-git/v5"
@@ -62,9 +61,6 @@ type stuckSession struct {
 
 func runSessionsFix(cmd *cobra.Command, force bool) error {
 	ctx := cmd.Context()
-	w := cmd.OutOrStdout()
-	defer func() { settings.WriteDeprecatedStrategyWarnings(ctx, w) }()
-
 	// Load all session states
 	states, err := strategy.ListSessionStates(ctx)
 	if err != nil {

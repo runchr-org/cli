@@ -12,31 +12,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const unknownStrategyName = "unknown"
-
 // gitHooksDisabled is set by PersistentPreRunE when Entire is not set up or disabled.
 // When true, all git hook commands return early without doing any work.
 var gitHooksDisabled bool
 
 // gitHookContext holds common state for git hook logging.
 type gitHookContext struct {
-	hookName     string
-	ctx          context.Context
-	start        time.Time
-	strategy     strategy.Strategy
-	strategyName string
+	hookName string
+	ctx      context.Context
+	start    time.Time
+	strategy *strategy.ManualCommitStrategy
 }
 
 // newGitHookContext creates a new git hook context with logging initialized.
 func newGitHookContext(ctx context.Context, hookName string) *gitHookContext {
 	g := &gitHookContext{
-		hookName:     hookName,
-		start:        time.Now(),
-		ctx:          logging.WithComponent(ctx, "hooks"),
-		strategyName: unknownStrategyName,
+		hookName: hookName,
+		start:    time.Now(),
+		ctx:      logging.WithComponent(ctx, "hooks"),
 	}
 	g.strategy = GetStrategy(ctx)
-	g.strategyName = g.strategy.Name()
 	return g
 }
 
@@ -45,7 +40,7 @@ func (g *gitHookContext) logInvoked(extraAttrs ...any) {
 	attrs := []any{
 		slog.String("hook", g.hookName),
 		slog.String("hook_type", "git"),
-		slog.String("strategy", g.strategyName),
+		slog.String("strategy", strategy.StrategyNameManualCommit),
 	}
 	logging.Debug(g.ctx, g.hookName+" hook invoked", append(attrs, extraAttrs...)...)
 }
@@ -56,7 +51,7 @@ func (g *gitHookContext) logCompleted(err error, extraAttrs ...any) {
 	attrs := []any{
 		slog.String("hook", g.hookName),
 		slog.String("hook_type", "git"),
-		slog.String("strategy", g.strategyName),
+		slog.String("strategy", strategy.StrategyNameManualCommit),
 		slog.Bool("success", err == nil),
 	}
 	logging.LogDuration(g.ctx, slog.LevelDebug, g.hookName+" hook completed", g.start, append(attrs, extraAttrs...)...)

@@ -162,10 +162,9 @@ func TestEmptySession(t *testing.T) {
 	}
 }
 
-// TestShadowStrategyImplementsSessionSource verifies that manual-commit strategy implements SessionSource
-func TestManualCommitStrategyImplementsSessionSource(t *testing.T) {
-	// Manual-commit strategy should implement SessionSource
-	var strat = NewManualCommitStrategy()
+// TestManualCommitStrategyGetAdditionalSessions verifies that GetAdditionalSessions is callable
+func TestManualCommitStrategyGetAdditionalSessions(t *testing.T) {
+	strat := NewManualCommitStrategy()
 
 	// GetAdditionalSessions should be callable
 	_, err := strat.GetAdditionalSessions(context.Background())

@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	agentpkg "github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
@@ -31,7 +32,7 @@ import (
 const unknownSessionID = "unknown"
 
 // getAgent returns an agent by type, falling back to the default agent for empty types.
-func getAgent(agentType agentpkg.AgentType) (agentpkg.Agent, error) {
+func getAgent(agentType types.AgentType) (agentpkg.Agent, error) {
 	ag, err := strategy.ResolveAgentForRewind(agentType)
 	if err != nil {
 		return nil, fmt.Errorf("resolving agent: %w", err)
@@ -531,7 +532,7 @@ func runRewindToInternal(ctx context.Context, commitID string, logsOnly bool, re
 
 // handleLogsOnlyRewindNonInteractive handles logs-only rewind in non-interactive mode.
 // Defaults to restoring logs only (no checkout) for safety.
-func handleLogsOnlyRewindNonInteractive(ctx context.Context, start strategy.Strategy, point strategy.RewindPoint) error {
+func handleLogsOnlyRewindNonInteractive(ctx context.Context, start *strategy.ManualCommitStrategy, point strategy.RewindPoint) error {
 	// Resolve agent once for use throughout
 	agent, err := getAgent(point.Agent)
 	if err != nil {
@@ -569,7 +570,7 @@ func handleLogsOnlyRewindNonInteractive(ctx context.Context, start strategy.Stra
 
 // handleLogsOnlyResetNonInteractive handles reset in non-interactive mode.
 // This performs a git reset --hard to the target commit.
-func handleLogsOnlyResetNonInteractive(ctx context.Context, start strategy.Strategy, point strategy.RewindPoint) error {
+func handleLogsOnlyResetNonInteractive(ctx context.Context, start *strategy.ManualCommitStrategy, point strategy.RewindPoint) error {
 	// Resolve agent once for use throughout
 	agent, err := getAgent(point.Agent)
 	if err != nil {
@@ -739,7 +740,7 @@ func restoreSessionTranscriptFromShadow(ctx context.Context, commitHash, metadat
 // This is acceptable because task checkpoints are currently only created by Claude Code's
 // PostToolUse hook. If other agents gain sub-agent support, this will need a
 // format-aware refactor (agent-specific parsing, truncation, and serialization).
-func restoreTaskCheckpointTranscript(ctx context.Context, strat strategy.Strategy, point strategy.RewindPoint, sessionID, checkpointUUID string, agent agentpkg.Agent) error {
+func restoreTaskCheckpointTranscript(ctx context.Context, strat *strategy.ManualCommitStrategy, point strategy.RewindPoint, sessionID, checkpointUUID string, agent agentpkg.Agent) error {
 	// Get transcript content from strategy
 	content, err := strat.GetTaskCheckpointTranscript(ctx, point)
 	if err != nil {
@@ -775,7 +776,7 @@ func restoreTaskCheckpointTranscript(ctx context.Context, strat strategy.Strateg
 }
 
 // handleLogsOnlyRewindInteractive handles rewind for logs-only points with a sub-choice menu.
-func handleLogsOnlyRewindInteractive(ctx context.Context, start strategy.Strategy, point strategy.RewindPoint, shortID string) error {
+func handleLogsOnlyRewindInteractive(ctx context.Context, start *strategy.ManualCommitStrategy, point strategy.RewindPoint, shortID string) error {
 	var action string
 
 	form := NewAccessibleForm(
@@ -813,7 +814,7 @@ func handleLogsOnlyRewindInteractive(ctx context.Context, start strategy.Strateg
 }
 
 // handleLogsOnlyRestore restores only the session logs without changing files.
-func handleLogsOnlyRestore(ctx context.Context, start strategy.Strategy, point strategy.RewindPoint) error {
+func handleLogsOnlyRestore(ctx context.Context, start *strategy.ManualCommitStrategy, point strategy.RewindPoint) error {
 	// Resolve agent once for use throughout
 	agent, err := getAgent(point.Agent)
 	if err != nil {
@@ -850,7 +851,7 @@ func handleLogsOnlyRestore(ctx context.Context, start strategy.Strategy, point s
 }
 
 // handleLogsOnlyCheckout restores logs and checks out the commit (detached HEAD).
-func handleLogsOnlyCheckout(ctx context.Context, start strategy.Strategy, point strategy.RewindPoint, shortID string) error {
+func handleLogsOnlyCheckout(ctx context.Context, start *strategy.ManualCommitStrategy, point strategy.RewindPoint, shortID string) error {
 	// Resolve agent once for use throughout
 	agent, err := getAgent(point.Agent)
 	if err != nil {
@@ -915,7 +916,7 @@ func handleLogsOnlyCheckout(ctx context.Context, start strategy.Strategy, point 
 }
 
 // handleLogsOnlyReset restores logs and resets the branch to the commit (destructive).
-func handleLogsOnlyReset(ctx context.Context, start strategy.Strategy, point strategy.RewindPoint, shortID string) error {
+func handleLogsOnlyReset(ctx context.Context, start *strategy.ManualCommitStrategy, point strategy.RewindPoint, shortID string) error {
 	// Resolve agent once for use throughout
 	agent, agentErr := getAgent(point.Agent)
 	if agentErr != nil {

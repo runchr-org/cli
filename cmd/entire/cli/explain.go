@@ -14,6 +14,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/agent/opencode"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
@@ -535,7 +536,7 @@ func getAssociatedCommits(ctx context.Context, repo *git.Repository, checkpointI
 // relevant to a specific checkpoint, starting from the given offset.
 // For Claude Code (JSONL), the offset is a line number and we slice by line.
 // For Gemini (single JSON blob), the offset is a message index and we slice by message.
-func scopeTranscriptForCheckpoint(fullTranscript []byte, startOffset int, agentType agent.AgentType) []byte {
+func scopeTranscriptForCheckpoint(fullTranscript []byte, startOffset int, agentType types.AgentType) []byte {
 	switch agentType {
 	case agent.AgentTypeGemini:
 		scoped, err := geminicli.SliceFromMessage(fullTranscript, startOffset)
@@ -557,7 +558,7 @@ func scopeTranscriptForCheckpoint(fullTranscript []byte, startOffset int, agentT
 
 // extractPromptsFromTranscript extracts user prompts from transcript bytes.
 // Returns a slice of prompt strings.
-func extractPromptsFromTranscript(transcriptBytes []byte, agentType agent.AgentType) []string {
+func extractPromptsFromTranscript(transcriptBytes []byte, agentType types.AgentType) []string {
 	if len(transcriptBytes) == 0 {
 		return nil
 	}
@@ -685,7 +686,7 @@ func formatCheckpointOutput(summary *checkpoint.CheckpointSummary, content *chec
 // based on verbosity level. Full mode shows the entire session, verbose shows checkpoint scope.
 // fullTranscript is the entire session transcript, scopedContent is either scoped transcript bytes
 // or a pre-formatted string (for backwards compat), and scopedFallback is used when scoped parsing fails.
-func appendTranscriptSection(sb *strings.Builder, verbose, full bool, fullTranscript, scopedTranscript []byte, scopedFallback string, agentType agent.AgentType) {
+func appendTranscriptSection(sb *strings.Builder, verbose, full bool, fullTranscript, scopedTranscript []byte, scopedFallback string, agentType types.AgentType) {
 	switch {
 	case full:
 		sb.WriteString("\n")
@@ -702,7 +703,7 @@ func appendTranscriptSection(sb *strings.Builder, verbose, full bool, fullTransc
 // formatTranscriptBytes formats transcript bytes into a human-readable string.
 // It parses the transcript (JSONL for Claude, JSON for Gemini) and formats it using the condensed format.
 // The fallback is used for backwards compatibility when transcript parsing fails or is empty.
-func formatTranscriptBytes(transcriptBytes []byte, fallback string, agentType agent.AgentType) string {
+func formatTranscriptBytes(transcriptBytes []byte, fallback string, agentType types.AgentType) string {
 	if len(transcriptBytes) == 0 {
 		if fallback != "" {
 			return fallback + "\n"
@@ -1557,7 +1558,7 @@ func countLines(content []byte) int {
 
 // transcriptOffset returns the appropriate offset for scoping a transcript.
 // For Claude Code (JSONL), this is the line count. For Gemini (JSON), this is the message count.
-func transcriptOffset(transcriptBytes []byte, agentType agent.AgentType) int {
+func transcriptOffset(transcriptBytes []byte, agentType types.AgentType) int {
 	switch agentType {
 	case agent.AgentTypeGemini:
 		t, err := geminicli.ParseTranscript(transcriptBytes)

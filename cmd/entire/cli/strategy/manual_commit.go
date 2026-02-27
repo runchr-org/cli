@@ -57,20 +57,8 @@ func (s *ManualCommitStrategy) getCheckpointStore() (*checkpoint.GitStore, error
 }
 
 // NewManualCommitStrategy creates a new manual-commit strategy instance.
-//
-
-func NewManualCommitStrategy() Strategy {
+func NewManualCommitStrategy() *ManualCommitStrategy {
 	return &ManualCommitStrategy{}
-}
-
-// Name returns the strategy name.
-func (s *ManualCommitStrategy) Name() string {
-	return StrategyNameManualCommit
-}
-
-// Description returns the strategy description.
-func (s *ManualCommitStrategy) Description() string {
-	return "Manual commit checkpoints with session logs on entire/checkpoints/v1"
 }
 
 // ValidateRepository validates that the repository is suitable for this strategy.
@@ -113,6 +101,3 @@ func (s *ManualCommitStrategy) ListOrphanedItems(ctx context.Context) ([]Cleanup
 
 	return items, nil
 }
-
-// Compile-time check that ManualCommitStrategy implements SessionSource
-var _ Strategy = (*ManualCommitStrategy)(nil)

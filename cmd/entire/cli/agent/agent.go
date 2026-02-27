@@ -6,6 +6,8 @@ package agent
 import (
 	"context"
 	"io"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 )
 
 // Agent defines the interface for interacting with a coding agent.
@@ -20,11 +22,11 @@ type Agent interface {
 	// --- Identity ---
 
 	// Name returns the agent registry key (e.g., "claude-code", "gemini")
-	Name() AgentName
+	Name() types.AgentName
 
 	// Type returns the agent type identifier (e.g., "Claude Code", "Gemini CLI")
 	// This is stored in metadata and trailers.
-	Type() AgentType
+	Type() types.AgentType
 
 	// Description returns a human-readable description for UI
 	Description() string

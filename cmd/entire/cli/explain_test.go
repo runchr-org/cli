@@ -487,10 +487,9 @@ func TestFormatSessionInfo_WithSourceRef(t *testing.T) {
 	}
 }
 
-// Helper to verify common session functions work with SessionSource interface
-func TestStrategySessionSourceInterface(t *testing.T) {
-	// This ensures manual-commit strategy implements SessionSource
-	var s = strategy.NewManualCommitStrategy()
+// TestManualCommitStrategyCallable verifies that the strategy's methods are callable
+func TestManualCommitStrategyCallable(t *testing.T) {
+	s := strategy.NewManualCommitStrategy()
 
 	// GetAdditionalSessions should exist and be callable
 	_, err := s.GetAdditionalSessions(context.Background())

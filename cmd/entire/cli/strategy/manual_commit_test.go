@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -769,12 +770,7 @@ func TestShadowStrategy_PrepareCommitMsg_NoActiveSession(t *testing.T) {
 	}
 
 	s := NewManualCommitStrategy()
-	// NewManualCommitStrategy returns ManualCommitStrategy
-	sv2, ok := s.(*ManualCommitStrategy)
-	if !ok {
-		t.Fatal("failed to cast to ManualCommitStrategy")
-	}
-	prepErr := sv2.PrepareCommitMsg(context.Background(), commitMsgFile, "")
+	prepErr := s.PrepareCommitMsg(context.Background(), commitMsgFile, "")
 	if prepErr != nil {
 		t.Errorf("PrepareCommitMsg() error = %v", prepErr)
 	}
@@ -803,10 +799,6 @@ func TestShadowStrategy_PrepareCommitMsg_SkipSources(t *testing.T) {
 	originalMsg := "Merge branch 'feature'\n"
 
 	s := NewManualCommitStrategy()
-	sv2, ok := s.(*ManualCommitStrategy)
-	if !ok {
-		t.Fatal("failed to cast to ManualCommitStrategy")
-	}
 
 	skipSources := []string{"merge", "squash", "commit"}
 	for _, source := range skipSources {
@@ -815,7 +807,7 @@ func TestShadowStrategy_PrepareCommitMsg_SkipSources(t *testing.T) {
 				t.Fatalf("failed to write commit message file: %v", err)
 			}
 
-			prepErr := sv2.PrepareCommitMsg(context.Background(), commitMsgFile, source)
+			prepErr := s.PrepareCommitMsg(context.Background(), commitMsgFile, source)
 			if prepErr != nil {
 				t.Errorf("PrepareCommitMsg() error = %v", prepErr)
 			}
@@ -1801,7 +1793,7 @@ func TestSaveStep_UsesCtxAgentType_WhenPartialState(t *testing.T) {
 func TestCountTranscriptItems(t *testing.T) {
 	tests := []struct {
 		name      string
-		agentType agent.AgentType
+		agentType types.AgentType
 		content   string
 		expected  int
 	}{
@@ -1896,7 +1888,7 @@ func TestCountTranscriptItems(t *testing.T) {
 func TestExtractUserPrompts(t *testing.T) {
 	tests := []struct {
 		name      string
-		agentType agent.AgentType
+		agentType types.AgentType
 		content   string
 		expected  []string
 	}{

@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 
 	"github.com/go-git/go-git/v5"
@@ -340,54 +341,6 @@ func TestRunStatus_ShowsManualCommitStrategy(t *testing.T) {
 	}
 }
 
-func TestRunStatus_DeprecatedStrategyWarning(t *testing.T) {
-	setupTestRepo(t)
-	writeSettings(t, `{"enabled": true, "strategy": "auto-commit"}`)
-
-	var stdout bytes.Buffer
-	if err := runStatus(context.Background(), &stdout, false); err != nil {
-		t.Fatalf("runStatus() error = %v", err)
-	}
-
-	output := stdout.String()
-	if !strings.Contains(output, "no longer needed") {
-		t.Errorf("Expected deprecation warning, got: %s", output)
-	}
-	if !strings.Contains(output, "strategy") {
-		t.Errorf("Expected warning to mention 'strategy', got: %s", output)
-	}
-}
-
-func TestRunStatus_DeprecatedStrategyWarning_Detailed(t *testing.T) {
-	setupTestRepo(t)
-	writeSettings(t, `{"enabled": true, "strategy": "auto-commit"}`)
-
-	var stdout bytes.Buffer
-	if err := runStatus(context.Background(), &stdout, true); err != nil {
-		t.Fatalf("runStatus() error = %v", err)
-	}
-
-	output := stdout.String()
-	if !strings.Contains(output, "no longer needed") {
-		t.Errorf("Expected deprecation warning in detailed mode, got: %s", output)
-	}
-}
-
-func TestRunStatus_NoWarningWithoutStrategy(t *testing.T) {
-	setupTestRepo(t)
-	writeSettings(t, testSettingsEnabled)
-
-	var stdout bytes.Buffer
-	if err := runStatus(context.Background(), &stdout, false); err != nil {
-		t.Fatalf("runStatus() error = %v", err)
-	}
-
-	output := stdout.String()
-	if strings.Contains(output, "no longer needed") {
-		t.Errorf("Expected no deprecation warning, got: %s", output)
-	}
-}
-
 func TestTimeAgo(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -436,7 +389,7 @@ func TestWriteActiveSessions(t *testing.T) {
 			StartedAt:           now.Add(-2 * time.Hour),
 			LastInteractionTime: &recentInteraction,
 			FirstPrompt:         "Fix auth bug in login flow",
-			AgentType:           agent.AgentType("Claude Code"),
+			AgentType:           types.AgentType("Claude Code"),
 			TokenUsage: &agent.TokenUsage{
 				InputTokens:  800,
 				OutputTokens: 400,
@@ -563,7 +516,7 @@ func TestWriteActiveSessions_ActiveTimeOmittedWhenClose(t *testing.T) {
 		StartedAt:           startedAt,
 		LastInteractionTime: &lastInteraction,
 		FirstPrompt:         "test prompt",
-		AgentType:           agent.AgentType("Claude Code"),
+		AgentType:           types.AgentType("Claude Code"),
 	}
 
 	if err := store.Save(context.Background(), state); err != nil {

@@ -186,7 +186,7 @@ func (s *ManualCommitStrategy) GetSessionContext(ctx context.Context, sessionID 
 
 // GetCheckpointLog returns the session transcript for a specific checkpoint.
 // For manual-commit strategy, metadata is stored at sharded paths on entire/checkpoints/v1 branch.
-func (s *ManualCommitStrategy) GetCheckpointLog(ctx context.Context, checkpoint Checkpoint) ([]byte, error) {
+func (s *ManualCommitStrategy) GetCheckpointLog(ctx context.Context, checkpoint Checkpoint) ([]byte, error) { //nolint:unparam // []byte is used by callers; lint false positive from test-only usage
 	if checkpoint.CheckpointID.IsEmpty() {
 		return nil, ErrNoMetadata
 	}

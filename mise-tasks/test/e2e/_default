@@ -14,7 +14,9 @@ if [ -z "${E2E_ENTIRE_BIN:-}" ]; then
   export E2E_ENTIRE_BIN="$PWD/entire"
 fi
 
-E2E_ARTIFACT_DIR="$PWD/e2e/artifacts/$(date +%Y-%m-%dT%H-%M-%S)"
+if [ -z "${E2E_ARTIFACT_DIR:-}" ]; then
+  E2E_ARTIFACT_DIR="$PWD/e2e/artifacts/$(date +%Y-%m-%dT%H-%M-%S)"
+fi
 export E2E_ARTIFACT_DIR
 mkdir -p "$E2E_ARTIFACT_DIR"
 echo "artifacts: $E2E_ARTIFACT_DIR"

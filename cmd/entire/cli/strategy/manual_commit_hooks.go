@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,12 +13,14 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/redact"
@@ -55,23 +58,39 @@ func hasTTY() bool {
 	return true
 }
 
-// askConfirmTTY prompts the user for a yes/no confirmation via /dev/tty.
+// ttyConfirmResult represents the outcome of a TTY confirmation prompt.
+type ttyConfirmResult int
+
+const (
+	ttyConfirmYes    ttyConfirmResult = iota // User confirmed (y/yes/enter with default=yes)
+	ttyConfirmNo                             // User declined (n/no)
+	ttyConfirmAlways                         // User chose "always" (a/always)
+)
+
+// askConfirmTTY prompts the user for a yes/no/always confirmation via /dev/tty.
 // This works even when stdin is redirected (e.g., git commit -m).
-// Returns true for yes, false for no. If TTY is unavailable, returns the default.
-// If context is non-empty, it is displayed on a separate line before the prompt.
-func askConfirmTTY(prompt string, context string, defaultYes bool) bool {
+// Returns ttyConfirmYes, ttyConfirmNo, or ttyConfirmAlways.
+// If TTY is unavailable, returns ttyConfirmYes when defaultYes is true, ttyConfirmNo otherwise.
+// header is displayed as the first line (e.g., "Entire: Active Claude Code session").
+// detail lines are displayed indented below the header.
+func askConfirmTTY(header string, details []string, prompt string, defaultYes bool) ttyConfirmResult {
+	defaultResult := ttyConfirmNo
+	if defaultYes {
+		defaultResult = ttyConfirmYes
+	}
+
 	// In test mode, don't try to interact with the real TTY — just use the default.
 	// ENTIRE_TEST_TTY=1 simulates "a human is present" for the hasTTY() check
 	// but we can't actually read from the TTY in tests.
 	if os.Getenv("ENTIRE_TEST_TTY") != "" {
-		return defaultYes
+		return defaultResult
 	}
 
 	// Gemini CLI sets GEMINI_CLI=1 when running shell commands (including git commit).
 	// The agent can't respond to TTY prompts, so use the default to avoid hanging.
 	// See: https://geminicli.com/docs/tools/shell/
 	if os.Getenv("GEMINI_CLI") != "" {
-		return defaultYes
+		return defaultResult
 	}
 
 	// Open /dev/tty for both reading and writing
@@ -79,49 +98,93 @@ func askConfirmTTY(prompt string, context string, defaultYes bool) bool {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		// Can't open TTY (e.g., running in CI), use default
-		return defaultYes
+		return defaultResult
 	}
 	defer tty.Close()
 
-	// Show context if provided
-	if context != "" {
-		fmt.Fprintf(tty, "%s\n", context)
+	// Write to tty directly, not stderr, since git hooks may redirect stderr to /dev/null
+	fmt.Fprintf(tty, "\n%s\n", header)
+	for _, line := range details {
+		fmt.Fprintf(tty, "  %s\n", line)
 	}
 
-	// Show prompt with default indicator
-	// Write to tty directly, not stderr, since git hooks may redirect stderr to /dev/null
-	var hint string
+	// Show prompt with option descriptions
+	fmt.Fprintf(tty, "\n%s\n", prompt)
 	if defaultYes {
-		hint = "[Y/n]"
+		fmt.Fprint(tty, "  [Y]es / [n]o / [a]lways (remember my choice): ")
 	} else {
-		hint = "[y/N]"
+		fmt.Fprint(tty, "  [y]es / [N]o / [a]lways (remember my choice): ")
 	}
-	fmt.Fprintf(tty, "%s %s ", prompt, hint)
 
 	// Read response
 	reader := bufio.NewReader(tty)
 	response, err := reader.ReadString('\n')
 	if err != nil {
-		return defaultYes
+		return defaultResult
 	}
 
 	response = strings.TrimSpace(strings.ToLower(response))
 	switch response {
 	case "y", "yes":
-		return true
+		return ttyConfirmYes
 	case "n", "no":
-		return false
+		return ttyConfirmNo
+	case "a", "always":
+		return ttyConfirmAlways
 	default:
 		// Empty or invalid input - use default
-		return defaultYes
+		return defaultResult
 	}
+}
+
+// saveCommitLinkingAlways persists commit_linking = "always" to settings.local.json.
+// Uses raw JSON merge to set only the commit_linking field without affecting other
+// fields. This avoids writing unintended defaults (e.g., enabled: true) when the
+// local settings file doesn't exist yet.
+func saveCommitLinkingAlways(ctx context.Context) error {
+	localPath, err := paths.AbsPath(ctx, settings.EntireSettingsLocalFile)
+	if err != nil {
+		return fmt.Errorf("resolving local settings path: %w", err)
+	}
+
+	// Read existing file as raw JSON map to preserve all existing fields.
+	// If the file doesn't exist, start with an empty map so we only write commit_linking.
+	var raw map[string]json.RawMessage
+	data, readErr := os.ReadFile(localPath) //nolint:gosec // path is from AbsPath
+	if readErr == nil {
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parsing local settings: %w", err)
+		}
+	} else if !os.IsNotExist(readErr) {
+		return fmt.Errorf("reading local settings: %w", readErr)
+	}
+	if raw == nil {
+		raw = make(map[string]json.RawMessage)
+	}
+
+	raw["commit_linking"] = json.RawMessage(`"` + settings.CommitLinkingAlways + `"`)
+
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling local settings: %w", err)
+	}
+	out = append(out, '\n')
+
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o750); err != nil {
+		return fmt.Errorf("creating settings directory: %w", err)
+	}
+	//nolint:gosec // G306: settings file is config, not secrets; 0o644 is appropriate
+	if err := os.WriteFile(localPath, out, 0o644); err != nil {
+		return fmt.Errorf("writing local settings: %w", err)
+	}
+	return nil
 }
 
 // CommitMsg is called by the git commit-msg hook after the user edits the message.
 // If the message contains only our trailer (no actual user content), strip it
 // so git will abort the commit due to empty message.
 
-func (s *ManualCommitStrategy) CommitMsg(_ context.Context, commitMsgFile string) error {
+func (s *ManualCommitStrategy) CommitMsg(_ context.Context, commitMsgFile string) error { //nolint:unparam // error return is part of the hook contract; callers check it
 	content, err := os.ReadFile(commitMsgFile) //nolint:gosec // Path comes from git hook
 	if err != nil {
 		return nil //nolint:nilerr // Hook must be silent on failure
@@ -334,7 +397,7 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	}
 
 	// Determine agent type and last prompt from session
-	var agentType agent.AgentType
+	var agentType types.AgentType
 	var lastPrompt string
 	if len(sessionsWithContent) > 0 {
 		firstSession := sessionsWithContent[0]
@@ -347,27 +410,47 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	// Prepare prompt for display: collapse newlines/whitespace, then truncate (rune-safe)
 	displayPrompt := stringutil.TruncateRunes(stringutil.CollapseWhitespace(lastPrompt), 80, "...")
 
+	// Load commit_linking setting to decide whether to prompt
+	commitLinking := settings.CommitLinkingPrompt // safe default
+	if stngs, loadErr := settings.Load(ctx); loadErr == nil {
+		commitLinking = stngs.GetCommitLinking()
+	}
+
 	// Add trailer differently based on commit source
 	switch source {
 	case "message":
-		// Using -m or -F: ask user interactively whether to add trailer
-		// (comments won't be stripped by git in this mode)
+		// Using -m or -F: behavior depends on commit_linking setting
+		if commitLinking == settings.CommitLinkingAlways {
+			// Auto-link: add trailer without prompting
+			message = addCheckpointTrailer(message, checkpointID)
+		} else {
+			// Prompt mode: ask user interactively whether to add trailer
+			// (comments won't be stripped by git in this mode)
+			header := "Entire: Active " + string(agentType) + " session detected"
+			var details []string
+			if displayPrompt != "" {
+				details = append(details, "Last prompt: "+displayPrompt)
+			}
 
-		// Build context string for interactive prompt
-		var promptContext string
-		if displayPrompt != "" {
-			promptContext = "You have an active " + string(agentType) + " session.\nLast Prompt: " + displayPrompt
+			result := askConfirmTTY(header, details, "Link this commit to session context?", true)
+			if result == ttyConfirmNo {
+				// User declined - don't add trailer
+				logging.Debug(logCtx, "prepare-commit-msg: user declined trailer",
+					slog.String("strategy", "manual-commit"),
+					slog.String("source", source),
+				)
+				return nil
+			}
+			if result == ttyConfirmAlways {
+				// User chose "always" - persist to settings.local.json (non-fatal if it fails)
+				if saveErr := saveCommitLinkingAlways(ctx); saveErr != nil {
+					logging.Warn(logCtx, "prepare-commit-msg: failed to save commit_linking=always",
+						slog.String("error", saveErr.Error()),
+					)
+				}
+			}
+			message = addCheckpointTrailer(message, checkpointID)
 		}
-
-		if !askConfirmTTY("Link this commit to "+string(agentType)+" session context?", promptContext, true) {
-			// User declined - don't add trailer
-			logging.Debug(logCtx, "prepare-commit-msg: user declined trailer",
-				slog.String("strategy", "manual-commit"),
-				slog.String("source", source),
-			)
-			return nil
-		}
-		message = addCheckpointTrailer(message, checkpointID)
 	default:
 		// Normal editor flow: add trailer with explanatory comment (will be stripped by git)
 		message = addCheckpointTrailerWithComment(message, checkpointID, string(agentType), displayPrompt)
@@ -620,7 +703,7 @@ func (h *postCommitActionHandler) HandleWarnStaleSession(_ *session.State) error
 // During rebase/cherry-pick/revert operations, phase transitions are skipped entirely.
 //
 
-func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error {
+func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:unparam // error return is part of the hook contract; callers check it
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 
 	repo, err := OpenRepository(ctx)
@@ -717,9 +800,10 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error {
 			continue
 		}
 		if err := deleteShadowBranch(ctx, repo, shadowBranchName); err != nil {
-			fmt.Fprintf(os.Stderr, "[entire] Warning: failed to clean up %s: %v\n", shadowBranchName, err)
+			logging.Warn(logCtx, "failed to clean up shadow branch",
+				slog.String("shadow_branch", shadowBranchName),
+				slog.String("error", err.Error()))
 		} else {
-			fmt.Fprintf(os.Stderr, "[entire] Cleaned up shadow branch: %s\n", shadowBranchName)
 			logging.Info(logCtx, "shadow branch deleted",
 				slog.String("strategy", "manual-commit"),
 				slog.String("shadow_branch", shadowBranchName),
@@ -831,7 +915,8 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	}
 
 	if err := TransitionAndLog(ctx, state, session.EventGitCommit, *transitionCtx, handler); err != nil {
-		fmt.Fprintf(os.Stderr, "[entire] Warning: post-commit action handler error: %v\n", err)
+		logging.Warn(logCtx, "post-commit action handler error",
+			slog.String("error", err.Error()))
 	}
 
 	// Record checkpoint ID for ACTIVE sessions so HandleTurnEnd can finalize
@@ -869,7 +954,9 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 
 	// Save the updated state
 	if err := s.saveSessionState(ctx, state); err != nil {
-		fmt.Fprintf(os.Stderr, "[entire] Warning: failed to update session state: %v\n", err)
+		logging.Warn(logCtx, "failed to update session state",
+			slog.String("session_id", state.SessionID),
+			slog.String("error", err.Error()))
 	}
 
 	// Only preserve shadow branch for active sessions that were NOT condensed.
@@ -895,9 +982,7 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 	result, err := s.CondenseSession(ctx, repo, checkpointID, state, committedFiles, opts...)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[entire] Warning: condensation failed for session %s: %v\n",
-			state.SessionID, err)
-		logging.Warn(logCtx, "post-commit: condensation failed",
+		logging.Warn(logCtx, "condensation failed",
 			slog.String("session_id", state.SessionID),
 			slog.String("error", err.Error()),
 		)
@@ -922,15 +1007,9 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 	// Save checkpoint ID so subsequent commits can reuse it (e.g., amend restores trailer)
 	state.LastCheckpointID = checkpointID
 
-	shortID := state.SessionID
-	if len(shortID) > 8 {
-		shortID = shortID[:8]
-	}
-	fmt.Fprintf(os.Stderr, "[entire] Condensed session %s: %s (%d checkpoints)\n",
-		shortID, result.CheckpointID, result.CheckpointsCount)
-
 	logging.Info(logCtx, "session condensed",
 		slog.String("strategy", "manual-commit"),
+		slog.String("session_id", state.SessionID),
 		slog.String("checkpoint_id", result.CheckpointID.String()),
 		slog.Int("checkpoints_condensed", result.CheckpointsCount),
 		slog.Int("transcript_lines", result.TotalTranscriptLines),
@@ -997,7 +1076,9 @@ func (s *ManualCommitStrategy) postCommitUpdateBaseCommitOnly(ctx context.Contex
 			)
 			state.BaseCommit = newHead
 			if err := s.saveSessionState(ctx, state); err != nil {
-				fmt.Fprintf(os.Stderr, "[entire] Warning: failed to update session state: %v\n", err)
+				logging.Warn(logCtx, "failed to update session state",
+					slog.String("session_id", state.SessionID),
+					slog.String("error", err.Error()))
 			}
 		}
 	}
@@ -1530,7 +1611,7 @@ func addCheckpointTrailerWithComment(message string, checkpointID id.CheckpointI
 // agentType is the human-readable name of the agent (e.g., "Claude Code").
 // transcriptPath is the path to the live transcript file (for mid-session commit detection).
 // userPrompt is the user's prompt text (stored truncated as FirstPrompt for display).
-func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID string, agentType agent.AgentType, transcriptPath string, userPrompt string) error {
+func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID string, agentType types.AgentType, transcriptPath string, userPrompt string) error {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open git repository: %w", err)
@@ -1545,7 +1626,9 @@ func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID 
 	if state != nil && state.BaseCommit != "" {
 		// Session is fully initialized — apply phase transition for TurnStart.
 		if transErr := TransitionAndLog(ctx, state, session.EventTurnStart, session.TransitionContext{}, session.NoOpActionHandler{}); transErr != nil {
-			fmt.Fprintf(os.Stderr, "[entire] Warning: turn start transition failed: %v\n", transErr)
+			logging.Warn(logging.WithComponent(ctx, "hooks"), "turn start transition failed",
+				slog.String("session_id", sessionID),
+				slog.String("error", transErr.Error()))
 		}
 
 		// Generate a new TurnID for each turn (correlates carry-forward checkpoints)
@@ -1606,7 +1689,9 @@ func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID 
 
 	// Apply phase transition: new session starts as ACTIVE.
 	if transErr := TransitionAndLog(ctx, state, session.EventTurnStart, session.TransitionContext{}, session.NoOpActionHandler{}); transErr != nil {
-		fmt.Fprintf(os.Stderr, "[entire] Warning: turn start transition failed: %v\n", transErr)
+		logging.Warn(logging.WithComponent(ctx, "hooks"), "turn start transition failed",
+			slog.String("session_id", sessionID),
+			slog.String("error", transErr.Error()))
 	}
 
 	// Calculate attribution for pre-prompt edits
@@ -1617,7 +1702,8 @@ func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID 
 		return fmt.Errorf("failed to save attribution: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Initialized shadow session: %s\n", sessionID)
+	logging.Info(logging.WithComponent(ctx, "hooks"), "initialized shadow session",
+		slog.String("session_id", sessionID))
 	return nil
 }
 
@@ -1786,7 +1872,7 @@ func (s *ManualCommitStrategy) getLastPrompt(ctx context.Context, repo *git.Repo
 // (from prompt to stop event), ensuring every checkpoint has the full context.
 //
 
-func (s *ManualCommitStrategy) HandleTurnEnd(ctx context.Context, state *SessionState) error {
+func (s *ManualCommitStrategy) HandleTurnEnd(ctx context.Context, state *SessionState) error { //nolint:unparam // error return is part of the hook contract; callers check it
 	// Finalize all checkpoints from this turn with the full transcript.
 	//
 	// IMPORTANT: This is best-effort - errors are logged but don't fail the hook.

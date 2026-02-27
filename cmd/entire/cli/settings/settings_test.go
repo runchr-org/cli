@@ -160,12 +160,36 @@ func TestLoad_AcceptsDeprecatedStrategyField(t *testing.T) {
 	}
 }
 
-func TestFilesWithDeprecatedStrategy(t *testing.T) {
+func TestGetCommitLinking_DefaultsToPrompt(t *testing.T) {
+	s := &EntireSettings{Enabled: true}
+	if got := s.GetCommitLinking(); got != CommitLinkingPrompt {
+		t.Errorf("GetCommitLinking() = %q, want %q", got, CommitLinkingPrompt)
+	}
+}
+
+func TestGetCommitLinking_ReturnsExplicitValue(t *testing.T) {
+	s := &EntireSettings{Enabled: true, CommitLinking: CommitLinkingAlways}
+	if got := s.GetCommitLinking(); got != CommitLinkingAlways {
+		t.Errorf("GetCommitLinking() = %q, want %q", got, CommitLinkingAlways)
+	}
+
+	s.CommitLinking = CommitLinkingPrompt
+	if got := s.GetCommitLinking(); got != CommitLinkingPrompt {
+		t.Errorf("GetCommitLinking() = %q, want %q", got, CommitLinkingPrompt)
+	}
+}
+
+func TestLoad_CommitLinkingField(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	entireDir := filepath.Join(tmpDir, ".entire")
 	if err := os.MkdirAll(entireDir, 0o755); err != nil {
 		t.Fatalf("failed to create .entire directory: %v", err)
+	}
+
+	settingsFile := filepath.Join(entireDir, "settings.json")
+	if err := os.WriteFile(settingsFile, []byte(`{"enabled": true, "commit_linking": "always"}`), 0o644); err != nil {
+		t.Fatalf("failed to write settings file: %v", err)
 	}
 
 	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
@@ -174,30 +198,50 @@ func TestFilesWithDeprecatedStrategy(t *testing.T) {
 
 	t.Chdir(tmpDir)
 
-	// No strategy field → empty result
-	if err := os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{"enabled": true}`), 0o644); err != nil {
-		t.Fatal(err)
+	s, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if files := FilesWithDeprecatedStrategy(context.Background()); len(files) != 0 {
-		t.Errorf("expected no deprecated files, got %v", files)
+	if s.CommitLinking != CommitLinkingAlways {
+		t.Errorf("CommitLinking = %q, want %q", s.CommitLinking, CommitLinkingAlways)
+	}
+	if got := s.GetCommitLinking(); got != CommitLinkingAlways {
+		t.Errorf("GetCommitLinking() = %q, want %q", got, CommitLinkingAlways)
+	}
+}
+
+func TestMergeJSON_CommitLinking(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	entireDir := filepath.Join(tmpDir, ".entire")
+	if err := os.MkdirAll(entireDir, 0o755); err != nil {
+		t.Fatalf("failed to create .entire directory: %v", err)
 	}
 
-	// Add strategy to project settings
-	if err := os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{"enabled": true, "strategy": "auto-commit"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	files := FilesWithDeprecatedStrategy(context.Background())
-	if len(files) != 1 || files[0] != EntireSettingsFile {
-		t.Errorf("expected [%s], got %v", EntireSettingsFile, files)
+	// Base settings without commit_linking
+	settingsFile := filepath.Join(entireDir, "settings.json")
+	if err := os.WriteFile(settingsFile, []byte(`{"enabled": true}`), 0o644); err != nil {
+		t.Fatalf("failed to write settings file: %v", err)
 	}
 
-	// Also add strategy to local settings
-	if err := os.WriteFile(filepath.Join(entireDir, "settings.local.json"), []byte(`{"strategy": "manual-commit"}`), 0o644); err != nil {
-		t.Fatal(err)
+	// Local override with commit_linking
+	localFile := filepath.Join(entireDir, "settings.local.json")
+	if err := os.WriteFile(localFile, []byte(`{"commit_linking": "always"}`), 0o644); err != nil {
+		t.Fatalf("failed to write local settings file: %v", err)
 	}
-	files = FilesWithDeprecatedStrategy(context.Background())
-	if len(files) != 2 {
-		t.Errorf("expected 2 deprecated files, got %v", files)
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
+		t.Fatalf("failed to create .git directory: %v", err)
+	}
+
+	t.Chdir(tmpDir)
+
+	s, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.CommitLinking != CommitLinkingAlways {
+		t.Errorf("CommitLinking = %q, want %q (expected local override)", s.CommitLinking, CommitLinkingAlways)
 	}
 }
 

@@ -109,7 +109,7 @@ Without --force, prompts for confirmation before deleting.`,
 }
 
 // runResetSession handles the --session flag: reset a single session.
-func runResetSession(ctx context.Context, cmd *cobra.Command, strat strategy.Strategy, sessionID string, force bool) error {
+func runResetSession(ctx context.Context, cmd *cobra.Command, strat *strategy.ManualCommitStrategy, sessionID string, force bool) error {
 	// Verify the session exists
 	state, err := strategy.LoadSessionState(ctx, sessionID)
 	if err != nil {
