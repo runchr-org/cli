@@ -409,13 +409,11 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	// Determine agent type and last prompt from session
 	var agentType types.AgentType
 	var lastPrompt string
-	if len(sessionsWithContent) > 0 {
-		firstSession := sessionsWithContent[0]
-		if firstSession.AgentType != "" {
-			agentType = firstSession.AgentType
-		}
-		lastPrompt = s.getLastPrompt(ctx, repo, firstSession)
+	firstSession := sessionsWithContent[0]
+	if firstSession.AgentType != "" {
+		agentType = firstSession.AgentType
 	}
+	lastPrompt = s.getLastPrompt(ctx, repo, firstSession)
 
 	// Prepare prompt for display: collapse newlines/whitespace, then truncate (rune-safe)
 	displayPrompt := stringutil.TruncateRunes(stringutil.CollapseWhitespace(lastPrompt), 80, "...")

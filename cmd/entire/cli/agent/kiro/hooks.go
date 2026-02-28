@@ -89,7 +89,7 @@ func (k *KiroAgent) InstallHooks(ctx context.Context, localDev bool, force bool)
 		return 0, fmt.Errorf("failed to write hooks config: %w", err)
 	}
 
-	return 5, nil
+	return len(k.HookNames()), nil
 }
 
 // UninstallHooks removes the Entire hooks config file.

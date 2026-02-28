@@ -161,6 +161,13 @@ func (k *KiroAgent) GetHookConfigPath() string {
 	return filepath.Join(".kiro", hooksDir, HooksFileName)
 }
 
+// --- SQLite helpers ---
+
+// escapeSQLString escapes single quotes for use in SQLite string literals.
+func escapeSQLString(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
+}
+
 // --- SQLite session resolution ---
 
 // dbPath returns the path to Kiro's SQLite database.
@@ -194,7 +201,7 @@ func (k *KiroAgent) querySessionID(ctx context.Context, cwd string) (string, err
 
 	query := fmt.Sprintf(
 		"SELECT json_extract(value, '$.conversation_id') FROM conversations_v2 WHERE key = '%s' ORDER BY updated_at DESC LIMIT 1",
-		strings.ReplaceAll(cwd, "'", "''"),
+		escapeSQLString(cwd),
 	)
 
 	cmd := exec.CommandContext(ctx, "sqlite3", "-json", db, query)
@@ -238,10 +245,7 @@ func (k *KiroAgent) ensureCachedTranscript(ctx context.Context, cwd, sessionID s
 
 	// Fetch fresh transcript from SQLite on every call (transcript grows during session)
 	if os.Getenv("ENTIRE_TEST_KIRO_MOCK_DB") == "1" {
-		// In test mode, return cache path if it exists, or empty
-		if _, err := os.Stat(cachePath); err == nil {
-			return cachePath, nil
-		}
+		// In test mode, return the expected cache path without hitting SQLite.
 		return cachePath, nil
 	}
 
@@ -252,7 +256,7 @@ func (k *KiroAgent) ensureCachedTranscript(ctx context.Context, cwd, sessionID s
 
 	query := fmt.Sprintf(
 		"SELECT value FROM conversations_v2 WHERE key = '%s' ORDER BY updated_at DESC LIMIT 1",
-		strings.ReplaceAll(cwd, "'", "''"),
+		escapeSQLString(cwd),
 	)
 
 	cmd := exec.CommandContext(ctx, "sqlite3", db, query)
