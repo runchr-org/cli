@@ -1,17 +1,6 @@
 {
   "checkpoints": [
     {
-      "checkpoint_id": "6c28847c18ef",
-      "commit_sha": "8b01d8e0315c2d38edd4916e69d268ecc2f9064d",
-      "created_at": "2026-03-02T20:53:53.616057Z"
-    },
-    {
-      "checkpoint_id": "6c28847c18ef",
-      "commit_sha": "8b01d8e0315c2d38edd4916e69d268ecc2f9064d",
-      "created_at": "2026-03-02T20:53:53.581738Z",
-      "summary": "commit this"
-    },
-    {
       "checkpoint_id": "4cb9291bb58a",
       "commit_sha": "cef3938d6f9a678a364567482033a219dc0d22db",
       "created_at": "2026-03-02T20:22:27+01:00",
