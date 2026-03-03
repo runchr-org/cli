@@ -22,6 +22,7 @@ Collect these before starting (ask the user if not provided):
 | `AGENT_NAME` | Human-readable name (e.g., "Gemini CLI") | User provides |
 | `AGENT_PACKAGE` | Go package dir name — **no hyphens** | Lowercase, remove hyphens/spaces |
 | `AGENT_KEY` | Registry key for `agent.Register()` and `entire enable` | Check existing patterns in `cmd/entire/cli/agent/registry.go` |
+| `AGENT_SLUG` | Filesystem/URL-safe slug (kebab-case) used in E2E runner filenames and script names | Kebab-case of agent name; align with existing entries in `e2e/agents/` |
 | `AGENT_BIN` | CLI binary name | `command -v <binary>` |
 | `LIVE_COMMAND` | Full command to launch agent | User provides |
 | `EVENTS_OR_UNKNOWN` | Known hook event names, or "unknown" | From agent docs or "unknown" |

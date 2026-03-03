@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -50,6 +51,14 @@ func hasTTY() bool {
 		return false
 	}
 
+	// GIT_TERMINAL_PROMPT=0 disables git's own terminal prompts.
+	// Factory AI Droid (and other non-interactive environments like CI) set this.
+	// Since we run as a git hook, respect it — if the environment doesn't want
+	// git prompting, our hook shouldn't prompt either.
+	if os.Getenv("GIT_TERMINAL_PROMPT") == "0" {
+		return false
+	}
+
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return false
@@ -58,6 +67,7 @@ func hasTTY() bool {
 	return true
 }
 
+<<<<<<< HEAD
 // agentUsesTerminal returns true for agents that run inside a terminal emulator
 // (e.g., Kiro runs in tmux). These agents have hasTTY()=true even when the agent
 // itself is committing, so the no-TTY fast path doesn't catch them. This lets the
@@ -68,23 +78,27 @@ func agentUsesTerminal(agentType types.AgentType) bool {
 
 // ttyConfirmResult represents the outcome of a TTY confirmation prompt.
 type ttyConfirmResult int
+=======
+// ttyResult represents the outcome of a TTY confirmation prompt.
+type ttyResult int
+>>>>>>> main
 
 const (
-	ttyConfirmYes    ttyConfirmResult = iota // User confirmed (y/yes/enter with default=yes)
-	ttyConfirmNo                             // User declined (n/no)
-	ttyConfirmAlways                         // User chose "always" (a/always)
+	ttyResultLink       ttyResult = iota // Link: add the checkpoint trailer
+	ttyResultSkip                        // Skip: don't add the trailer
+	ttyResultLinkAlways                  // Link and remember: add trailer + save "always" preference
 )
 
-// askConfirmTTY prompts the user for a yes/no/always confirmation via /dev/tty.
-// This works even when stdin is redirected (e.g., git commit -m).
-// Returns ttyConfirmYes, ttyConfirmNo, or ttyConfirmAlways.
-// If TTY is unavailable, returns ttyConfirmYes when defaultYes is true, ttyConfirmNo otherwise.
+// askConfirmTTY prompts the user via /dev/tty whether to link a commit to session context.
+// This requires a controlling terminal — callers must check hasTTY() first and handle
+// the no-TTY case (agent subprocesses, CI) themselves.
+//
 // header is displayed as the first line (e.g., "Entire: Active Claude Code session").
 // detail lines are displayed indented below the header.
-func askConfirmTTY(header string, details []string, prompt string, defaultYes bool) ttyConfirmResult {
-	defaultResult := ttyConfirmNo
+func askConfirmTTY(header string, details []string, prompt string, defaultYes bool) ttyResult {
+	defaultResult := ttyResultSkip
 	if defaultYes {
-		defaultResult = ttyConfirmYes
+		defaultResult = ttyResultLink
 	}
 
 	// In test mode, don't try to interact with the real TTY — just use the default.
@@ -94,18 +108,11 @@ func askConfirmTTY(header string, details []string, prompt string, defaultYes bo
 		return defaultResult
 	}
 
-	// Gemini CLI sets GEMINI_CLI=1 when running shell commands (including git commit).
-	// The agent can't respond to TTY prompts, so use the default to avoid hanging.
-	// See: https://geminicli.com/docs/tools/shell/
-	if os.Getenv("GEMINI_CLI") != "" {
-		return defaultResult
-	}
-
-	// Open /dev/tty for both reading and writing
+	// Open /dev/tty for both reading and writing.
 	// This is the controlling terminal, which works even when stdin/stderr are redirected
+	// (e.g., human runs git commit -m where stdin is not a pipe).
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		// Can't open TTY (e.g., running in CI), use default
 		return defaultResult
 	}
 	defer tty.Close()
@@ -134,11 +141,11 @@ func askConfirmTTY(header string, details []string, prompt string, defaultYes bo
 	response = strings.TrimSpace(strings.ToLower(response))
 	switch response {
 	case "y", "yes":
-		return ttyConfirmYes
+		return ttyResultLink
 	case "n", "no":
-		return ttyConfirmNo
+		return ttyResultSkip
 	case "a", "always":
-		return ttyConfirmAlways
+		return ttyResultLinkAlways
 	default:
 		// Empty or invalid input - use default
 		return defaultResult
@@ -440,13 +447,22 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	// Add trailer differently based on commit source
 	switch source {
 	case "message":
+<<<<<<< HEAD
 		// Using -m or -F: behavior depends on session phase, commit_linking setting
 		if anyActive || commitLinking == settings.CommitLinkingAlways {
 			// Auto-link: agent is running (can't prompt) or user chose "always"
+=======
+		// Using -m or -F: behavior depends on TTY availability and commit_linking setting
+		switch {
+		case !hasTTY():
+			// No TTY (agent subprocess, CI) — auto-link without prompting
+>>>>>>> main
 			message = addCheckpointTrailer(message, checkpointID)
-		} else {
-			// Prompt mode: ask user interactively whether to add trailer
-			// (comments won't be stripped by git in this mode)
+		case commitLinking == settings.CommitLinkingAlways:
+			// User previously chose "always" — auto-link without prompting
+			message = addCheckpointTrailer(message, checkpointID)
+		default:
+			// Human at terminal — prompt interactively
 			header := "Entire: Active " + string(agentType) + " session detected"
 			var details []string
 			if displayPrompt != "" {
@@ -454,16 +470,15 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 			}
 
 			result := askConfirmTTY(header, details, "Link this commit to session context?", true)
-			if result == ttyConfirmNo {
-				// User declined - don't add trailer
+			if result == ttyResultSkip {
 				logging.Debug(logCtx, "prepare-commit-msg: user declined trailer",
 					slog.String("strategy", "manual-commit"),
 					slog.String("source", source),
 				)
 				return nil
 			}
-			if result == ttyConfirmAlways {
-				// User chose "always" - persist to settings.local.json (non-fatal if it fails)
+			if result == ttyResultLinkAlways {
+				// Persist preference so future commits auto-link (non-fatal if it fails)
 				if saveErr := saveCommitLinkingAlways(ctx); saveErr != nil {
 					logging.Warn(logCtx, "prepare-commit-msg: failed to save commit_linking=always",
 						slog.String("error", saveErr.Error()),
@@ -806,6 +821,11 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 	committedFileSet := filesChangedInCommit(commit, headTree, parentTree)
 
 	for _, state := range sessions {
+		// Skip fully-condensed ended sessions — no work remains.
+		// These sessions only persist for LastCheckpointID (amend trailer reuse).
+		if state.FullyCondensed && state.Phase == session.PhaseEnded {
+			continue
+		}
 		s.postCommitProcessSession(ctx, repo, state, &transitionCtx, checkpointID,
 			head, commit, newHead, headTree, parentTree, committedFileSet,
 			shadowBranchesToDelete, uncondensedActiveOnBranch)
@@ -886,7 +906,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		hasNew = true
 	} else {
 		var contentErr error
-		hasNew, contentErr = s.sessionHasNewContent(ctx, repo, state, shadowTree)
+		hasNew, contentErr = s.sessionHasNewContent(ctx, repo, state, contentCheckOpts{shadowTree: shadowTree})
 		if contentErr != nil {
 			hasNew = true
 			logging.Debug(logCtx, "post-commit: error checking session content, assuming new content",
@@ -971,6 +991,13 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		if len(remainingFiles) > 0 {
 			s.carryForwardToNewShadowBranch(ctx, repo, state, remainingFiles)
 		}
+	}
+
+	// Mark ENDED sessions as fully condensed when no carry-forward remains.
+	// PostCommit will skip these sessions entirely on future commits.
+	// They persist only for LastCheckpointID (amend trailer restoration).
+	if handler.condensed && state.Phase == session.PhaseEnded && len(state.FilesTouched) == 0 {
+		state.FullyCondensed = true
 	}
 
 	// Save the updated state
@@ -1115,11 +1142,29 @@ func truncateHash(h string) string {
 
 // filterSessionsWithNewContent returns sessions that have new transcript content
 // beyond what was already condensed.
+// Computes the staged files list once and reuses it across all sessions to avoid
+// redundant `git diff --cached` calls (previously called up to 3 times per session).
 func (s *ManualCommitStrategy) filterSessionsWithNewContent(ctx context.Context, repo *git.Repository, sessions []*SessionState) []*SessionState {
 	var result []*SessionState
 
+	// Compute staged files once for all sessions.
+	// On error, pass nil — sessionHasNewContent treats nil stagedFiles as
+	// "unavailable" and skips overlap checks, falling through to other heuristics.
+	stagedFiles, err := getStagedFiles(ctx)
+	if err != nil {
+		logging.Debug(logging.WithComponent(ctx, "manual-commit"),
+			"filterSessionsWithNewContent: getStagedFiles failed, skipping overlap checks",
+			slog.String("error", err.Error()),
+		)
+		stagedFiles = nil
+	}
+
 	for _, state := range sessions {
-		hasNew, err := s.sessionHasNewContent(ctx, repo, state)
+		// Skip fully-condensed ended sessions — no new content possible.
+		if state.FullyCondensed && state.Phase == session.PhaseEnded {
+			continue
+		}
+		hasNew, err := s.sessionHasNewContent(ctx, repo, state, contentCheckOpts{stagedFiles: stagedFiles})
 		if err != nil {
 			// On error, include the session (fail open for hooks)
 			result = append(result, state)
@@ -1133,17 +1178,31 @@ func (s *ManualCommitStrategy) filterSessionsWithNewContent(ctx context.Context,
 	return result
 }
 
+// contentCheckOpts holds pre-computed values for sessionHasNewContent to avoid
+// redundant work across multiple sessions in a single hook invocation.
+type contentCheckOpts struct {
+	// stagedFiles is the pre-computed list of staged files (from getStagedFiles).
+	// nil means staged files are unavailable (error or PostCommit context where
+	// files are already committed) — callers skip overlap checks and fall through
+	// to other heuristics (e.g., transcript growth).
+	// Non-nil empty means successfully resolved but no files are staged.
+	stagedFiles []string
+
+	// shadowTree, when non-nil, is used directly to avoid redundant shadow branch
+	// resolution (the shadow ref/commit/tree were already resolved by the caller).
+	shadowTree *object.Tree
+}
+
 // sessionHasNewContent checks if a session has new transcript content
 // beyond what was already condensed.
-// When cachedShadowTree is non-nil, it is used directly to avoid redundant
-// shadow branch resolution (the shadow ref/commit/tree were already resolved by the caller).
-func (s *ManualCommitStrategy) sessionHasNewContent(ctx context.Context, repo *git.Repository, state *SessionState, cachedShadowTree ...*object.Tree) (bool, error) {
+// The opts parameter provides pre-computed values to avoid redundant work.
+func (s *ManualCommitStrategy) sessionHasNewContent(ctx context.Context, repo *git.Repository, state *SessionState, opts contentCheckOpts) (bool, error) {
 	logCtx := logging.WithComponent(ctx, "manual-commit")
 
 	// Use cached shadow tree if provided
 	var tree *object.Tree
-	if len(cachedShadowTree) > 0 && cachedShadowTree[0] != nil {
-		tree = cachedShadowTree[0]
+	if opts.shadowTree != nil {
+		tree = opts.shadowTree
 	} else {
 		// Resolve shadow branch from repo
 		shadowBranchName := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
@@ -1154,7 +1213,7 @@ func (s *ManualCommitStrategy) sessionHasNewContent(ctx context.Context, repo *g
 				slog.String("session_id", state.SessionID),
 				slog.String("shadow_branch", shadowBranchName),
 			)
-			return s.sessionHasNewContentFromLiveTranscript(ctx, repo, state)
+			return s.sessionHasNewContentFromLiveTranscript(ctx, state, opts.stagedFiles)
 		}
 
 		commit, err := repo.CommitObject(ref.Hash())
@@ -1191,14 +1250,13 @@ func (s *ManualCommitStrategy) sessionHasNewContent(ctx context.Context, repo *g
 		if len(state.FilesTouched) > 0 {
 			// Shadow branch has files from carry-forward - check if staged files overlap
 			// AND have matching content (content-aware check).
-			stagedFiles := getStagedFiles(repo)
-			if len(stagedFiles) > 0 {
+			if len(opts.stagedFiles) > 0 {
 				// PrepareCommitMsg context: check staged files overlap with content
-				result := stagedFilesOverlapWithContent(ctx, repo, tree, stagedFiles, state.FilesTouched)
+				result := stagedFilesOverlapWithContent(ctx, repo, tree, opts.stagedFiles, state.FilesTouched)
 				logging.Debug(logCtx, "sessionHasNewContent: no transcript, carry-forward with staged files",
 					slog.String("session_id", state.SessionID),
 					slog.Int("files_touched", len(state.FilesTouched)),
-					slog.Int("staged_files", len(stagedFiles)),
+					slog.Int("staged_files", len(opts.stagedFiles)),
 					slog.Bool("result", result),
 				)
 				return result, nil
@@ -1215,7 +1273,7 @@ func (s *ManualCommitStrategy) sessionHasNewContent(ctx context.Context, repo *g
 		logging.Debug(logCtx, "sessionHasNewContent: no transcript and no files touched, checking live transcript",
 			slog.String("session_id", state.SessionID),
 		)
-		return s.sessionHasNewContentFromLiveTranscript(ctx, repo, state)
+		return s.sessionHasNewContentFromLiveTranscript(ctx, state, opts.stagedFiles)
 	}
 
 	// Check if there's new content to condense. Two cases:
@@ -1224,7 +1282,7 @@ func (s *ManualCommitStrategy) sessionHasNewContent(ctx context.Context, repo *g
 	//
 	// For PrepareCommitMsg context, we verify staged files overlap with session's files
 	// using content-aware matching to detect reverted files.
-	// For PostCommit context, getStagedFiles() is empty (files already committed),
+	// For PostCommit context, stagedFiles is nil/empty (files already committed),
 	// so we return true and let the caller do the overlap check via filesOverlapWithContent.
 
 	hasTranscriptGrowth := transcriptLines > state.CheckpointTranscriptStart
@@ -1243,13 +1301,12 @@ func (s *ManualCommitStrategy) sessionHasNewContent(ctx context.Context, repo *g
 	}
 
 	// Check if staged files overlap with session's files with content-aware matching.
-	// This is primarily for PrepareCommitMsg; in PostCommit, stagedFiles is empty.
-	stagedFiles := getStagedFiles(repo)
-	if len(stagedFiles) > 0 {
-		result := stagedFilesOverlapWithContent(ctx, repo, tree, stagedFiles, state.FilesTouched)
+	// This is primarily for PrepareCommitMsg; in PostCommit, stagedFiles is nil/empty.
+	if len(opts.stagedFiles) > 0 {
+		result := stagedFilesOverlapWithContent(ctx, repo, tree, opts.stagedFiles, state.FilesTouched)
 		logging.Debug(logCtx, "sessionHasNewContent: staged files overlap check",
 			slog.String("session_id", state.SessionID),
-			slog.Int("staged_files", len(stagedFiles)),
+			slog.Int("staged_files", len(opts.stagedFiles)),
 			slog.Bool("result", result),
 		)
 		return result, nil
@@ -1279,8 +1336,10 @@ func (s *ManualCommitStrategy) sessionHasNewContent(ctx context.Context, repo *g
 // The overlap check ensures we don't add checkpoint trailers to commits that are
 // unrelated to the agent's recent changes.
 //
+// stagedFiles is the pre-computed list of staged files from the caller.
+//
 // This handles the scenario where the agent commits mid-session before Stop.
-func (s *ManualCommitStrategy) sessionHasNewContentFromLiveTranscript(ctx context.Context, repo *git.Repository, state *SessionState) (bool, error) {
+func (s *ManualCommitStrategy) sessionHasNewContentFromLiveTranscript(ctx context.Context, state *SessionState, stagedFiles []string) (bool, error) {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 
 	modifiedFiles, ok := s.extractNewModifiedFilesFromLiveTranscript(ctx, state)
@@ -1292,11 +1351,6 @@ func (s *ManualCommitStrategy) sessionHasNewContentFromLiveTranscript(ctx contex
 		slog.String("session_id", state.SessionID),
 		slog.Int("modified_files", len(modifiedFiles)),
 	)
-
-	// Check if any modified files overlap with currently staged files
-	// This ensures we only add checkpoint trailers to commits that include
-	// files the agent actually modified
-	stagedFiles := getStagedFiles(repo)
 
 	logging.Debug(logCtx, "live transcript check: comparing staged vs modified",
 		slog.String("session_id", state.SessionID),
@@ -1841,31 +1895,40 @@ func (s *ManualCommitStrategy) calculatePromptAttributionAtStart(
 	return result
 }
 
-// getStagedFiles returns a list of files staged for commit.
-func getStagedFiles(repo *git.Repository) []string {
-	worktree, err := repo.Worktree()
+// getStagedFiles returns a list of files staged for commit using native git CLI.
+// This is much faster than go-git's worktree.Status() which scans the entire
+// working tree. `git diff --cached --name-only` uses native git's optimized index
+// and filesystem monitors.
+//
+// Returns (non-nil empty slice, nil) when no files are staged — callers can
+// distinguish "no staged files" from "error resolving staged files" (nil, err).
+func getStagedFiles(ctx context.Context) ([]string, error) {
+	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("resolve worktree root: %w", err)
 	}
 
-	status, err := worktree.Status()
+	cmd := exec.CommandContext(ctx, "git", "diff", "--cached", "--name-only")
+	cmd.Dir = repoRoot
+	output, err := cmd.Output()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("git diff --cached: %w", err)
 	}
 
-	var staged []string
-	for path, fileStatus := range status {
-		// Check if file is staged (in index)
-		if fileStatus.Staging != git.Unmodified && fileStatus.Staging != git.Untracked {
-			staged = append(staged, path)
+	staged := []string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line != "" {
+			staged = append(staged, line)
 		}
 	}
-	return staged
+	return staged, nil
 }
 
 // getLastPrompt retrieves the most recent user prompt from a session's shadow branch.
+// Reads prompt.txt directly from the shadow branch tree instead of parsing the full
+// transcript (which involves token counting, context generation, etc.).
 // Returns empty string if no prompt can be retrieved.
-func (s *ManualCommitStrategy) getLastPrompt(ctx context.Context, repo *git.Repository, state *SessionState) string {
+func (s *ManualCommitStrategy) getLastPrompt(_ context.Context, repo *git.Repository, state *SessionState) string {
 	shadowBranchName := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
 	refName := plumbing.NewBranchReferenceName(shadowBranchName)
 	ref, err := repo.Reference(refName, true)
@@ -1873,16 +1936,49 @@ func (s *ManualCommitStrategy) getLastPrompt(ctx context.Context, repo *git.Repo
 		return ""
 	}
 
-	// Extract session data to get prompts for commit message generation
-	// Pass agent type to handle different transcript formats (JSONL for Claude, JSON for Gemini)
-	// Pass 0 for checkpointTranscriptStart since we're extracting all prompts, not calculating token usage
-	sessionData, err := s.extractSessionData(ctx, repo, ref.Hash(), state.SessionID, nil, state.AgentType, "", 0, state.Phase.IsActive())
-	if err != nil || len(sessionData.Prompts) == 0 {
+	commit, err := repo.CommitObject(ref.Hash())
+	if err != nil {
 		return ""
 	}
 
-	// Return the last prompt (most recent work before commit)
-	return sessionData.Prompts[len(sessionData.Prompts)-1]
+	tree, err := commit.Tree()
+	if err != nil {
+		return ""
+	}
+
+	// Read prompt.txt directly from the shadow branch tree.
+	// Prompts are separated by "\n\n---\n\n" — extract the last one.
+	metadataDir := paths.EntireMetadataDir + "/" + state.SessionID
+	promptPath := metadataDir + "/" + paths.PromptFileName
+	file, err := tree.File(promptPath)
+	if err != nil {
+		return ""
+	}
+
+	content, err := file.Contents()
+	if err != nil {
+		return ""
+	}
+
+	return extractLastPrompt(content)
+}
+
+// extractLastPrompt returns the last non-empty prompt from prompt.txt content.
+// Prompts are separated by "\n\n---\n\n".
+func extractLastPrompt(content string) string {
+	if content == "" {
+		return ""
+	}
+
+	prompts := strings.Split(content, "\n\n---\n\n")
+	// Iterate backwards to find the last non-empty prompt
+	for i := len(prompts) - 1; i >= 0; i-- {
+		cleaned := strings.TrimSpace(prompts[i])
+		if cleaned != "" && !isOnlySeparators(cleaned) {
+			return cleaned
+		}
+	}
+	return ""
 }
 
 // HandleTurnEnd dispatches strategy-specific actions emitted when an agent turn ends.

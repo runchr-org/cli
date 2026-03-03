@@ -84,7 +84,8 @@ type State struct {
 	//   - Cleared when session is reset (ResetSession deletes the state file entirely)
 	TurnCheckpointIDs []string `json:"turn_checkpoint_ids,omitempty"`
 
-	// LastInteractionTime is updated on every hook invocation.
+	// LastInteractionTime is updated on agent-interaction events (TurnStart,
+	// TurnEnd, SessionStop, Compaction) but NOT on git commit hooks.
 	// Used for stale session detection in "entire doctor".
 	LastInteractionTime *time.Time `json:"last_interaction_time,omitempty"`
 
@@ -113,6 +114,13 @@ type State struct {
 	// Used to restore the Entire-Checkpoint trailer on amend and to identify
 	// sessions that have been condensed at least once. Cleared on new prompt.
 	LastCheckpointID id.CheckpointID `json:"last_checkpoint_id,omitempty"`
+
+	// FullyCondensed indicates this session has been condensed and has no remaining
+	// carry-forward files. PostCommit skips fully-condensed sessions entirely.
+	// Set after successful condensation when no files remain for carry-forward
+	// and the session phase is ENDED. Cleared on session reactivation (ENDED →
+	// ACTIVE via TurnStart, or ENDED → IDLE via SessionStart) by ActionClearEndedAt.
+	FullyCondensed bool `json:"fully_condensed,omitempty"`
 
 	// AgentType identifies the agent that created this session (e.g., "Claude Code", "Gemini CLI", "Cursor")
 	AgentType types.AgentType `json:"agent_type,omitempty"`

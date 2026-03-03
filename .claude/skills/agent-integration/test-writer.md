@@ -177,7 +177,7 @@ After writing the runner code:
 1. **Lint check**: `mise run lint` — ensure no lint errors
 2. **Compile check**: `go test -c -tags=e2e ./e2e/tests` — compile-only with the build tag to verify the runner compiles and registers
 3. **Verify registration**: The runner's `init()` calls `Register()` and will be picked up by `ForEachAgent` in existing tests
-4. **Add mise task**: Remind the user to add a `test:e2e:${agent_slug}` task in `mise.toml` and update CI workflows
+4. **Add mise task**: Remind the user that E2E tests are run via `mise run test:e2e --agent ${agent_slug}` and to update CI workflows if needed
 5. **Next step**: The implement phase will run E2E tests against this runner — that's where failures are diagnosed and fixed
 
 ### Step 7: Commit
