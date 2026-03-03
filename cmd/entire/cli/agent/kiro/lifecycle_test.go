@@ -571,6 +571,48 @@ func TestSessionIDCaching_UserPromptSubmitGeneratesNewIDWhenCacheMissing(t *test
 	}
 }
 
+func TestParseStop_PlaceholderTranscript_WhenSQLiteUnavailable(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+	// Do NOT set ENTIRE_TEST_KIRO_MOCK_DB — SQLite will fail, triggering placeholder path.
+
+	ag := &KiroAgent{}
+
+	// First, agent-spawn to cache a session ID.
+	spawnInput := `{"hook_event_name":"agentSpawn","cwd":"` + tempDir + `"}`
+	spawnEvent, err := ag.ParseHookEvent(context.Background(), HookNameAgentSpawn, strings.NewReader(spawnInput))
+	if err != nil {
+		t.Fatalf("agent-spawn error: %v", err)
+	}
+
+	// Stop hook — SQLite unavailable, should create placeholder transcript.
+	stopInput := `{"hook_event_name":"stop","cwd":"` + tempDir + `"}`
+	stopEvent, err := ag.ParseHookEvent(context.Background(), HookNameStop, strings.NewReader(stopInput))
+	if err != nil {
+		t.Fatalf("stop error: %v", err)
+	}
+
+	// SessionRef must be non-empty (placeholder was created).
+	if stopEvent.SessionRef == "" {
+		t.Fatal("expected non-empty SessionRef from placeholder transcript")
+	}
+
+	// The placeholder file should exist and contain valid JSON.
+	data, err := os.ReadFile(stopEvent.SessionRef)
+	if err != nil {
+		t.Fatalf("failed to read placeholder transcript: %v", err)
+	}
+	if string(data) != "{}" {
+		t.Errorf("expected placeholder content %q, got %q", "{}", string(data))
+	}
+
+	// Verify session ID consistency.
+	if stopEvent.SessionID != spawnEvent.SessionID {
+		t.Errorf("stop session ID %q does not match spawn session ID %q",
+			stopEvent.SessionID, spawnEvent.SessionID)
+	}
+}
+
 func TestSessionIDCaching_StopFallsBackToUnknownWhenNoCacheAndNoSQLite(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)

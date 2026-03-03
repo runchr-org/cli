@@ -109,13 +109,40 @@ type Event struct {
 // with errors.Is and handle it gracefully.
 var ErrEmptyHookInput = errors.New("empty hook input")
 
+// stdinReadTimeout is how long ReadAndParseHookInput waits for stdin data
+// before treating the input as empty. IDEs like Kiro keep stdin pipes open
+// without sending EOF, so io.ReadAll blocks forever. Piped data is available
+// immediately, so 500ms is generous.
+const stdinReadTimeout = 500 * time.Millisecond
+
+// readResult holds the outcome of an io.ReadAll goroutine.
+type readResult struct {
+	data []byte
+	err  error
+}
+
 // ReadAndParseHookInput reads all bytes from stdin and unmarshals JSON into the given type.
 // This is a shared helper for agent ParseHookEvent implementations.
+//
+// A 500ms timeout prevents hanging when the IDE keeps stdin open without EOF.
 func ReadAndParseHookInput[T any](stdin io.Reader) (*T, error) {
-	data, err := io.ReadAll(stdin)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read hook input: %w", err)
+	ch := make(chan readResult, 1)
+	go func() {
+		data, err := io.ReadAll(stdin)
+		ch <- readResult{data, err}
+	}()
+
+	var data []byte
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			return nil, fmt.Errorf("failed to read hook input: %w", res.err)
+		}
+		data = res.data
+	case <-time.After(stdinReadTimeout):
+		return nil, ErrEmptyHookInput
 	}
+
 	if len(data) == 0 {
 		return nil, ErrEmptyHookInput
 	}

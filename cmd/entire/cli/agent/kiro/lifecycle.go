@@ -150,7 +150,14 @@ func (k *KiroAgent) parseStop(ctx context.Context, stdin io.Reader) (*agent.Even
 
 	// At stop, Kiro's SQLite transcript is available. Fetch and cache it
 	// under our stable session ID so lifecycle.go can read it.
-	sessionRef, _ := k.ensureCachedTranscript(ctx, cwd, sessionID) //nolint:errcheck // best-effort: sessionRef="" is a valid fallback
+	sessionRef, _ := k.ensureCachedTranscript(ctx, cwd, sessionID) //nolint:errcheck // best-effort: fall back to placeholder
+
+	// IDE mode: SQLite may not exist or be at a different path. Create a
+	// minimal placeholder transcript so the lifecycle handler can proceed
+	// (file-diff checkpoints still work without a real transcript).
+	if sessionRef == "" {
+		sessionRef = k.createPlaceholderTranscript(ctx, cwd, sessionID)
+	}
 
 	return &agent.Event{
 		Type:       agent.TurnEnd,
@@ -158,6 +165,30 @@ func (k *KiroAgent) parseStop(ctx context.Context, stdin io.Reader) (*agent.Even
 		SessionRef: sessionRef,
 		Timestamp:  time.Now(),
 	}, nil
+}
+
+// createPlaceholderTranscript writes a minimal JSON transcript to .entire/tmp/
+// so the lifecycle handler can proceed when the real transcript is unavailable
+// (e.g., Kiro IDE mode where SQLite is at a different path).
+func (k *KiroAgent) createPlaceholderTranscript(ctx context.Context, cwd, sessionID string) string {
+	repoRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		repoRoot = cwd
+	}
+	if repoRoot == "" {
+		return ""
+	}
+	cacheDir := filepath.Join(repoRoot, ".entire", "tmp")
+	cachePath := filepath.Join(cacheDir, sessionID+".json")
+	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
+		logging.Warn(ctx, "kiro: failed to create transcript cache dir", "err", err)
+		return ""
+	}
+	if err := os.WriteFile(cachePath, []byte("{}"), 0o600); err != nil {
+		logging.Warn(ctx, "kiro: failed to write placeholder transcript", "err", err)
+		return ""
+	}
+	return cachePath
 }
 
 // generateAndCacheSessionID creates a new random session ID and writes it
