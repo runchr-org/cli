@@ -16,6 +16,9 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
+// Compile-time interface assertion for TranscriptAnalyzer.
+var _ agent.TranscriptAnalyzer = (*KiroAgent)(nil)
+
 // Kiro hook names — these become CLI subcommands under `entire hooks kiro`.
 // Kiro uses camelCase hook names natively, but CLI subcommands use kebab-case.
 const (

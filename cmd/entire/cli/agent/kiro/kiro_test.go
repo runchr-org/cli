@@ -14,8 +14,9 @@ import (
 
 // Compile-time interface compliance checks.
 var (
-	_ agent.Agent       = (*KiroAgent)(nil)
-	_ agent.HookSupport = (*KiroAgent)(nil)
+	_ agent.Agent              = (*KiroAgent)(nil)
+	_ agent.HookSupport        = (*KiroAgent)(nil)
+	_ agent.TranscriptAnalyzer = (*KiroAgent)(nil)
 )
 
 func TestNewKiroAgent(t *testing.T) {

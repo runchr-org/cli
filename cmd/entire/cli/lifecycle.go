@@ -178,7 +178,7 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	// Early check: bail out quickly if the repo has no commits yet.
 	if repo, err := strategy.OpenRepository(ctx); err == nil && strategy.IsEmptyRepository(repo) {
 		logging.Info(logCtx, "skipping checkpoint - will activate after first commit")
-		return NewSilentError(strategy.ErrEmptyRepository)
+		return nil
 	}
 
 	// Create session metadata directory

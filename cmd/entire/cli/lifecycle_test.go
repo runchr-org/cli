@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -243,17 +242,9 @@ func TestHandleLifecycleTurnEnd_EmptyRepository(t *testing.T) {
 
 	err := handleLifecycleTurnEnd(context.Background(), ag, event)
 
-	// Should return a SilentError wrapping ErrEmptyRepository
-	if err == nil {
-		t.Error("expected error for empty repository, got nil")
-	}
-
-	var silentErr *SilentError
-	if !errors.As(err, &silentErr) {
-		t.Errorf("expected SilentError, got: %T", err)
-	}
-	if !errors.Is(silentErr.Unwrap(), strategy.ErrEmptyRepository) {
-		t.Errorf("expected ErrEmptyRepository, got: %v", silentErr.Unwrap())
+	// Should return nil (benign skip, not an error) so the hook exits 0
+	if err != nil {
+		t.Errorf("expected nil for empty repository skip, got: %v", err)
 	}
 }
 

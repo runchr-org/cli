@@ -161,6 +161,108 @@ func (k *KiroAgent) GetHookConfigPath() string {
 	return filepath.Join(".kiro", hooksDir, HooksFileName)
 }
 
+// --- TranscriptAnalyzer interface implementation ---
+
+// GetTranscriptPosition returns the number of history entries in a Kiro transcript.
+// Kiro uses JSON format with paired user+assistant history entries, so position
+// is the entry count. Returns 0 if the file doesn't exist, is empty, or is a
+// placeholder "{}".
+func (k *KiroAgent) GetTranscriptPosition(path string) (int, error) {
+	if path == "" {
+		return 0, nil
+	}
+
+	data, err := os.ReadFile(path) //nolint:gosec // Reading from controlled transcript path
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("failed to read transcript: %w", err)
+	}
+
+	if len(data) == 0 {
+		return 0, nil
+	}
+
+	t, err := parseTranscript(data)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse transcript: %w", err)
+	}
+
+	return len(t.History), nil
+}
+
+// ExtractModifiedFilesFromOffset extracts files modified since a given history index.
+// For Kiro (JSON format), offset is the starting history entry index.
+func (k *KiroAgent) ExtractModifiedFilesFromOffset(path string, startOffset int) (files []string, currentPosition int, err error) {
+	if path == "" {
+		return nil, 0, nil
+	}
+
+	data, readErr := os.ReadFile(path) //nolint:gosec // Reading from controlled transcript path
+	if readErr != nil {
+		if os.IsNotExist(readErr) {
+			return nil, 0, nil
+		}
+		return nil, 0, fmt.Errorf("failed to read transcript: %w", readErr)
+	}
+
+	if len(data) == 0 {
+		return nil, 0, nil
+	}
+
+	t, parseErr := parseTranscript(data)
+	if parseErr != nil {
+		return nil, 0, parseErr
+	}
+
+	totalEntries := len(t.History)
+
+	if startOffset >= totalEntries {
+		return nil, totalEntries, nil
+	}
+
+	modifiedFiles := extractModifiedFilesFromHistory(t.History[startOffset:])
+	return modifiedFiles, totalEntries, nil
+}
+
+// ExtractPrompts extracts user prompts from the transcript starting at the given offset.
+// Only Prompt-type user messages are returned; ToolUseResults entries are skipped.
+func (k *KiroAgent) ExtractPrompts(sessionRef string, fromOffset int) ([]string, error) {
+	data, err := os.ReadFile(sessionRef) //nolint:gosec // Path comes from agent hook input
+	if err != nil {
+		return nil, fmt.Errorf("failed to read transcript: %w", err)
+	}
+
+	t, parseErr := parseTranscript(data)
+	if parseErr != nil {
+		return nil, fmt.Errorf("failed to parse transcript: %w", parseErr)
+	}
+
+	var prompts []string
+	for i := fromOffset; i < len(t.History); i++ {
+		if prompt := extractUserPrompt(t.History[i].User.Content); prompt != "" {
+			prompts = append(prompts, prompt)
+		}
+	}
+	return prompts, nil
+}
+
+// ExtractSummary extracts the last assistant response as a session summary.
+func (k *KiroAgent) ExtractSummary(sessionRef string) (string, error) {
+	data, err := os.ReadFile(sessionRef) //nolint:gosec // Path comes from agent hook input
+	if err != nil {
+		return "", fmt.Errorf("failed to read transcript: %w", err)
+	}
+
+	t, parseErr := parseTranscript(data)
+	if parseErr != nil {
+		return "", fmt.Errorf("failed to parse transcript: %w", parseErr)
+	}
+
+	return extractLastAssistantResponse(t.History), nil
+}
+
 // --- SQLite helpers ---
 
 // escapeSQLString escapes single quotes for use in SQLite string literals.

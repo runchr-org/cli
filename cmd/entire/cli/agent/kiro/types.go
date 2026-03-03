@@ -1,5 +1,7 @@
 package kiro
 
+import "encoding/json"
+
 // hookInputRaw matches Kiro's hook stdin JSON payload.
 // All hooks receive the same structure; fields are populated based on the event.
 type hookInputRaw struct {
@@ -56,4 +58,63 @@ type kiroIDEHookWhen struct {
 type kiroIDEHookThen struct {
 	Type    string `json:"type"`
 	Command string `json:"command"`
+}
+
+// --- Transcript types ---
+// These types model the Kiro SQLite-cached conversation JSON.
+// The format uses paired user+assistant history entries with tagged unions
+// for content variants (Prompt vs ToolUseResults, Response vs ToolUse).
+
+// kiroTranscript is the top-level transcript structure cached from SQLite.
+type kiroTranscript struct {
+	ConversationID string             `json:"conversation_id"`
+	History        []kiroHistoryEntry `json:"history"`
+}
+
+// kiroHistoryEntry is a single user+assistant exchange in the conversation.
+type kiroHistoryEntry struct {
+	User      kiroUserMessage `json:"user"`
+	Assistant json.RawMessage `json:"assistant"`
+}
+
+// kiroUserMessage wraps the user's contribution in a history entry.
+type kiroUserMessage struct {
+	Content   json.RawMessage `json:"content"`
+	Timestamp string          `json:"timestamp,omitempty"`
+}
+
+// kiroPromptContent represents the {"Prompt": {"prompt": "..."}} user content variant.
+type kiroPromptContent struct {
+	Prompt struct {
+		Prompt string `json:"prompt"`
+	} `json:"Prompt"`
+}
+
+// kiroToolUseContent represents the {"ToolUse": {...}} assistant content variant.
+type kiroToolUseContent struct {
+	ToolUse kiroToolUsePayload `json:"ToolUse"`
+}
+
+// kiroToolUsePayload carries tool call details within a ToolUse assistant message.
+type kiroToolUsePayload struct {
+	MessageID string         `json:"message_id"`
+	ToolUses  []kiroToolCall `json:"tool_uses"`
+}
+
+// kiroResponseContent represents the {"Response": {...}} assistant content variant.
+type kiroResponseContent struct {
+	Response kiroResponsePayload `json:"Response"`
+}
+
+// kiroResponsePayload carries text content within a Response assistant message.
+type kiroResponsePayload struct {
+	MessageID string `json:"message_id"`
+	Content   string `json:"content"`
+}
+
+// kiroToolCall represents a single tool invocation within a ToolUse message.
+type kiroToolCall struct {
+	ID   string          `json:"id"`
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args"`
 }
