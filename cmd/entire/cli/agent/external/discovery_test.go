@@ -40,13 +40,33 @@ func makeInfoJSON(name string) string {
 }`
 }
 
-// NOTE: Tests in this file modify process-global state (os.Setenv, agent registry)
+// NOTE: Tests in this file modify process-global state (os.Setenv, os.Chdir, agent registry)
 // and therefore cannot use t.Parallel().
+
+// enableExternalAgents creates a temp repo with external_agents enabled in settings
+// and chdir's into it so that settings.Load can find the config.
+func enableExternalAgents(t *testing.T) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	entireDir := filepath.Join(tmpDir, ".entire")
+	if err := os.MkdirAll(entireDir, 0o755); err != nil {
+		t.Fatalf("create .entire: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{"enabled":true,"external_agents":true}`), 0o644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	t.Chdir(tmpDir)
+}
 
 func TestDiscoverAndRegister_FindsAgent(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
 	}
+
+	enableExternalAgents(t)
 
 	name := "disc-find"
 	dir := setupDiscoveryDir(t, name, makeInfoJSON(name))
@@ -67,6 +87,8 @@ func TestDiscoverAndRegister_Deduplication(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
 	}
+
+	enableExternalAgents(t)
 
 	name := "disc-dedup"
 	dir1 := setupDiscoveryDir(t, name, makeInfoJSON(name))
@@ -89,6 +111,8 @@ func TestDiscoverAndRegister_SkipsNameConflict(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
 	}
+
+	enableExternalAgents(t)
 
 	name := "disc-conflict"
 	// Pre-register an agent with the same name.
@@ -128,6 +152,8 @@ func TestDiscoverAndRegister_SkipsNonExecutable(t *testing.T) {
 		t.Skip("sh not available")
 	}
 
+	enableExternalAgents(t)
+
 	name := "disc-noexec"
 	dir := t.TempDir()
 	binPath := filepath.Join(dir, binaryPrefix+name)
@@ -148,6 +174,8 @@ func TestDiscoverAndRegister_SkipsNonExecutable(t *testing.T) {
 }
 
 func TestDiscoverAndRegister_SkipsDirectory(t *testing.T) {
+	enableExternalAgents(t)
+
 	name := "disc-dir"
 	dir := t.TempDir()
 
@@ -165,7 +193,40 @@ func TestDiscoverAndRegister_SkipsDirectory(t *testing.T) {
 	}
 }
 
+func TestDiscoverAndRegister_SkipsWhenDisabled(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	// Set up a repo WITHOUT external_agents enabled (default false)
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	entireDir := filepath.Join(tmpDir, ".entire")
+	if err := os.MkdirAll(entireDir, 0o755); err != nil {
+		t.Fatalf("create .entire: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{"enabled":true}`), 0o644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	t.Chdir(tmpDir)
+
+	name := "disc-disabled"
+	dir := setupDiscoveryDir(t, name, makeInfoJSON(name))
+	t.Setenv("PATH", dir)
+
+	DiscoverAndRegister(context.Background())
+
+	// Agent should NOT be registered because external_agents is false
+	_, err := agent.Get(types.AgentName(name))
+	if err == nil {
+		t.Error("expected agent to NOT be registered when external_agents is disabled")
+	}
+}
+
 func TestDiscoverAndRegister_EmptyPATH(t *testing.T) {
+	enableExternalAgents(t)
 	t.Setenv("PATH", "")
 
 	// Should return without error or panic.
@@ -176,6 +237,8 @@ func TestDiscoverAndRegister_UnreadableDir(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
 	}
+
+	enableExternalAgents(t)
 
 	name := "disc-unread"
 	goodDir := setupDiscoveryDir(t, name, makeInfoJSON(name))
@@ -195,6 +258,8 @@ func TestDiscoverAndRegister_SkipsInfoFailure(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
 	}
+
+	enableExternalAgents(t)
 
 	name := "disc-badjson"
 	dir := t.TempDir()

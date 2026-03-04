@@ -10,6 +10,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
 
 const binaryPrefix = "entire-agent-"
@@ -19,6 +20,11 @@ const binaryPrefix = "entire-agent-"
 // Binaries whose name conflicts with an already-registered agent are skipped.
 // Errors during discovery are logged but do not prevent other agents from loading.
 func DiscoverAndRegister(ctx context.Context) {
+	if !settings.IsExternalAgentsEnabled(ctx) {
+		logging.Debug(ctx, "external agent discovery disabled (external_agents not enabled in settings)")
+		return
+	}
+
 	pathEnv := os.Getenv("PATH")
 	if pathEnv == "" {
 		return
