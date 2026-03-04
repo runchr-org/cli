@@ -47,6 +47,10 @@ func NewTmuxSession(name string, dir string, unsetEnv []string, command string, 
 	// Keep the pane around after the command exits so we can capture error output.
 	setCmd := exec.Command("tmux", "set-option", "-t", name, "remain-on-exit", "on")
 	_ = setCmd.Run()
+
+	resizeCmd := exec.Command("tmux", "resize-window", "-t", name, "-x", "200", "-y", "50")
+	_ = resizeCmd.Run()
+
 	return s, nil
 }
 
