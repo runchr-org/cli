@@ -23,6 +23,8 @@ func main() {
 		err = cmdInfo()
 	case "detect":
 		err = cmdDetect()
+	case "get-session-id":
+		err = cmdGetSessionID()
 	case "get-session-dir":
 		err = runGetSessionDir()
 	case "resolve-session-file":
@@ -76,6 +78,22 @@ func cmdInfo() error {
 func cmdDetect() error {
 	return writeJSON(map[string]interface{}{
 		"present": true,
+	})
+}
+
+func cmdGetSessionID() error {
+	input, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return fmt.Errorf("failed to read stdin: %w", err)
+	}
+	var hookInput struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(input, &hookInput); err != nil {
+		return fmt.Errorf("failed to unmarshal hook input: %w", err)
+	}
+	return writeJSON(map[string]interface{}{
+		"session_id": hookInput.SessionID,
 	})
 }
 
