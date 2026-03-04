@@ -1,16 +1,10 @@
 {
   "checkpoints": [
     {
-      "checkpoint_id": "71e7a767d37f",
-      "commit_sha": "aaeab8f9310007a8dc70a43110656cc829815ba3",
-      "created_at": "2026-03-04T05:56:44.859234Z",
-      "summary": null
-    },
-    {
-      "checkpoint_id": "71e7a767d37f",
-      "commit_sha": "aaeab8f9310007a8dc70a43110656cc829815ba3",
-      "created_at": "2026-03-04T05:56:44.757427Z",
-      "summary": "yes, do it."
+      "checkpoint_id": "9f325be721aa",
+      "commit_sha": "7a7c625267ecd780efcca0b8af5c3e7a182719f9",
+      "created_at": "2026-03-04T16:24:19+11:00",
+      "summary": "fix: Restore IsActive guard and eliminate double PrepareTranscript"
     },
     {
       "checkpoint_id": "44959c8685c1",
