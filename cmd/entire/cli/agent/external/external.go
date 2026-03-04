@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -413,7 +414,7 @@ func (e *Agent) run(ctx context.Context, stdin []byte, args ...string) ([]byte, 
 	cmd.Stderr = &stderrBuf
 
 	if err := cmd.Run(); err != nil {
-		errMsg := stderrBuf.String()
+		errMsg := strings.TrimSpace(stderrBuf.String())
 		if errMsg != "" {
 			return nil, fmt.Errorf("%s: %s", args[0], errMsg)
 		}
