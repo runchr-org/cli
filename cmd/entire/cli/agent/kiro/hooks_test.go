@@ -704,6 +704,342 @@ func TestInstallHooks_Idempotent_IncludesIDEHooks(t *testing.T) {
 	}
 }
 
+// --- Trusted Commands Tests ---
+
+func TestInstallHooks_CreatesTrustedCommands(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	commands := readTrustedCommands(t, tempDir)
+	if len(commands) != 1 {
+		t.Fatalf("expected 1 trusted command, got %d: %v", len(commands), commands)
+	}
+	if commands[0] != prodTrustedCommand {
+		t.Errorf("trusted command = %q, want %q", commands[0], prodTrustedCommand)
+	}
+}
+
+func TestInstallHooks_TrustedCommands_PreservesExistingSettings(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	// Create existing .vscode/settings.json with other settings
+	vscodeDir := filepath.Join(tempDir, ".vscode")
+	if err := os.MkdirAll(vscodeDir, 0o750); err != nil {
+		t.Fatalf("failed to create .vscode dir: %v", err)
+	}
+	existing := `{
+  "editor.fontSize": 14,
+  "editor.tabSize": 2
+}
+`
+	if err := os.WriteFile(filepath.Join(vscodeDir, "settings.json"), []byte(existing), 0o600); err != nil {
+		t.Fatalf("failed to write existing settings: %v", err)
+	}
+
+	ag := &KiroAgent{}
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	// Verify trusted commands added
+	commands := readTrustedCommands(t, tempDir)
+	if len(commands) != 1 || commands[0] != prodTrustedCommand {
+		t.Errorf("trusted commands = %v, want [\"entire hooks *\"]", commands)
+	}
+
+	// Verify other settings preserved
+	settings := readVSCodeSettings(t, tempDir)
+	if _, ok := settings["editor.fontSize"]; !ok {
+		t.Error("editor.fontSize setting was not preserved")
+	}
+	if _, ok := settings["editor.tabSize"]; !ok {
+		t.Error("editor.tabSize setting was not preserved")
+	}
+}
+
+func TestInstallHooks_TrustedCommands_LocalDevMode(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+	_, err := ag.InstallHooks(context.Background(), true, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	commands := readTrustedCommands(t, tempDir)
+	expected := localDevCmdPrefix + "hooks *"
+	if len(commands) != 1 {
+		t.Fatalf("expected 1 trusted command, got %d: %v", len(commands), commands)
+	}
+	if commands[0] != expected {
+		t.Errorf("trusted command = %q, want %q", commands[0], expected)
+	}
+}
+
+func TestInstallHooks_TrustedCommands_Idempotent(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+
+	// First install
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("first InstallHooks() error = %v", err)
+	}
+
+	// Force second install to bypass the early-return check
+	_, err = ag.InstallHooks(context.Background(), false, true)
+	if err != nil {
+		t.Fatalf("second InstallHooks() error = %v", err)
+	}
+
+	// Should not have duplicated the entry
+	commands := readTrustedCommands(t, tempDir)
+	if len(commands) != 1 {
+		t.Errorf("expected 1 trusted command after second install, got %d: %v", len(commands), commands)
+	}
+}
+
+func TestInstallHooks_TrustedCommands_PreservesExistingTrustedCommands(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	// Create existing settings with user-added trusted commands
+	vscodeDir := filepath.Join(tempDir, ".vscode")
+	if err := os.MkdirAll(vscodeDir, 0o750); err != nil {
+		t.Fatalf("failed to create .vscode dir: %v", err)
+	}
+	existing := `{
+  "kiroAgent.trustedCommands": ["my-custom-tool *", "another-tool run"]
+}
+`
+	if err := os.WriteFile(filepath.Join(vscodeDir, "settings.json"), []byte(existing), 0o600); err != nil {
+		t.Fatalf("failed to write existing settings: %v", err)
+	}
+
+	ag := &KiroAgent{}
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	commands := readTrustedCommands(t, tempDir)
+	if len(commands) != 3 {
+		t.Fatalf("expected 3 trusted commands, got %d: %v", len(commands), commands)
+	}
+	// User commands should be preserved
+	if commands[0] != "my-custom-tool *" {
+		t.Errorf("commands[0] = %q, want %q", commands[0], "my-custom-tool *")
+	}
+	if commands[1] != "another-tool run" {
+		t.Errorf("commands[1] = %q, want %q", commands[1], "another-tool run")
+	}
+	if commands[2] != prodTrustedCommand {
+		t.Errorf("commands[2] = %q, want %q", commands[2], prodTrustedCommand)
+	}
+}
+
+func TestInstallHooks_TrustedCommands_IdempotencyCheckIncludesTrustedCommands(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+
+	// First install
+	count1, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("first InstallHooks() error = %v", err)
+	}
+	if count1 != 9 {
+		t.Errorf("first install count = %d, want 9", count1)
+	}
+
+	// Second install (idempotent — should return 0)
+	count2, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("second InstallHooks() error = %v", err)
+	}
+	if count2 != 0 {
+		t.Errorf("second install count = %d, want 0 (idempotent)", count2)
+	}
+
+	// Remove the trusted command from settings — simulates user deletion
+	settingsPath := filepath.Join(tempDir, ".vscode", "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{}`), 0o600); err != nil {
+		t.Fatalf("failed to clear settings: %v", err)
+	}
+
+	// Third install should detect missing trusted command and re-install
+	count3, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("third InstallHooks() error = %v", err)
+	}
+	if count3 != 9 {
+		t.Errorf("third install count = %d, want 9 (should re-install)", count3)
+	}
+}
+
+func TestUninstallHooks_RemovesTrustedCommands(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+
+	// Install
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	// Verify trusted commands exist
+	commands := readTrustedCommands(t, tempDir)
+	if len(commands) != 1 {
+		t.Fatalf("expected 1 trusted command before uninstall, got %d", len(commands))
+	}
+
+	// Uninstall
+	if err := ag.UninstallHooks(context.Background()); err != nil {
+		t.Fatalf("UninstallHooks() error = %v", err)
+	}
+
+	// The key should be removed (empty array → key deleted)
+	settings := readVSCodeSettings(t, tempDir)
+	if _, ok := settings[trustedCommandsKey]; ok {
+		t.Error("trustedCommands key should be removed after uninstall when no other commands remain")
+	}
+}
+
+func TestUninstallHooks_TrustedCommands_PreservesOtherSettings(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+
+	// Install hooks
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	// Add other settings to the file
+	settingsPath := filepath.Join(tempDir, ".vscode", "settings.json")
+	settings := readVSCodeSettings(t, tempDir)
+	settings["editor.fontSize"] = json.RawMessage(`14`)
+	output, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		t.Fatalf("failed to marshal settings: %v", err)
+	}
+	if err := os.WriteFile(settingsPath, append(output, '\n'), 0o600); err != nil {
+		t.Fatalf("failed to write settings: %v", err)
+	}
+
+	// Uninstall
+	if err := ag.UninstallHooks(context.Background()); err != nil {
+		t.Fatalf("UninstallHooks() error = %v", err)
+	}
+
+	// Other settings should remain
+	settingsAfter := readVSCodeSettings(t, tempDir)
+	if _, ok := settingsAfter["editor.fontSize"]; !ok {
+		t.Error("editor.fontSize setting was not preserved after uninstall")
+	}
+}
+
+func TestUninstallHooks_TrustedCommands_PreservesUserTrustedCommands(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	// Create settings with both user and Entire trusted commands
+	vscodeDir := filepath.Join(tempDir, ".vscode")
+	if err := os.MkdirAll(vscodeDir, 0o750); err != nil {
+		t.Fatalf("failed to create .vscode dir: %v", err)
+	}
+	existing := `{
+  "kiroAgent.trustedCommands": ["my-custom-tool *", "entire hooks *", "another-tool run"]
+}
+`
+	if err := os.WriteFile(filepath.Join(vscodeDir, "settings.json"), []byte(existing), 0o600); err != nil {
+		t.Fatalf("failed to write existing settings: %v", err)
+	}
+
+	// Also install CLI + IDE hooks so uninstall has something to remove
+	ag := &KiroAgent{}
+	_, err := ag.InstallHooks(context.Background(), false, true)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	// Uninstall
+	if err := ag.UninstallHooks(context.Background()); err != nil {
+		t.Fatalf("UninstallHooks() error = %v", err)
+	}
+
+	// User trusted commands should survive
+	commands := readTrustedCommands(t, tempDir)
+	if len(commands) != 2 {
+		t.Fatalf("expected 2 user trusted commands after uninstall, got %d: %v", len(commands), commands)
+	}
+	if commands[0] != "my-custom-tool *" {
+		t.Errorf("commands[0] = %q, want %q", commands[0], "my-custom-tool *")
+	}
+	if commands[1] != "another-tool run" {
+		t.Errorf("commands[1] = %q, want %q", commands[1], "another-tool run")
+	}
+}
+
+func TestUninstallHooks_TrustedCommands_NoSettingsFile(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+
+	// Should not error when .vscode/settings.json doesn't exist
+	err := ag.UninstallHooks(context.Background())
+	if err != nil {
+		t.Fatalf("UninstallHooks() should not error when no settings file exists: %v", err)
+	}
+}
+
+// --- Trusted Commands Helper Functions ---
+
+func readVSCodeSettings(t *testing.T, tempDir string) map[string]json.RawMessage {
+	t.Helper()
+	settingsPath := filepath.Join(tempDir, ".vscode", "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("failed to read .vscode/settings.json: %v", err)
+	}
+	var settings map[string]json.RawMessage
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("failed to parse .vscode/settings.json: %v", err)
+	}
+	return settings
+}
+
+func readTrustedCommands(t *testing.T, tempDir string) []string {
+	t.Helper()
+	settings := readVSCodeSettings(t, tempDir)
+	raw, ok := settings[trustedCommandsKey]
+	if !ok {
+		t.Fatal("kiroAgent.trustedCommands key not found in .vscode/settings.json")
+	}
+	var commands []string
+	if err := json.Unmarshal(raw, &commands); err != nil {
+		t.Fatalf("failed to parse kiroAgent.trustedCommands: %v", err)
+	}
+	return commands
+}
+
 // --- Internal helper functions ---
 
 func TestIsEntireHook(t *testing.T) {

@@ -31,6 +31,18 @@ const ideHookFileSuffix = ".kiro.hook"
 // ideHookVersion is the schema version for IDE hook files.
 const ideHookVersion = "1"
 
+// vscodeSettingsDir is the directory for VS Code settings.
+const vscodeSettingsDir = ".vscode"
+
+// vscodeSettingsFile is the settings file within .vscode.
+const vscodeSettingsFile = "settings.json"
+
+// trustedCommandsKey is the VS Code settings key for Kiro trusted commands.
+const trustedCommandsKey = "kiroAgent.trustedCommands"
+
+// prodTrustedCommand is the trusted command pattern for production installs.
+const prodTrustedCommand = "entire hooks *"
+
 // localDevCmdPrefix is the command prefix used for local development builds.
 const localDevCmdPrefix = "go run ${KIRO_PROJECT_DIR}/cmd/entire/main.go "
 
@@ -75,7 +87,10 @@ func (k *KiroAgent) InstallHooks(ctx context.Context, localDev bool, force bool)
 	if !force {
 		if existing, readErr := os.ReadFile(hooksPath); readErr == nil { //nolint:gosec // path constructed from repo root
 			var file kiroAgentFile
-			if json.Unmarshal(existing, &file) == nil && allHooksPresent(file.Hooks, localDev) && allIDEHooksPresent(worktreeRoot, localDev) {
+			if json.Unmarshal(existing, &file) == nil &&
+				allHooksPresent(file.Hooks, localDev) &&
+				allIDEHooksPresent(worktreeRoot, localDev) &&
+				trustedCommandsPresent(worktreeRoot, localDev) {
 				return 0, nil
 			}
 		}
@@ -119,6 +134,11 @@ func (k *KiroAgent) InstallHooks(ctx context.Context, localDev bool, force bool)
 		return 0, fmt.Errorf("failed to install IDE hooks: %w", err)
 	}
 
+	// Configure trusted commands in .vscode/settings.json
+	if err := installTrustedCommands(worktreeRoot, localDev); err != nil {
+		return 0, fmt.Errorf("failed to configure trusted commands: %w", err)
+	}
+
 	return len(k.HookNames()) + ideCount, nil
 }
 
@@ -141,6 +161,11 @@ func (k *KiroAgent) UninstallHooks(ctx context.Context) error {
 		if err := os.Remove(idePath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("failed to remove IDE hook %s: %w", def.Filename, err)
 		}
+	}
+
+	// Remove trusted commands from .vscode/settings.json
+	if err := uninstallTrustedCommands(worktreeRoot); err != nil {
+		return fmt.Errorf("failed to remove trusted commands: %w", err)
 	}
 
 	return nil
@@ -303,4 +328,157 @@ func anyIDEHookPresent(worktreeRoot string) bool {
 // isEntireIDEHook checks if an IDE hook file belongs to Entire.
 func isEntireIDEHook(hook kiroIDEHookFile) bool {
 	return strings.HasPrefix(hook.Name, "entire-") && isEntireHook(hook.Then.Command)
+}
+
+// trustedCommand returns the trusted command pattern for the given mode.
+func trustedCommand(localDev bool) string {
+	if localDev {
+		return localDevCmdPrefix + "hooks *"
+	}
+	return prodTrustedCommand
+}
+
+// isEntireTrustedCommand checks if a command string is an Entire trusted command.
+func isEntireTrustedCommand(cmd string) bool {
+	return cmd == prodTrustedCommand || cmd == localDevCmdPrefix+"hooks *"
+}
+
+// trustedCommandsPresent checks if the appropriate trusted command is in .vscode/settings.json.
+func trustedCommandsPresent(worktreeRoot string, localDev bool) bool {
+	settingsPath := filepath.Join(worktreeRoot, vscodeSettingsDir, vscodeSettingsFile)
+	data, err := os.ReadFile(settingsPath) //nolint:gosec // path constructed from repo root
+	if err != nil {
+		return false
+	}
+
+	var rawSettings map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawSettings); err != nil {
+		return false
+	}
+
+	raw, ok := rawSettings[trustedCommandsKey]
+	if !ok {
+		return false
+	}
+
+	var commands []string
+	if err := json.Unmarshal(raw, &commands); err != nil {
+		return false
+	}
+
+	want := trustedCommand(localDev)
+	for _, c := range commands {
+		if c == want {
+			return true
+		}
+	}
+	return false
+}
+
+// installTrustedCommands adds the Entire trusted command pattern to .vscode/settings.json.
+func installTrustedCommands(worktreeRoot string, localDev bool) error {
+	settingsPath := filepath.Join(worktreeRoot, vscodeSettingsDir, vscodeSettingsFile)
+
+	var rawSettings map[string]json.RawMessage
+
+	existingData, readErr := os.ReadFile(settingsPath) //nolint:gosec // path constructed from repo root
+	if readErr == nil {
+		if err := json.Unmarshal(existingData, &rawSettings); err != nil {
+			return fmt.Errorf("failed to parse %s: %w", vscodeSettingsFile, err)
+		}
+	} else {
+		rawSettings = make(map[string]json.RawMessage)
+	}
+
+	var commands []string
+	if raw, ok := rawSettings[trustedCommandsKey]; ok {
+		if err := json.Unmarshal(raw, &commands); err != nil {
+			return fmt.Errorf("failed to parse %s: %w", trustedCommandsKey, err)
+		}
+	}
+
+	want := trustedCommand(localDev)
+	for _, c := range commands {
+		if c == want {
+			return nil // already present
+		}
+	}
+
+	commands = append(commands, want)
+	raw, err := json.Marshal(commands)
+	if err != nil {
+		return fmt.Errorf("failed to marshal %s: %w", trustedCommandsKey, err)
+	}
+	rawSettings[trustedCommandsKey] = raw
+
+	if err := os.MkdirAll(filepath.Join(worktreeRoot, vscodeSettingsDir), 0o750); err != nil {
+		return fmt.Errorf("failed to create %s directory: %w", vscodeSettingsDir, err)
+	}
+
+	output, err := jsonutil.MarshalIndentWithNewline(rawSettings, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal %s: %w", vscodeSettingsFile, err)
+	}
+
+	if err := os.WriteFile(settingsPath, output, 0o600); err != nil {
+		return fmt.Errorf("failed to write %s: %w", vscodeSettingsFile, err)
+	}
+
+	return nil
+}
+
+// uninstallTrustedCommands removes Entire trusted command patterns from .vscode/settings.json.
+func uninstallTrustedCommands(worktreeRoot string) error {
+	settingsPath := filepath.Join(worktreeRoot, vscodeSettingsDir, vscodeSettingsFile)
+
+	data, err := os.ReadFile(settingsPath) //nolint:gosec // path constructed from repo root
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read %s: %w", vscodeSettingsFile, err)
+	}
+
+	var rawSettings map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawSettings); err != nil {
+		return fmt.Errorf("failed to parse %s: %w", vscodeSettingsFile, err)
+	}
+
+	raw, ok := rawSettings[trustedCommandsKey]
+	if !ok {
+		return nil
+	}
+
+	var commands []string
+	if err := json.Unmarshal(raw, &commands); err != nil {
+		return fmt.Errorf("failed to parse %s: %w", trustedCommandsKey, err)
+	}
+
+	filtered := make([]string, 0, len(commands))
+	for _, c := range commands {
+		if !isEntireTrustedCommand(c) {
+			filtered = append(filtered, c)
+		}
+	}
+
+	if len(filtered) == 0 {
+		delete(rawSettings, trustedCommandsKey)
+	} else {
+		raw, err := json.Marshal(filtered)
+		if err != nil {
+			return fmt.Errorf("failed to marshal %s: %w", trustedCommandsKey, err)
+		}
+		rawSettings[trustedCommandsKey] = raw
+	}
+
+	output, err := jsonutil.MarshalIndentWithNewline(rawSettings, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal %s: %w", vscodeSettingsFile, err)
+	}
+
+	if err := os.WriteFile(settingsPath, output, 0o600); err != nil {
+		return fmt.Errorf("failed to write %s: %w", vscodeSettingsFile, err)
+	}
+
+	return nil
 }
