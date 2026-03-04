@@ -4,10 +4,11 @@
   "base": "main",
   "title": "Add trails feature: branch-centric work tracking",
   "body": "",
-  "status": "in_progress",
+  "status": "merged",
   "author": "Daniel Adams",
   "assignees": [],
   "labels": [],
   "created_at": "2026-02-23T11:29:33.654614+01:00",
-  "updated_at": "2026-02-23T20:00:12.987414+01:00"
+  "updated_at": "2026-03-04T06:23:47.387Z",
+  "merged_at": "2026-03-04T06:23:47.387Z"
 }
