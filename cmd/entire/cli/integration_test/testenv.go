@@ -499,6 +499,42 @@ func (env *TestEnv) GitCommitWithMultipleSessions(message string, sessionIDs []s
 	}
 }
 
+// GitCommitWithMultipleCheckpoints creates a commit with multiple Entire-Checkpoint trailers.
+// This simulates a GitHub squash merge commit where multiple individual commits with
+// checkpoint trailers are combined into a single commit message.
+func (env *TestEnv) GitCommitWithMultipleCheckpoints(message string, checkpointIDs []string) {
+	env.T.Helper()
+
+	// Format message with multiple checkpoint trailers (simulating squash merge format)
+	var sb strings.Builder
+	sb.WriteString(message)
+	sb.WriteString("\n\n")
+	for _, cpID := range checkpointIDs {
+		sb.WriteString("Entire-Checkpoint: " + cpID + "\n")
+	}
+
+	repo, err := git.PlainOpen(env.RepoDir)
+	if err != nil {
+		env.T.Fatalf("failed to open git repo: %v", err)
+	}
+
+	worktree, err := repo.Worktree()
+	if err != nil {
+		env.T.Fatalf("failed to get worktree: %v", err)
+	}
+
+	_, err = worktree.Commit(sb.String(), &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Test User",
+			Email: "test@example.com",
+			When:  time.Now(),
+		},
+	})
+	if err != nil {
+		env.T.Fatalf("failed to commit: %v", err)
+	}
+}
+
 // GetHeadHash returns the current HEAD commit hash.
 func (env *TestEnv) GetHeadHash() string {
 	env.T.Helper()

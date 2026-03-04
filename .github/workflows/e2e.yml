@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [claude-code, opencode, gemini-cli, factoryai-droid, kiro]
+        agent: [claude-code, opencode, gemini-cli, factoryai-droid, cursor-cli, kiro]
 
     steps:
       - name: Checkout repository
@@ -41,6 +41,7 @@ jobs:
             opencode)    curl -fsSL https://opencode.ai/install | bash ;;
             gemini-cli)  npm install -g @google/gemini-cli ;;
             kiro)        curl -fsSL https://cli.kiro.dev/install | bash ;;
+            cursor-cli)  curl https://cursor.com/install -fsS | bash ;;
             factoryai-droid) curl -fsSL https://app.factory.ai/cli | sh ;;
           esac
           echo "$HOME/.local/bin" >> $GITHUB_PATH
@@ -56,6 +57,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
           AMAZON_Q_SIGV4: ${{ matrix.agent == 'kiro' && '1' || '' }}
           AWS_REGION: ${{ matrix.agent == 'kiro' && 'us-east-1' || '' }}
@@ -65,6 +67,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
           AMAZON_Q_SIGV4: ${{ matrix.agent == 'kiro' && '1' || '' }}
           AWS_REGION: ${{ matrix.agent == 'kiro' && 'us-east-1' || '' }}

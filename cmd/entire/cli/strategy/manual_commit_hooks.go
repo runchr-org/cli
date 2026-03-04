@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
@@ -23,6 +24,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
+	"github.com/entireio/cli/cmd/entire/cli/trail"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/redact"
 
@@ -607,7 +609,7 @@ type postCommitActionHandler struct {
 
 func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 	logCtx := logging.WithComponent(h.ctx, "checkpoint")
-	shouldCondense := h.shouldCondenseWithOverlapCheck(state.Phase.IsActive())
+	shouldCondense := h.shouldCondenseWithOverlapCheck(state.Phase.IsActive(), state.LastInteractionTime)
 
 	logging.Debug(logCtx, "post-commit: HandleCondense decision",
 		slog.String("session_id", state.SessionID),
@@ -630,7 +632,7 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 
 func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.State) error {
 	logCtx := logging.WithComponent(h.ctx, "checkpoint")
-	shouldCondense := len(state.FilesTouched) > 0 && h.shouldCondenseWithOverlapCheck(state.Phase.IsActive())
+	shouldCondense := len(state.FilesTouched) > 0 && h.shouldCondenseWithOverlapCheck(state.Phase.IsActive(), state.LastInteractionTime)
 
 	logging.Debug(logCtx, "post-commit: HandleCondenseIfFilesTouched decision",
 		slog.String("session_id", state.SessionID),
@@ -653,28 +655,26 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 }
 
 // shouldCondenseWithOverlapCheck returns true if the session should be condensed
-// into this commit. Requires both that hasNew is true AND that the session's files
-// overlap with the committed files with matching content.
-//
-// This prevents stale sessions (ACTIVE sessions where the agent was killed, or
-// ENDED/IDLE sessions with carry-forward files) from being condensed into every
-// unrelated commit.
-//
-// filesTouchedBefore is populated from:
-//   - state.FilesTouched for IDLE/ENDED sessions (set via SaveStep/SaveTaskStep -> mergeFilesTouched)
-//   - transcript extraction for ACTIVE sessions when FilesTouched is empty
-//
-// When filesTouchedBefore is empty:
-//   - For ACTIVE sessions: fail-open (trust hasNew) because the agent may be
-//     mid-turn before any files are saved to state.
-//   - For IDLE/ENDED sessions: return false because there are no files to
-//     overlap with the commit.
-func (h *postCommitActionHandler) shouldCondenseWithOverlapCheck(isActive bool) bool {
+// into this commit. Active sessions with recent interaction always condense
+// (bypasses overlap check). Stale ACTIVE and IDLE/ENDED sessions require
+// file overlap evidence between tracked files and committed files.
+func (h *postCommitActionHandler) shouldCondenseWithOverlapCheck(isActive bool, lastInteraction *time.Time) bool {
 	if !h.hasNew {
 		return false
 	}
+	// ACTIVE sessions with recent interaction: skip the overlap check.
+	// PrepareCommitMsg already validated this commit is session-related
+	// (added trailer). The overlap check is only meaningful when we need
+	// heuristic evidence that a commit was related to the session.
+	//
+	// We check LastInteractionTime to avoid condensing stale ACTIVE sessions
+	// (agent killed without Stop hook) into every subsequent commit. A stale
+	// session has no recent interaction and falls through to the overlap check.
+	if isActive && isRecentInteraction(lastInteraction) {
+		return true
+	}
 	if len(h.filesTouchedBefore) == 0 {
-		return isActive // ACTIVE: fail-open; IDLE/ENDED: no files = no overlap
+		return false // No files tracked = no overlap evidence
 	}
 	// Only check files that were actually changed in this commit.
 	// Without this, files that exist in the tree but weren't changed
@@ -696,6 +696,17 @@ func (h *postCommitActionHandler) shouldCondenseWithOverlapCheck(isActive bool) 
 		parentTree:    h.parentTree,
 		hasParentTree: true,
 	})
+}
+
+// activeSessionInteractionThreshold is the maximum age of LastInteractionTime
+// for an ACTIVE session to be considered genuinely active. 24h is generous
+// because LastInteractionTime only updates at TurnStart, not per-tool-call.
+const activeSessionInteractionThreshold = 24 * time.Hour
+
+// isRecentInteraction returns true if lastInteraction is non-nil and within
+// activeSessionInteractionThreshold of now.
+func isRecentInteraction(lastInteraction *time.Time) bool {
+	return lastInteraction != nil && time.Since(*lastInteraction) < activeSessionInteractionThreshold
 }
 
 func (h *postCommitActionHandler) HandleDiscardIfNoFiles(state *session.State) error {
@@ -1012,6 +1023,16 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 			slog.String("error", err.Error()),
 		)
 		return false
+	}
+
+	// Link checkpoint to trail (best-effort)
+	branchName := GetCurrentBranchName(repo)
+	if branchName != "" && branchName != GetDefaultBranchName(repo) {
+		store := trail.NewStore(repo)
+		existing, findErr := store.FindByBranch(branchName)
+		if findErr == nil && existing != nil {
+			appendCheckpointToExistingTrail(store, existing.TrailID, result.CheckpointID, head.Hash(), result.Prompts)
+		}
 	}
 
 	// Track this shadow branch for cleanup
@@ -1663,7 +1684,7 @@ func addCheckpointTrailerWithComment(message string, checkpointID id.CheckpointI
 // agentType is the human-readable name of the agent (e.g., "Claude Code").
 // transcriptPath is the path to the live transcript file (for mid-session commit detection).
 // userPrompt is the user's prompt text (stored truncated as FirstPrompt for display).
-func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID string, agentType types.AgentType, transcriptPath string, userPrompt string) error {
+func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID string, agentType types.AgentType, transcriptPath string, userPrompt string, model string) error {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open git repository: %w", err)
@@ -1693,6 +1714,11 @@ func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID 
 		// Set AgentType from hook context if not yet set
 		if state.AgentType == "" && agentType != "" {
 			state.AgentType = agentType
+		}
+
+		// Update ModelName if provided (model can change between turns)
+		if model != "" {
+			state.ModelName = model
 		}
 
 		// Backfill FirstPrompt if empty (for sessions created before the first_prompt field was added)
@@ -1734,7 +1760,7 @@ func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID 
 	// Continue below to properly initialize it
 
 	// Initialize new session
-	state, err = s.initializeSession(ctx, repo, sessionID, agentType, transcriptPath, userPrompt)
+	state, err = s.initializeSession(ctx, repo, sessionID, agentType, transcriptPath, userPrompt, model)
 	if err != nil {
 		return fmt.Errorf("failed to initialize session: %w", err)
 	}
@@ -2228,4 +2254,29 @@ func (s *ManualCommitStrategy) carryForwardToNewShadowBranch(
 		slog.String("session_id", state.SessionID),
 		slog.Int("remaining_files", len(remainingFiles)),
 	)
+}
+
+// appendCheckpointToExistingTrail links a checkpoint to the given trail.
+// Best-effort: silently returns on any error (trails are non-critical metadata).
+func appendCheckpointToExistingTrail(store *trail.Store, trailID trail.ID, cpID id.CheckpointID, commitSHA plumbing.Hash, prompts []string) {
+	var summary *string
+	if len(prompts) > 0 {
+		s := truncateForSummary(prompts[len(prompts)-1], 200)
+		summary = &s
+	}
+
+	//nolint:errcheck,gosec // best-effort: trail checkpoint linking is non-critical
+	store.AddCheckpoint(trailID, trail.CheckpointRef{
+		CheckpointID: cpID.String(),
+		CommitSHA:    commitSHA.String(),
+		CreatedAt:    time.Now().UTC(),
+		Summary:      summary,
+	})
+}
+
+// truncateForSummary takes the first line of s and truncates to maxLen runes.
+func truncateForSummary(s string, maxLen int) string {
+	line, _, _ := strings.Cut(s, "\n")
+	line = strings.TrimSpace(line)
+	return stringutil.TruncateRunes(line, maxLen, "...")
 }
