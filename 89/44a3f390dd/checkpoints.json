@@ -1,3 +1,10 @@
 {
-  "checkpoints": []
+  "checkpoints": [
+    {
+      "checkpoint_id": "44959c8685c1",
+      "commit_sha": "6663328ad76eea24b378e94404a567df2ddf7d7c",
+      "created_at": "2026-03-04T04:14:10.399744Z",
+      "summary": "commit, run e2e (claude-code)"
+    }
+  ]
 }
