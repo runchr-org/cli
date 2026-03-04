@@ -35,7 +35,7 @@ func newHooksCmd() *cobra.Command {
 		if err != nil {
 			continue
 		}
-		if handler, ok := ag.(agent.HookSupport); ok {
+		if handler, ok := agent.AsHookSupport(ag); ok {
 			cmd.AddCommand(newAgentHooksCmd(agentName, handler))
 		}
 	}

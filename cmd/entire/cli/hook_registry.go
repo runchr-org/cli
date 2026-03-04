@@ -133,7 +133,7 @@ func newAgentHookVerbCmdWithLogging(agentName types.AgentName, hookName string) 
 				return fmt.Errorf("failed to get agent %q: %w", agentName, agentErr)
 			}
 
-			handler, ok := ag.(agent.HookSupport)
+			handler, ok := agent.AsHookSupport(ag)
 			if !ok {
 				return fmt.Errorf("agent %q does not support hooks", agentName)
 			}

@@ -1394,7 +1394,7 @@ func (s *ManualCommitStrategy) extractNewModifiedFilesFromLiveTranscript(ctx con
 	// transcript is already fully flushed (the Stop hook completed the flush).
 	// Skipping the wait avoids a 3s timeout per session in prepare-commit-msg/post-commit hooks.
 	if state.Phase.IsActive() {
-		if preparer, ok := ag.(agent.TranscriptPreparer); ok {
+		if preparer, ok := agent.AsTranscriptPreparer(ag); ok {
 			if prepErr := preparer.PrepareTranscript(ctx, state.TranscriptPath); prepErr != nil {
 				logging.Debug(logCtx, "prepare transcript failed",
 					slog.String("session_id", state.SessionID),
@@ -1406,7 +1406,7 @@ func (s *ManualCommitStrategy) extractNewModifiedFilesFromLiveTranscript(ctx con
 		}
 	}
 
-	analyzer, ok := ag.(agent.TranscriptAnalyzer)
+	analyzer, ok := agent.AsTranscriptAnalyzer(ag)
 	if !ok {
 		return nil, false
 	}
@@ -1447,7 +1447,7 @@ func (s *ManualCommitStrategy) extractModifiedFilesFromLiveTranscript(ctx contex
 	// Only wait for flush when the session is active — for idle/ended sessions the
 	// transcript is already fully flushed (the Stop hook completed the flush).
 	if state.Phase.IsActive() {
-		if preparer, ok := ag.(agent.TranscriptPreparer); ok {
+		if preparer, ok := agent.AsTranscriptPreparer(ag); ok {
 			if prepErr := preparer.PrepareTranscript(ctx, state.TranscriptPath); prepErr != nil {
 				logging.Debug(logCtx, "prepare transcript failed",
 					slog.String("session_id", state.SessionID),
@@ -1459,7 +1459,7 @@ func (s *ManualCommitStrategy) extractModifiedFilesFromLiveTranscript(ctx contex
 		}
 	}
 
-	analyzer, ok := ag.(agent.TranscriptAnalyzer)
+	analyzer, ok := agent.AsTranscriptAnalyzer(ag)
 	if !ok {
 		return nil
 	}

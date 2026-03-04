@@ -89,7 +89,7 @@ func handleLifecycleSessionStart(ctx context.Context, ag agent.Agent, event *age
 	if event.ResponseMessage != "" {
 		message = event.ResponseMessage
 	}
-	if writer, ok := ag.(agent.HookResponseWriter); ok {
+	if writer, ok := agent.AsHookResponseWriter(ag); ok {
 		if err := writer.WriteHookResponse(message); err != nil {
 			return fmt.Errorf("failed to write hook response: %w", err)
 		}
@@ -181,7 +181,7 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	// via `opencode export`, so the file doesn't exist until PrepareTranscript creates it.
 	// Claude Code's PrepareTranscript just flushes (always succeeds). Agents without
 	// TranscriptPreparer (Gemini, Droid) are unaffected.
-	if preparer, ok := ag.(agent.TranscriptPreparer); ok {
+	if preparer, ok := agent.AsTranscriptPreparer(ag); ok {
 		if err := preparer.PrepareTranscript(ctx, transcriptRef); err != nil {
 			logging.Warn(logCtx, "failed to prepare transcript",
 				slog.String("error", err.Error()))
@@ -239,7 +239,7 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	var summary string
 	var modifiedFiles []string
 
-	if analyzer, ok := ag.(agent.TranscriptAnalyzer); ok {
+	if analyzer, ok := agent.AsTranscriptAnalyzer(ag); ok {
 		// Extract prompts
 		if prompts, promptErr := analyzer.ExtractPrompts(transcriptRef, transcriptOffset); promptErr != nil {
 			logging.Warn(logCtx, "failed to extract prompts",
@@ -257,7 +257,7 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 		}
 
 		// Extract modified files - prefer SubagentAwareExtractor if available to include subagent files
-		if subagentExtractor, subOk := ag.(agent.SubagentAwareExtractor); subOk {
+		if subagentExtractor, subOk := agent.AsSubagentAwareExtractor(ag); subOk {
 			if files, fileErr := subagentExtractor.ExtractAllModifiedFiles(transcriptData, transcriptOffset, subagentsDir); fileErr != nil {
 				logging.Warn(logCtx, "failed to extract modified files (with subagents)",
 					slog.String("error", fileErr.Error()))
@@ -527,7 +527,7 @@ func handleLifecycleSubagentEnd(ctx context.Context, ag agent.Agent, event *agen
 
 	// Extract modified files from subagent transcript
 	var modifiedFiles []string
-	if analyzer, ok := ag.(agent.TranscriptAnalyzer); ok {
+	if analyzer, ok := agent.AsTranscriptAnalyzer(ag); ok {
 		transcriptToScan := event.SessionRef
 		if subagentTranscriptPath != "" {
 			transcriptToScan = subagentTranscriptPath

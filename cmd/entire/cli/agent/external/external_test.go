@@ -386,22 +386,22 @@ func TestWrap_HooksAndAnalyzer(t *testing.T) {
 	wrapped := Wrap(ea)
 
 	// Should satisfy HookSupport
-	if _, ok := wrapped.(agent.HookSupport); !ok {
+	if _, ok := agent.AsHookSupport(wrapped); !ok {
 		t.Error("Wrap() should return HookSupport when hooks=true")
 	}
 
 	// Should satisfy TranscriptAnalyzer
-	if _, ok := wrapped.(agent.TranscriptAnalyzer); !ok {
+	if _, ok := agent.AsTranscriptAnalyzer(wrapped); !ok {
 		t.Error("Wrap() should return TranscriptAnalyzer when transcript_analyzer=true")
 	}
 
 	// Should NOT satisfy TokenCalculator
-	if _, ok := wrapped.(agent.TokenCalculator); ok {
+	if _, ok := agent.AsTokenCalculator(wrapped); ok {
 		t.Error("Wrap() should not return TokenCalculator when token_calculator=false")
 	}
 
 	// Should NOT satisfy TranscriptPreparer (transcript_preparer=false in validInfoJSON)
-	if _, ok := wrapped.(agent.TranscriptPreparer); ok {
+	if _, ok := agent.AsTranscriptPreparer(wrapped); ok {
 		t.Error("Wrap() should not return TranscriptPreparer when transcript_preparer=false")
 	}
 }
@@ -432,10 +432,10 @@ func TestWrap_NoCapabilities(t *testing.T) {
 
 	wrapped := Wrap(ea)
 
-	if _, ok := wrapped.(agent.HookSupport); ok {
+	if _, ok := agent.AsHookSupport(wrapped); ok {
 		t.Error("Wrap() should not return HookSupport when hooks=false")
 	}
-	if _, ok := wrapped.(agent.TranscriptAnalyzer); ok {
+	if _, ok := agent.AsTranscriptAnalyzer(wrapped); ok {
 		t.Error("Wrap() should not return TranscriptAnalyzer when transcript_analyzer=false")
 	}
 }
@@ -466,10 +466,10 @@ func TestWrap_HooksOnly(t *testing.T) {
 
 	wrapped := Wrap(ea)
 
-	if _, ok := wrapped.(agent.HookSupport); !ok {
+	if _, ok := agent.AsHookSupport(wrapped); !ok {
 		t.Error("Wrap() should return HookSupport when hooks=true")
 	}
-	if _, ok := wrapped.(agent.TranscriptAnalyzer); ok {
+	if _, ok := agent.AsTranscriptAnalyzer(wrapped); ok {
 		t.Error("Wrap() should not return TranscriptAnalyzer when transcript_analyzer=false")
 	}
 }
@@ -500,13 +500,13 @@ func TestWrap_PreparerOnly(t *testing.T) {
 
 	wrapped := Wrap(ea)
 
-	if _, ok := wrapped.(agent.TranscriptPreparer); !ok {
+	if _, ok := agent.AsTranscriptPreparer(wrapped); !ok {
 		t.Error("Wrap() should return TranscriptPreparer when transcript_preparer=true")
 	}
-	if _, ok := wrapped.(agent.HookSupport); ok {
+	if _, ok := agent.AsHookSupport(wrapped); ok {
 		t.Error("Wrap() should not return HookSupport when hooks=false")
 	}
-	if _, ok := wrapped.(agent.TranscriptAnalyzer); ok {
+	if _, ok := agent.AsTranscriptAnalyzer(wrapped); ok {
 		t.Error("Wrap() should not return TranscriptAnalyzer when transcript_analyzer=false")
 	}
 }
@@ -537,13 +537,13 @@ func TestWrap_AnalyzerAndPreparer(t *testing.T) {
 
 	wrapped := Wrap(ea)
 
-	if _, ok := wrapped.(agent.TranscriptAnalyzer); !ok {
+	if _, ok := agent.AsTranscriptAnalyzer(wrapped); !ok {
 		t.Error("Wrap() should return TranscriptAnalyzer when transcript_analyzer=true")
 	}
-	if _, ok := wrapped.(agent.TranscriptPreparer); !ok {
+	if _, ok := agent.AsTranscriptPreparer(wrapped); !ok {
 		t.Error("Wrap() should return TranscriptPreparer when transcript_preparer=true")
 	}
-	if _, ok := wrapped.(agent.HookSupport); ok {
+	if _, ok := agent.AsHookSupport(wrapped); ok {
 		t.Error("Wrap() should not return HookSupport when hooks=false")
 	}
 }
@@ -574,16 +574,16 @@ func TestWrap_HooksAnalyzerPreparer(t *testing.T) {
 
 	wrapped := Wrap(ea)
 
-	if _, ok := wrapped.(agent.HookSupport); !ok {
+	if _, ok := agent.AsHookSupport(wrapped); !ok {
 		t.Error("Wrap() should return HookSupport when hooks=true")
 	}
-	if _, ok := wrapped.(agent.TranscriptAnalyzer); !ok {
+	if _, ok := agent.AsTranscriptAnalyzer(wrapped); !ok {
 		t.Error("Wrap() should return TranscriptAnalyzer when transcript_analyzer=true")
 	}
-	if _, ok := wrapped.(agent.TranscriptPreparer); !ok {
+	if _, ok := agent.AsTranscriptPreparer(wrapped); !ok {
 		t.Error("Wrap() should return TranscriptPreparer when transcript_preparer=true")
 	}
-	if _, ok := wrapped.(agent.TokenCalculator); ok {
+	if _, ok := agent.AsTokenCalculator(wrapped); ok {
 		t.Error("Wrap() should not return TokenCalculator when token_calculator=false")
 	}
 }

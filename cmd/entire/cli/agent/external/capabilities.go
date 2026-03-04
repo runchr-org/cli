@@ -8,308 +8,139 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 )
 
-// Wrap returns the Agent wrapped with the appropriate interface
-// implementations based on the capabilities declared in its info response.
-// The returned value satisfies agent.Agent and whichever optional interfaces
-// the external binary declared support for.
-//
-// We cannot use Go embedding because *Agent implements ALL optional interface
-// methods, and embedding would expose all of them regardless of capabilities.
-// Instead, each wrapper explicitly forwards only the interfaces it should expose.
+// Wrap returns the Agent wrapped as an agent.Agent that implements ALL optional
+// interfaces (forwarding to the underlying external agent) plus CapabilityDeclarer.
+// The As* helpers in the agent package use DeclaredCapabilities() to gate access,
+// so callers only see capabilities the external binary actually declared.
 func Wrap(ea *Agent) agent.Agent {
 	caps := ea.info.Capabilities
-
-	base := baseAgent{ea: ea}
-
-	switch {
-	case caps.Hooks && caps.TranscriptAnalyzer && caps.TranscriptPreparer && caps.TokenCalculator && caps.TextGenerator && caps.HookResponseWriter && caps.SubagentAwareExtractor:
-		return &fullAgent{baseAgent: base}
-	case caps.Hooks && caps.TranscriptAnalyzer && caps.TranscriptPreparer:
-		return &hooksAnalyzerPreparerAgent{baseAgent: base}
-	case caps.Hooks && caps.TranscriptAnalyzer:
-		return &hooksAnalyzerAgent{baseAgent: base}
-	case caps.Hooks && caps.TranscriptPreparer:
-		return &hooksPreparerAgent{baseAgent: base}
-	case caps.TranscriptAnalyzer && caps.TranscriptPreparer:
-		return &analyzerPreparerAgent{baseAgent: base}
-	case caps.Hooks:
-		return &hooksAgent{baseAgent: base}
-	case caps.TranscriptAnalyzer:
-		return &analyzerAgent{baseAgent: base}
-	case caps.TranscriptPreparer:
-		return &preparerAgent{baseAgent: base}
-	default:
-		return &base
+	return &wrappedAgent{
+		ea: ea,
+		caps: agent.DeclaredCaps{
+			Hooks:                  caps.Hooks,
+			TranscriptAnalyzer:     caps.TranscriptAnalyzer,
+			TranscriptPreparer:     caps.TranscriptPreparer,
+			TokenCalculator:        caps.TokenCalculator,
+			TextGenerator:          caps.TextGenerator,
+			HookResponseWriter:     caps.HookResponseWriter,
+			SubagentAwareExtractor: caps.SubagentAwareExtractor,
+		},
 	}
 }
 
-// --- baseAgent: only agent.Agent methods ---
-
-type baseAgent struct{ ea *Agent }
-
-func (b *baseAgent) Name() types.AgentName { return b.ea.Name() }
-func (b *baseAgent) Type() types.AgentType { return b.ea.Type() }
-func (b *baseAgent) Description() string   { return b.ea.Description() }
-func (b *baseAgent) IsPreview() bool       { return b.ea.IsPreview() }
-func (b *baseAgent) DetectPresence(ctx context.Context) (bool, error) {
-	return b.ea.DetectPresence(ctx)
-}
-func (b *baseAgent) ProtectedDirs() []string                   { return b.ea.ProtectedDirs() }
-func (b *baseAgent) ReadTranscript(ref string) ([]byte, error) { return b.ea.ReadTranscript(ref) }
-func (b *baseAgent) ChunkTranscript(ctx context.Context, c []byte, m int) ([][]byte, error) {
-	return b.ea.ChunkTranscript(ctx, c, m)
-}
-func (b *baseAgent) ReassembleTranscript(chunks [][]byte) ([]byte, error) {
-	return b.ea.ReassembleTranscript(chunks)
-}
-func (b *baseAgent) GetSessionID(input *agent.HookInput) string { return b.ea.GetSessionID(input) }
-func (b *baseAgent) GetSessionDir(repoPath string) (string, error) {
-	return b.ea.GetSessionDir(repoPath)
-}
-func (b *baseAgent) ResolveSessionFile(dir, id string) string {
-	return b.ea.ResolveSessionFile(dir, id)
-}
-func (b *baseAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession, error) {
-	return b.ea.ReadSession(input)
-}
-func (b *baseAgent) WriteSession(ctx context.Context, s *agent.AgentSession) error {
-	return b.ea.WriteSession(ctx, s)
-}
-func (b *baseAgent) FormatResumeCommand(id string) string { return b.ea.FormatResumeCommand(id) }
-
-// --- hooksAgent: agent.Agent + HookSupport ---
-
-type hooksAgent struct{ baseAgent }
-
-func (h *hooksAgent) HookNames() []string { return h.ea.HookNames() }
-func (h *hooksAgent) ParseHookEvent(ctx context.Context, name string, stdin io.Reader) (*agent.Event, error) {
-	return h.ea.ParseHookEvent(ctx, name, stdin)
-}
-func (h *hooksAgent) InstallHooks(ctx context.Context, localDev bool, force bool) (int, error) {
-	return h.ea.InstallHooks(ctx, localDev, force)
-}
-func (h *hooksAgent) UninstallHooks(ctx context.Context) error   { return h.ea.UninstallHooks(ctx) }
-func (h *hooksAgent) AreHooksInstalled(ctx context.Context) bool { return h.ea.AreHooksInstalled(ctx) }
-
-var _ agent.HookSupport = (*hooksAgent)(nil)
-
-// --- analyzerAgent: agent.Agent + TranscriptAnalyzer ---
-
-type analyzerAgent struct{ baseAgent }
-
-func (a *analyzerAgent) GetTranscriptPosition(path string) (int, error) {
-	return a.ea.GetTranscriptPosition(path)
-}
-func (a *analyzerAgent) ExtractModifiedFilesFromOffset(path string, offset int) ([]string, int, error) {
-	return a.ea.ExtractModifiedFilesFromOffset(path, offset)
-}
-func (a *analyzerAgent) ExtractPrompts(ref string, offset int) ([]string, error) {
-	return a.ea.ExtractPrompts(ref, offset)
-}
-func (a *analyzerAgent) ExtractSummary(ref string) (string, error) {
-	return a.ea.ExtractSummary(ref)
+// wrappedAgent forwards all agent.Agent and optional interface methods to the
+// underlying external Agent. Capability gating is handled by DeclaredCapabilities()
+// and the As* helpers in the agent package.
+type wrappedAgent struct {
+	ea   *Agent
+	caps agent.DeclaredCaps
 }
 
-var _ agent.TranscriptAnalyzer = (*analyzerAgent)(nil)
+// --- CapabilityDeclarer ---
 
-// --- preparerAgent: agent.Agent + TranscriptPreparer ---
+func (w *wrappedAgent) DeclaredCapabilities() agent.DeclaredCaps { return w.caps }
 
-type preparerAgent struct{ baseAgent }
+// --- agent.Agent ---
 
-func (p *preparerAgent) PrepareTranscript(ctx context.Context, ref string) error {
-	return p.ea.PrepareTranscript(ctx, ref)
+func (w *wrappedAgent) Name() types.AgentName { return w.ea.Name() }
+func (w *wrappedAgent) Type() types.AgentType { return w.ea.Type() }
+func (w *wrappedAgent) Description() string   { return w.ea.Description() }
+func (w *wrappedAgent) IsPreview() bool       { return w.ea.IsPreview() }
+func (w *wrappedAgent) DetectPresence(ctx context.Context) (bool, error) {
+	return w.ea.DetectPresence(ctx)
+}
+func (w *wrappedAgent) ProtectedDirs() []string                   { return w.ea.ProtectedDirs() }
+func (w *wrappedAgent) ReadTranscript(ref string) ([]byte, error) { return w.ea.ReadTranscript(ref) }
+func (w *wrappedAgent) ChunkTranscript(ctx context.Context, c []byte, m int) ([][]byte, error) {
+	return w.ea.ChunkTranscript(ctx, c, m)
+}
+func (w *wrappedAgent) ReassembleTranscript(chunks [][]byte) ([]byte, error) {
+	return w.ea.ReassembleTranscript(chunks)
+}
+func (w *wrappedAgent) GetSessionID(input *agent.HookInput) string { return w.ea.GetSessionID(input) }
+func (w *wrappedAgent) GetSessionDir(repoPath string) (string, error) {
+	return w.ea.GetSessionDir(repoPath)
+}
+func (w *wrappedAgent) ResolveSessionFile(dir, id string) string {
+	return w.ea.ResolveSessionFile(dir, id)
+}
+func (w *wrappedAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession, error) {
+	return w.ea.ReadSession(input)
+}
+func (w *wrappedAgent) WriteSession(ctx context.Context, s *agent.AgentSession) error {
+	return w.ea.WriteSession(ctx, s)
+}
+func (w *wrappedAgent) FormatResumeCommand(id string) string { return w.ea.FormatResumeCommand(id) }
+
+// --- HookSupport ---
+
+func (w *wrappedAgent) HookNames() []string { return w.ea.HookNames() }
+func (w *wrappedAgent) ParseHookEvent(ctx context.Context, name string, stdin io.Reader) (*agent.Event, error) {
+	return w.ea.ParseHookEvent(ctx, name, stdin)
+}
+func (w *wrappedAgent) InstallHooks(ctx context.Context, localDev bool, force bool) (int, error) {
+	return w.ea.InstallHooks(ctx, localDev, force)
+}
+func (w *wrappedAgent) UninstallHooks(ctx context.Context) error { return w.ea.UninstallHooks(ctx) }
+func (w *wrappedAgent) AreHooksInstalled(ctx context.Context) bool {
+	return w.ea.AreHooksInstalled(ctx)
 }
 
-var _ agent.TranscriptPreparer = (*preparerAgent)(nil)
+// --- TranscriptAnalyzer ---
 
-// --- analyzerPreparerAgent: agent.Agent + TranscriptAnalyzer + TranscriptPreparer ---
-
-type analyzerPreparerAgent struct{ baseAgent }
-
-func (ap *analyzerPreparerAgent) GetTranscriptPosition(path string) (int, error) {
-	return ap.ea.GetTranscriptPosition(path)
+func (w *wrappedAgent) GetTranscriptPosition(path string) (int, error) {
+	return w.ea.GetTranscriptPosition(path)
 }
-func (ap *analyzerPreparerAgent) ExtractModifiedFilesFromOffset(path string, offset int) ([]string, int, error) {
-	return ap.ea.ExtractModifiedFilesFromOffset(path, offset)
+func (w *wrappedAgent) ExtractModifiedFilesFromOffset(path string, offset int) ([]string, int, error) {
+	return w.ea.ExtractModifiedFilesFromOffset(path, offset)
 }
-func (ap *analyzerPreparerAgent) ExtractPrompts(ref string, offset int) ([]string, error) {
-	return ap.ea.ExtractPrompts(ref, offset)
+func (w *wrappedAgent) ExtractPrompts(ref string, offset int) ([]string, error) {
+	return w.ea.ExtractPrompts(ref, offset)
 }
-func (ap *analyzerPreparerAgent) ExtractSummary(ref string) (string, error) {
-	return ap.ea.ExtractSummary(ref)
-}
-func (ap *analyzerPreparerAgent) PrepareTranscript(ctx context.Context, ref string) error {
-	return ap.ea.PrepareTranscript(ctx, ref)
+func (w *wrappedAgent) ExtractSummary(ref string) (string, error) {
+	return w.ea.ExtractSummary(ref)
 }
 
-var (
-	_ agent.TranscriptAnalyzer = (*analyzerPreparerAgent)(nil)
-	_ agent.TranscriptPreparer = (*analyzerPreparerAgent)(nil)
-)
+// --- TranscriptPreparer ---
 
-// --- hooksPreparerAgent: agent.Agent + HookSupport + TranscriptPreparer ---
+func (w *wrappedAgent) PrepareTranscript(ctx context.Context, ref string) error {
+	return w.ea.PrepareTranscript(ctx, ref)
+}
 
-type hooksPreparerAgent struct{ baseAgent }
+// --- TokenCalculator ---
 
-func (hp *hooksPreparerAgent) HookNames() []string { return hp.ea.HookNames() }
-func (hp *hooksPreparerAgent) ParseHookEvent(ctx context.Context, name string, stdin io.Reader) (*agent.Event, error) {
-	return hp.ea.ParseHookEvent(ctx, name, stdin)
+func (w *wrappedAgent) CalculateTokenUsage(data []byte, offset int) (*agent.TokenUsage, error) {
+	return w.ea.CalculateTokenUsage(data, offset)
 }
-func (hp *hooksPreparerAgent) InstallHooks(ctx context.Context, localDev bool, force bool) (int, error) {
-	return hp.ea.InstallHooks(ctx, localDev, force)
+
+// --- TextGenerator ---
+
+func (w *wrappedAgent) GenerateText(ctx context.Context, prompt string, model string) (string, error) {
+	return w.ea.GenerateText(ctx, prompt, model)
 }
-func (hp *hooksPreparerAgent) UninstallHooks(ctx context.Context) error {
-	return hp.ea.UninstallHooks(ctx)
+
+// --- HookResponseWriter ---
+
+func (w *wrappedAgent) WriteHookResponse(message string) error {
+	return w.ea.WriteHookResponse(message)
 }
-func (hp *hooksPreparerAgent) AreHooksInstalled(ctx context.Context) bool {
-	return hp.ea.AreHooksInstalled(ctx)
+
+// --- SubagentAwareExtractor ---
+
+func (w *wrappedAgent) ExtractAllModifiedFiles(data []byte, offset int, dir string) ([]string, error) {
+	return w.ea.ExtractAllModifiedFiles(data, offset, dir)
 }
-func (hp *hooksPreparerAgent) PrepareTranscript(ctx context.Context, ref string) error {
-	return hp.ea.PrepareTranscript(ctx, ref)
+func (w *wrappedAgent) CalculateTotalTokenUsage(data []byte, offset int, dir string) (*agent.TokenUsage, error) {
+	return w.ea.CalculateTotalTokenUsage(data, offset, dir)
 }
 
 var (
-	_ agent.HookSupport        = (*hooksPreparerAgent)(nil)
-	_ agent.TranscriptPreparer = (*hooksPreparerAgent)(nil)
-)
-
-// --- hooksAnalyzerPreparerAgent: agent.Agent + HookSupport + TranscriptAnalyzer + TranscriptPreparer ---
-
-type hooksAnalyzerPreparerAgent struct{ baseAgent }
-
-func (hap *hooksAnalyzerPreparerAgent) HookNames() []string { return hap.ea.HookNames() }
-func (hap *hooksAnalyzerPreparerAgent) ParseHookEvent(ctx context.Context, name string, stdin io.Reader) (*agent.Event, error) {
-	return hap.ea.ParseHookEvent(ctx, name, stdin)
-}
-func (hap *hooksAnalyzerPreparerAgent) InstallHooks(ctx context.Context, localDev bool, force bool) (int, error) {
-	return hap.ea.InstallHooks(ctx, localDev, force)
-}
-func (hap *hooksAnalyzerPreparerAgent) UninstallHooks(ctx context.Context) error {
-	return hap.ea.UninstallHooks(ctx)
-}
-func (hap *hooksAnalyzerPreparerAgent) AreHooksInstalled(ctx context.Context) bool {
-	return hap.ea.AreHooksInstalled(ctx)
-}
-func (hap *hooksAnalyzerPreparerAgent) GetTranscriptPosition(path string) (int, error) {
-	return hap.ea.GetTranscriptPosition(path)
-}
-func (hap *hooksAnalyzerPreparerAgent) ExtractModifiedFilesFromOffset(path string, offset int) ([]string, int, error) {
-	return hap.ea.ExtractModifiedFilesFromOffset(path, offset)
-}
-func (hap *hooksAnalyzerPreparerAgent) ExtractPrompts(ref string, offset int) ([]string, error) {
-	return hap.ea.ExtractPrompts(ref, offset)
-}
-func (hap *hooksAnalyzerPreparerAgent) ExtractSummary(ref string) (string, error) {
-	return hap.ea.ExtractSummary(ref)
-}
-func (hap *hooksAnalyzerPreparerAgent) PrepareTranscript(ctx context.Context, ref string) error {
-	return hap.ea.PrepareTranscript(ctx, ref)
-}
-
-var (
-	_ agent.HookSupport        = (*hooksAnalyzerPreparerAgent)(nil)
-	_ agent.TranscriptAnalyzer = (*hooksAnalyzerPreparerAgent)(nil)
-	_ agent.TranscriptPreparer = (*hooksAnalyzerPreparerAgent)(nil)
-)
-
-// --- hooksAnalyzerAgent: agent.Agent + HookSupport + TranscriptAnalyzer ---
-
-type hooksAnalyzerAgent struct{ baseAgent }
-
-func (ha *hooksAnalyzerAgent) HookNames() []string { return ha.ea.HookNames() }
-func (ha *hooksAnalyzerAgent) ParseHookEvent(ctx context.Context, name string, stdin io.Reader) (*agent.Event, error) {
-	return ha.ea.ParseHookEvent(ctx, name, stdin)
-}
-func (ha *hooksAnalyzerAgent) InstallHooks(ctx context.Context, localDev bool, force bool) (int, error) {
-	return ha.ea.InstallHooks(ctx, localDev, force)
-}
-func (ha *hooksAnalyzerAgent) UninstallHooks(ctx context.Context) error {
-	return ha.ea.UninstallHooks(ctx)
-}
-func (ha *hooksAnalyzerAgent) AreHooksInstalled(ctx context.Context) bool {
-	return ha.ea.AreHooksInstalled(ctx)
-}
-func (ha *hooksAnalyzerAgent) GetTranscriptPosition(path string) (int, error) {
-	return ha.ea.GetTranscriptPosition(path)
-}
-func (ha *hooksAnalyzerAgent) ExtractModifiedFilesFromOffset(path string, offset int) ([]string, int, error) {
-	return ha.ea.ExtractModifiedFilesFromOffset(path, offset)
-}
-func (ha *hooksAnalyzerAgent) ExtractPrompts(ref string, offset int) ([]string, error) {
-	return ha.ea.ExtractPrompts(ref, offset)
-}
-func (ha *hooksAnalyzerAgent) ExtractSummary(ref string) (string, error) {
-	return ha.ea.ExtractSummary(ref)
-}
-
-var (
-	_ agent.HookSupport        = (*hooksAnalyzerAgent)(nil)
-	_ agent.TranscriptAnalyzer = (*hooksAnalyzerAgent)(nil)
-)
-
-// --- fullAgent: all optional interfaces ---
-
-type fullAgent struct{ baseAgent }
-
-// HookSupport
-func (f *fullAgent) HookNames() []string { return f.ea.HookNames() }
-func (f *fullAgent) ParseHookEvent(ctx context.Context, name string, stdin io.Reader) (*agent.Event, error) {
-	return f.ea.ParseHookEvent(ctx, name, stdin)
-}
-func (f *fullAgent) InstallHooks(ctx context.Context, localDev bool, force bool) (int, error) {
-	return f.ea.InstallHooks(ctx, localDev, force)
-}
-func (f *fullAgent) UninstallHooks(ctx context.Context) error   { return f.ea.UninstallHooks(ctx) }
-func (f *fullAgent) AreHooksInstalled(ctx context.Context) bool { return f.ea.AreHooksInstalled(ctx) }
-
-// TranscriptAnalyzer
-func (f *fullAgent) GetTranscriptPosition(path string) (int, error) {
-	return f.ea.GetTranscriptPosition(path)
-}
-func (f *fullAgent) ExtractModifiedFilesFromOffset(path string, offset int) ([]string, int, error) {
-	return f.ea.ExtractModifiedFilesFromOffset(path, offset)
-}
-func (f *fullAgent) ExtractPrompts(ref string, offset int) ([]string, error) {
-	return f.ea.ExtractPrompts(ref, offset)
-}
-func (f *fullAgent) ExtractSummary(ref string) (string, error) {
-	return f.ea.ExtractSummary(ref)
-}
-
-// TokenCalculator
-func (f *fullAgent) CalculateTokenUsage(data []byte, offset int) (*agent.TokenUsage, error) {
-	return f.ea.CalculateTokenUsage(data, offset)
-}
-
-// TextGenerator
-func (f *fullAgent) GenerateText(ctx context.Context, prompt string, model string) (string, error) {
-	return f.ea.GenerateText(ctx, prompt, model)
-}
-
-// HookResponseWriter
-func (f *fullAgent) WriteHookResponse(message string) error {
-	return f.ea.WriteHookResponse(message)
-}
-
-// TranscriptPreparer
-func (f *fullAgent) PrepareTranscript(ctx context.Context, ref string) error {
-	return f.ea.PrepareTranscript(ctx, ref)
-}
-
-// SubagentAwareExtractor
-func (f *fullAgent) ExtractAllModifiedFiles(data []byte, offset int, dir string) ([]string, error) {
-	return f.ea.ExtractAllModifiedFiles(data, offset, dir)
-}
-func (f *fullAgent) CalculateTotalTokenUsage(data []byte, offset int, dir string) (*agent.TokenUsage, error) {
-	return f.ea.CalculateTotalTokenUsage(data, offset, dir)
-}
-
-var (
-	_ agent.HookSupport            = (*fullAgent)(nil)
-	_ agent.TranscriptAnalyzer     = (*fullAgent)(nil)
-	_ agent.TranscriptPreparer     = (*fullAgent)(nil)
-	_ agent.TokenCalculator        = (*fullAgent)(nil)
-	_ agent.TextGenerator          = (*fullAgent)(nil)
-	_ agent.HookResponseWriter     = (*fullAgent)(nil)
-	_ agent.SubagentAwareExtractor = (*fullAgent)(nil)
+	_ agent.CapabilityDeclarer     = (*wrappedAgent)(nil)
+	_ agent.HookSupport            = (*wrappedAgent)(nil)
+	_ agent.TranscriptAnalyzer     = (*wrappedAgent)(nil)
+	_ agent.TranscriptPreparer     = (*wrappedAgent)(nil)
+	_ agent.TokenCalculator        = (*wrappedAgent)(nil)
+	_ agent.TextGenerator          = (*wrappedAgent)(nil)
+	_ agent.HookResponseWriter     = (*wrappedAgent)(nil)
+	_ agent.SubagentAwareExtractor = (*wrappedAgent)(nil)
 )
