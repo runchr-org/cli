@@ -81,12 +81,7 @@ func (k *KiroAgent) InstallHooks(ctx context.Context, localDev bool, force bool)
 		}
 	}
 
-	var cmdPrefix string
-	if localDev {
-		cmdPrefix = localDevCmdPrefix + "hooks kiro "
-	} else {
-		cmdPrefix = prodHookCmdPrefix
-	}
+	cmdPrefix := hookCmdPrefix(localDev)
 
 	file := kiroAgentFile{
 		Name: "entire",
@@ -189,12 +184,7 @@ func (k *KiroAgent) GetSupportedHooks() []agent.HookType {
 }
 
 func allHooksPresent(hooks kiroHooks, localDev bool) bool {
-	var cmdPrefix string
-	if localDev {
-		cmdPrefix = localDevCmdPrefix + "hooks kiro "
-	} else {
-		cmdPrefix = prodHookCmdPrefix
-	}
+	cmdPrefix := hookCmdPrefix(localDev)
 
 	return hookCommandExists(hooks.AgentSpawn, cmdPrefix+HookNameAgentSpawn) &&
 		hookCommandExists(hooks.UserPromptSubmit, cmdPrefix+HookNameUserPromptSubmit) &&
@@ -228,6 +218,13 @@ func hasEntireHook(entries []kiroHookEntry) bool {
 		}
 	}
 	return false
+}
+
+func hookCmdPrefix(localDev bool) string {
+	if localDev {
+		return localDevCmdPrefix + "hooks kiro "
+	}
+	return prodHookCmdPrefix
 }
 
 // installIDEHooks creates .kiro/hooks/*.kiro.hook files for the Kiro IDE.
@@ -268,12 +265,7 @@ func installIDEHooks(worktreeRoot, cmdPrefix string) (int, error) {
 
 // allIDEHooksPresent checks that all 4 IDE hook files exist and have correct commands.
 func allIDEHooksPresent(worktreeRoot string, localDev bool) bool {
-	var cmdPrefix string
-	if localDev {
-		cmdPrefix = localDevCmdPrefix + "hooks kiro "
-	} else {
-		cmdPrefix = prodHookCmdPrefix
-	}
+	cmdPrefix := hookCmdPrefix(localDev)
 
 	for _, def := range ideHookDefs {
 		path := filepath.Join(worktreeRoot, ".kiro", ideHooksDir, def.Filename+ideHookFileSuffix)
