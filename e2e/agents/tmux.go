@@ -11,6 +11,7 @@ import (
 // TmuxSession implements Session using tmux for PTY-based interactive agents.
 type TmuxSession struct {
 	name         string
+	socket       string   // dedicated tmux server socket (-L flag)
 	stableAtSend string   // stable content snapshot when Send was last called
 	cleanups     []func() // run on Close
 }
@@ -20,14 +21,19 @@ func (s *TmuxSession) OnClose(fn func()) {
 	s.cleanups = append(s.cleanups, fn)
 }
 
+// tmuxCmd builds an exec.Cmd targeting this session's dedicated tmux server.
+func (s *TmuxSession) tmuxCmd(args ...string) *exec.Cmd {
+	full := append([]string{"-L", s.socket}, args...)
+	return exec.Command("tmux", full...)
+}
+
 // NewTmuxSession creates a new tmux session running the given command in dir.
+// Each session gets its own tmux server socket so -x/-y sizing is reliable.
 // unsetEnv lists environment variable names to strip from the session.
 func NewTmuxSession(name string, dir string, unsetEnv []string, command string, args ...string) (*TmuxSession, error) {
-	s := &TmuxSession{name: name}
+	s := &TmuxSession{name: name, socket: name}
 
-	// Set explicit window size so TUI agents have enough room to render their
-	// input prompt (some agents like droid have large splash banners).
-	tmuxArgs := []string{"new-session", "-d", "-s", name, "-x", "200", "-y", "50", "-c", dir}
+	tmuxArgs := []string{"-L", s.socket, "new-session", "-d", "-s", name, "-x", "200", "-y", "50", "-c", dir}
 	// Build a shell command string, prefixed with env -u for each var to strip.
 	// All arguments are shell-quoted to prevent injection or splitting.
 	var parts []string
@@ -45,11 +51,8 @@ func NewTmuxSession(name string, dir string, unsetEnv []string, command string, 
 		return nil, fmt.Errorf("tmux new-session: %w\n%s", err, out)
 	}
 	// Keep the pane around after the command exits so we can capture error output.
-	setCmd := exec.Command("tmux", "set-option", "-t", name, "remain-on-exit", "on")
+	setCmd := s.tmuxCmd("set-option", "-t", name, "remain-on-exit", "on")
 	_ = setCmd.Run()
-
-	resizeCmd := exec.Command("tmux", "resize-window", "-t", name, "-x", "200", "-y", "50")
-	_ = resizeCmd.Run()
 
 	return s, nil
 }
@@ -85,7 +88,7 @@ func (s *TmuxSession) Send(input string) error {
 // SendKeys sends raw tmux key names without appending Enter.
 func (s *TmuxSession) SendKeys(keys ...string) error {
 	args := append([]string{"send-keys", "-t", s.name}, keys...)
-	cmd := exec.Command("tmux", args...)
+	cmd := s.tmuxCmd(args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("tmux send-keys: %w\n%s", err, out)
@@ -158,7 +161,7 @@ func (s *TmuxSession) WaitFor(pattern string, timeout time.Duration) (string, er
 }
 
 func (s *TmuxSession) Capture() string {
-	cmd := exec.Command("tmux", "capture-pane", "-t", s.name, "-p")
+	cmd := s.tmuxCmd("capture-pane", "-t", s.name, "-p")
 	out, _ := cmd.Output()
 	return strings.TrimRight(string(out), "\n")
 }
@@ -167,10 +170,11 @@ func (s *TmuxSession) Close() error {
 	for _, fn := range s.cleanups {
 		fn()
 	}
-	cmd := exec.Command("tmux", "kill-session", "-t", s.name)
+	// Kill the entire dedicated tmux server (cleaner than kill-session).
+	cmd := s.tmuxCmd("kill-server")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("tmux kill-session: %w\n%s", err, out)
+		return fmt.Errorf("tmux kill-server: %w\n%s", err, out)
 	}
 	return nil
 }
