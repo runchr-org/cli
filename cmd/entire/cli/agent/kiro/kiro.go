@@ -44,6 +44,10 @@ func (k *KiroAgent) Description() string     { return "Kiro - Amazon AI coding C
 func (k *KiroAgent) IsPreview() bool         { return true }
 func (k *KiroAgent) ProtectedDirs() []string { return []string{".kiro"} }
 
+// UsesTerminal reports that Kiro runs inside a terminal emulator (tmux).
+// This means hasTTY() returns true even when the agent is committing.
+func (k *KiroAgent) UsesTerminal() bool { return true }
+
 // DetectPresence checks if Kiro is configured in the repository.
 func (k *KiroAgent) DetectPresence(ctx context.Context) (bool, error) {
 	worktreeRoot, err := paths.WorktreeRoot(ctx)

@@ -129,6 +129,10 @@ type readResult struct {
 // This is a shared helper for agent ParseHookEvent implementations.
 //
 // A 500ms timeout prevents hanging when the IDE keeps stdin open without EOF.
+//
+// Note: on timeout, the io.ReadAll goroutine is abandoned (it blocks forever on
+// the open stdin pipe). This is an intentional trade-off — hook processes are
+// short-lived, so the leaked goroutine is cleaned up when the process exits.
 func ReadAndParseHookInput[T any](stdin io.Reader) (*T, error) {
 	ch := make(chan readResult, 1)
 	go func() {

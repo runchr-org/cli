@@ -195,6 +195,29 @@ type HookResponseWriter interface {
 	WriteHookResponse(message string) error
 }
 
+// TerminalAgent is implemented by agents that run inside a terminal emulator
+// (e.g., Kiro in tmux). These agents have hasTTY()=true even when the agent
+// itself is committing, so git hooks cannot distinguish user-initiated commits
+// from agent-initiated commits using TTY detection alone.
+type TerminalAgent interface {
+	Agent
+
+	// UsesTerminal reports whether this agent runs in a terminal emulator.
+	UsesTerminal() bool
+}
+
+// IsTerminalAgent checks whether the given agent type corresponds to an agent
+// that runs inside a terminal emulator. It looks up the agent in the registry
+// and checks for the TerminalAgent interface.
+func IsTerminalAgent(agentType types.AgentType) bool {
+	ag, err := GetByAgentType(agentType)
+	if err != nil {
+		return false
+	}
+	ta, ok := ag.(TerminalAgent)
+	return ok && ta.UsesTerminal()
+}
+
 // SubagentAwareExtractor provides methods for extracting files and tokens including subagents.
 // Agents that support spawning subagents (like Claude Code's Task tool) should implement this
 // to ensure subagent contributions are included in checkpoints.

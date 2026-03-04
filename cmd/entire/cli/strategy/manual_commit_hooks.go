@@ -74,8 +74,11 @@ func hasTTY() bool {
 // (e.g., Kiro runs in tmux). These agents have hasTTY()=true even when the agent
 // itself is committing, so the no-TTY fast path doesn't catch them. This lets the
 // fast path auto-link their commits during ACTIVE sessions without prompting.
+//
+// Uses the TerminalAgent optional interface from the agent registry rather than
+// hardcoding agent types.
 func agentUsesTerminal(agentType types.AgentType) bool {
-	return agentType == agent.AgentTypeKiro
+	return agent.IsTerminalAgent(agentType)
 }
 
 // ttyResult represents the outcome of a TTY confirmation prompt.
