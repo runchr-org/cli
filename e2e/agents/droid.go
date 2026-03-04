@@ -203,8 +203,9 @@ func (d *Droid) StartSession(ctx context.Context, dir string) (Session, error) {
 		return nil, err
 	}
 
-	// Wait for the interactive prompt indicator.
-	if _, err := s.WaitFor(`>`, 30*time.Second); err != nil {
+	// Wait for the splash screen to finish rendering. The full TUI input box
+	// (with ">") may not render on headless CI, but this text always appears.
+	if _, err := s.WaitFor(`ENTER to send`, 30*time.Second); err != nil {
 		_ = s.Close()
 		return nil, fmt.Errorf("waiting for startup prompt: %w", err)
 	}
