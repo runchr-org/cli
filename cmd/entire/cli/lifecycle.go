@@ -525,8 +525,9 @@ func handleLifecycleSubagentEnd(ctx context.Context, ag agent.Agent, event *agen
 	}
 	logging.Info(logCtx, "subagent completed", subagentEndAttrs...)
 
-	// Extract modified files from subagent transcript
+	// Extract modified files from hook payload and/or subagent transcript
 	var modifiedFiles []string
+	modifiedFiles = append(modifiedFiles, event.ModifiedFiles...)
 	if analyzer, ok := ag.(agent.TranscriptAnalyzer); ok {
 		transcriptToScan := event.SessionRef
 		if subagentTranscriptPath != "" {
@@ -536,7 +537,7 @@ func handleLifecycleSubagentEnd(ctx context.Context, ag agent.Agent, event *agen
 			logging.Warn(logCtx, "failed to extract modified files from subagent",
 				slog.String("error", fileErr.Error()))
 		} else {
-			modifiedFiles = files
+			modifiedFiles = append(modifiedFiles, files...)
 		}
 	}
 
