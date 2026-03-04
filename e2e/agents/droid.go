@@ -56,24 +56,32 @@ func (d *Droid) IsTransientError(out Output, err error) bool {
 // droidSettings represents the ~/.factory/settings.json structure used for
 // BYOK (Bring Your Own Key) configuration.
 type droidSettings struct {
-	CustomModels []droidCustomModel `json:"customModels,omitempty"`
+	CustomModels           []droidCustomModel    `json:"customModels,omitempty"`
+	SessionDefaultSettings *droidSessionDefaults `json:"sessionDefaultSettings,omitempty"`
+	AutonomyMode           string                `json:"autonomyMode,omitempty"`
 }
 
 type droidCustomModel struct {
-	DisplayName    string `json:"displayName"`
-	Model          string `json:"model"`
-	BaseURL        string `json:"baseUrl"`
-	APIKey         string `json:"apiKey"`
-	Provider       string `json:"provider"`
-	MaxOutputToken int    `json:"maxOutputTokens"`
+	Model           string `json:"model"`
+	ID              string `json:"id"`
+	Index           int    `json:"index"`
+	BaseURL         string `json:"baseUrl"`
+	DisplayName     string `json:"displayName"`
+	MaxOutputTokens int    `json:"maxOutputTokens"`
+	NoImageSupport  bool   `json:"noImageSupport"`
+	Provider        string `json:"provider"`
+	APIKey          string `json:"apiKey"`
+}
+
+type droidSessionDefaults struct {
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 }
 
 const (
-	// Droid v0.63+ expects custom model selection using custom:<model-id>.
-	// The displayName in settings is not accepted by --model.
-	droidCustomModelDisplayName = "claude-haiku-custom"
+	droidCustomModelDisplayName = "Haiku E2E [Custom]"
 	droidCustomModelBaseID      = "claude-haiku-4-5-20251001"
-	defaultDroidModel           = "custom:" + droidCustomModelBaseID
+	droidCustomModelID          = "custom:Haiku-E2E-[Custom]-0"
 )
 
 func (d *Droid) Bootstrap() error {
@@ -104,12 +112,15 @@ func (d *Droid) Bootstrap() error {
 
 	// Replace or add the BYOK model entry.
 	byokModel := droidCustomModel{
-		DisplayName:    droidCustomModelDisplayName,
-		Model:          droidCustomModelBaseID,
-		BaseURL:        "https://api.anthropic.com",
-		APIKey:         apiKey,
-		Provider:       "anthropic",
-		MaxOutputToken: 8192,
+		Model:           droidCustomModelBaseID,
+		ID:              droidCustomModelID,
+		Index:           0,
+		BaseURL:         "https://api.anthropic.com",
+		DisplayName:     droidCustomModelDisplayName,
+		MaxOutputTokens: 8192,
+		NoImageSupport:  false,
+		Provider:        "anthropic",
+		APIKey:          apiKey,
 	}
 
 	found := false
@@ -124,6 +135,15 @@ func (d *Droid) Bootstrap() error {
 		settings.CustomModels = append(settings.CustomModels, byokModel)
 	}
 
+	// Set the default model for interactive sessions.
+	settings.SessionDefaultSettings = &droidSessionDefaults{
+		Model:           droidCustomModelID,
+		ReasoningEffort: "none",
+	}
+
+	// Auto-high allows all tool use without permission prompts (for E2E tests).
+	settings.AutonomyMode = "auto-high"
+
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)
@@ -132,18 +152,14 @@ func (d *Droid) Bootstrap() error {
 }
 
 func (d *Droid) RunPrompt(ctx context.Context, dir string, prompt string, opts ...Option) (Output, error) {
-	cfg := &runConfig{Model: defaultDroidModel}
+	cfg := &runConfig{}
 	for _, o := range opts {
 		o(cfg)
 	}
 
-	model := cfg.Model
-	if model == "" {
-		model = defaultDroidModel
-	}
-
-	args := []string{"exec", "--skip-permissions-unsafe", "--model", model, prompt}
-	displayArgs := []string{"exec", "--skip-permissions-unsafe", "--model", model, fmt.Sprintf("%q", prompt)}
+	// Model is configured via sessionDefaultSettings in ~/.factory/settings.json.
+	args := []string{"exec", "--skip-permissions-unsafe", prompt}
+	displayArgs := []string{"exec", "--skip-permissions-unsafe", fmt.Sprintf("%q", prompt)}
 
 	cmd := exec.CommandContext(ctx, d.Binary(), args...)
 	cmd.Dir = dir
@@ -180,7 +196,9 @@ func (d *Droid) RunPrompt(ctx context.Context, dir string, prompt string, opts .
 
 func (d *Droid) StartSession(ctx context.Context, dir string) (Session, error) {
 	name := fmt.Sprintf("droid-test-%d", time.Now().UnixNano())
-	s, err := NewTmuxSession(name, dir, []string{"ENTIRE_TEST_TTY"}, d.Binary(), "--model", defaultDroidModel, "--skip-permissions-unsafe")
+	// Model is configured via sessionDefaultSettings in ~/.factory/settings.json.
+	// Interactive mode doesn't support --model or --skip-permissions-unsafe (exec-only flags).
+	s, err := NewTmuxSession(name, dir, []string{"ENTIRE_TEST_TTY"}, d.Binary())
 	if err != nil {
 		return nil, err
 	}

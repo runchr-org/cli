@@ -161,6 +161,15 @@ func mergeDroidCustomModels(globalSettingsPath, repoSettingsPath string) error {
 	}
 	repoSettings["customModels"] = customModels
 
+	// Also copy sessionDefaultSettings and autonomyMode so the repo-local config
+	// uses the right model and allows tool use without permission prompts.
+	if sessionDefaults, ok := globalSettings["sessionDefaultSettings"]; ok {
+		repoSettings["sessionDefaultSettings"] = sessionDefaults
+	}
+	if autonomyMode, ok := globalSettings["autonomyMode"]; ok {
+		repoSettings["autonomyMode"] = autonomyMode
+	}
+
 	out, err := json.MarshalIndent(repoSettings, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal repo-local droid settings: %w", err)
