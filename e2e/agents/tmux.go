@@ -25,7 +25,9 @@ func (s *TmuxSession) OnClose(fn func()) {
 func NewTmuxSession(name string, dir string, unsetEnv []string, command string, args ...string) (*TmuxSession, error) {
 	s := &TmuxSession{name: name}
 
-	tmuxArgs := []string{"new-session", "-d", "-s", name, "-c", dir}
+	// Set explicit window size so TUI agents have enough room to render their
+	// input prompt (some agents like droid have large splash banners).
+	tmuxArgs := []string{"new-session", "-d", "-s", name, "-x", "200", "-y", "50", "-c", dir}
 	// Build a shell command string, prefixed with env -u for each var to strip.
 	// All arguments are shell-quoted to prevent injection or splitting.
 	var parts []string
