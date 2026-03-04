@@ -1,14 +1,19 @@
-package main
+package cursor
 
 import "encoding/json"
 
-// CursorHooksFile represents the .cursor/hooks.json structure.
+// CursorHooksFile represents the .cursor/HooksFileName structure.
+// Cursor uses a flat JSON file with version and hooks sections.
+//
+//nolint:revive // CursorHooksFile is clearer than HooksFile when used outside this package
 type CursorHooksFile struct {
 	Version int         `json:"version"`
 	Hooks   CursorHooks `json:"hooks"`
 }
 
 // CursorHooks contains all hook configurations using camelCase keys.
+//
+//nolint:revive // CursorHooks is clearer than Hooks when used outside this package
 type CursorHooks struct {
 	SessionStart       []CursorHookEntry `json:"sessionStart,omitempty"`
 	SessionEnd         []CursorHookEntry `json:"sessionEnd,omitempty"`
@@ -20,13 +25,19 @@ type CursorHooks struct {
 }
 
 // CursorHookEntry represents a single hook command.
+// Cursor hooks have a command string and an optional matcher field for filtering by tool name.
+//
+//nolint:revive // CursorHookEntry is clearer than HookEntry when used outside this package
 type CursorHookEntry struct {
 	Command string `json:"command"`
 	Matcher string `json:"matcher,omitempty"`
 }
 
 // sessionStartRaw is the JSON structure from SessionStart hooks.
+// IDE includes composer_mode ("agent"), CLI omits it.
+// IDE model is "default", CLI has actual model name.
 type sessionStartRaw struct {
+	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
 	Model          string   `json:"model"`
@@ -36,12 +47,16 @@ type sessionStartRaw struct {
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
 
+	// hook specific
 	IsBackgroundAgent bool   `json:"is_background_agent"`
-	ComposerMode      string `json:"composer_mode"`
+	ComposerMode      string `json:"composer_mode"` // IDE-only: "agent"
 }
 
 // stopHookInputRaw is the JSON structure from Stop hooks.
+// IDE provides transcript_path; CLI sends null.
+// Both provide status and loop_count.
 type stopHookInputRaw struct {
+	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
 	Model          string   `json:"model"`
@@ -51,12 +66,16 @@ type stopHookInputRaw struct {
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
 
+	// hook specific
 	Status    string      `json:"status"`
 	LoopCount json.Number `json:"loop_count"`
 }
 
 // sessionEndRaw is the JSON structure from SessionEnd hooks.
+// IDE provides transcript_path; CLI sends null.
+// Both provide reason, duration_ms, is_background_agent, final_status.
 type sessionEndRaw struct {
+	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
 	Model          string   `json:"model"`
@@ -66,6 +85,7 @@ type sessionEndRaw struct {
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
 
+	// hook specific
 	Reason            string      `json:"reason"`
 	DurationMs        json.Number `json:"duration_ms"`
 	IsBackgroundAgent bool        `json:"is_background_agent"`
@@ -74,6 +94,7 @@ type sessionEndRaw struct {
 
 // beforeSubmitPromptInputRaw is the JSON structure from BeforeSubmitPrompt hooks.
 type beforeSubmitPromptInputRaw struct {
+	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
 	Model          string   `json:"model"`
@@ -83,11 +104,13 @@ type beforeSubmitPromptInputRaw struct {
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
 
+	// hook specific
 	Prompt string `json:"prompt"`
 }
 
 // preCompactHookInputRaw is the JSON structure from PreCompact hook.
 type preCompactHookInputRaw struct {
+	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
 	Model          string   `json:"model"`
@@ -97,17 +120,19 @@ type preCompactHookInputRaw struct {
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
 
-	Trigger             string      `json:"trigger"`
-	ContextUsagePercent json.Number `json:"context_usage_percent"`
-	ContextTokens       json.Number `json:"context_tokens"`
-	ContextWindowSize   json.Number `json:"context_window_size"`
-	MessageCount        json.Number `json:"message_count"`
-	MessagesToCompact   json.Number `json:"messages_to_compact"`
-	IsFirstCompaction   bool        `json:"is_first_compaction"`
+	// hook specific
+	Trigger             string      `json:"trigger"`               // "auto" | "manual",
+	ContextUsagePercent json.Number `json:"context_usage_percent"` // : 85,
+	ContextTokens       json.Number `json:"context_tokens"`        // 120000,
+	ContextWindowSize   json.Number `json:"context_window_size"`   // : 128000,
+	MessageCount        json.Number `json:"message_count"`         // 45,
+	MessagesToCompact   json.Number `json:"messages_to_compact"`   // : 30,
+	IsFirstCompaction   bool        `json:"is_first_compaction"`   // true | false
 }
 
-// subagentStartHookInputRaw is the JSON structure from SubagentStart hook.
+// subagentStartHookInputRaw is the JSON structure from SubagentStart[Task] hook.
 type subagentStartHookInputRaw struct {
+	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
 	Model          string   `json:"model"`
@@ -117,6 +142,7 @@ type subagentStartHookInputRaw struct {
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
 
+	// hook specific
 	SubagentID           string `json:"subagent_id"`
 	SubagentType         string `json:"subagent_type"`
 	SubagentModel        string `json:"subagent_model"`
@@ -128,6 +154,7 @@ type subagentStartHookInputRaw struct {
 
 // subagentStopHookInputRaw is the JSON structure from SubagentStop hooks.
 type subagentStopHookInputRaw struct {
+	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
 	Model          string   `json:"model"`
@@ -137,6 +164,7 @@ type subagentStopHookInputRaw struct {
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
 
+	// hook specific
 	SubagentID           string      `json:"subagent_id"`
 	SubagentType         string      `json:"subagent_type"`
 	Status               string      `json:"status"`

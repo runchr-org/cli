@@ -1,54 +1,81 @@
-package main
+package cursor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
-const hooksFileName = "hooks.json"
+// Ensure CursorAgent implements HookSupport
+var (
+	_ agent.HookSupport = (*CursorAgent)(nil)
+)
 
-// entireHookPrefixes are command prefixes that identify Entire hooks.
+// Cursor hook names - these become subcommands under `entire hooks cursor`
+const (
+	HookNameSessionStart       = "session-start"
+	HookNameSessionEnd         = "session-end"
+	HookNameBeforeSubmitPrompt = "before-submit-prompt"
+	HookNameStop               = "stop"
+	HookNamePreCompact         = "pre-compact"
+	HookNameSubagentStart      = "subagent-start"
+	HookNameSubagentStop       = "subagent-stop"
+)
+
+// HooksFileName is the hooks file used by Cursor.
+const HooksFileName = "hooks.json"
+
+// entireHookPrefixes are command prefixes that identify Entire hooks
 var entireHookPrefixes = []string{
 	"entire ",
 	"go run ${CURSOR_PROJECT_DIR}/cmd/entire/main.go ",
 }
 
-// Hook name constants.
-const (
-	hookNameSessionStart       = "session-start"
-	hookNameSessionEnd         = "session-end"
-	hookNameBeforeSubmitPrompt = "before-submit-prompt"
-	hookNameStop               = "stop"
-	hookNamePreCompact         = "pre-compact"
-	hookNameSubagentStart      = "subagent-start"
-	hookNameSubagentStop       = "subagent-stop"
-)
+// HookNames returns the hook verbs Cursor supports.
+// These become subcommands: entire hooks cursor <verb>
+func (c *CursorAgent) HookNames() []string {
+	return []string{
+		HookNameSessionStart,
+		HookNameSessionEnd,
+		HookNameBeforeSubmitPrompt,
+		HookNameStop,
+		HookNamePreCompact,
+		HookNameSubagentStart,
+		HookNameSubagentStop,
+	}
+}
 
-// cmdInstallHooks installs Cursor hooks in .cursor/hooks.json.
-func cmdInstallHooks(localDev, force bool) error {
-	repoRoot := os.Getenv("ENTIRE_REPO_ROOT")
-	if repoRoot == "" {
-		repoRoot = "."
+// InstallHooks installs Cursor hooks in .cursor/hooks.json.
+// If force is true, removes existing Entire hooks before installing.
+// Returns the number of hooks installed.
+// Unknown top-level fields and hook types are preserved on round-trip.
+func (c *CursorAgent) InstallHooks(ctx context.Context, localDev bool, force bool) (int, error) {
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		worktreeRoot = "."
 	}
 
-	hooksPath := filepath.Join(repoRoot, ".cursor", hooksFileName)
+	hooksPath := filepath.Join(worktreeRoot, ".cursor", HooksFileName)
 
+	// Use raw maps to preserve unknown fields on round-trip
 	var rawFile map[string]json.RawMessage
 	var rawHooks map[string]json.RawMessage
 
-	existingData, readErr := os.ReadFile(hooksPath) //nolint:gosec // path constructed from env + fixed suffix
+	existingData, readErr := os.ReadFile(hooksPath) //nolint:gosec // path is constructed from repo root + fixed path
 	if readErr == nil {
 		if err := json.Unmarshal(existingData, &rawFile); err != nil {
-			return fmt.Errorf("failed to parse existing %s: %w", hooksFileName, err)
+			return 0, fmt.Errorf("failed to parse existing "+HooksFileName+": %w", err)
 		}
 		if hooksRaw, ok := rawFile["hooks"]; ok {
 			if err := json.Unmarshal(hooksRaw, &rawHooks); err != nil {
-				return fmt.Errorf("failed to parse hooks in %s: %w", hooksFileName, err)
+				return 0, fmt.Errorf("failed to parse hooks in "+HooksFileName+": %w", err)
 			}
 		}
 		if _, ok := rawFile["version"]; !ok {
@@ -64,6 +91,7 @@ func cmdInstallHooks(localDev, force bool) error {
 		rawHooks = make(map[string]json.RawMessage)
 	}
 
+	// Parse only the hook types we manage
 	var sessionStart, sessionEnd, beforeSubmitPrompt, stop, preCompact, subagentStart, subagentStop []CursorHookEntry
 	parseCursorHookType(rawHooks, "sessionStart", &sessionStart)
 	parseCursorHookType(rawHooks, "sessionEnd", &sessionEnd)
@@ -73,6 +101,7 @@ func cmdInstallHooks(localDev, force bool) error {
 	parseCursorHookType(rawHooks, "subagentStart", &subagentStart)
 	parseCursorHookType(rawHooks, "subagentStop", &subagentStop)
 
+	// If force is true, remove all existing Entire hooks first
 	if force {
 		sessionStart = removeEntireHooks(sessionStart)
 		sessionEnd = removeEntireHooks(sessionEnd)
@@ -83,6 +112,7 @@ func cmdInstallHooks(localDev, force bool) error {
 		subagentStop = removeEntireHooks(subagentStop)
 	}
 
+	// Define hook commands
 	var cmdPrefix string
 	if localDev {
 		cmdPrefix = "go run ${CURSOR_PROJECT_DIR}/cmd/entire/main.go hooks cursor "
@@ -90,28 +120,51 @@ func cmdInstallHooks(localDev, force bool) error {
 		cmdPrefix = "entire hooks cursor "
 	}
 
-	cmds := map[string]*[]CursorHookEntry{
-		cmdPrefix + hookNameSessionStart:       &sessionStart,
-		cmdPrefix + hookNameSessionEnd:         &sessionEnd,
-		cmdPrefix + hookNameBeforeSubmitPrompt: &beforeSubmitPrompt,
-		cmdPrefix + hookNameStop:               &stop,
-		cmdPrefix + hookNamePreCompact:         &preCompact,
-		cmdPrefix + hookNameSubagentStart:      &subagentStart,
-		cmdPrefix + hookNameSubagentStop:       &subagentStop,
-	}
+	sessionStartCmd := cmdPrefix + HookNameSessionStart
+	sessionEndCmd := cmdPrefix + HookNameSessionEnd
+	beforeSubmitPromptCmd := cmdPrefix + HookNameBeforeSubmitPrompt
+	stopCmd := cmdPrefix + HookNameStop
+	preCompactCmd := cmdPrefix + HookNamePreCompact
+	subagentStartCmd := cmdPrefix + HookNameSubagentStart
+	subagentEndCmd := cmdPrefix + HookNameSubagentStop
 
 	count := 0
-	for cmd, entries := range cmds {
-		if !hookCommandExists(*entries, cmd) {
-			*entries = append(*entries, CursorHookEntry{Command: cmd})
-			count++
-		}
+
+	// Add hooks if they don't exist
+	if !hookCommandExists(sessionStart, sessionStartCmd) {
+		sessionStart = append(sessionStart, CursorHookEntry{Command: sessionStartCmd})
+		count++
+	}
+	if !hookCommandExists(sessionEnd, sessionEndCmd) {
+		sessionEnd = append(sessionEnd, CursorHookEntry{Command: sessionEndCmd})
+		count++
+	}
+	if !hookCommandExists(beforeSubmitPrompt, beforeSubmitPromptCmd) {
+		beforeSubmitPrompt = append(beforeSubmitPrompt, CursorHookEntry{Command: beforeSubmitPromptCmd})
+		count++
+	}
+	if !hookCommandExists(stop, stopCmd) {
+		stop = append(stop, CursorHookEntry{Command: stopCmd})
+		count++
+	}
+	if !hookCommandExists(preCompact, preCompactCmd) {
+		preCompact = append(preCompact, CursorHookEntry{Command: preCompactCmd})
+		count++
+	}
+	if !hookCommandExists(subagentStart, subagentStartCmd) {
+		subagentStart = append(subagentStart, CursorHookEntry{Command: subagentStartCmd})
+		count++
+	}
+	if !hookCommandExists(subagentStop, subagentEndCmd) {
+		subagentStop = append(subagentStop, CursorHookEntry{Command: subagentEndCmd})
+		count++
 	}
 
 	if count == 0 {
-		return writeJSON(map[string]int{"hooks_installed": 0})
+		return 0, nil
 	}
 
+	// Marshal modified hook types back into rawHooks
 	marshalCursorHookType(rawHooks, "sessionStart", sessionStart)
 	marshalCursorHookType(rawHooks, "sessionEnd", sessionEnd)
 	marshalCursorHookType(rawHooks, "beforeSubmitPrompt", beforeSubmitPrompt)
@@ -120,56 +173,59 @@ func cmdInstallHooks(localDev, force bool) error {
 	marshalCursorHookType(rawHooks, "subagentStart", subagentStart)
 	marshalCursorHookType(rawHooks, "subagentStop", subagentStop)
 
+	// Marshal hooks and update raw file
 	hooksJSON, err := json.Marshal(rawHooks)
 	if err != nil {
-		return fmt.Errorf("failed to marshal hooks: %w", err)
+		return 0, fmt.Errorf("failed to marshal hooks: %w", err)
 	}
 	rawFile["hooks"] = hooksJSON
 
-	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o750); err != nil { //nolint:gosec // path constructed from env + fixed suffix
-		return fmt.Errorf("failed to create .cursor directory: %w", err)
+	// Write to file
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o750); err != nil {
+		return 0, fmt.Errorf("failed to create .cursor directory: %w", err)
 	}
 
 	output, err := jsonutil.MarshalIndentWithNewline(rawFile, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal %s: %w", hooksFileName, err)
+		return 0, fmt.Errorf("failed to marshal "+HooksFileName+": %w", err)
 	}
 
-	if err := os.WriteFile(hooksPath, output, 0o600); err != nil { //nolint:gosec // path constructed from env + fixed suffix
-		return fmt.Errorf("failed to write %s: %w", hooksFileName, err)
+	if err := os.WriteFile(hooksPath, output, 0o600); err != nil {
+		return 0, fmt.Errorf("failed to write "+HooksFileName+": %w", err)
 	}
 
-	return writeJSON(map[string]int{"hooks_installed": count})
+	return count, nil
 }
 
-// cmdUninstallHooks removes Entire hooks from .cursor/hooks.json.
-func cmdUninstallHooks() error {
-	repoRoot := os.Getenv("ENTIRE_REPO_ROOT")
-	if repoRoot == "" {
-		repoRoot = "."
+// UninstallHooks removes Entire hooks from Cursor HooksFileName.
+// Unknown top-level fields and hook types are preserved on round-trip.
+func (c *CursorAgent) UninstallHooks(ctx context.Context) error {
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		worktreeRoot = "."
 	}
-
-	hooksPath := filepath.Join(repoRoot, ".cursor", hooksFileName)
-	data, err := os.ReadFile(hooksPath) //nolint:gosec // path constructed from env + fixed suffix
+	hooksPath := filepath.Join(worktreeRoot, ".cursor", HooksFileName)
+	data, err := os.ReadFile(hooksPath) //nolint:gosec // path is constructed from repo root + fixed path
 	if err != nil {
 		return nil //nolint:nilerr // No hooks file means nothing to uninstall
 	}
 
 	var rawFile map[string]json.RawMessage
 	if err := json.Unmarshal(data, &rawFile); err != nil {
-		return fmt.Errorf("failed to parse %s: %w", hooksFileName, err)
+		return fmt.Errorf("failed to parse "+HooksFileName+": %w", err)
 	}
 
 	var rawHooks map[string]json.RawMessage
 	if hooksRaw, ok := rawFile["hooks"]; ok {
 		if err := json.Unmarshal(hooksRaw, &rawHooks); err != nil {
-			return fmt.Errorf("failed to parse hooks in %s: %w", hooksFileName, err)
+			return fmt.Errorf("failed to parse hooks in "+HooksFileName+": %w", err)
 		}
 	}
 	if rawHooks == nil {
 		rawHooks = make(map[string]json.RawMessage)
 	}
 
+	// Parse only the hook types we manage
 	var sessionStart, sessionEnd, beforeSubmitPrompt, stop, preCompact, subagentStart, subagentStop []CursorHookEntry
 	parseCursorHookType(rawHooks, "sessionStart", &sessionStart)
 	parseCursorHookType(rawHooks, "sessionEnd", &sessionEnd)
@@ -179,6 +235,7 @@ func cmdUninstallHooks() error {
 	parseCursorHookType(rawHooks, "subagentStart", &subagentStart)
 	parseCursorHookType(rawHooks, "subagentStop", &subagentStop)
 
+	// Remove Entire hooks from all hook types
 	sessionStart = removeEntireHooks(sessionStart)
 	sessionEnd = removeEntireHooks(sessionEnd)
 	beforeSubmitPrompt = removeEntireHooks(beforeSubmitPrompt)
@@ -187,6 +244,7 @@ func cmdUninstallHooks() error {
 	subagentStart = removeEntireHooks(subagentStart)
 	subagentStop = removeEntireHooks(subagentStop)
 
+	// Marshal modified hook types back into rawHooks
 	marshalCursorHookType(rawHooks, "sessionStart", sessionStart)
 	marshalCursorHookType(rawHooks, "sessionEnd", sessionEnd)
 	marshalCursorHookType(rawHooks, "beforeSubmitPrompt", beforeSubmitPrompt)
@@ -195,6 +253,7 @@ func cmdUninstallHooks() error {
 	marshalCursorHookType(rawHooks, "subagentStart", subagentStart)
 	marshalCursorHookType(rawHooks, "subagentStop", subagentStop)
 
+	// Marshal hooks back (preserving unknown hook types)
 	if len(rawHooks) > 0 {
 		hooksJSON, err := json.Marshal(rawHooks)
 		if err != nil {
@@ -205,55 +264,67 @@ func cmdUninstallHooks() error {
 		delete(rawFile, "hooks")
 	}
 
+	// Write back
 	output, err := jsonutil.MarshalIndentWithNewline(rawFile, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal %s: %w", hooksFileName, err)
+		return fmt.Errorf("failed to marshal "+HooksFileName+": %w", err)
 	}
 
-	if err := os.WriteFile(hooksPath, output, 0o600); err != nil { //nolint:gosec // path constructed from env + fixed suffix
-		return fmt.Errorf("failed to write %s: %w", hooksFileName, err)
+	if err := os.WriteFile(hooksPath, output, 0o600); err != nil {
+		return fmt.Errorf("failed to write "+HooksFileName+": %w", err)
 	}
 	return nil
 }
 
-// cmdAreHooksInstalled checks if Entire hooks are installed.
-func cmdAreHooksInstalled() error {
-	repoRoot := os.Getenv("ENTIRE_REPO_ROOT")
-	if repoRoot == "" {
-		repoRoot = "."
-	}
-
-	hooksPath := filepath.Join(repoRoot, ".cursor", hooksFileName)
-	data, err := os.ReadFile(hooksPath) //nolint:gosec // path constructed from env + fixed suffix
+// AreHooksInstalled checks if Entire hooks are installed.
+func (c *CursorAgent) AreHooksInstalled(ctx context.Context) bool {
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return writeJSON(map[string]bool{"installed": false})
+		worktreeRoot = "."
+	}
+	hooksPath := filepath.Join(worktreeRoot, ".cursor", HooksFileName)
+	data, err := os.ReadFile(hooksPath) //nolint:gosec // path is constructed from repo root + fixed path
+	if err != nil {
+		return false
 	}
 
 	var hooksFile CursorHooksFile
 	if err := json.Unmarshal(data, &hooksFile); err != nil {
-		return writeJSON(map[string]bool{"installed": false})
+		return false
 	}
 
-	installed := hasEntireHook(hooksFile.Hooks.SessionStart) ||
+	return hasEntireHook(hooksFile.Hooks.SessionStart) ||
 		hasEntireHook(hooksFile.Hooks.SessionEnd) ||
 		hasEntireHook(hooksFile.Hooks.BeforeSubmitPrompt) ||
 		hasEntireHook(hooksFile.Hooks.Stop) ||
 		hasEntireHook(hooksFile.Hooks.PreCompact) ||
 		hasEntireHook(hooksFile.Hooks.SubagentStart) ||
 		hasEntireHook(hooksFile.Hooks.SubagentStop)
+}
 
-	return writeJSON(map[string]bool{"installed": installed})
+// GetSupportedHooks returns the hook types Cursor supports.
+func (c *CursorAgent) GetSupportedHooks() []agent.HookType {
+	return []agent.HookType{
+		agent.HookSessionStart,
+		agent.HookSessionEnd,
+		agent.HookUserPromptSubmit,
+		agent.HookStop,
+		agent.HookPreToolUse,
+		agent.HookPostToolUse,
+	}
 }
 
 // parseCursorHookType parses a specific hook type from rawHooks into the target slice.
+// Silently ignores parse errors (leaves target unchanged).
 func parseCursorHookType(rawHooks map[string]json.RawMessage, hookType string, target *[]CursorHookEntry) {
 	if data, ok := rawHooks[hookType]; ok {
-		//nolint:errcheck,gosec // Intentionally ignoring parse errors
+		//nolint:errcheck,gosec // Intentionally ignoring parse errors - leave target as nil/empty
 		json.Unmarshal(data, target)
 	}
 }
 
 // marshalCursorHookType marshals a hook type back into rawHooks.
+// If the slice is empty, removes the key from rawHooks.
 func marshalCursorHookType(rawHooks map[string]json.RawMessage, hookType string, entries []CursorHookEntry) {
 	if len(entries) == 0 {
 		delete(rawHooks, hookType)
@@ -261,10 +332,12 @@ func marshalCursorHookType(rawHooks map[string]json.RawMessage, hookType string,
 	}
 	data, err := json.Marshal(entries)
 	if err != nil {
-		return
+		return // Silently ignore marshal errors (shouldn't happen)
 	}
 	rawHooks[hookType] = data
 }
+
+// Helper functions for hook management
 
 func hookCommandExists(entries []CursorHookEntry, command string) bool {
 	for _, entry := range entries {
