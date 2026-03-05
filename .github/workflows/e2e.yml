@@ -14,7 +14,6 @@ on:
           - gemini-cli
           - factoryai-droid
           - cursor-cli
-          - kiro
   push:
     branches:
       - main
@@ -42,7 +41,7 @@ jobs:
           if [ -n "$input" ]; then
             echo "agents=[\"$input\"]" >> "$GITHUB_OUTPUT"
           else
-            echo 'agents=["claude-code","opencode","gemini-cli","factoryai-droid","cursor-cli", "kiro"]' >> "$GITHUB_OUTPUT"
+            echo 'agents=["claude-code","opencode","gemini-cli","factoryai-droid","cursor-cli"]' >> "$GITHUB_OUTPUT"
           fi
 
   e2e-tests:
@@ -70,47 +69,10 @@ jobs:
             claude-code) curl -fsSL https://claude.ai/install.sh | bash ;;
             opencode)    curl -fsSL https://opencode.ai/install | bash ;;
             gemini-cli)  npm install -g @google/gemini-cli ;;
-            kiro)
-              KIRO_VERSION="1.27.0"
-              curl -fsSL "https://desktop-release.q.us-east-1.amazonaws.com/${KIRO_VERSION}/kirocli-x86_64-linux.zip" -o kiro.zip
-              unzip -q kiro.zip
-              mkdir -p ~/.local/bin
-              cp kirocli/bin/kiro-cli-chat ~/.local/bin/
-              chmod +x ~/.local/bin/kiro-cli-chat
-              rm -rf kirocli kiro.zip
-              ;;
             cursor-cli)  curl https://cursor.com/install -fsS | bash ;;
             factoryai-droid) curl -fsSL https://app.factory.ai/cli | sh ;;
           esac
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-      - name: Inject Kiro auth token
-        if: matrix.agent == 'kiro'
-        run: |
-          mkdir -p ~/.local/share/kiro-cli
-          DB="$HOME/.local/share/kiro-cli/data.sqlite3"
-          sqlite3 "$DB" <<'SQL'
-          CREATE TABLE IF NOT EXISTS migrations (id INTEGER PRIMARY KEY, version INTEGER NOT NULL, migration_time INTEGER NOT NULL);
-          INSERT OR IGNORE INTO migrations (id, version, migration_time) VALUES (1,0,0),(2,1,0),(3,2,0),(4,3,0),(5,4,0),(6,5,0),(7,6,0),(8,7,0),(9,8,0);
-          CREATE TABLE IF NOT EXISTS auth_kv (key TEXT PRIMARY KEY, value TEXT);
-          CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value BLOB);
-          CREATE TABLE IF NOT EXISTS conversations (key TEXT PRIMARY KEY, value TEXT);
-          CREATE TABLE IF NOT EXISTS conversations_v2 (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
-          CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY, value TEXT, updated_at TEXT);
-          SQL
-          python3 -c "
-          import sqlite3, os
-          db = sqlite3.connect(os.environ['HOME'] + '/.local/share/kiro-cli/data.sqlite3')
-          db.execute('INSERT OR REPLACE INTO auth_kv (key, value) VALUES (?, ?)',
-                     ('kirocli:odic:device-registration', os.environ['KIRO_DEVICE_REG']))
-          db.execute('INSERT OR REPLACE INTO auth_kv (key, value) VALUES (?, ?)',
-                     ('kirocli:odic:token', os.environ['KIRO_AUTH_TOKEN']))
-          db.commit()
-          "
-          kiro-cli-chat whoami -f json
-        env:
-          KIRO_AUTH_TOKEN: ${{ secrets.KIRO_AUTH_TOKEN }}
-          KIRO_DEVICE_REG: ${{ secrets.KIRO_DEVICE_REG }}
 
       - name: Bootstrap agent
         env:
