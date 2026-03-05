@@ -138,7 +138,10 @@ func (k *Kiro) RunPrompt(ctx context.Context, dir string, prompt string, opts ..
 	}
 
 	name := fmt.Sprintf("kiro-run-%d", time.Now().UnixNano())
-	s, err := NewTmuxSession(name, dir, []string{"ENTIRE_TEST_TTY"}, k.Binary(), args...)
+	cmdArgs := append([]string{"env"}, kiroAuthEnvArgs()...)
+	cmdArgs = append(cmdArgs, k.Binary())
+	cmdArgs = append(cmdArgs, args...)
+	s, err := NewTmuxSession(name, dir, []string{"ENTIRE_TEST_TTY"}, cmdArgs[0], cmdArgs[1:]...)
 	if err != nil {
 		return Output{}, fmt.Errorf("starting kiro session: %w", err)
 	}
@@ -177,7 +180,9 @@ func (k *Kiro) RunPrompt(ctx context.Context, dir string, prompt string, opts ..
 
 func (k *Kiro) StartSession(ctx context.Context, dir string) (Session, error) {
 	name := fmt.Sprintf("kiro-test-%d", time.Now().UnixNano())
-	s, err := NewTmuxSession(name, dir, []string{"ENTIRE_TEST_TTY"}, k.Binary(), "chat", "-a", "--agent", "entire")
+	cmdArgs := append([]string{"env"}, kiroAuthEnvArgs()...)
+	cmdArgs = append(cmdArgs, k.Binary(), "chat", "-a", "--agent", "entire")
+	s, err := NewTmuxSession(name, dir, []string{"ENTIRE_TEST_TTY"}, cmdArgs[0], cmdArgs[1:]...)
 	if err != nil {
 		return nil, err
 	}
@@ -190,6 +195,26 @@ func (k *Kiro) StartSession(ctx context.Context, dir string) (Session, error) {
 	s.stableAtSend = ""
 
 	return &KiroSession{TmuxSession: s}, nil
+}
+
+// kiroAuthEnvArgs returns KEY=VALUE strings for AWS SIGV4 auth env vars
+// that are set in the current process. These must be forwarded explicitly
+// through tmux via the `env` command since tmux sessions inherit the
+// server's environment, not the client's.
+func kiroAuthEnvArgs() []string {
+	var args []string
+	for _, key := range []string{
+		"AMAZON_Q_SIGV4",
+		"AWS_REGION",
+		"AWS_ACCESS_KEY_ID",
+		"AWS_SECRET_ACCESS_KEY",
+		"AWS_SESSION_TOKEN",
+	} {
+		if v := os.Getenv(key); v != "" {
+			args = append(args, key+"="+v)
+		}
+	}
+	return args
 }
 
 // KiroSession wraps TmuxSession for Kiro's interactive sessions.
