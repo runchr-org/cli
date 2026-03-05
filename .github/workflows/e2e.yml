@@ -30,14 +30,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      agents: ${{ steps.set-matrix.outputs.agents }}
+    steps:
+      - id: set-matrix
+        env:
+          SELECTED_AGENT: ${{ github.event.inputs.agent }}
+        run: |
+          if [[ "$SELECTED_AGENT" != "" ]]; then
+            echo "agents=[\"$SELECTED_AGENT\"]" >> "$GITHUB_OUTPUT"
+          else
+            echo 'agents=["claude-code","opencode","gemini-cli","factoryai-droid","cursor-cli","kiro"]' >> "$GITHUB_OUTPUT"
+          fi
+
   e2e-tests:
+    needs: setup
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    if: ${{ github.event_name != 'workflow_dispatch' || !github.event.inputs.agent || github.event.inputs.agent == matrix.agent }}
     strategy:
       fail-fast: false
       matrix:
-        agent: [claude-code, opencode, gemini-cli, factoryai-droid, cursor-cli, kiro]
+        agent: ${{ fromJSON(needs.setup.outputs.agents) }}
 
     steps:
       - name: Checkout repository
