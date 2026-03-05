@@ -5,8 +5,11 @@ import (
 	"fmt"
 )
 
-// kiroFileModificationTools lists tool names that create or modify files.
-var kiroFileModificationTools = []string{"fs_write", "fs_edit"}
+// kiroFileModificationTools is the set of tool names that create or modify files.
+var kiroFileModificationTools = map[string]struct{}{
+	"fs_write": {},
+	"fs_edit":  {},
+}
 
 // parseTranscript unmarshals raw JSON into a kiroTranscript, supporting both
 // Kiro CLI format (paired user+assistant entries) and Kiro IDE format
@@ -260,12 +263,8 @@ func extractFilesFromAssistant(raw json.RawMessage) []string {
 
 // isFileModificationTool reports whether the tool name is a file-modifying tool.
 func isFileModificationTool(name string) bool {
-	for _, t := range kiroFileModificationTools {
-		if name == t {
-			return true
-		}
-	}
-	return false
+	_, ok := kiroFileModificationTools[name]
+	return ok
 }
 
 // extractFilePath extracts a file path from tool call args JSON.

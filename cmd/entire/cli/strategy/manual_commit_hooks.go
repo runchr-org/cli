@@ -370,6 +370,10 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	// This covers two cases:
 	// 1. Non-TTY agents (Claude Code, Gemini CLI): hasTTY()=false
 	// 2. TTY agents (Kiro in tmux): hasTTY()=true but agentUsesTerminal()=true
+	//
+	// Note: manual user commits while a terminal agent session is ACTIVE also
+	// auto-link via this path. This is intentional and non-destructive — the
+	// trailer can be removed by the user in prepare-commit-msg before finalizing.
 	for _, state := range sessions {
 		if state.Phase.IsActive() && (!hasTTY() || agentUsesTerminal(state.AgentType)) {
 			return s.addTrailerForAgentCommit(logCtx, commitMsgFile, state, source)

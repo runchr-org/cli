@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,11 +154,18 @@ func (k *KiroAgent) parseStop(ctx context.Context, stdin io.Reader) (*agent.Even
 
 	// At stop, Kiro's SQLite transcript is available. Fetch and cache it
 	// under our stable session ID so lifecycle.go can read it.
-	sessionRef, _ := k.ensureCachedTranscript(ctx, cwd, sessionID) //nolint:errcheck // best-effort: fall back to IDE or placeholder
+	var sessionRef string
+	sessionRef, err = k.ensureCachedTranscript(ctx, cwd, sessionID)
+	if err != nil {
+		logging.Debug(ctx, "kiro: ensureCachedTranscript failed (best-effort)", slog.String("error", err.Error()))
+	}
 
 	// IDE mode: SQLite may not exist. Try the IDE's workspace session files.
 	if sessionRef == "" {
-		sessionRef, _ = k.ensureIDETranscript(ctx, cwd, sessionID) //nolint:errcheck // best-effort: fall back to placeholder
+		sessionRef, err = k.ensureIDETranscript(ctx, cwd, sessionID)
+		if err != nil {
+			logging.Debug(ctx, "kiro: ensureIDETranscript failed (best-effort)", slog.String("error", err.Error()))
+		}
 	}
 
 	// Last resort: create a minimal placeholder so the lifecycle handler can
