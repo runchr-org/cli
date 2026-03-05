@@ -271,8 +271,9 @@ func NewStateStoreWithDir(stateDir string) *StateStore {
 }
 
 // Load loads the session state for the given session ID.
-// Returns (nil, nil) when session file doesn't exist or session is stale (not an error condition).
-// Stale sessions (ended longer than StaleSessionThreshold ago) are automatically deleted.
+// Returns (nil, nil) when session file doesn't exist, session is stale, or session is
+// from a test agent (not an error condition).
+// Stale and test sessions are automatically deleted from disk.
 func (s *StateStore) Load(ctx context.Context, sessionID string) (*State, error) {
 	// Validate session ID to prevent path traversal
 	if err := validation.ValidateSessionID(sessionID); err != nil {
