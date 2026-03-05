@@ -209,7 +209,15 @@ func IsTerminalAgent(agentType types.AgentType) bool {
 		return false
 	}
 	ta, ok := ag.(TerminalAgent)
+
 	return ok && ta.UsesTerminal()
+}
+
+// TestOnly is implemented by agents that exist solely for testing (e.g., the Vogon canary agent).
+// These agents are excluded from the user-facing agent selection in `entire enable`.
+type TestOnly interface {
+	Agent
+	IsTestOnly() bool
 }
 
 // SubagentAwareExtractor provides methods for extracting files and tokens including subagents.

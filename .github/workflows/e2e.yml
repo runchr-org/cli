@@ -30,29 +30,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  setup:
+  # Build the matrix dynamically so workflow_dispatch can select a single agent.
+  matrix-setup:
     runs-on: ubuntu-latest
     outputs:
-      agents: ${{ steps.set-matrix.outputs.agents }}
+      agents: ${{ steps.set.outputs.agents }}
     steps:
-      - id: set-matrix
-        env:
-          SELECTED_AGENT: ${{ github.event.inputs.agent }}
+      - id: set
         run: |
-          if [[ "$SELECTED_AGENT" != "" ]]; then
-            echo "agents=[\"$SELECTED_AGENT\"]" >> "$GITHUB_OUTPUT"
+          input="${{ github.event.inputs.agent }}"
+          if [ -n "$input" ]; then
+            echo "agents=[\"$input\"]" >> "$GITHUB_OUTPUT"
           else
-            echo 'agents=["claude-code","opencode","gemini-cli","factoryai-droid","cursor-cli","kiro"]' >> "$GITHUB_OUTPUT"
+            echo 'agents=["claude-code","opencode","gemini-cli","factoryai-droid","cursor-cli", "kiro"]' >> "$GITHUB_OUTPUT"
           fi
 
   e2e-tests:
-    needs: setup
+    needs: matrix-setup
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        agent: ${{ fromJSON(needs.setup.outputs.agents) }}
+        agent: ${{ fromJson(needs.matrix-setup.outputs.agents) }}
 
     steps:
       - name: Checkout repository

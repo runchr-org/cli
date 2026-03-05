@@ -344,6 +344,7 @@ func TestHandleLifecycleCompaction_PreservesTranscriptOffset(t *testing.T) {
 	// Create session state with non-zero transcript offset (set by prior condensation)
 	sessionState := &strategy.SessionState{
 		SessionID:                 sessionID,
+		StartedAt:                 time.Now(),
 		CheckpointTranscriptStart: 50,
 	}
 	if err := strategy.SaveSessionState(context.Background(), sessionState); err != nil {
@@ -497,6 +498,18 @@ func TestDispatchLifecycleEvent_RoutesToCorrectHandler(t *testing.T) {
 			eventType:   agent.SubagentEnd,
 			sessionID:   "test",
 			expectError: false, // Succeeds when run from a valid git repo
+		},
+		{
+			name:        "ModelUpdate with empty model is no-op",
+			eventType:   agent.ModelUpdate,
+			sessionID:   "test",
+			expectError: false,
+		},
+		{
+			name:        "ModelUpdate with empty session ID is no-op",
+			eventType:   agent.ModelUpdate,
+			sessionID:   "",
+			expectError: false,
 		},
 	}
 

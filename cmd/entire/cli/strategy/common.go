@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
@@ -1412,6 +1414,26 @@ func IsOnDefaultBranch(repo *git.Repository) (bool, string) {
 	return currentBranch == defaultBranch, currentBranch
 }
 
+// prepareTranscriptForState ensures the transcript is up-to-date for the given session.
+// Only prepares for ACTIVE sessions — IDLE/ENDED sessions are already flushed.
+// Resolves the agent from state.AgentType internally. Multiple calls are safe but
+// not free — callers should avoid redundant calls for performance.
+func prepareTranscriptForState(ctx context.Context, state *SessionState) {
+	if !state.Phase.IsActive() || state.TranscriptPath == "" || state.AgentType == "" {
+		return
+	}
+	ag, err := agent.GetByAgentType(state.AgentType)
+	if err != nil {
+		logging.Debug(ctx, "prepareTranscriptForState: unknown agent type",
+			slog.String("session_id", state.SessionID),
+			slog.String("agent_type", string(state.AgentType)),
+			slog.Any("error", err),
+		)
+		return
+	}
+	prepareTranscriptIfNeeded(ctx, ag, state.TranscriptPath)
+}
+
 // prepareTranscriptIfNeeded calls PrepareTranscript for agents that implement
 // the TranscriptPreparer interface. This ensures transcript files exist before
 // they are read (e.g., OpenCode creates its transcript lazily via `opencode export`).
@@ -1420,7 +1442,7 @@ func prepareTranscriptIfNeeded(ctx context.Context, ag agent.Agent, transcriptPa
 	if ag == nil || transcriptPath == "" {
 		return
 	}
-	if preparer, ok := ag.(agent.TranscriptPreparer); ok {
+	if preparer, ok := agent.AsTranscriptPreparer(ag); ok {
 		// Best-effort: callers handle missing files gracefully.
 		// Transcript may not be available yet (e.g., agent not installed).
 		_ = preparer.PrepareTranscript(ctx, transcriptPath) //nolint:errcheck // Best-effort in hook path
