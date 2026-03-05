@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -124,113 +125,83 @@ func (k *Kiro) RunPrompt(ctx context.Context, dir string, prompt string, opts ..
 		o(cfg)
 	}
 
-	// kiro-cli --no-interactive mode does not fire agent hooks, so we must
-	// use interactive (tmux) mode and send the prompt through the TUI.
 	timeout := 2 * time.Minute
 	if cfg.PromptTimeout > 0 {
 		timeout = cfg.PromptTimeout
 	}
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
-	// --agent entire activates the agent profile that contains our hooks
-	args := []string{"chat", "-a", "--agent", "entire"}
+	// --no-interactive: runs a single prompt and exits; SIGV4 env vars
+	// propagate naturally (no tmux env forwarding needed).
+	// --trust-all-tools: auto-approve tool use (equivalent to -a in interactive mode).
+	// --agent entire: activates the agent profile that contains our hooks.
+	args := []string{"chat", "--no-interactive", "--trust-all-tools", "--agent", "entire"}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
+	args = append(args, prompt)
 
-	name := fmt.Sprintf("kiro-run-%d", time.Now().UnixNano())
-	cmdArgs := append([]string{"env"}, kiroAuthEnvArgs()...)
-	cmdArgs = append(cmdArgs, k.Binary())
-	cmdArgs = append(cmdArgs, args...)
-	s, err := NewTmuxSession(name, dir, []string{"ENTIRE_TEST_TTY"}, cmdArgs[0], cmdArgs[1:]...)
-	if err != nil {
-		return Output{}, fmt.Errorf("starting kiro session: %w", err)
+	// Build display args with quoted prompt for logging.
+	displayArgs := make([]string, len(args))
+	copy(displayArgs, args)
+	displayArgs[len(displayArgs)-1] = fmt.Sprintf("%q", prompt)
+
+	cmd := exec.CommandContext(cmdCtx, k.Binary(), args...)
+	cmd.Dir = dir
+	cmd.Stdin = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
-	defer func() { _ = s.Close() }()
+	cmd.WaitDelay = 5 * time.Second
 
-	// Wait for initial prompt — kiro-cli TUI shows "!>" in trust-all mode
-	if _, err := s.WaitFor(k.PromptPattern(), 30*time.Second); err != nil {
-		content := s.Capture()
-		return Output{
-			Command: k.Binary() + " " + strings.Join(args, " "),
-			Stderr:  content,
-		}, fmt.Errorf("waiting for kiro startup: %w", err)
-	}
-	s.stableAtSend = ""
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
-	// Send the prompt
-	if err := s.Send(prompt); err != nil {
-		return Output{}, fmt.Errorf("sending prompt to kiro: %w", err)
-	}
-
-	// Wait for "Credits:" which only appears after the agent finishes a response.
-	// More reliable than PromptPattern for single-prompt mode since it uniquely
-	// identifies response completion without needing to distinguish echoed input.
-	content, err := s.WaitFor(`Credits:`, timeout)
+	err := cmd.Run()
 	exitCode := 0
 	if err != nil {
-		exitCode = -1
+		exitErr := &exec.ExitError{}
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1
+		}
 	}
 
 	return Output{
-		Command:  k.Binary() + " " + strings.Join(args, " ") + " " + fmt.Sprintf("%q", prompt),
-		Stdout:   content,
+		Command:  k.Binary() + " " + strings.Join(displayArgs, " "),
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
 		ExitCode: exitCode,
 	}, err
 }
 
 func (k *Kiro) StartSession(ctx context.Context, dir string) (Session, error) {
-	name := fmt.Sprintf("kiro-test-%d", time.Now().UnixNano())
-	cmdArgs := append([]string{"env"}, kiroAuthEnvArgs()...)
-	cmdArgs = append(cmdArgs, k.Binary(), "chat", "-a", "--agent", "entire")
-	s, err := NewTmuxSession(name, dir, []string{"ENTIRE_TEST_TTY"}, cmdArgs[0], cmdArgs[1:]...)
-	if err != nil {
-		return nil, err
-	}
-
-	// Wait for the prompt indicator — kiro-cli TUI shows "!>" in trust-all mode
-	if _, err := s.WaitFor(k.PromptPattern(), 15*time.Second); err != nil {
-		_ = s.Close()
-		return nil, fmt.Errorf("waiting for kiro startup prompt: %w", err)
-	}
-	s.stableAtSend = ""
-
-	return &KiroSession{TmuxSession: s}, nil
+	return &KiroSession{kiro: k, dir: dir, ctx: ctx}, nil
 }
 
-// kiroAuthEnvArgs returns KEY=VALUE strings for AWS SIGV4 auth env vars
-// that are set in the current process. These must be forwarded explicitly
-// through tmux via the `env` command since tmux sessions inherit the
-// server's environment, not the client's.
-func kiroAuthEnvArgs() []string {
-	var args []string
-	for _, key := range []string{
-		"AMAZON_Q_SIGV4",
-		"AWS_REGION",
-		"AWS_ACCESS_KEY_ID",
-		"AWS_SECRET_ACCESS_KEY",
-		"AWS_SESSION_TOKEN",
-	} {
-		if v := os.Getenv(key); v != "" {
-			args = append(args, key+"="+v)
-		}
-	}
-	return args
-}
-
-// KiroSession wraps TmuxSession for Kiro's interactive sessions.
-// After Send, WaitFor uses an end-of-line pattern to avoid matching
-// the echoed "!>" prompt in the input line.
+// KiroSession runs each Send as a separate --no-interactive command.
+// SIGV4 auth does not work with the interactive TUI, so this approach
+// runs one kiro-cli process per prompt (same pattern as setup-kiro-action).
 type KiroSession struct {
-	*TmuxSession
+	kiro       *Kiro
+	dir        string
+	ctx        context.Context
+	lastOutput string
 }
 
-func (s *KiroSession) WaitFor(pattern string, timeout time.Duration) (string, error) {
-	// For initial waits (before any Send), use the original pattern ("!>").
-	if s.stableAtSend == "" {
-		return s.TmuxSession.WaitFor(pattern, timeout)
-	}
-	// After a Send, the echoed input line contains "!>" with text after it
-	// (e.g., "[entire] 3% !> now commit it"). The real prompt has "!>" at
-	// end-of-line (e.g., "[entire] 3% !>"). Match only the latter.
-	return s.TmuxSession.WaitFor(`(?m)!>\s*$`, timeout)
+func (s *KiroSession) Send(input string) error {
+	out, err := s.kiro.RunPrompt(s.ctx, s.dir, input)
+	s.lastOutput = out.Stdout + out.Stderr
+	return err
 }
+
+func (s *KiroSession) WaitFor(_ string, _ time.Duration) (string, error) {
+	return s.lastOutput, nil
+}
+
+func (s *KiroSession) Capture() string { return s.lastOutput }
+func (s *KiroSession) Close() error    { return nil }
