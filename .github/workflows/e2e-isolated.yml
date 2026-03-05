@@ -47,7 +47,7 @@ jobs:
         if: inputs.agent == 'kiro'
         uses: clouatre-labs/setup-kiro-action@v1
         with:
-          version: '1.24.0'
+          version: '1.22.0'
           enable-sigv4: true
           aws-region: us-east-1
 
