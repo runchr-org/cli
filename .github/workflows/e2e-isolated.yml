@@ -14,9 +14,6 @@ on:
         required: true
         default: "TestInteractiveMultiStep"
 
-permissions:
-  contents: read
-
 jobs:
   e2e-isolated:
     runs-on: ubuntu-latest

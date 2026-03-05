@@ -53,8 +53,6 @@ e2e/
 | `E2E_ARTIFACT_DIR` | Override artifact output directory | `e2e/artifacts/<timestamp>` |
 | `ANTHROPIC_API_KEY` | Required for Claude Code | — |
 | `GEMINI_API_KEY` | Required for Gemini CLI | — |
-| `AMAZON_Q_SIGV4` | Enable headless IAM/SIGV4 auth for Kiro | unset |
-| `AWS_REGION` | AWS region for Kiro SIGV4 auth | `us-east-1` in CI |
 
 ## Debugging Failures
 
@@ -82,21 +80,14 @@ To diagnose: read `console.log` in the failing test's artifact directory. Compar
 
 ## CI Workflows
 
-- **`.github/workflows/e2e.yml`** — Runs full suite on push to main. Matrix: `[claude-code, opencode, gemini-cli, factoryai-droid, kiro]`.
+- **`.github/workflows/e2e.yml`** — Runs full suite on push to main. Matrix: `[claude-code, opencode, gemini-cli, factoryai-droid]` (Kiro excluded pending [headless auth](https://github.com/kirodotdev/Kiro/issues/5938)).
 - **`.github/workflows/e2e-isolated.yml`** — Manual dispatch for debugging a single test. Inputs: agent + test name filter.
 
 Both workflows run `go run ./e2e/bootstrap` before tests to handle agent-specific CI setup (auth config, warmup).
 
 ## Kiro Authentication
 
-Kiro E2E tests require the `kiro-cli-chat` binary (not `kiro-cli`). The desktop app wrapper (`kiro-cli`) ignores `AMAZON_Q_SIGV4` and always forces browser OAuth, which fails in headless environments.
+Kiro currently only supports browser-based authentication. There is no headless/token-based auth flow available yet — see [kirodotdev/Kiro#5938](https://github.com/kirodotdev/Kiro/issues/5938) for the upstream tracking issue.
 
-- **GitHub-hosted CI**: Workflows download `kiro-cli-chat` directly and use AWS OIDC credentials plus SIGV4 (`AMAZON_Q_SIGV4=1`).
-- **Local development**: Install `kiro-cli-chat` separately — the Kiro desktop app only provides `kiro-cli`. Download the standalone binary:
-  ```bash
-  KIRO_VERSION="1.27.0"
-  curl -fsSL "https://desktop-release.q.us-east-1.amazonaws.com/${KIRO_VERSION}/kirocli-$(uname -m)-$(uname -s | tr '[:upper:]' '[:lower:]').zip" -o kiro.zip
-  unzip -q kiro.zip && cp kirocli/bin/kiro-cli-chat ~/.local/bin/ && rm -rf kirocli kiro.zip
-  ```
-
-CI prerequisite: set `AWS_ROLE_ARN` repository secret so `aws-actions/configure-aws-credentials` can assume the role.
+- **Local development**: Run `kiro-cli` once interactively to complete browser auth before running E2E tests.
+- **CI**: Kiro E2E tests are **disabled in CI** until a headless auth mechanism is available. The agent is excluded from the workflow matrix in both `e2e.yml` and `e2e-isolated.yml`.
