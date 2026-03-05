@@ -15,7 +15,6 @@ on:
         default: "TestInteractiveMultiStep"
 
 permissions:
-  id-token: write
   contents: read
 
 jobs:
@@ -36,31 +35,33 @@ jobs:
       - name: Build entire CLI
         run: go build -o /usr/local/bin/entire ./cmd/entire
 
-      - name: Configure AWS credentials (Kiro OIDC)
-        if: inputs.agent == 'kiro'
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
-
-      - name: Setup Kiro CLI
-        if: inputs.agent == 'kiro'
-        uses: clouatre-labs/setup-kiro-action@v1
-        with:
-          version: '1.22.0'
-          enable-sigv4: true
-          aws-region: us-east-1
-
       - name: Install agent CLI
         run: |
           case "${{ inputs.agent }}" in
             claude-code) curl -fsSL https://claude.ai/install.sh | bash ;;
             opencode)    curl -fsSL https://opencode.ai/install | bash ;;
             gemini-cli)  npm install -g @google/gemini-cli ;;
+            kiro)
+              KIRO_VERSION="1.27.0"
+              curl -fsSL "https://desktop-release.q.us-east-1.amazonaws.com/${KIRO_VERSION}/kirocli-x86_64-linux.zip" -o kiro.zip
+              unzip -q kiro.zip
+              mkdir -p ~/.local/bin
+              cp kirocli/bin/kiro-cli-chat ~/.local/bin/
+              chmod +x ~/.local/bin/kiro-cli-chat
+              rm -rf kirocli kiro.zip
+              ;;
             cursor-cli)  curl https://cursor.com/install -fsS | bash ;;
             factoryai-droid) curl -fsSL https://app.factory.ai/cli | sh ;;
           esac
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Inject Kiro auth token
+        if: inputs.agent == 'kiro'
+        run: |
+          mkdir -p ~/.aws/sso/cache
+          echo "$KIRO_AUTH_TOKEN" > ~/.aws/sso/cache/kiro-auth-token.json
+        env:
+          KIRO_AUTH_TOKEN: ${{ secrets.KIRO_AUTH_TOKEN }}
 
       - name: Bootstrap agent
         env:
@@ -68,8 +69,6 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
-          AMAZON_Q_SIGV4: ${{ inputs.agent == 'kiro' && '1' || '' }}
-          AWS_REGION: ${{ inputs.agent == 'kiro' && 'us-east-1' || '' }}
         run: go run ./e2e/bootstrap
 
       - name: Run isolated test
@@ -78,8 +77,6 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
-          AMAZON_Q_SIGV4: ${{ inputs.agent == 'kiro' && '1' || '' }}
-          AWS_REGION: ${{ inputs.agent == 'kiro' && 'us-east-1' || '' }}
           E2E_ARTIFACT_DIR: ${{ github.workspace }}/e2e-artifacts
           E2E_ENTIRE_BIN: /usr/local/bin/entire
         run: |

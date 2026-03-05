@@ -84,12 +84,13 @@ jobs:
           esac
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Configure AWS credentials (Kiro OIDC)
+      - name: Inject Kiro auth token
         if: matrix.agent == 'kiro'
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+        run: |
+          mkdir -p ~/.aws/sso/cache
+          echo "$KIRO_AUTH_TOKEN" > ~/.aws/sso/cache/kiro-auth-token.json
+        env:
+          KIRO_AUTH_TOKEN: ${{ secrets.KIRO_AUTH_TOKEN }}
 
       - name: Bootstrap agent
         env:
@@ -97,8 +98,6 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
-          AMAZON_Q_SIGV4: ${{ matrix.agent == 'kiro' && '1' || '' }}
-          AWS_REGION: ${{ matrix.agent == 'kiro' && 'us-east-1' || '' }}
         run: go run ./e2e/bootstrap
 
       - name: Run E2E Tests
@@ -107,8 +106,6 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
-          AMAZON_Q_SIGV4: ${{ matrix.agent == 'kiro' && '1' || '' }}
-          AWS_REGION: ${{ matrix.agent == 'kiro' && 'us-east-1' || '' }}
           E2E_CONCURRENT_TEST_LIMIT: ${{ matrix.agent == 'gemini-cli' && '6' || matrix.agent == 'factoryai-droid' && '1' || '' }}
         run: mise run test:e2e --agent ${{ matrix.agent }}
 
