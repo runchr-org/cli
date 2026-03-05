@@ -129,7 +129,10 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		}
 	} else {
 		if state.TranscriptPath == "" {
-			// No transcript available (e.g., Kiro's deferred SQLite persistence).
+			if state.AgentType != agent.AgentTypeKiro {
+				return nil, fmt.Errorf("shadow branch not found and no live transcript available for agent %s", state.AgentType)
+			}
+			// Kiro-specific: deferred SQLite persistence — no transcript at commit time.
 			// Create minimal session data — HandleTurnEnd will finalize the checkpoint
 			// with the full transcript once it becomes available at the stop hook.
 			sessionData = &ExtractedSessionData{}

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -139,41 +140,47 @@ var ErrEmptyHookInput = errors.New("empty hook input")
 // immediately, so 500ms is generous.
 const stdinReadTimeout = 500 * time.Millisecond
 
-// readResult holds the outcome of an io.ReadAll goroutine.
-type readResult struct {
-	data []byte
-	err  error
-}
-
 // ReadAndParseHookInput reads all bytes from stdin and unmarshals JSON into the given type.
 // This is a shared helper for agent ParseHookEvent implementations.
 //
-// A 500ms timeout prevents hanging when the IDE keeps stdin open without EOF.
+// Uses a two-phase approach to handle agents that keep stdin open without EOF (e.g., Kiro):
+//   - Phase 1: Peek(1) with a timeout to detect whether any data is available.
+//   - Phase 2: Once data is confirmed, io.ReadAll without timeout to read the full payload.
 //
-// Note: on timeout, the io.ReadAll goroutine is abandoned (it blocks forever on
+// Note: on timeout, the Peek goroutine is abandoned (it blocks forever on
 // the open stdin pipe). This is an intentional trade-off — hook processes are
 // short-lived, so the leaked goroutine is cleaned up when the process exits.
 func ReadAndParseHookInput[T any](stdin io.Reader) (*T, error) {
-	ch := make(chan readResult, 1)
+	br := bufio.NewReader(stdin)
+
+	// Phase 1: detect whether any data is available (with timeout for open-pipe cases).
+	peekCh := make(chan error, 1)
 	go func() {
-		data, err := io.ReadAll(stdin)
-		ch <- readResult{data, err}
+		_, err := br.Peek(1)
+		peekCh <- err
 	}()
 
-	var data []byte
 	select {
-	case res := <-ch:
-		if res.err != nil {
-			return nil, fmt.Errorf("failed to read hook input: %w", res.err)
+	case err := <-peekCh:
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, ErrEmptyHookInput
+			}
+			return nil, fmt.Errorf("failed to read hook input: %w", err)
 		}
-		data = res.data
 	case <-time.After(stdinReadTimeout):
 		return nil, ErrEmptyHookInput
 	}
 
+	// Phase 2: data available — read the full payload (no timeout, wait for EOF).
+	data, err := io.ReadAll(br)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read hook input: %w", err)
+	}
 	if len(data) == 0 {
 		return nil, ErrEmptyHookInput
 	}
+
 	var result T
 	if err := json.Unmarshal(data, &result); err != nil {
 		return nil, fmt.Errorf("failed to parse hook input: %w", err)
