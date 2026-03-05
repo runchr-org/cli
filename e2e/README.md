@@ -89,7 +89,14 @@ Both workflows run `go run ./e2e/bootstrap` before tests to handle agent-specifi
 
 ## Kiro Authentication
 
-- **Local development**: use normal browser/device login (`kiro-cli login`) and the CLI will reuse your local auth state.
-- **GitHub-hosted CI**: Kiro jobs use AWS OIDC credentials plus SIGV4 (`AMAZON_Q_SIGV4=1`) instead of browser login.
+Kiro E2E tests require the `kiro-cli-chat` binary (not `kiro-cli`). The desktop app wrapper (`kiro-cli`) ignores `AMAZON_Q_SIGV4` and always forces browser OAuth, which fails in headless environments.
+
+- **GitHub-hosted CI**: Workflows download `kiro-cli-chat` directly and use AWS OIDC credentials plus SIGV4 (`AMAZON_Q_SIGV4=1`).
+- **Local development**: Install `kiro-cli-chat` separately — the Kiro desktop app only provides `kiro-cli`. Download the standalone binary:
+  ```bash
+  KIRO_VERSION="1.27.0"
+  curl -fsSL "https://desktop-release.q.us-east-1.amazonaws.com/${KIRO_VERSION}/kirocli-$(uname -m)-$(uname -s | tr '[:upper:]' '[:lower:]').zip" -o kiro.zip
+  unzip -q kiro.zip && cp kirocli/bin/kiro-cli-chat ~/.local/bin/ && rm -rf kirocli kiro.zip
+  ```
 
 CI prerequisite: set `AWS_ROLE_ARN` repository secret so `aws-actions/configure-aws-credentials` can assume the role.

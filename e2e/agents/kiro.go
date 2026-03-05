@@ -18,7 +18,7 @@ func init() {
 	if env := os.Getenv("E2E_AGENT"); env != "" && env != "kiro" {
 		return
 	}
-	if _, err := exec.LookPath("kiro-cli"); err != nil {
+	if _, err := exec.LookPath("kiro-cli-chat"); err != nil {
 		return
 	}
 	Register(&Kiro{})
@@ -30,7 +30,7 @@ func init() {
 type Kiro struct{}
 
 func (k *Kiro) Name() string               { return "kiro" }
-func (k *Kiro) Binary() string             { return "kiro-cli" }
+func (k *Kiro) Binary() string             { return "kiro-cli-chat" }
 func (k *Kiro) EntireAgent() string        { return "kiro" }
 func (k *Kiro) PromptPattern() string      { return `!>` }
 func (k *Kiro) TimeoutMultiplier() float64 { return 1.5 }
@@ -46,8 +46,9 @@ func (k *Kiro) IsTransientError(out Output, _ error) bool {
 }
 
 func (k *Kiro) Bootstrap() error {
-	// kiro-cli uses Amazon Q / Builder ID auth.
-	// On CI, ensure auth is available; locally, auth is handled by the desktop app.
+	// kiro-cli-chat is the standalone binary that supports headless SIGV4 auth.
+	// The desktop app wrapper (kiro-cli) ignores AMAZON_Q_SIGV4 and always
+	// forces browser OAuth, so E2E tests must use kiro-cli-chat.
 	if os.Getenv("CI") == "" {
 		return nil
 	}
@@ -58,7 +59,7 @@ func (k *Kiro) Bootstrap() error {
 			os.Getenv("AWS_ACCESS_KEY_ID"),
 			os.Getenv("AWS_SECRET_ACCESS_KEY"),
 		); err != nil {
-			return fmt.Errorf("kiro-cli sigv4 auth check failed: %w", err)
+			return fmt.Errorf("kiro-cli-chat sigv4 auth check failed: %w", err)
 		}
 		return nil
 	}
@@ -66,16 +67,16 @@ func (k *Kiro) Bootstrap() error {
 	// Verify login status — fail fast if not authenticated.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "kiro-cli", "whoami", "-f", "json")
+	cmd := exec.CommandContext(ctx, "kiro-cli-chat", "whoami", "-f", "json")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf(
-			"kiro-cli auth check failed (run `kiro-cli login --use-device-flow`): %s",
+			"kiro-cli-chat auth check failed (run `kiro-cli-chat login --use-device-flow`): %s",
 			strings.TrimSpace(string(out)),
 		)
 	}
 	if err := validateKiroWhoamiJSON(out); err != nil {
-		return fmt.Errorf("kiro-cli auth check failed: %w", err)
+		return fmt.Errorf("kiro-cli-chat auth check failed: %w", err)
 	}
 	return nil
 }
@@ -185,7 +186,7 @@ func (k *Kiro) StartSession(ctx context.Context, dir string) (Session, error) {
 
 // KiroSession runs each Send as a separate --no-interactive command.
 // SIGV4 auth does not work with the interactive TUI, so this approach
-// runs one kiro-cli process per prompt (same pattern as setup-kiro-action).
+// runs one kiro-cli-chat process per prompt (same pattern as setup-kiro-action).
 type KiroSession struct {
 	kiro       *Kiro
 	dir        string

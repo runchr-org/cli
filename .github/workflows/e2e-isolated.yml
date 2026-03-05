@@ -42,7 +42,14 @@ jobs:
             claude-code) curl -fsSL https://claude.ai/install.sh | bash ;;
             opencode)    curl -fsSL https://opencode.ai/install | bash ;;
             gemini-cli)  npm install -g @google/gemini-cli ;;
-            kiro)        curl -fsSL https://cli.kiro.dev/install | bash ;;
+            kiro)
+              KIRO_VERSION="1.27.0"
+              curl -fsSL "https://desktop-release.q.us-east-1.amazonaws.com/${KIRO_VERSION}/kirocli-x86_64-linux.zip" -o kiro.zip
+              unzip -q kiro.zip
+              cp kirocli/bin/kiro-cli-chat ~/.local/bin/
+              chmod +x ~/.local/bin/kiro-cli-chat
+              rm -rf kirocli kiro.zip
+              ;;
             cursor-cli)  curl https://cursor.com/install -fsS | bash ;;
             factoryai-droid) curl -fsSL https://app.factory.ai/cli | sh ;;
           esac
