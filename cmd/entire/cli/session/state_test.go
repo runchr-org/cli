@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/go-git/go-git/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -158,6 +159,57 @@ func TestState_IsStale(t *testing.T) {
 	})
 }
 
+func TestState_IsTestSession(t *testing.T) {
+	t.Parallel()
+
+	t.Run("mock_agent_type_is_test_session", func(t *testing.T) {
+		t.Parallel()
+		state := &State{AgentType: types.AgentType("Mock Lifecycle Agent")}
+		assert.True(t, state.IsTestSession())
+	})
+
+	t.Run("real_agent_type_is_not_test_session", func(t *testing.T) {
+		t.Parallel()
+		state := &State{AgentType: types.AgentType("Claude Code")}
+		assert.False(t, state.IsTestSession())
+	})
+
+	t.Run("empty_agent_type_is_not_test_session", func(t *testing.T) {
+		t.Parallel()
+		state := &State{}
+		assert.False(t, state.IsTestSession())
+	})
+}
+
+func TestStateStore_Load_DeletesTestSession(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "entire-sessions")
+	require.NoError(t, os.MkdirAll(stateDir, 0o750))
+	store := NewStateStoreWithDir(stateDir)
+	ctx := context.Background()
+
+	now := time.Now()
+	testSession := &State{
+		SessionID:           "test",
+		AgentType:           types.AgentType("Mock Lifecycle Agent"),
+		StartedAt:           now,
+		LastInteractionTime: &now,
+	}
+	require.NoError(t, store.Save(ctx, testSession))
+
+	stateFile := filepath.Join(stateDir, "test.json")
+	_, err := os.Stat(stateFile)
+	require.NoError(t, err, "state file should exist before load")
+
+	loaded, err := store.Load(ctx, "test")
+	require.NoError(t, err)
+	assert.Nil(t, loaded, "Load should return nil for test session")
+
+	_, err = os.Stat(stateFile)
+	assert.True(t, os.IsNotExist(err), "test session file should be deleted after Load")
+}
+
 func TestStateStore_Load_DeletesStaleSession(t *testing.T) {
 	t.Parallel()
 
@@ -202,6 +254,48 @@ func TestStateStore_Load_DeletesStaleSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, loaded, "Load should return state for active session")
 	assert.Equal(t, "active-session", loaded.SessionID)
+}
+
+func TestStateStore_List_DeletesTestSession(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "entire-sessions")
+	require.NoError(t, os.MkdirAll(stateDir, 0o750))
+	store := NewStateStoreWithDir(stateDir)
+	ctx := context.Background()
+
+	// Create an active session
+	now := time.Now()
+	active := &State{
+		SessionID:           "active-session",
+		BaseCommit:          "abc123",
+		StartedAt:           now,
+		LastInteractionTime: &now,
+	}
+	require.NoError(t, store.Save(ctx, active))
+
+	// Create a test session (Mock agent, recent — not stale)
+	testSession := &State{
+		SessionID:           "test",
+		AgentType:           types.AgentType("Mock Lifecycle Agent"),
+		StartedAt:           now,
+		LastInteractionTime: &now,
+	}
+	require.NoError(t, store.Save(ctx, testSession))
+
+	// List should return only the active session
+	states, err := store.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	assert.Equal(t, "active-session", states[0].SessionID)
+
+	// Test session file should be deleted from disk
+	_, err = os.Stat(filepath.Join(stateDir, "test.json"))
+	assert.True(t, os.IsNotExist(err), "test session file should be deleted")
+
+	// Active session file should still exist
+	_, err = os.Stat(filepath.Join(stateDir, "active-session.json"))
+	assert.NoError(t, err, "active session file should still exist")
 }
 
 func TestStateStore_List_DeletesStaleSession(t *testing.T) {

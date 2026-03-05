@@ -232,6 +232,13 @@ func (s *State) IsStale() bool {
 	return s.LastInteractionTime != nil && time.Since(*s.LastInteractionTime) > StaleSessionThreshold
 }
 
+// IsTestSession returns true when the session was created by a test agent.
+// Test sessions leak into .git/entire-sessions/ when tests run against the
+// real working directory. They should be cleaned up automatically.
+func (s *State) IsTestSession() bool {
+	return strings.Contains(string(s.AgentType), "Mock")
+}
+
 // StateStore provides low-level operations for managing session state files.
 //
 // StateStore is a primitive for session state persistence. It is NOT the same as
@@ -288,13 +295,13 @@ func (s *StateStore) Load(ctx context.Context, sessionID string) (*State, error)
 	}
 	state.NormalizeAfterLoad(ctx)
 
-	if state.IsStale() {
+	if state.IsStale() || state.IsTestSession() {
 		logCtx := logging.WithComponent(ctx, "session")
-		logging.Debug(logCtx, "deleting stale session state",
+		logging.Debug(logCtx, "deleting stale or test session state",
 			slog.String("session_id", sessionID),
 		)
-		_ = s.Clear(ctx, sessionID) //nolint:errcheck // best-effort cleanup of stale session
-		return nil, nil             //nolint:nilnil // stale session treated as not found
+		_ = s.Clear(ctx, sessionID) //nolint:errcheck // best-effort cleanup
+		return nil, nil             //nolint:nilnil // stale/test session treated as not found
 	}
 
 	return &state, nil
