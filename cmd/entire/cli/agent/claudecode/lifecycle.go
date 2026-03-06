@@ -46,6 +46,7 @@ func (c *ClaudeCodeAgent) HookNames() []string {
 		HookNamePreTask,
 		HookNamePostTask,
 		HookNamePostTodo,
+		HookNamePostFileEdit,
 	}
 }
 
@@ -65,6 +66,8 @@ func (c *ClaudeCodeAgent) ParseHookEvent(_ context.Context, hookName string, std
 		return c.parseSubagentStart(stdin)
 	case HookNamePostTask:
 		return c.parseSubagentEnd(stdin)
+	case HookNamePostFileEdit:
+		return c.parseFileEdit(stdin)
 	case HookNamePostTodo:
 		// PostTodo is Claude-specific; handled outside the generic dispatcher.
 		return nil, nil //nolint:nilnil // nil event = no lifecycle action
@@ -182,6 +185,35 @@ func (c *ClaudeCodeAgent) parseSubagentEnd(stdin io.Reader) (*agent.Event, error
 		event.SubagentID = raw.ToolResponse.AgentID
 	}
 	return event, nil
+}
+
+// fileEditToolInput extracts file_path from Write/Edit tool input.
+type fileEditToolInput struct {
+	FilePath string `json:"file_path"`
+}
+
+func (c *ClaudeCodeAgent) parseFileEdit(stdin io.Reader) (*agent.Event, error) {
+	raw, err := agent.ReadAndParseHookInput[postToolHookInputRaw](stdin)
+	if err != nil {
+		return nil, err
+	}
+
+	var toolInput fileEditToolInput
+	if err := json.Unmarshal(raw.ToolInput, &toolInput); err != nil {
+		// tool_input doesn't match expected schema — skip silently
+		return nil, nil //nolint:nilnil,nilerr // not our tool format
+	}
+	if toolInput.FilePath == "" {
+		return nil, nil //nolint:nilnil // no file_path = skip
+	}
+
+	return &agent.Event{
+		Type:       agent.FileEdit,
+		SessionID:  raw.SessionID,
+		SessionRef: raw.TranscriptPath,
+		FilePath:   toolInput.FilePath,
+		Timestamp:  time.Now(),
+	}, nil
 }
 
 // --- Transcript flush sentinel ---

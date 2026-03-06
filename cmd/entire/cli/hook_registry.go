@@ -79,7 +79,8 @@ func getHookType(hookName string) string {
 	switch hookName {
 	case claudecode.HookNamePreTask, claudecode.HookNamePostTask, claudecode.HookNamePostTodo:
 		return "subagent"
-	case geminicli.HookNameBeforeTool, geminicli.HookNameAfterTool:
+	case geminicli.HookNameBeforeTool, geminicli.HookNameAfterTool,
+		claudecode.HookNamePostFileEdit:
 		return "tool"
 	default:
 		return "agent"

@@ -500,6 +500,8 @@ func TestInstallHooks_PreservesUserHooksOnSameType(t *testing.T) {
 		assertHookExists(t, matchers, "Write", "echo user wrote file", "user Write hook")
 		assertHookExists(t, matchers, "Task", "entire hooks claude-code post-task", "Entire Task hook")
 		assertHookExists(t, matchers, "TodoWrite", "entire hooks claude-code post-todo", "Entire TodoWrite hook")
+		assertHookExists(t, matchers, "Write", "entire hooks claude-code post-file-edit", "Entire Write post-file-edit hook")
+		assertHookExists(t, matchers, "Edit", "entire hooks claude-code post-file-edit", "Entire Edit post-file-edit hook")
 	})
 }
 

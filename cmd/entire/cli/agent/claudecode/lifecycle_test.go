@@ -270,6 +270,47 @@ func TestParseHookEvent_PostTodo_ReturnsNil(t *testing.T) {
 	}
 }
 
+func TestParseFileEdit(t *testing.T) {
+	t.Parallel()
+
+	ag := &ClaudeCodeAgent{}
+	input := `{"session_id":"sess-123","transcript_path":"/tmp/t.jsonl","tool_use_id":"tu_abc","tool_input":{"file_path":"/repo/src/main.go"},"tool_response":{}}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNamePostFileEdit, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if event.Type != agent.FileEdit {
+		t.Errorf("expected event type %v, got %v", agent.FileEdit, event.Type)
+	}
+	if event.SessionID != "sess-123" {
+		t.Errorf("expected session_id 'sess-123', got %q", event.SessionID)
+	}
+	if event.FilePath != "/repo/src/main.go" {
+		t.Errorf("expected file_path '/repo/src/main.go', got %q", event.FilePath)
+	}
+}
+
+func TestParseFileEdit_NoFilePath(t *testing.T) {
+	t.Parallel()
+
+	ag := &ClaudeCodeAgent{}
+	input := `{"session_id":"sess-123","transcript_path":"/tmp/t.jsonl","tool_use_id":"tu_abc","tool_input":{"content":"hello"},"tool_response":{}}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNamePostFileEdit, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event != nil {
+		t.Errorf("expected nil event when file_path is missing, got %+v", event)
+	}
+}
+
 func TestParseHookEvent_UnknownHook_ReturnsNil(t *testing.T) {
 	t.Parallel()
 
@@ -360,6 +401,11 @@ func TestParseHookEvent_AllHookTypes(t *testing.T) {
 			hookName:      HookNamePostTodo,
 			expectNil:     true,
 			inputTemplate: `{"session_id": "s7", "transcript_path": "/t"}`,
+		},
+		{
+			hookName:      HookNamePostFileEdit,
+			expectedType:  agent.FileEdit,
+			inputTemplate: `{"session_id": "s8", "transcript_path": "/t", "tool_use_id": "t3", "tool_input": {"file_path": "/repo/f.go"}, "tool_response": {}}`,
 		},
 	}
 
