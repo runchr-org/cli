@@ -555,3 +555,18 @@ func TestAppendFileTouched_InvalidSessionID(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid session ID")
 }
+
+func TestAppendFileTouched_RejectsNewlines(t *testing.T) {
+	t.Parallel()
+
+	store := NewStateStoreWithDir(t.TempDir())
+	ctx := context.Background()
+
+	err := store.AppendFileTouched(ctx, "session-1", "file\ninjected")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "newline")
+
+	err = store.AppendFileTouched(ctx, "session-1", "file\rinjected")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "newline")
+}

@@ -423,6 +423,10 @@ func (s *StateStore) AppendFileTouched(ctx context.Context, sessionID, filePath 
 		return fmt.Errorf("invalid session ID: %w", err)
 	}
 
+	if strings.ContainsAny(filePath, "\n\r") {
+		return fmt.Errorf("file path contains newline characters: %q", filePath)
+	}
+
 	if err := os.MkdirAll(s.stateDir, 0o750); err != nil {
 		return fmt.Errorf("failed to create session state directory: %w", err)
 	}
@@ -458,7 +462,7 @@ func (s *StateStore) ReadFilesTouched(ctx context.Context, sessionID string) ([]
 
 	// Deduplicate using a map
 	seen := make(map[string]struct{})
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			seen[line] = struct{}{}
