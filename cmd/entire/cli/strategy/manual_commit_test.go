@@ -15,6 +15,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -3677,4 +3678,81 @@ func TestResolveFilesTouched_PrefersStateFallsBackToTranscript(t *testing.T) {
 			t.Errorf("resolveFilesTouched with no sources = %v, want nil", files)
 		}
 	})
+}
+
+// TestResolveFilesTouched_FromTrackingFile verifies that resolveFilesTouched reads from
+// the file tracking file when state.FilesTouched is empty.
+func TestResolveFilesTouched_FromTrackingFile(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	// Set up tracking file via StateStore
+	stateDir := filepath.Join(dir, ".git", session.SessionStateDirName)
+	store := session.NewStateStoreWithDir(stateDir)
+	ctx := context.Background()
+	sessionID := "2026-01-15-tracking-test"
+
+	// Append files to the tracking file
+	if err := store.AppendFileTouched(ctx, sessionID, "tracked-b.txt"); err != nil {
+		t.Fatalf("failed to append file: %v", err)
+	}
+	if err := store.AppendFileTouched(ctx, sessionID, "tracked-a.txt"); err != nil {
+		t.Fatalf("failed to append file: %v", err)
+	}
+
+	s := &ManualCommitStrategy{}
+	state := &SessionState{
+		SessionID:    sessionID,
+		FilesTouched: nil, // empty — should fall through to tracking file
+	}
+
+	files := s.resolveFilesTouched(ctx, state)
+
+	// Should return tracking file data, sorted
+	if len(files) != 2 {
+		t.Fatalf("resolveFilesTouched = %v, want 2 files", files)
+	}
+	if files[0] != "tracked-a.txt" || files[1] != "tracked-b.txt" {
+		t.Errorf("resolveFilesTouched = %v, want [tracked-a.txt tracked-b.txt]", files)
+	}
+}
+
+// TestResolveFilesTouched_MergesBothSources verifies that resolveFilesTouched merges
+// state.FilesTouched AND tracking file data, deduplicating and sorting the result.
+func TestResolveFilesTouched_MergesBothSources(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	// Set up tracking file via StateStore
+	stateDir := filepath.Join(dir, ".git", session.SessionStateDirName)
+	store := session.NewStateStoreWithDir(stateDir)
+	ctx := context.Background()
+	sessionID := "2026-01-15-merge-test"
+
+	// Append files to the tracking file (including one that overlaps with state)
+	if err := store.AppendFileTouched(ctx, sessionID, "shared.txt"); err != nil {
+		t.Fatalf("failed to append file: %v", err)
+	}
+	if err := store.AppendFileTouched(ctx, sessionID, "only-tracked.txt"); err != nil {
+		t.Fatalf("failed to append file: %v", err)
+	}
+
+	s := &ManualCommitStrategy{}
+	state := &SessionState{
+		SessionID:    sessionID,
+		FilesTouched: []string{"shared.txt", "only-state.txt"},
+	}
+
+	files := s.resolveFilesTouched(ctx, state)
+
+	// Should merge both sources: shared.txt (deduplicated), only-state.txt, only-tracked.txt
+	expected := []string{"only-state.txt", "only-tracked.txt", "shared.txt"}
+	if len(files) != len(expected) {
+		t.Fatalf("resolveFilesTouched = %v, want %v", files, expected)
+	}
+	for i, f := range files {
+		if f != expected[i] {
+			t.Errorf("resolveFilesTouched[%d] = %q, want %q", i, f, expected[i])
+		}
+	}
 }

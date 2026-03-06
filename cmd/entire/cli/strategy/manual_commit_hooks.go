@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -1030,6 +1031,10 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 			shadowTree: shadowTree,
 		})
 		state.FilesTouched = remainingFiles
+		// Clear tracking file — state.FilesTouched now has the authoritative carry-forward list
+		if store, storeErr := s.getStateStore(ctx); storeErr == nil {
+			_ = store.ClearFilesTouched(ctx, state.SessionID) //nolint:errcheck // Best-effort cleanup, non-critical
+		}
 		logging.Debug(logCtx, "post-commit: carry-forward decision (content-aware)",
 			slog.String("session_id", state.SessionID),
 			slog.Int("files_touched_before", len(filesTouchedBefore)),
@@ -1121,6 +1126,10 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 	state.PromptAttributions = nil
 	state.PendingPromptAttribution = nil
 	state.FilesTouched = nil
+	// Clear the file tracking file alongside state.FilesTouched
+	if store, storeErr := s.getStateStore(ctx); storeErr == nil {
+		_ = store.ClearFilesTouched(ctx, state.SessionID) //nolint:errcheck // Best-effort cleanup, non-critical
+	}
 
 	// NOTE: filesystem prompt.txt is NOT cleared here. The caller (PostCommit handler)
 	// decides whether to clear it based on carry-forward: if remaining files exist,
@@ -1459,9 +1468,27 @@ func (s *ManualCommitStrategy) sessionHasNewContentFromLiveTranscript(ctx contex
 // Handles PrepareTranscript internally before falling back to extraction,
 // so callers don't need to prepare the transcript first.
 func (s *ManualCommitStrategy) resolveFilesTouched(ctx context.Context, state *SessionState) []string {
-	if len(state.FilesTouched) > 0 {
-		result := make([]string, len(state.FilesTouched))
-		copy(result, state.FilesTouched)
+	var tracked []string
+	if store, err := s.getStateStore(ctx); err == nil {
+		tracked, _ = store.ReadFilesTouched(ctx, state.SessionID) //nolint:errcheck // Best-effort read, falls back to transcript
+	}
+
+	if len(state.FilesTouched) > 0 || len(tracked) > 0 {
+		seen := make(map[string]struct{})
+		var result []string
+		for _, f := range state.FilesTouched {
+			if _, ok := seen[f]; !ok {
+				seen[f] = struct{}{}
+				result = append(result, f)
+			}
+		}
+		for _, f := range tracked {
+			if _, ok := seen[f]; !ok {
+				seen[f] = struct{}{}
+				result = append(result, f)
+			}
+		}
+		sort.Strings(result)
 		return result
 	}
 
