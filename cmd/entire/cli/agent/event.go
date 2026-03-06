@@ -40,6 +40,10 @@ const (
 	// (e.g., Gemini CLI's BeforeModel). The framework stores the model as a hint
 	// for subsequent TurnStart/TurnEnd events in the same session.
 	ModelUpdate
+
+	// FileEdit indicates the agent modified a file via a Write/Edit tool.
+	// The framework appends the file path to the session's tracking file.
+	FileEdit
 )
 
 // String returns a human-readable name for the event type.
@@ -61,6 +65,8 @@ func (e EventType) String() string {
 		return "SubagentEnd"
 	case ModelUpdate:
 		return "ModelUpdate"
+	case FileEdit:
+		return "FileEdit"
 	default:
 		return "Unknown"
 	}
@@ -113,6 +119,11 @@ type Event struct {
 	// Populated on SubagentEnd events when the agent provides this data
 	// directly via hook payload (e.g., Cursor's subagentStop).
 	ModifiedFiles []string
+
+	// FilePath is the path to a file that was edited (for FileEdit events).
+	// Populated by agents from tool_input.file_path. May be absolute — the
+	// framework normalizes to repo-relative before persisting.
+	FilePath string
 
 	// ResponseMessage is an optional message to display to the user via the agent.
 	ResponseMessage string
