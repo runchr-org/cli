@@ -23,10 +23,10 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
+	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
 // Common branch name constants for default branch detection.
@@ -675,21 +675,9 @@ func GetRemoteMetadataBranchTree(repo *git.Repository) (*object.Tree, error) {
 	return tree, nil
 }
 
-// OpenRepository opens the git repository with linked worktree support enabled.
-// It uses git.PlainOpenWithOptions with EnableDotGitCommonDir set to true,
-// which is required for proper operation in git worktrees created via 'git worktree add'.
-//
-// Without EnableDotGitCommonDir, go-git operations in worktrees can silently fail:
-// - Commits appear to succeed but are not persisted
-// - Refs are written to incorrect locations
-// - The worktree's HEAD/index don't get updated properly
-//
-// This happens because worktrees use .git as a file (pointing to the main repo)
-// rather than a directory, and go-git needs to route paths correctly between
-// shared (.git/) and per-worktree (.git/worktrees/<name>/) locations.
-//
-// The function first uses 'git rev-parse --show-toplevel' to find the repository
-// root, which works correctly even when called from a subdirectory within the repo.
+// OpenRepository opens the git repository from the repo root.
+// It uses 'git rev-parse --show-toplevel' to find the repository root,
+// which works correctly even when called from a subdirectory or a linked worktree.
 func OpenRepository(ctx context.Context) (*git.Repository, error) {
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
@@ -698,9 +686,7 @@ func OpenRepository(ctx context.Context) (*git.Repository, error) {
 		repoRoot = "."
 	}
 
-	repo, err := git.PlainOpenWithOptions(repoRoot, &git.PlainOpenOptions{
-		EnableDotGitCommonDir: true,
-	})
+	repo, err := git.PlainOpen(repoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open repository: %w", err)
 	}
