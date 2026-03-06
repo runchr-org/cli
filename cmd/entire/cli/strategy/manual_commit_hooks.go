@@ -2168,12 +2168,10 @@ func (s *ManualCommitStrategy) pushFinalizedCheckpointsIfNeeded(ctx context.Cont
 	)
 	fmt.Fprintf(os.Stderr, "[entire] Pushing finalized checkpoint transcripts to %s...\n", remote)
 
-	// Best-effort: pushBranchIfNeeded/PushTrailsBranch handle errors internally
-	// (printing to stderr) and always return nil, so we don't block session cleanup.
-	//nolint:errcheck,gosec // doPushBranch always returns nil; errors printed to stderr internally
-	pushBranchIfNeeded(ctx, remote, paths.MetadataBranchName)
-	//nolint:errcheck,gosec // doPushBranch always returns nil; errors printed to stderr internally
-	PushTrailsBranch(ctx, remote)
+	if err := pushBranchIfNeeded(ctx, remote, paths.MetadataBranchName); err != nil {
+		logging.Warn(logCtx, "failed to push finalized checkpoints",
+			slog.String("error", err.Error()))
+	}
 }
 
 // finalizeAllTurnCheckpoints replaces the provisional transcript in each checkpoint

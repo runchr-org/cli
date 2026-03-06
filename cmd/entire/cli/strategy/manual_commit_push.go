@@ -24,7 +24,11 @@ func (s *ManualCommitStrategy) PrePush(ctx context.Context, remote string) error
 	}
 	pushCheckpointsSpan.End()
 
-	markActiveSessionsPushed(ctx, remote)
+	// Only mark sessions if pushing was actually enabled and attempted.
+	// pushSessionsBranchCommon returns nil without pushing when disabled.
+	if !isPushSessionsDisabled(ctx) {
+		markActiveSessionsPushed(ctx, remote)
+	}
 
 	_, pushTrailsSpan := perf.Start(ctx, "push_trails_branch")
 	err := PushTrailsBranch(ctx, remote)
