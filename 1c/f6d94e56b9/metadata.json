@@ -1,0 +1,14 @@
+{
+  "trail_id": "1cf6d94e56b9",
+  "branch": "alex/trails-multi-pr",
+  "base": "main",
+  "title": "allow trails to support multiple branches (and PRs)",
+  "body": "",
+  "status": "draft",
+  "author": "khaong",
+  "assignees": [],
+  "labels": [],
+  "created_at": "2026-03-07T10:28:48.386506+11:00",
+  "updated_at": "2026-03-07T10:28:48.386506+11:00",
+  "merged_at": null
+}
