@@ -103,7 +103,7 @@ func runTurn(dir, sessionID, transcriptPath, prompt string) {
 // --- Prompt Parsing ---
 
 type action struct {
-	kind    string // "create", "modify", "delete", "commit"
+	kind    string // "create", "modify", "delete", "commit", "push"
 	path    string
 	content string
 }
@@ -130,6 +130,10 @@ var (
 	// Matches: "Do not commit.", "Do not commit the file.", "Do not commit them,"
 	// Does NOT match: "Do not commit any other files" (different intent)
 	noCommitRe = regexp.MustCompile(`(?i)(?:do\s+not|don'?t)\s+commit(?:\s+(?:it|them|the\s+\w+))?(?:\.|,|$)`)
+	// "push" anywhere in the prompt
+	pushRe = regexp.MustCompile(`(?i)(?:then\s+|now\s+)?(?:git\s+)?push\b`)
+	// Negative: "do not push" / "don't push"
+	noPushRe = regexp.MustCompile(`(?i)(?:do\s+not|don'?t)\s+push(?:\s+(?:it|them|the\s+\w+))?(?:\.|,|$)`)
 	// "commit each file separately" — interleave create+commit
 	commitSeparatelyRe = regexp.MustCompile(`(?i)commit\s+each\s+file\s+separately`)
 	// Individual file in multi-create: "docs/a.md about apples"
@@ -260,6 +264,11 @@ func parsePrompt(prompt string) []action {
 		}
 	}
 
+	// Push: append after commit so sequence is create → commit → push.
+	if pushRe.MatchString(prompt) && !noPushRe.MatchString(prompt) {
+		actions = append(actions, action{kind: "push"})
+	}
+
 	return actions
 }
 
@@ -321,6 +330,12 @@ func parseNumberedSteps(prompt string) []action {
 		// Bare commit instruction
 		if commitRe.MatchString(step) && !noCommitRe.MatchString(step) {
 			actions = append(actions, action{kind: "commit"})
+			continue
+		}
+
+		// Bare push instruction
+		if pushRe.MatchString(step) && !noPushRe.MatchString(step) {
+			actions = append(actions, action{kind: "push"})
 		}
 	}
 	return actions
@@ -391,6 +406,8 @@ func executeActions(dir string, actions []action) {
 		case "commit":
 			gitCommit(dir, pendingFiles)
 			pendingFiles = nil
+		case "push":
+			gitRun(dir, "push", "origin", "HEAD")
 		}
 	}
 }
