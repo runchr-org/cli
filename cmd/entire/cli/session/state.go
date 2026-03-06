@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -406,6 +407,94 @@ func (s *StateStore) List(ctx context.Context) ([]*State, error) {
 // stateFilePath returns the path to a session state file.
 func (s *StateStore) stateFilePath(sessionID string) string {
 	return filepath.Join(s.stateDir, sessionID+".json")
+}
+
+// filesTouchedPath returns the path to the append-only file tracking file for a session.
+func (s *StateStore) filesTouchedPath(sessionID string) string {
+	return filepath.Join(s.stateDir, sessionID+".files")
+}
+
+// AppendFileTouched appends a single file path to the session's tracking file.
+// The file is created if it doesn't exist. Paths are stored one per line.
+func (s *StateStore) AppendFileTouched(ctx context.Context, sessionID, filePath string) error {
+	_ = ctx // Reserved for future use
+
+	if err := validation.ValidateSessionID(sessionID); err != nil {
+		return fmt.Errorf("invalid session ID: %w", err)
+	}
+
+	if err := os.MkdirAll(s.stateDir, 0o750); err != nil {
+		return fmt.Errorf("failed to create session state directory: %w", err)
+	}
+
+	f, err := os.OpenFile(s.filesTouchedPath(sessionID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to open files touched tracking file: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := fmt.Fprintln(f, filePath); err != nil {
+		return fmt.Errorf("failed to write to files touched tracking file: %w", err)
+	}
+	return nil
+}
+
+// ReadFilesTouched reads the session's file tracking file and returns a deduplicated,
+// sorted list of file paths. Returns (nil, nil) if the file doesn't exist or is empty.
+func (s *StateStore) ReadFilesTouched(ctx context.Context, sessionID string) ([]string, error) {
+	_ = ctx // Reserved for future use
+
+	if err := validation.ValidateSessionID(sessionID); err != nil {
+		return nil, fmt.Errorf("invalid session ID: %w", err)
+	}
+
+	data, err := os.ReadFile(s.filesTouchedPath(sessionID))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read files touched tracking file: %w", err)
+	}
+
+	// Deduplicate using a map
+	seen := make(map[string]struct{})
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			seen[line] = struct{}{}
+		}
+	}
+
+	if len(seen) == 0 {
+		return nil, nil
+	}
+
+	// Collect and sort
+	result := make([]string, 0, len(seen))
+	for path := range seen {
+		result = append(result, path)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+// ClearFilesTouched removes the session's file tracking file.
+// Returns nil if the file doesn't exist (idempotent).
+func (s *StateStore) ClearFilesTouched(ctx context.Context, sessionID string) error {
+	_ = ctx // Reserved for future use
+
+	if err := validation.ValidateSessionID(sessionID); err != nil {
+		return fmt.Errorf("invalid session ID: %w", err)
+	}
+
+	err := os.Remove(s.filesTouchedPath(sessionID))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to remove files touched tracking file: %w", err)
+	}
+	return nil
 }
 
 // gitCommonDirCache caches the git common dir to avoid repeated subprocess calls.

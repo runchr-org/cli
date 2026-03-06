@@ -455,3 +455,103 @@ func TestGetGitCommonDir_ErrorOutsideRepo(t *testing.T) {
 	_, err := getGitCommonDir(context.Background())
 	assert.Error(t, err)
 }
+
+func TestAppendFileTouched(t *testing.T) {
+	t.Parallel()
+
+	store := NewStateStoreWithDir(t.TempDir())
+	ctx := context.Background()
+	sessionID := "2026-01-13-test-session"
+
+	// Append multiple files including a duplicate
+	require.NoError(t, store.AppendFileTouched(ctx, sessionID, "src/main.go"))
+	require.NoError(t, store.AppendFileTouched(ctx, sessionID, "README.md"))
+	require.NoError(t, store.AppendFileTouched(ctx, sessionID, "src/main.go")) // duplicate
+	require.NoError(t, store.AppendFileTouched(ctx, sessionID, "api/handler.go"))
+
+	// Read back — should be deduped and sorted
+	files, err := store.ReadFilesTouched(ctx, sessionID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"README.md", "api/handler.go", "src/main.go"}, files)
+}
+
+func TestReadFilesTouched_NoFile(t *testing.T) {
+	t.Parallel()
+
+	store := NewStateStoreWithDir(t.TempDir())
+	ctx := context.Background()
+
+	files, err := store.ReadFilesTouched(ctx, "nonexistent-session")
+	require.NoError(t, err)
+	require.Nil(t, files)
+}
+
+func TestClearFilesTouched(t *testing.T) {
+	t.Parallel()
+
+	store := NewStateStoreWithDir(t.TempDir())
+	ctx := context.Background()
+	sessionID := "2026-01-13-clear-test"
+
+	// Create tracking file
+	require.NoError(t, store.AppendFileTouched(ctx, sessionID, "file.txt"))
+
+	// Verify it exists
+	files, err := store.ReadFilesTouched(ctx, sessionID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"file.txt"}, files)
+
+	// Clear it
+	require.NoError(t, store.ClearFilesTouched(ctx, sessionID))
+
+	// Verify it's gone
+	files, err = store.ReadFilesTouched(ctx, sessionID)
+	require.NoError(t, err)
+	require.Nil(t, files)
+
+	// Clearing again should not error (idempotent)
+	require.NoError(t, store.ClearFilesTouched(ctx, sessionID))
+}
+
+func TestClear_RemovesFilesTracking(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store := NewStateStoreWithDir(stateDir)
+	ctx := context.Background()
+	sessionID := "2026-01-13-clear-all"
+
+	// Create both .json state and .files tracking
+	state := &State{
+		SessionID:  sessionID,
+		BaseCommit: "abc123",
+		StartedAt:  time.Now(),
+	}
+	require.NoError(t, store.Save(ctx, state))
+	require.NoError(t, store.AppendFileTouched(ctx, sessionID, "tracked.go"))
+
+	// Verify both files exist
+	_, err := os.Stat(filepath.Join(stateDir, sessionID+".json"))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(stateDir, sessionID+".files"))
+	require.NoError(t, err)
+
+	// Clear should remove all session files including .files
+	require.NoError(t, store.Clear(ctx, sessionID))
+
+	matches, err := filepath.Glob(filepath.Join(stateDir, sessionID+".*"))
+	require.NoError(t, err)
+	assert.Empty(t, matches, "all session files including .files should be removed")
+}
+
+func TestAppendFileTouched_InvalidSessionID(t *testing.T) {
+	t.Parallel()
+
+	store := NewStateStoreWithDir(t.TempDir())
+	ctx := context.Background()
+
+	// Path traversal attempt
+	err := store.AppendFileTouched(ctx, "../evil", "file.txt")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid session ID")
+}
