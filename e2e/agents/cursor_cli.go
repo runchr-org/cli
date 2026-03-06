@@ -53,6 +53,7 @@ func (a *CursorCLI) IsTransientError(out Output, err error) bool {
 		"ETIMEDOUT",
 		"server error",
 		"Internal Server Error",
+		"ENOENT",
 	} {
 		if strings.Contains(combined, p) {
 			return true
