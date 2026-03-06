@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	// Create context that cancels on interrupt
+	// Create a cancellable context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Handle interrupt signals
