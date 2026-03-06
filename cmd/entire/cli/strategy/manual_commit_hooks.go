@@ -2168,6 +2168,8 @@ func (s *ManualCommitStrategy) pushFinalizedCheckpointsIfNeeded(ctx context.Cont
 	)
 	fmt.Fprintf(os.Stderr, "[entire] Pushing finalized checkpoint transcripts to %s...\n", remote)
 
+	// pushBranchIfNeeded is hook-silent (logs warnings to stderr, currently always
+	// returns nil). Error check kept for defensive correctness if that changes.
 	if err := pushBranchIfNeeded(ctx, remote, paths.MetadataBranchName); err != nil {
 		logging.Warn(logCtx, "failed to push finalized checkpoints",
 			slog.String("error", err.Error()))

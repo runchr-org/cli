@@ -330,10 +330,9 @@ func parseNumberedSteps(prompt string) []action {
 		// Bare commit instruction
 		if commitRe.MatchString(step) && !noCommitRe.MatchString(step) {
 			actions = append(actions, action{kind: "commit"})
-			continue
 		}
 
-		// Bare push instruction
+		// Push instruction (checked separately so "(2) commit and push" works)
 		if pushRe.MatchString(step) && !noPushRe.MatchString(step) {
 			actions = append(actions, action{kind: "push"})
 		}
