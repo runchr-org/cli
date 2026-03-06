@@ -408,6 +408,38 @@ func (env *TestEnv) SimulatePostTodo(input PostTodoInput) error {
 	return runner.SimulatePostTodo(input)
 }
 
+// PostFileEditInput contains the input for PostToolUse[Write/Edit] hook.
+type PostFileEditInput struct {
+	SessionID      string
+	TranscriptPath string
+	ToolUseID      string
+	FilePath       string
+}
+
+// SimulatePostFileEdit simulates the PostToolUse[Write/Edit] hook.
+func (r *HookRunner) SimulatePostFileEdit(input PostFileEditInput) error {
+	r.T.Helper()
+
+	hookInput := map[string]interface{}{
+		"session_id":      input.SessionID,
+		"transcript_path": input.TranscriptPath,
+		"tool_use_id":     input.ToolUseID,
+		"tool_input": map[string]string{
+			"file_path": input.FilePath,
+		},
+		"tool_response": map[string]interface{}{},
+	}
+
+	return r.runHookWithInput("post-file-edit", hookInput)
+}
+
+// SimulatePostFileEdit is a convenience method on TestEnv.
+func (env *TestEnv) SimulatePostFileEdit(input PostFileEditInput) error {
+	env.T.Helper()
+	runner := NewHookRunner(env.RepoDir, env.ClaudeProjectDir, env.T)
+	return runner.SimulatePostFileEdit(input)
+}
+
 // ClearSessionState removes the session state file for the given session ID.
 // This simulates what happens when a user commits their changes (session is "completed").
 // Used in tests to allow sequential sessions to run without triggering concurrent session warnings.
