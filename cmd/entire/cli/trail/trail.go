@@ -206,8 +206,6 @@ type Verification struct {
 // Metadata represents the metadata for a trail, matching the web PR format.
 type Metadata struct {
 	TrailID   ID         `json:"trail_id"`
-	Branch    string     `json:"branch"`
-	Base      string     `json:"base"`
 	Title     string     `json:"title"`
 	Body      string     `json:"body"`
 	Status    Status     `json:"status"`
@@ -216,10 +214,38 @@ type Metadata struct {
 	Labels    []string   `json:"labels"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
-	MergedAt  *time.Time `json:"merged_at"`
+	MergedAt  *time.Time `json:"merged_at,omitempty"`
 	Priority  Priority   `json:"priority,omitempty"`
 	Type      Type       `json:"type,omitempty"`
 	Reviewers []Reviewer `json:"reviewers,omitempty"`
+
+	// Multi-branch fields
+	Intent   *Intent       `json:"intent,omitempty"`
+	Branches []BranchEntry `json:"branches,omitempty"`
+	Summary  string        `json:"summary,omitempty"`
+
+	// Legacy single-branch fields (kept for backward compat reads)
+	Branch string `json:"branch,omitempty"`
+	Base   string `json:"base,omitempty"`
+}
+
+// FindBranch returns the BranchEntry matching the given branch name, or nil.
+func (m *Metadata) FindBranch(branchName string) *BranchEntry {
+	for i := range m.Branches {
+		if m.Branches[i].Name == branchName {
+			return &m.Branches[i]
+		}
+	}
+	return nil
+}
+
+// ActiveBranchName returns the branch name for trail context.
+// Prefers Branches[0].Name if available, falls back to legacy Branch field.
+func (m *Metadata) ActiveBranchName() string {
+	if len(m.Branches) > 0 {
+		return m.Branches[0].Name
+	}
+	return m.Branch
 }
 
 // Discussion holds the discussion/comments for a trail.

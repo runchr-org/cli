@@ -177,6 +177,52 @@ func TestBranchStatus_IsValid(t *testing.T) {
 	}
 }
 
+func TestMetadata_FindBranch(t *testing.T) {
+	t.Parallel()
+
+	m := &Metadata{
+		TrailID: "a1b2c3d4e5f6",
+		Branches: []BranchEntry{
+			{ID: "uuid-1", Name: "feature/auth-core"},
+			{ID: "uuid-2", Name: "feature/auth-api"},
+		},
+	}
+
+	entry := m.FindBranch("feature/auth-api")
+	if entry == nil {
+		t.Fatal("expected to find branch")
+	}
+	if entry.ID != "uuid-2" {
+		t.Errorf("expected uuid-2, got %s", entry.ID)
+	}
+
+	if m.FindBranch("nonexistent") != nil {
+		t.Error("expected nil for nonexistent branch")
+	}
+}
+
+func TestMetadata_ActiveBranchName(t *testing.T) {
+	t.Parallel()
+
+	// With Branches
+	m1 := &Metadata{Branches: []BranchEntry{{Name: "feature/new"}}}
+	if got := m1.ActiveBranchName(); got != "feature/new" {
+		t.Errorf("expected feature/new, got %s", got)
+	}
+
+	// Legacy fallback
+	m2 := &Metadata{Branch: "feature/old"}
+	if got := m2.ActiveBranchName(); got != "feature/old" {
+		t.Errorf("expected feature/old, got %s", got)
+	}
+
+	// Empty
+	m3 := &Metadata{}
+	if got := m3.ActiveBranchName(); got != "" {
+		t.Errorf("expected empty, got %s", got)
+	}
+}
+
 func TestHumanizeBranchName(t *testing.T) {
 	t.Parallel()
 
