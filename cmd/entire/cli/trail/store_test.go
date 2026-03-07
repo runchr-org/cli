@@ -693,6 +693,62 @@ func TestStore_FindByBranch_MultiBranch(t *testing.T) {
 	}
 }
 
+func TestStore_AddCheckpointWithBranchID(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewStore(repo)
+
+	trailID, err := GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().Truncate(time.Second)
+
+	metadata := &Metadata{
+		TrailID:   trailID,
+		Title:     "Multi-branch",
+		Status:    StatusActive,
+		Author:    "tester",
+		Assignees: []string{},
+		Labels:    []string{},
+		CreatedAt: now,
+		UpdatedAt: now,
+		Branches: []BranchEntry{
+			{ID: "branch-uuid-1", Name: "feature/core", BaseBranch: "main", Status: BranchOpen, AddedAt: now},
+		},
+	}
+
+	if err := store.Write(metadata, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	summary := "initial implementation"
+	ref := CheckpointRef{
+		CheckpointID: "aabbccddeeff",
+		CommitSHA:    "1234567890ab",
+		CreatedAt:    now,
+		Summary:      &summary,
+		BranchID:     "branch-uuid-1",
+	}
+
+	if err := store.AddCheckpoint(trailID, ref); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, checkpoints, _, err := store.Read(trailID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(checkpoints.Checkpoints) != 1 {
+		t.Fatalf("expected 1 checkpoint, got %d", len(checkpoints.Checkpoints))
+	}
+	if checkpoints.Checkpoints[0].BranchID != "branch-uuid-1" {
+		t.Errorf("expected branch ID branch-uuid-1, got %s", checkpoints.Checkpoints[0].BranchID)
+	}
+}
+
 func TestStore_FindByBranch_LegacyFallback(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)

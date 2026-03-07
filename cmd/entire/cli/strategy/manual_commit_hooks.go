@@ -1101,9 +1101,13 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 	branchName := GetCurrentBranchName(repo)
 	if branchName != "" && branchName != GetDefaultBranchName(repo) {
 		store := trail.NewStore(repo)
-		existing, _, findErr := store.FindByBranch(branchName)
+		existing, branchEntry, findErr := store.FindByBranch(branchName)
 		if findErr == nil && existing != nil {
-			appendCheckpointToExistingTrail(store, existing.TrailID, result.CheckpointID, head.Hash(), result.Prompts)
+			var branchID string
+			if branchEntry != nil {
+				branchID = branchEntry.ID
+			}
+			appendCheckpointToExistingTrail(store, existing.TrailID, result.CheckpointID, head.Hash(), result.Prompts, branchID)
 		}
 	}
 
@@ -2373,7 +2377,7 @@ func (s *ManualCommitStrategy) carryForwardToNewShadowBranch(
 
 // appendCheckpointToExistingTrail links a checkpoint to the given trail.
 // Best-effort: silently returns on any error (trails are non-critical metadata).
-func appendCheckpointToExistingTrail(store *trail.Store, trailID trail.ID, cpID id.CheckpointID, commitSHA plumbing.Hash, prompts []string) {
+func appendCheckpointToExistingTrail(store *trail.Store, trailID trail.ID, cpID id.CheckpointID, commitSHA plumbing.Hash, prompts []string, branchID string) {
 	var summary *string
 	if len(prompts) > 0 {
 		s := truncateForSummary(prompts[len(prompts)-1], 200)
@@ -2386,6 +2390,7 @@ func appendCheckpointToExistingTrail(store *trail.Store, trailID trail.ID, cpID 
 		CommitSHA:    commitSHA.String(),
 		CreatedAt:    time.Now().UTC(),
 		Summary:      summary,
+		BranchID:     branchID,
 	})
 }
 

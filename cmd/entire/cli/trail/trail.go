@@ -289,6 +289,7 @@ type CheckpointRef struct {
 	CommitSHA    string    `json:"commit_sha"`
 	CreatedAt    time.Time `json:"created_at"`
 	Summary      *string   `json:"summary"`
+	BranchID     string    `json:"branch_id,omitempty"`
 }
 
 // Checkpoints holds the list of checkpoint references for a trail.
