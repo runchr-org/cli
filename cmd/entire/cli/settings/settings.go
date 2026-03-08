@@ -32,7 +32,6 @@ const (
 
 // EntireSettings represents the .entire/settings.json configuration
 type EntireSettings struct {
-
 	// Enabled indicates whether Entire is active. When false, CLI commands
 	// show a disabled message and hooks exit silently. Defaults to true.
 	Enabled bool `json:"enabled"`
@@ -67,9 +66,26 @@ type EntireSettings struct {
 	// plugins (entire-agent-* binaries on $PATH). Defaults to false.
 	ExternalAgents bool `json:"external_agents,omitempty"`
 
+	// GitBackend configures which git backend (go-git or cli) to use
+	// for each operation category. See gitbackend.Config for details.
+	// nil means "auto".
+	GitBackend *GitBackendConfig `json:"git_backend,omitempty"`
+
 	// Deprecated: no longer used. Exists to tolerate old settings files
 	// that still contain "strategy": "auto-commit" or similar.
 	Strategy string `json:"strategy,omitempty"`
+}
+
+// GitBackendConfig controls which git backend is used per operation category.
+// Valid providers: "go-git", "cli", "auto" (use sensible defaults).
+// Valid categories: "refs", "commits", "objects", "worktree", "remote", "diff", "config".
+type GitBackendConfig struct {
+	// Default is the default provider for categories not listed in Overrides.
+	// "auto" or empty uses sensible per-category defaults.
+	Default string `json:"default,omitempty"`
+
+	// Overrides maps specific operation categories to a provider.
+	Overrides map[string]string `json:"overrides,omitempty"`
 }
 
 // GetCommitLinking returns the effective commit linking mode.
@@ -257,6 +273,15 @@ func mergeJSON(settings *EntireSettings, data []byte) error {
 			return fmt.Errorf("parsing external_agents field: %w", err)
 		}
 		settings.ExternalAgents = ea
+	}
+
+	// Override git_backend if present
+	if gitBackendRaw, ok := raw["git_backend"]; ok {
+		var gb GitBackendConfig
+		if err := json.Unmarshal(gitBackendRaw, &gb); err != nil {
+			return fmt.Errorf("parsing git_backend field: %w", err)
+		}
+		settings.GitBackend = &gb
 	}
 
 	return nil
