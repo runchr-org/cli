@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 
 	"github.com/go-git/go-git/v6"
@@ -55,6 +56,18 @@ func UpdateSubtree(
 	newEntries []object.TreeEntry,
 	opts UpdateSubtreeOptions,
 ) (plumbing.Hash, error) {
+	return updateSubtreeProvider(gitprovider.NewGoGit(repo), rootTreeHash, pathSegments, newEntries, opts)
+}
+
+// updateSubtreeProvider is the provider-based implementation of UpdateSubtree.
+// Used internally by GitStore methods that hold a gitprovider.Repository.
+func updateSubtreeProvider(
+	repo gitprovider.ObjectProvider,
+	rootTreeHash plumbing.Hash,
+	pathSegments []string,
+	newEntries []object.TreeEntry,
+	opts UpdateSubtreeOptions,
+) (plumbing.Hash, error) {
 	if len(pathSegments) == 0 {
 		return buildLeafTree(repo, rootTreeHash, newEntries, opts)
 	}
@@ -85,7 +98,7 @@ func UpdateSubtree(
 	}
 
 	// Recurse into the subtree
-	newSubtreeHash, err := UpdateSubtree(repo, existingSubtreeHash, remainingPath, newEntries, opts)
+	newSubtreeHash, err := updateSubtreeProvider(repo, existingSubtreeHash, remainingPath, newEntries, opts)
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
@@ -114,12 +127,12 @@ func UpdateSubtree(
 	}
 
 	sortTreeEntries(updatedEntries)
-	return storeTree(repo, updatedEntries)
+	return storeTreeProvider(repo, updatedEntries)
 }
 
 // buildLeafTree builds the tree at the leaf of the UpdateSubtree path.
 func buildLeafTree(
-	repo *git.Repository,
+	repo gitprovider.ObjectProvider,
 	existingTreeHash plumbing.Hash,
 	newEntries []object.TreeEntry,
 	opts UpdateSubtreeOptions,
@@ -128,7 +141,7 @@ func buildLeafTree(
 		sorted := make([]object.TreeEntry, len(newEntries))
 		copy(sorted, newEntries)
 		sortTreeEntries(sorted)
-		return storeTree(repo, sorted)
+		return storeTreeProvider(repo, sorted)
 	}
 
 	// MergeKeepExisting: read existing tree, merge
@@ -137,7 +150,7 @@ func buildLeafTree(
 		sorted := make([]object.TreeEntry, len(newEntries))
 		copy(sorted, newEntries)
 		sortTreeEntries(sorted)
-		return storeTree(repo, sorted)
+		return storeTreeProvider(repo, sorted)
 	}
 
 	// Build lookup of new entries by name
@@ -173,17 +186,23 @@ func buildLeafTree(
 	}
 
 	sortTreeEntries(merged)
-	return storeTree(repo, merged)
+	return storeTreeProvider(repo, merged)
 }
 
 // storeTree creates a git tree object from entries and stores it in the repo.
+// This is the backward-compatible version that accepts *git.Repository.
 func storeTree(repo *git.Repository, entries []object.TreeEntry) (plumbing.Hash, error) {
+	return storeTreeProvider(gitprovider.NewGoGit(repo), entries)
+}
+
+// storeTreeProvider creates a git tree object from entries using a gitprovider.ObjectProvider.
+func storeTreeProvider(repo gitprovider.ObjectProvider, entries []object.TreeEntry) (plumbing.Hash, error) {
 	tree := &object.Tree{Entries: entries}
-	obj := repo.Storer.NewEncodedObject()
+	obj := repo.Storer().NewEncodedObject()
 	if err := tree.Encode(obj); err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to encode tree: %w", err)
 	}
-	hash, err := repo.Storer.SetEncodedObject(obj)
+	hash, err := repo.Storer().SetEncodedObject(obj)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to store tree: %w", err)
 	}
@@ -196,6 +215,15 @@ func storeTree(repo *git.Repository, entries []object.TreeEntry) (plumbing.Hash,
 // over FlattenTree + BuildTreeFromEntries for sparse changes.
 func ApplyTreeChanges(
 	repo *git.Repository,
+	rootTreeHash plumbing.Hash,
+	changes []TreeChange,
+) (plumbing.Hash, error) {
+	return applyTreeChangesProvider(gitprovider.NewGoGit(repo), rootTreeHash, changes)
+}
+
+// applyTreeChangesProvider is the provider-based implementation of ApplyTreeChanges.
+func applyTreeChangesProvider(
+	repo gitprovider.ObjectProvider,
 	rootTreeHash plumbing.Hash,
 	changes []TreeChange,
 ) (plumbing.Hash, error) {
@@ -262,7 +290,7 @@ func ApplyTreeChanges(
 			if existing, ok := entryMap[name]; ok && existing.Mode == filemode.Dir {
 				existingHash = existing.Hash
 			}
-			newSubHash, err := ApplyTreeChanges(repo, existingHash, dc.subChanges)
+			newSubHash, err := applyTreeChangesProvider(repo, existingHash, dc.subChanges)
 			if err != nil {
 				return plumbing.ZeroHash, fmt.Errorf("failed to apply changes in %s: %w", name, err)
 			}
@@ -279,7 +307,7 @@ func ApplyTreeChanges(
 		result = append(result, e)
 	}
 	sortTreeEntries(result)
-	return storeTree(repo, result)
+	return storeTreeProvider(repo, result)
 }
 
 // splitFirstSegment splits "a/b/c" into ("a", "b/c"), and "file.txt" into ("file.txt", "").
@@ -295,7 +323,7 @@ func splitFirstSegment(path string) (first, rest string) {
 // without flattening the tree.
 func (s *GitStore) getSessionsBranchRef() (plumbing.Hash, plumbing.Hash, error) {
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
-	ref, err := s.repo.Reference(refName, true)
+	ref, err := s.repo.GetReference(refName, true)
 	if err != nil {
 		return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("failed to get sessions branch reference: %w", err)
 	}

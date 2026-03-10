@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
+
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
@@ -454,23 +456,26 @@ func TestFindNewUntrackedFiles(t *testing.T) {
 	}
 }
 
-func TestGetGitConfigValue(t *testing.T) {
-	// Test that invalid keys return empty string
-	invalid := getGitConfigValue(context.Background(), "nonexistent.key.that.does.not.exist")
+func TestConfigValueViaProvider(t *testing.T) {
+	t.Parallel()
+	// Test that invalid keys return empty string via gitprovider CLI
+	cli := gitprovider.NewCLI(".")
+	invalid, _ := cli.ConfigValue(context.Background(), "nonexistent.key.that.does.not.exist") //nolint:errcheck // Testing fallback on missing key
 	if invalid != "" {
 		t.Errorf("expected empty string for invalid key, got %q", invalid)
 	}
 
 	// Test that it returns a value for user.name (assuming git is configured on test machine)
-	// This is a basic sanity check - it may return empty on unconfigured systems
-	name := getGitConfigValue(context.Background(), "user.name")
+	name, _ := cli.ConfigValue(context.Background(), "user.name") //nolint:errcheck // Best-effort check
 	t.Logf("git config user.name returned: %q", name)
 }
 
-func TestGetGitConfigValueTrimsWhitespace(t *testing.T) {
+func TestConfigValueTrimsWhitespace(t *testing.T) {
+	t.Parallel()
 	// The git config command returns values with trailing newline
-	// Verify that getGitConfigValue trims whitespace properly
-	email := getGitConfigValue(context.Background(), "user.email")
+	// Verify that ConfigValue trims whitespace properly
+	cli := gitprovider.NewCLI(".")
+	email, _ := cli.ConfigValue(context.Background(), "user.email") //nolint:errcheck // Best-effort check
 	t.Logf("git config user.email returned: %q", email)
 
 	// If email is set, verify no leading/trailing whitespace

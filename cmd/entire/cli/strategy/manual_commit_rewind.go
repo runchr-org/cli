@@ -14,6 +14,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
@@ -27,7 +28,7 @@ import (
 // GetRewindPoints returns available rewind points.
 // Uses checkpoint.GitStore.ListTemporaryCheckpoints for reading from shadow branches.
 func (s *ManualCommitStrategy) GetRewindPoints(ctx context.Context, limit int) ([]RewindPoint, error) {
-	repo, err := OpenRepository(ctx)
+	repo, err := OpenProvider(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
@@ -134,7 +135,7 @@ func (s *ManualCommitStrategy) GetRewindPoints(ctx context.Context, limit int) (
 // 3. Scanning the current branch history for commits with Entire-Checkpoint trailers
 // 4. Matching by checkpoint ID (stable across amend/rebase)
 func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limit int) ([]RewindPoint, error) {
-	repo, err := OpenRepository(ctx)
+	repo, err := OpenProvider(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +276,7 @@ func ResolveLatestCheckpointFromMap(cpIDs []id.CheckpointID, infoMap map[id.Chec
 //
 
 func (s *ManualCommitStrategy) Rewind(ctx context.Context, point RewindPoint) error {
-	repo, err := OpenRepository(ctx)
+	repo, err := OpenProvider(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open git repository: %w", err)
 	}
@@ -446,7 +447,7 @@ func (s *ManualCommitStrategy) Rewind(ctx context.Context, point RewindPoint) er
 // resetShadowBranchToCheckpoint resets the shadow branch HEAD to the given checkpoint.
 // This ensures that when the user commits after rewinding, the next checkpoint will only
 // include prompts from the rewound point, not prompts from later checkpoints.
-func (s *ManualCommitStrategy) resetShadowBranchToCheckpoint(ctx context.Context, repo *git.Repository, commit *object.Commit) error {
+func (s *ManualCommitStrategy) resetShadowBranchToCheckpoint(ctx context.Context, repo gitprovider.Repository, commit *object.Commit) error {
 	// Extract session ID from the checkpoint commit's Entire-Session trailer
 	sessionID, found := trailers.ParseSession(commit.Message)
 	if !found {
@@ -468,7 +469,7 @@ func (s *ManualCommitStrategy) resetShadowBranchToCheckpoint(ctx context.Context
 
 	// Update the reference to point to the checkpoint commit
 	ref := plumbing.NewHashReference(refName, commit.Hash)
-	if err := repo.Storer.SetReference(ref); err != nil {
+	if err := repo.SetReference(ref); err != nil {
 		return fmt.Errorf("failed to update shadow branch: %w", err)
 	}
 
@@ -492,7 +493,7 @@ func (s *ManualCommitStrategy) PreviewRewind(ctx context.Context, point RewindPo
 		return &RewindPreview{}, nil
 	}
 
-	repo, err := OpenRepository(ctx)
+	repo, err := OpenProvider(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
@@ -759,7 +760,7 @@ func ResolveAgentForRewind(agentType types.AgentType) (agent.Agent, error) {
 
 // readSessionPrompt reads the first prompt from the session's prompt.txt file stored in git.
 // Returns an empty string if the prompt cannot be read.
-func readSessionPrompt(repo *git.Repository, commitHash plumbing.Hash, metadataDir string) string {
+func readSessionPrompt(repo gitprovider.Repository, commitHash plumbing.Hash, metadataDir string) string {
 	// Get the commit and its tree
 	commit, err := repo.CommitObject(commitHash)
 	if err != nil {

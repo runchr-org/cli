@@ -18,6 +18,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -109,7 +110,7 @@ func (s *GitStore) WriteCommitted(ctx context.Context, opts WriteCommittedOption
 
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 	newRef := plumbing.NewHashReference(refName, newCommitHash)
-	if err := s.repo.Storer.SetReference(newRef); err != nil {
+	if err := s.repo.SetReference(newRef); err != nil {
 		return fmt.Errorf("failed to set branch reference: %w", err)
 	}
 
@@ -139,7 +140,7 @@ func (s *GitStore) flattenCheckpointEntries(rootTreeHash plumbing.Hash, checkpoi
 	}
 
 	// Flatten just this subtree with the full path prefix
-	if err := FlattenTree(s.repo, subtree, checkpointPath, entries); err != nil {
+	if err := flattenTreeProvider(s.repo, subtree, checkpointPath, entries); err != nil {
 		return nil, err
 	}
 	return entries, nil
@@ -161,7 +162,7 @@ func (s *GitStore) spliceCheckpointSubtree(rootTreeHash plumbing.Hash, checkpoin
 	}
 
 	// Build the checkpoint subtree from relative entries
-	checkpointTreeHash, err := BuildTreeFromEntries(s.repo, relEntries)
+	checkpointTreeHash, err := buildTreeFromEntriesProvider(s.repo, relEntries)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to build checkpoint subtree: %w", err)
 	}
@@ -170,7 +171,7 @@ func (s *GitStore) spliceCheckpointSubtree(rootTreeHash plumbing.Hash, checkpoin
 	// Path: ["a3"] with entry "b2c4d5e6f7" pointing to the checkpoint tree
 	shardPrefix := string(checkpointID[:2])
 	shardSuffix := string(checkpointID[2:])
-	return UpdateSubtree(s.repo, rootTreeHash, []string{shardPrefix}, []object.TreeEntry{
+	return updateSubtreeProvider(s.repo, rootTreeHash, []string{shardPrefix}, []object.TreeEntry{
 		{Name: shardSuffix, Mode: filemode.Dir, Hash: checkpointTreeHash},
 	}, UpdateSubtreeOptions{MergeMode: MergeKeepExisting})
 }
@@ -201,7 +202,7 @@ func (s *GitStore) writeIncrementalTaskCheckpoint(opts WriteCommittedOptions, ta
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal incremental checkpoint: %w", err)
 	}
-	cpBlobHash, err := CreateBlobFromContent(s.repo, cpData)
+	cpBlobHash, err := createBlobFromContentProvider(s.repo, cpData)
 	if err != nil {
 		return "", fmt.Errorf("failed to create incremental checkpoint blob: %w", err)
 	}
@@ -228,7 +229,7 @@ func (s *GitStore) writeFinalTaskCheckpoint(ctx context.Context, opts WriteCommi
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal task checkpoint: %w", err)
 	}
-	blobHash, err := CreateBlobFromContent(s.repo, checkpointData)
+	blobHash, err := createBlobFromContentProvider(s.repo, checkpointData)
 	if err != nil {
 		return "", fmt.Errorf("failed to create task checkpoint blob: %w", err)
 	}
@@ -256,7 +257,7 @@ func (s *GitStore) writeFinalTaskCheckpoint(ctx context.Context, opts WriteCommi
 			}
 			agentContent = redacted
 
-			agentBlobHash, agentBlobErr := CreateBlobFromContent(s.repo, agentContent)
+			agentBlobHash, agentBlobErr := createBlobFromContentProvider(s.repo, agentContent)
 			if agentBlobErr == nil {
 				agentPath := taskPath + "agent-" + opts.AgentID + ".jsonl"
 				entries[agentPath] = object.TreeEntry{
@@ -351,7 +352,7 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 	// Write prompts
 	if len(opts.Prompts) > 0 {
 		promptContent := redact.String(strings.Join(opts.Prompts, "\n\n---\n\n"))
-		blobHash, err := CreateBlobFromContent(s.repo, []byte(promptContent))
+		blobHash, err := createBlobFromContentProvider(s.repo, []byte(promptContent))
 		if err != nil {
 			return filePaths, err
 		}
@@ -391,7 +392,7 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 	if err != nil {
 		return filePaths, fmt.Errorf("failed to marshal session metadata: %w", err)
 	}
-	metadataHash, err := CreateBlobFromContent(s.repo, metadataJSON)
+	metadataHash, err := createBlobFromContentProvider(s.repo, metadataJSON)
 	if err != nil {
 		return filePaths, err
 	}
@@ -429,7 +430,7 @@ func (s *GitStore) writeCheckpointSummary(opts WriteCommittedOptions, basePath s
 	if err != nil {
 		return fmt.Errorf("failed to marshal checkpoint summary: %w", err)
 	}
-	metadataHash, err := CreateBlobFromContent(s.repo, metadataJSON)
+	metadataHash, err := createBlobFromContentProvider(s.repo, metadataJSON)
 	if err != nil {
 		return err
 	}
@@ -493,7 +494,7 @@ func (s *GitStore) reaggregateFromEntries(basePath string, sessionCount int, ent
 }
 
 // readJSONFromBlob reads JSON from a blob hash and decodes it to the given type.
-func readJSONFromBlob[T any](repo *git.Repository, hash plumbing.Hash) (*T, error) {
+func readJSONFromBlob[T any](repo gitprovider.ObjectProvider, hash plumbing.Hash) (*T, error) {
 	blob, err := repo.BlobObject(hash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get blob: %w", err)
@@ -573,7 +574,7 @@ func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptio
 	// Write chunk files
 	for i, chunk := range chunks {
 		chunkPath := basePath + agent.ChunkFileName(paths.TranscriptFileName, i)
-		blobHash, err := CreateBlobFromContent(s.repo, chunk)
+		blobHash, err := createBlobFromContentProvider(s.repo, chunk)
 		if err != nil {
 			return err
 		}
@@ -586,7 +587,7 @@ func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptio
 
 	// Content hash for deduplication (hash of full transcript)
 	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(transcript))
-	hashBlob, err := CreateBlobFromContent(s.repo, []byte(contentHash))
+	hashBlob, err := createBlobFromContentProvider(s.repo, []byte(contentHash))
 	if err != nil {
 		return err
 	}
@@ -1070,7 +1071,7 @@ func (s *GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoint
 	if err != nil {
 		return fmt.Errorf("failed to marshal metadata: %w", err)
 	}
-	metadataHash, err := CreateBlobFromContent(s.repo, metadataJSON)
+	metadataHash, err := createBlobFromContentProvider(s.repo, metadataJSON)
 	if err != nil {
 		return fmt.Errorf("failed to create metadata blob: %w", err)
 	}
@@ -1086,7 +1087,7 @@ func (s *GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoint
 		return err
 	}
 
-	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
+	authorName, authorEmail := getGitAuthorFromRepoProvider(s.repo)
 	commitMsg := fmt.Sprintf("Update summary for checkpoint %s (session: %s)", checkpointID, existingMetadata.SessionID)
 	newCommitHash, err := s.createCommit(newTreeHash, parentHash, commitMsg, authorName, authorEmail)
 	if err != nil {
@@ -1095,7 +1096,7 @@ func (s *GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoint
 
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 	newRef := plumbing.NewHashReference(refName, newCommitHash)
-	if err := s.repo.Storer.SetReference(newRef); err != nil {
+	if err := s.repo.SetReference(newRef); err != nil {
 		return fmt.Errorf("failed to set branch reference: %w", err)
 	}
 
@@ -1188,7 +1189,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 	// Replace prompts (apply redaction as safety net)
 	if len(opts.Prompts) > 0 {
 		promptContent := redact.String(strings.Join(opts.Prompts, "\n\n---\n\n"))
-		blobHash, err := CreateBlobFromContent(s.repo, []byte(promptContent))
+		blobHash, err := createBlobFromContentProvider(s.repo, []byte(promptContent))
 		if err != nil {
 			return fmt.Errorf("failed to create prompt blob: %w", err)
 		}
@@ -1205,7 +1206,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 		return err
 	}
 
-	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
+	authorName, authorEmail := getGitAuthorFromRepoProvider(s.repo)
 	commitMsg := fmt.Sprintf("Finalize transcript for Checkpoint: %s", opts.CheckpointID)
 	newCommitHash, err := s.createCommit(newTreeHash, parentHash, commitMsg, authorName, authorEmail)
 	if err != nil {
@@ -1214,7 +1215,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 	newRef := plumbing.NewHashReference(refName, newCommitHash)
-	if err := s.repo.Storer.SetReference(newRef); err != nil {
+	if err := s.repo.SetReference(newRef); err != nil {
 		return fmt.Errorf("failed to set branch reference: %w", err)
 	}
 
@@ -1241,7 +1242,7 @@ func (s *GitStore) replaceTranscript(ctx context.Context, transcript []byte, age
 	// Write chunk files
 	for i, chunk := range chunks {
 		chunkPath := sessionPath + agent.ChunkFileName(paths.TranscriptFileName, i)
-		blobHash, err := CreateBlobFromContent(s.repo, chunk)
+		blobHash, err := createBlobFromContentProvider(s.repo, chunk)
 		if err != nil {
 			return fmt.Errorf("failed to create transcript blob: %w", err)
 		}
@@ -1254,7 +1255,7 @@ func (s *GitStore) replaceTranscript(ctx context.Context, transcript []byte, age
 
 	// Update content hash
 	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(transcript))
-	hashBlob, err := CreateBlobFromContent(s.repo, []byte(contentHash))
+	hashBlob, err := createBlobFromContentProvider(s.repo, []byte(contentHash))
 	if err != nil {
 		return fmt.Errorf("failed to create content hash blob: %w", err)
 	}
@@ -1271,25 +1272,25 @@ func (s *GitStore) replaceTranscript(ctx context.Context, transcript []byte, age
 // ensureSessionsBranch ensures the entire/checkpoints/v1 branch exists.
 func (s *GitStore) ensureSessionsBranch() error {
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
-	_, err := s.repo.Reference(refName, true)
+	_, err := s.repo.GetReference(refName, true)
 	if err == nil {
 		return nil // Branch exists
 	}
 
 	// Create orphan branch with empty tree
-	emptyTreeHash, err := BuildTreeFromEntries(s.repo, make(map[string]object.TreeEntry))
+	emptyTreeHash, err := buildTreeFromEntriesProvider(s.repo, make(map[string]object.TreeEntry))
 	if err != nil {
 		return err
 	}
 
-	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
+	authorName, authorEmail := getGitAuthorFromRepoProvider(s.repo)
 	commitHash, err := s.createCommit(emptyTreeHash, plumbing.ZeroHash, "Initialize sessions branch", authorName, authorEmail)
 	if err != nil {
 		return err
 	}
 
 	newRef := plumbing.NewHashReference(refName, commitHash)
-	if err := s.repo.Storer.SetReference(newRef); err != nil {
+	if err := s.repo.SetReference(newRef); err != nil {
 		return fmt.Errorf("failed to set branch reference: %w", err)
 	}
 	return nil
@@ -1299,11 +1300,11 @@ func (s *GitStore) ensureSessionsBranch() error {
 // Falls back to origin/entire/checkpoints/v1 if the local branch doesn't exist.
 func (s *GitStore) getSessionsBranchTree() (*object.Tree, error) {
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
-	ref, err := s.repo.Reference(refName, true)
+	ref, err := s.repo.GetReference(refName, true)
 	if err != nil {
 		// Local branch doesn't exist, try remote-tracking branch
 		remoteRefName := plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
-		ref, err = s.repo.Reference(remoteRefName, true)
+		ref, err = s.repo.GetReference(remoteRefName, true)
 		if err != nil {
 			return nil, fmt.Errorf("sessions branch not found: %w", err)
 		}
@@ -1325,7 +1326,12 @@ func (s *GitStore) getSessionsBranchTree() (*object.Tree, error) {
 // CreateBlobFromContent creates a blob object from in-memory content.
 // Exported for use by strategy package (session_test.go)
 func CreateBlobFromContent(repo *git.Repository, content []byte) (plumbing.Hash, error) {
-	obj := repo.Storer.NewEncodedObject()
+	return createBlobFromContentProvider(gitprovider.NewGoGit(repo), content)
+}
+
+// createBlobFromContentProvider is the provider-based implementation of CreateBlobFromContent.
+func createBlobFromContentProvider(repo gitprovider.ObjectProvider, content []byte) (plumbing.Hash, error) {
+	obj := repo.Storer().NewEncodedObject()
 	obj.SetType(plumbing.BlobObject)
 	obj.SetSize(int64(len(content)))
 
@@ -1343,7 +1349,7 @@ func CreateBlobFromContent(repo *git.Repository, content []byte) (plumbing.Hash,
 		return plumbing.ZeroHash, fmt.Errorf("failed to close blob writer: %w", err)
 	}
 
-	hash, err := repo.Storer.SetEncodedObject(obj)
+	hash, err := repo.Storer().SetEncodedObject(obj)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to store blob object: %w", err)
 	}
@@ -1415,7 +1421,7 @@ func (s *GitStore) copyMetadataDir(metadataDir, basePath string, entries map[str
 
 // createRedactedBlobFromFile reads a file, applies secrets redaction, and creates a git blob.
 // JSONL files get JSONL-aware redaction; all other files get plain string redaction.
-func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string) (plumbing.Hash, filemode.FileMode, error) {
+func createRedactedBlobFromFile(repo gitprovider.ObjectProvider, filePath, treePath string) (plumbing.Hash, filemode.FileMode, error) {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return plumbing.ZeroHash, 0, fmt.Errorf("failed to stat file: %w", err)
@@ -1435,7 +1441,7 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string)
 	// running string replacement on them would corrupt the data.
 	isBin, binErr := binary.IsBinary(bytes.NewReader(content))
 	if binErr != nil || isBin {
-		hash, err := CreateBlobFromContent(repo, content)
+		hash, err := createBlobFromContentProvider(repo, content)
 		if err != nil {
 			return plumbing.ZeroHash, 0, fmt.Errorf("failed to create blob: %w", err)
 		}
@@ -1452,7 +1458,7 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string)
 		content = redact.Bytes(content)
 	}
 
-	hash, err := CreateBlobFromContent(repo, content)
+	hash, err := createBlobFromContentProvider(repo, content)
 	if err != nil {
 		return plumbing.ZeroHash, 0, fmt.Errorf("failed to create blob: %w", err)
 	}
@@ -1462,8 +1468,13 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string)
 // GetGitAuthorFromRepo retrieves the git user.name and user.email,
 // checking both the repository-local config and the global ~/.gitconfig.
 func GetGitAuthorFromRepo(repo *git.Repository) (name, email string) {
+	return getGitAuthorFromRepoProvider(gitprovider.NewGoGit(repo))
+}
+
+// getGitAuthorFromRepoProvider is the provider-based implementation of GetGitAuthorFromRepo.
+func getGitAuthorFromRepoProvider(repo gitprovider.ObjectProvider) (name, email string) {
 	// Get repository config (includes local settings)
-	cfg, err := repo.Config()
+	cfg, err := repo.Storer().Config()
 	if err == nil {
 		name = cfg.User.Name
 		email = cfg.User.Email
@@ -1496,6 +1507,11 @@ func GetGitAuthorFromRepo(repo *git.Repository) (name, email string) {
 // CreateCommit creates a git commit object with the given tree, parent, message, and author.
 // If parentHash is ZeroHash, the commit is created without a parent (orphan commit).
 func CreateCommit(repo *git.Repository, treeHash, parentHash plumbing.Hash, message, authorName, authorEmail string) (plumbing.Hash, error) {
+	return createCommitProvider(gitprovider.NewGoGit(repo), treeHash, parentHash, message, authorName, authorEmail)
+}
+
+// createCommitProvider is the provider-based implementation of CreateCommit.
+func createCommitProvider(repo gitprovider.ObjectProvider, treeHash, parentHash plumbing.Hash, message, authorName, authorEmail string) (plumbing.Hash, error) {
 	now := time.Now()
 	sig := object.Signature{
 		Name:  authorName,
@@ -1514,12 +1530,12 @@ func CreateCommit(repo *git.Repository, treeHash, parentHash plumbing.Hash, mess
 		commit.ParentHashes = []plumbing.Hash{parentHash}
 	}
 
-	obj := repo.Storer.NewEncodedObject()
+	obj := repo.Storer().NewEncodedObject()
 	if err := commit.Encode(obj); err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to encode commit: %w", err)
 	}
 
-	hash, err := repo.Storer.SetEncodedObject(obj)
+	hash, err := repo.Storer().SetEncodedObject(obj)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to store commit: %w", err)
 	}
@@ -1622,7 +1638,7 @@ func (s *GitStore) GetCheckpointAuthor(ctx context.Context, checkpointID id.Chec
 	}
 
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
-	ref, err := s.repo.Reference(refName, true)
+	ref, err := s.repo.GetReference(refName, true)
 	if err != nil {
 		return Author{}, nil
 	}

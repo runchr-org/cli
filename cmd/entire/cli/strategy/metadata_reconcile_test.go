@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 
 	"github.com/go-git/go-git/v6"
@@ -92,7 +93,7 @@ func TestReconcileDisconnected_SameHash(t *testing.T) {
 	}
 
 	// Create local branch from remote (same hash)
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(gitprovider.WrapGoGit(repo)); err != nil {
 		t.Fatalf("EnsureMetadataBranch failed: %v", err)
 	}
 
@@ -114,7 +115,7 @@ func TestReconcileDisconnected_SharedAncestry(t *testing.T) {
 	}
 
 	// Create local branch from remote (shared base)
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(gitprovider.WrapGoGit(repo)); err != nil {
 		t.Fatalf("EnsureMetadataBranch failed: %v", err)
 	}
 
@@ -455,7 +456,7 @@ func TestIsMetadataDisconnected_SameHash(t *testing.T) {
 		t.Fatalf("failed to open repo: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(gitprovider.WrapGoGit(repo)); err != nil {
 		t.Fatalf("EnsureMetadataBranch failed: %v", err)
 	}
 
@@ -479,7 +480,7 @@ func TestIsMetadataDisconnected_SharedAncestry(t *testing.T) {
 		t.Fatalf("failed to open repo: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(gitprovider.WrapGoGit(repo)); err != nil {
 		t.Fatalf("EnsureMetadataBranch failed: %v", err)
 	}
 

@@ -67,9 +67,27 @@ type EntireSettings struct {
 	// plugins (entire-agent-* binaries on $PATH). Defaults to false.
 	ExternalAgents bool `json:"external_agents,omitempty"`
 
+	// GitProvider allows per-category overrides of the git implementation.
+	// Valid values per category are "go-git" and "cli".
+	// Categories: references, objects, worktree, remote, config, diff.
+	// Omitted categories use sensible defaults (go-git for references/objects,
+	// cli for worktree/remote/config/diff).
+	GitProvider *GitProviderConfig `json:"git_provider,omitempty"`
+
 	// Deprecated: no longer used. Exists to tolerate old settings files
 	// that still contain "strategy": "auto-commit" or similar.
 	Strategy string `json:"strategy,omitempty"`
+}
+
+// GitProviderConfig maps each git operation category to an implementation.
+// Valid values are "go-git" and "cli". Empty strings use the default.
+type GitProviderConfig struct {
+	References string `json:"references,omitempty"`
+	Objects    string `json:"objects,omitempty"`
+	Worktree   string `json:"worktree,omitempty"`
+	Remote     string `json:"remote,omitempty"`
+	Config     string `json:"config,omitempty"`
+	Diff       string `json:"diff,omitempty"`
 }
 
 // GetCommitLinking returns the effective commit linking mode.
@@ -257,6 +275,36 @@ func mergeJSON(settings *EntireSettings, data []byte) error {
 			return fmt.Errorf("parsing external_agents field: %w", err)
 		}
 		settings.ExternalAgents = ea
+	}
+
+	// Override git_provider if present
+	if gpRaw, ok := raw["git_provider"]; ok {
+		var gp GitProviderConfig
+		if err := json.Unmarshal(gpRaw, &gp); err != nil {
+			return fmt.Errorf("parsing git_provider field: %w", err)
+		}
+		if settings.GitProvider == nil {
+			settings.GitProvider = &gp
+		} else {
+			if gp.References != "" {
+				settings.GitProvider.References = gp.References
+			}
+			if gp.Objects != "" {
+				settings.GitProvider.Objects = gp.Objects
+			}
+			if gp.Worktree != "" {
+				settings.GitProvider.Worktree = gp.Worktree
+			}
+			if gp.Remote != "" {
+				settings.GitProvider.Remote = gp.Remote
+			}
+			if gp.Config != "" {
+				settings.GitProvider.Config = gp.Config
+			}
+			if gp.Diff != "" {
+				settings.GitProvider.Diff = gp.Diff
+			}
+		}
 	}
 
 	return nil

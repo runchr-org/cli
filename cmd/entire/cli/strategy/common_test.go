@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
@@ -1050,7 +1051,7 @@ func TestEnsureMetadataBranch(t *testing.T) {
 			t.Fatalf("failed to open repo: %v", err)
 		}
 
-		if err := EnsureMetadataBranch(repo); err != nil {
+		if err := EnsureMetadataBranch(gitprovider.WrapGoGit(repo)); err != nil {
 			t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 		}
 
@@ -1114,7 +1115,7 @@ func TestEnsureMetadataBranch(t *testing.T) {
 			t.Fatalf("failed to set ref: %v", err)
 		}
 
-		if err := EnsureMetadataBranch(repo); err != nil {
+		if err := EnsureMetadataBranch(gitprovider.WrapGoGit(repo)); err != nil {
 			t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 		}
 
@@ -1137,7 +1138,7 @@ func TestEnsureMetadataBranch(t *testing.T) {
 			t.Fatalf("failed to open repo: %v", err)
 		}
 
-		if err := EnsureMetadataBranch(repo); err != nil {
+		if err := EnsureMetadataBranch(gitprovider.WrapGoGit(repo)); err != nil {
 			t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 		}
 
@@ -1215,7 +1216,7 @@ func TestEnsureMetadataBranch_DisconnectedBranchesNotReconciledInEnable(t *testi
 		t.Fatalf("local branch not found: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(gitprovider.WrapGoGit(repo)); err != nil {
 		t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 	}
 
@@ -1242,7 +1243,7 @@ func TestEnsureMetadataBranch_DoesNotFastForwardWhenBehind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open repo: %v", err)
 	}
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(gitprovider.WrapGoGit(repo)); err != nil {
 		t.Fatalf("first EnsureMetadataBranch() failed: %v", err)
 	}
 
@@ -1282,7 +1283,7 @@ func TestEnsureMetadataBranch_DoesNotFastForwardWhenBehind(t *testing.T) {
 		t.Fatalf("failed to reopen repo: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(gitprovider.WrapGoGit(repo)); err != nil {
 		t.Fatalf("second EnsureMetadataBranch() failed: %v", err)
 	}
 
@@ -1432,8 +1433,8 @@ func TestReadLatestSessionPromptFromCommittedTree(t *testing.T) {
 		// Session 1 (latest) has no prompt.txt, session 0 does.
 		// This happens when a test session gets condensed alongside a real one.
 		tree := buildCommittedTree(t, map[string]string{
-			"a3/b2c4d5e6f7/0/prompt.txt":      "Real session prompt",
-			"a3/b2c4d5e6f7/1/metadata.json":    `{"session_id":"test"}`,
+			"a3/b2c4d5e6f7/0/prompt.txt":    "Real session prompt",
+			"a3/b2c4d5e6f7/1/metadata.json": `{"session_id":"test"}`,
 		})
 
 		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 2)
@@ -1446,9 +1447,9 @@ func TestReadLatestSessionPromptFromCommittedTree(t *testing.T) {
 		t.Parallel()
 		// Sessions 2 and 1 have no prompt, session 0 does.
 		tree := buildCommittedTree(t, map[string]string{
-			"a3/b2c4d5e6f7/0/prompt.txt":      "Original prompt",
-			"a3/b2c4d5e6f7/1/metadata.json":    `{"session_id":"s1"}`,
-			"a3/b2c4d5e6f7/2/metadata.json":    `{"session_id":"s2"}`,
+			"a3/b2c4d5e6f7/0/prompt.txt":    "Original prompt",
+			"a3/b2c4d5e6f7/1/metadata.json": `{"session_id":"s1"}`,
+			"a3/b2c4d5e6f7/2/metadata.json": `{"session_id":"s2"}`,
 		})
 
 		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 3)
@@ -1506,7 +1507,7 @@ func TestIsEmptyRepository(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to init repo: %v", err)
 		}
-		if !IsEmptyRepository(repo) {
+		if !IsEmptyRepository(gitprovider.WrapGoGit(repo)) {
 			t.Error("IsEmptyRepository() = false, want true for empty repo")
 		}
 	})
@@ -1537,7 +1538,7 @@ func TestIsEmptyRepository(t *testing.T) {
 			t.Fatalf("failed to commit: %v", err)
 		}
 
-		if IsEmptyRepository(repo) {
+		if IsEmptyRepository(gitprovider.WrapGoGit(repo)) {
 			t.Error("IsEmptyRepository() = true, want false for repo with commit")
 		}
 	})

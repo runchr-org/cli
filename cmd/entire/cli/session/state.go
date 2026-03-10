@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
@@ -444,22 +445,12 @@ func getGitCommonDir(ctx context.Context) (string, error) {
 	}
 	gitCommonDirMu.RUnlock()
 
-	// Cache miss — resolve via git subprocess
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--git-common-dir")
-	cmd.Dir = "."
-	output, err := cmd.Output()
+	// Cache miss — resolve via gitprovider CLI
+	cli := gitprovider.NewCLI(".")
+	commonDir, err := cli.GitCommonDir(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to get git common dir: %w", err)
 	}
-
-	commonDir := strings.TrimSpace(string(output))
-
-	// git rev-parse --git-common-dir returns relative paths from the working directory,
-	// so we need to make it absolute if it isn't already
-	if !filepath.IsAbs(commonDir) {
-		commonDir = filepath.Join(".", commonDir)
-	}
-	commonDir = filepath.Clean(commonDir)
 
 	gitCommonDirMu.Lock()
 	gitCommonDirCache = commonDir

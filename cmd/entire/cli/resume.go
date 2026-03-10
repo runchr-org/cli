@@ -12,6 +12,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -177,7 +178,8 @@ func resumeFromCurrentBranch(ctx context.Context, branchName string, force bool)
 	// Get metadata branch tree for lookups (reuse from resolveLatestCheckpoint if available)
 	if metadataTree == nil {
 		var err error
-		metadataTree, err = strategy.GetMetadataBranchTree(repo)
+		wrappedRepo := gitprovider.WrapGoGit(repo)
+		metadataTree, err = strategy.GetMetadataBranchTree(wrappedRepo)
 		if err != nil {
 			// No local metadata branch, check if remote has it
 			return checkRemoteMetadata(ctx, repo, checkpointID)
@@ -221,14 +223,15 @@ func resolveLatestCheckpoint(ctx context.Context, repo *git.Repository, checkpoi
 // getMetadataTree returns the metadata branch tree, trying local first,
 // then fetching from remote, then falling back to the remote tree directly.
 func getMetadataTree(ctx context.Context, repo *git.Repository) (*object.Tree, error) {
-	metadataTree, err := strategy.GetMetadataBranchTree(repo)
+	wrappedRepo := gitprovider.WrapGoGit(repo)
+	metadataTree, err := strategy.GetMetadataBranchTree(wrappedRepo)
 	if err == nil {
 		return metadataTree, nil
 	}
 
 	// Try fetching from remote
 	if fetchErr := FetchMetadataBranch(ctx); fetchErr == nil {
-		metadataTree, err = strategy.GetMetadataBranchTree(repo)
+		metadataTree, err = strategy.GetMetadataBranchTree(wrappedRepo)
 		if err == nil {
 			return metadataTree, nil
 		}
@@ -279,7 +282,7 @@ func findBranchCheckpoints(repo *git.Repository, branchName string) (*branchChec
 
 	// HEAD doesn't have a checkpoint - find branch-only commits
 	// Get the default branch name
-	defaultBranch := getDefaultBranchFromRemote(repo)
+	defaultBranch := getDefaultBranchFromRemote(gitprovider.WrapGoGit(repo))
 	if defaultBranch == "" {
 		// Fallback: try common names
 		for _, name := range []string{"main", "master"} {

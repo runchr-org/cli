@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
+
+	"os/exec"
 
 	agentpkg "github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
@@ -694,8 +695,8 @@ func restoreSessionTranscriptFromStrategy(ctx context.Context, cpID id.Checkpoin
 // restoreSessionTranscriptFromShadow restores a session transcript from a shadow branch commit.
 // This is used for uncommitted checkpoints where the transcript is stored in the shadow branch tree.
 func restoreSessionTranscriptFromShadow(ctx context.Context, commitHash, metadataDir, sessionID string, agent agentpkg.Agent) (string, error) {
-	// Open repository
-	repo, err := git.PlainOpenWithOptions(".", &git.PlainOpenOptions{DetectDotGit: true})
+	// Open repository via gitprovider
+	repo, err := openProvider(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to open repository: %w", err)
 	}
@@ -707,7 +708,7 @@ func restoreSessionTranscriptFromShadow(ctx context.Context, commitHash, metadat
 	}
 
 	// Get transcript from shadow branch commit tree
-	store := checkpoint.NewGitStore(repo)
+	store := checkpoint.NewGitStoreFromProvider(repo)
 	content, err := store.GetTranscriptFromCommit(ctx, hash, metadataDir, agent.Type())
 	if err != nil {
 		return "", fmt.Errorf("failed to get transcript from shadow branch: %w", err)
@@ -1022,7 +1023,7 @@ func handleLogsOnlyReset(ctx context.Context, start *strategy.ManualCommitStrate
 
 // getCurrentHeadHash returns the current HEAD commit hash.
 func getCurrentHeadHash(ctx context.Context) (string, error) {
-	repo, err := openRepository(ctx)
+	repo, err := openProvider(ctx)
 	if err != nil {
 		return "", err
 	}

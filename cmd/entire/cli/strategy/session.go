@@ -11,9 +11,8 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-
-	"github.com/go-git/go-git/v6"
 )
 
 // NoDescription is the default description for sessions without one.
@@ -64,7 +63,7 @@ type Checkpoint struct {
 // plus any additional sessions from strategies implementing SessionSource.
 // It automatically discovers all registered strategies and merges their sessions.
 func ListSessions(ctx context.Context) ([]Session, error) {
-	repo, err := OpenRepository(ctx)
+	repo, err := OpenProvider(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
@@ -183,7 +182,7 @@ func GetSession(ctx context.Context, sessionID string) (*Session, error) {
 
 // getDescriptionForCheckpoint reads the description for a checkpoint from the entire/checkpoints/v1 branch.
 // It reads from the latest session subdirectory in the new storage format.
-func getDescriptionForCheckpoint(repo *git.Repository, checkpointID id.CheckpointID) string {
+func getDescriptionForCheckpoint(repo gitprovider.Repository, checkpointID id.CheckpointID) string {
 	tree, err := GetMetadataBranchTree(repo)
 	if err != nil {
 		return NoDescription

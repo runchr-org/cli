@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 
@@ -17,10 +17,21 @@ import (
 
 // openRepository opens the git repository with linked worktree support enabled.
 // This is a convenience wrapper around strategy.OpenRepository() for use in the CLI package.
+// Kept for backward compatibility with tests and code that still needs *git.Repository.
 func openRepository(ctx context.Context) (*git.Repository, error) {
 	repo, err := strategy.OpenRepository(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open repository: %w", err)
+	}
+	return repo, nil
+}
+
+// openProvider opens a gitprovider.Repository using the default configuration.
+// This is the preferred way to access git operations in the CLI package.
+func openProvider(ctx context.Context) (gitprovider.Repository, error) {
+	repo, err := gitprovider.OpenDefault(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open provider: %w", err)
 	}
 	return repo, nil
 }
@@ -32,29 +43,22 @@ type GitAuthor struct {
 }
 
 // GetGitAuthor retrieves the git user.name and user.email from the repository config.
-// It checks local config first, then falls back to global config.
-// If go-git can't find the config, it falls back to using the git command.
+// Uses gitprovider.Repository.ConfigValue to read git config values.
 // Returns fallback defaults if no user is configured anywhere.
 func GetGitAuthor(ctx context.Context) (*GitAuthor, error) {
-	repo, err := openRepository(ctx)
+	repo, err := openProvider(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
 
-	name, email := strategy.GetGitAuthorFromRepo(repo)
-
-	// If go-git returned defaults, try using git command as fallback
-	// This handles cases where go-git can't find the config (e.g., different HOME paths,
-	// non-standard config locations, or environment issues in hook contexts)
-	if name == "Unknown" {
-		if gitName := getGitConfigValue(ctx, "user.name"); gitName != "" {
-			name = gitName
-		}
+	name, _ := repo.ConfigValue(ctx, "user.name") //nolint:errcheck // Best-effort, falls back to default
+	if name == "" {
+		name = "Unknown"
 	}
-	if email == "unknown@local" {
-		if gitEmail := getGitConfigValue(ctx, "user.email"); gitEmail != "" {
-			email = gitEmail
-		}
+
+	email, _ := repo.ConfigValue(ctx, "user.email") //nolint:errcheck // Best-effort, falls back to default
+	if email == "" {
+		email = "unknown@local"
 	}
 
 	return &GitAuthor{
@@ -63,24 +67,13 @@ func GetGitAuthor(ctx context.Context) (*GitAuthor, error) {
 	}, nil
 }
 
-// getGitConfigValue retrieves a git config value using the git command.
-// Returns empty string if the value is not set or on error.
-func getGitConfigValue(ctx context.Context, key string) string {
-	cmd := exec.CommandContext(ctx, "git", "config", "--get", key)
-	output, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(output))
-}
-
 // IsOnDefaultBranch checks if the repository is currently on the default branch.
 // It determines the default branch by:
 // 1. Checking the remote origin's HEAD reference
 // 2. Falling back to common names (main, master) if remote HEAD is unavailable
 // Returns (isDefault, branchName, error)
 func IsOnDefaultBranch(ctx context.Context) (bool, string, error) {
-	repo, err := openRepository(ctx)
+	repo, err := openProvider(ctx)
 	if err != nil {
 		return false, "", fmt.Errorf("failed to open git repository: %w", err)
 	}
@@ -115,9 +108,9 @@ func IsOnDefaultBranch(ctx context.Context) (bool, string, error) {
 
 // getDefaultBranchFromRemote tries to determine the default branch from the origin remote.
 // Returns empty string if unable to determine.
-func getDefaultBranchFromRemote(repo *git.Repository) string {
+func getDefaultBranchFromRemote(repo gitprovider.Repository) string {
 	// Try to get the symbolic reference for origin/HEAD
-	ref, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", "HEAD"), true)
+	ref, err := repo.GetReference(plumbing.NewRemoteReferenceName("origin", "HEAD"), true)
 	if err == nil && ref != nil {
 		// ref.Target() gives us something like "refs/remotes/origin/main"
 		target := ref.Target().String()
@@ -127,10 +120,10 @@ func getDefaultBranchFromRemote(repo *git.Repository) string {
 	}
 
 	// Fallback: check if origin/main or origin/master exists
-	if _, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", "main"), true); err == nil {
+	if _, err := repo.GetReference(plumbing.NewRemoteReferenceName("origin", "main"), true); err == nil {
 		return "main"
 	}
-	if _, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", "master"), true); err == nil {
+	if _, err := repo.GetReference(plumbing.NewRemoteReferenceName("origin", "master"), true); err == nil {
 		return "master"
 	}
 
@@ -153,7 +146,7 @@ func ShouldSkipOnDefaultBranch(ctx context.Context) (bool, string) {
 // GetCurrentBranch returns the name of the current branch.
 // Returns an error if in detached HEAD state or if not in a git repository.
 func GetCurrentBranch(ctx context.Context) (string, error) {
-	repo, err := openRepository(ctx)
+	repo, err := openProvider(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to open git repository: %w", err)
 	}
@@ -173,18 +166,18 @@ func GetCurrentBranch(ctx context.Context) (string, error) {
 // GetMergeBase finds the common ancestor (merge-base) between two branches.
 // Returns the hash of the merge-base commit.
 func GetMergeBase(ctx context.Context, branch1, branch2 string) (*plumbing.Hash, error) {
-	repo, err := openRepository(ctx)
+	repo, err := openProvider(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
 
 	// Resolve branch references
-	ref1, err := repo.Reference(plumbing.NewBranchReferenceName(branch1), true)
+	ref1, err := repo.GetReference(plumbing.NewBranchReferenceName(branch1), true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve branch %s: %w", branch1, err)
 	}
 
-	ref2, err := repo.Reference(plumbing.NewBranchReferenceName(branch2), true)
+	ref2, err := repo.GetReference(plumbing.NewBranchReferenceName(branch2), true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve branch %s: %w", branch2, err)
 	}
@@ -216,17 +209,17 @@ func GetMergeBase(ctx context.Context, branch1, branch2 string) (*plumbing.Hash,
 
 // HasUncommittedChanges checks if there are any uncommitted changes in the repository.
 // This includes staged changes, unstaged changes, and untracked files.
-// Uses git CLI instead of go-git because go-git doesn't respect global gitignore
-// (core.excludesfile) which can cause false positives for globally ignored files.
+// Delegates to gitprovider.Repository which uses the git CLI to respect global gitignore.
 func HasUncommittedChanges(ctx context.Context) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
-	output, err := cmd.Output()
+	repo, err := openProvider(ctx)
 	if err != nil {
-		return false, fmt.Errorf("failed to get git status: %w", err)
+		return false, fmt.Errorf("failed to open git repository: %w", err)
 	}
-
-	// If output is empty, there are no changes
-	return len(strings.TrimSpace(string(output))) > 0, nil
+	hasChanges, err := repo.HasUncommittedChanges(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to check uncommitted changes: %w", err)
+	}
+	return hasChanges, nil
 }
 
 // findNewUntrackedFiles finds files that are newly untracked (not in pre-existing list)
@@ -248,13 +241,13 @@ func findNewUntrackedFiles(current, preExisting []string) []string {
 // BranchExistsOnRemote checks if a branch exists on the origin remote.
 // Returns true if the branch is tracked on origin, false otherwise.
 func BranchExistsOnRemote(ctx context.Context, branchName string) (bool, error) {
-	repo, err := openRepository(ctx)
+	repo, err := openProvider(ctx)
 	if err != nil {
 		return false, fmt.Errorf("failed to open git repository: %w", err)
 	}
 
 	// Check for remote reference: refs/remotes/origin/<branchName>
-	_, err = repo.Reference(plumbing.NewRemoteReferenceName("origin", branchName), true)
+	_, err = repo.GetReference(plumbing.NewRemoteReferenceName("origin", branchName), true)
 	if err != nil {
 		if errors.Is(err, plumbing.ErrReferenceNotFound) {
 			return false, nil
@@ -267,12 +260,12 @@ func BranchExistsOnRemote(ctx context.Context, branchName string) (bool, error) 
 
 // BranchExistsLocally checks if a local branch exists.
 func BranchExistsLocally(ctx context.Context, branchName string) (bool, error) {
-	repo, err := openRepository(ctx)
+	repo, err := openProvider(ctx)
 	if err != nil {
 		return false, fmt.Errorf("failed to open git repository: %w", err)
 	}
 
-	_, err = repo.Reference(plumbing.NewBranchReferenceName(branchName), true)
+	_, err = repo.GetReference(plumbing.NewBranchReferenceName(branchName), true)
 	if err != nil {
 		if errors.Is(err, plumbing.ErrReferenceNotFound) {
 			return false, nil
@@ -284,17 +277,15 @@ func BranchExistsLocally(ctx context.Context, branchName string) (bool, error) {
 }
 
 // CheckoutBranch switches to the specified local branch or commit.
-// Uses git CLI instead of go-git to work around go-git v5 bug where Checkout
-// deletes untracked files (see https://github.com/go-git/go-git/issues/970).
-// Should be switched back to go-git once we upgrade to go-git v6
+// Delegates to gitprovider.Repository.Checkout which uses the git CLI.
 // Returns an error if the ref doesn't exist or checkout fails.
 func CheckoutBranch(ctx context.Context, ref string) error {
-	if strings.HasPrefix(ref, "-") {
-		return fmt.Errorf("checkout failed: invalid ref %q", ref)
+	repo, err := openProvider(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open git repository: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, "git", "checkout", ref)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("checkout failed: %s: %w", strings.TrimSpace(string(output)), err)
+	if err := repo.Checkout(ctx, ref); err != nil {
+		return fmt.Errorf("checkout failed: %w", err)
 	}
 	return nil
 }
@@ -302,93 +293,78 @@ func CheckoutBranch(ctx context.Context, ref string) error {
 // ValidateBranchName checks if a branch name is valid using git check-ref-format.
 // Returns an error if the name is invalid or contains unsafe characters.
 func ValidateBranchName(ctx context.Context, branchName string) error {
-	cmd := exec.CommandContext(ctx, "git", "check-ref-format", "--branch", branchName)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("invalid branch name %q", branchName)
+	repo, err := openProvider(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open git repository: %w", err)
+	}
+	if err := repo.ValidateBranchName(ctx, branchName); err != nil {
+		return fmt.Errorf("invalid branch name: %w", err)
 	}
 	return nil
 }
 
 // FetchAndCheckoutRemoteBranch fetches a branch from origin and creates a local tracking branch.
-// Uses git CLI instead of go-git for fetch because go-git doesn't use credential helpers,
-// which breaks HTTPS URLs that require authentication.
+// Delegates to gitprovider.Repository for fetch, reference, and checkout operations.
 func FetchAndCheckoutRemoteBranch(ctx context.Context, branchName string) error {
-	// Validate branch name before using in shell command (branchName comes from user CLI input)
+	// Validate branch name before using (branchName comes from user CLI input)
 	if err := ValidateBranchName(ctx, branchName); err != nil {
 		return err
 	}
 
-	// Use git CLI for fetch (go-git's fetch can be tricky with auth)
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-
-	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
-
-	fetchCmd := exec.CommandContext(ctx, "git", "fetch", "origin", refSpec)
-	if output, err := fetchCmd.CombinedOutput(); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return errors.New("fetch timed out after 2 minutes")
-		}
-		return fmt.Errorf("failed to fetch branch from origin: %s: %w", strings.TrimSpace(string(output)), err)
-	}
-
-	repo, err := openRepository(ctx)
+	repo, err := openProvider(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
 
+	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
+	if err := repo.Fetch(ctx, "origin", refSpec, 2*time.Minute); err != nil {
+		return fmt.Errorf("failed to fetch branch from origin: %w", err)
+	}
+
 	// Get the remote branch reference
-	remoteRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", branchName), true)
+	remoteRef, err := repo.GetReference(plumbing.NewRemoteReferenceName("origin", branchName), true)
 	if err != nil {
 		return fmt.Errorf("branch '%s' not found on origin: %w", branchName, err)
 	}
 
 	// Create local branch pointing to the same commit
 	localRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), remoteRef.Hash())
-	err = repo.Storer.SetReference(localRef)
-	if err != nil {
+	if err := repo.SetReference(localRef); err != nil {
 		return fmt.Errorf("failed to create local branch: %w", err)
 	}
 
 	// Checkout the new local branch
-	return CheckoutBranch(ctx, branchName)
+	if err := repo.Checkout(ctx, branchName); err != nil {
+		return fmt.Errorf("failed to checkout branch: %w", err)
+	}
+	return nil
 }
 
 // FetchMetadataBranch fetches the entire/checkpoints/v1 branch from origin and creates/updates the local branch.
 // This is used when the metadata branch exists on remote but not locally.
-// Uses git CLI instead of go-git for fetch because go-git doesn't use credential helpers,
-// which breaks HTTPS URLs that require authentication.
+// Delegates to gitprovider.Repository for fetch, reference, and set-reference operations.
 func FetchMetadataBranch(ctx context.Context) error {
 	branchName := paths.MetadataBranchName
 
-	// Use git CLI for fetch (go-git's fetch can be tricky with auth)
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-
-	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
-
-	fetchCmd := exec.CommandContext(ctx, "git", "fetch", "origin", refSpec)
-	if output, err := fetchCmd.CombinedOutput(); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return errors.New("fetch timed out after 2 minutes")
-		}
-		return fmt.Errorf("failed to fetch %s from origin: %s: %w", branchName, strings.TrimSpace(string(output)), err)
-	}
-
-	repo, err := openRepository(ctx)
+	repo, err := openProvider(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
 
+	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
+	if err := repo.Fetch(ctx, "origin", refSpec, 2*time.Minute); err != nil {
+		return fmt.Errorf("failed to fetch %s from origin: %w", branchName, err)
+	}
+
 	// Get the remote branch reference
-	remoteRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", branchName), true)
+	remoteRef, err := repo.GetReference(plumbing.NewRemoteReferenceName("origin", branchName), true)
 	if err != nil {
 		return fmt.Errorf("branch '%s' not found on origin: %w", branchName, err)
 	}
 
 	// Create or update local branch pointing to the same commit
 	localRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), remoteRef.Hash())
-	if err := repo.Storer.SetReference(localRef); err != nil {
+	if err := repo.SetReference(localRef); err != nil {
 		return fmt.Errorf("failed to create local %s branch: %w", branchName, err)
 	}
 

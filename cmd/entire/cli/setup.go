@@ -69,7 +69,7 @@ modifying your active branch.`,
 			external.DiscoverAndRegister(ctx)
 
 			// Warn if repo has no commits yet
-			if repo, err := strategy.OpenRepository(ctx); err == nil && strategy.IsEmptyRepository(repo) {
+			if repo, err := strategy.OpenProvider(ctx); err == nil && strategy.IsEmptyRepository(repo) {
 				fmt.Fprintln(cmd.OutOrStdout(), "Note: This repository has no commits yet. Entire will be configured, but")
 				fmt.Fprintln(cmd.OutOrStdout(), "session checkpoints won't work until you create your first commit.")
 				fmt.Fprintln(cmd.OutOrStdout())

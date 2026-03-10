@@ -17,6 +17,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -90,7 +91,7 @@ func (s *GitStore) WriteTemporary(ctx context.Context, opts WriteTemporaryOption
 		// using `git status --porcelain -z` which respects both repo and global .gitignore.
 		// This is much faster than filesystem walk. The base tree from HEAD already contains
 		// all unchanged tracked files. We also capture user's pre-existing deletions.
-		result, err := collectChangedFiles(ctx, s.repo)
+		result, err := collectChangedFiles(ctx)
 		if err != nil {
 			return WriteTemporaryResult{}, fmt.Errorf("failed to collect changed files: %w", err)
 		}
@@ -131,7 +132,7 @@ func (s *GitStore) WriteTemporary(ctx context.Context, opts WriteTemporaryOption
 	// Update branch reference
 	refName := plumbing.NewBranchReferenceName(shadowBranchName)
 	newRef := plumbing.NewHashReference(refName, commitHash)
-	if err := s.repo.Storer.SetReference(newRef); err != nil {
+	if err := s.repo.SetReference(newRef); err != nil {
 		return WriteTemporaryResult{}, fmt.Errorf("failed to update branch reference: %w", err)
 	}
 
@@ -152,7 +153,7 @@ func (s *GitStore) ReadTemporary(ctx context.Context, baseCommit, worktreeID str
 	shadowBranchName := ShadowBranchNameForCommit(baseCommit, worktreeID)
 	refName := plumbing.NewBranchReferenceName(shadowBranchName)
 
-	ref, err := s.repo.Reference(refName, true)
+	ref, err := s.repo.GetReference(refName, true)
 	if err != nil {
 		return nil, nil //nolint:nilnil,nilerr // Branch not found is an expected case
 	}
@@ -181,7 +182,7 @@ func (s *GitStore) ListTemporary(ctx context.Context) ([]TemporaryInfo, error) {
 		return nil, err //nolint:wrapcheck // Propagating context cancellation
 	}
 
-	iter, err := s.repo.Branches()
+	iter, err := s.repo.ListBranches()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list branches: %w", err)
 	}
@@ -285,7 +286,7 @@ func (s *GitStore) WriteTemporaryTask(ctx context.Context, opts WriteTemporaryTa
 	// Update shadow branch reference
 	refName := plumbing.NewBranchReferenceName(shadowBranchName)
 	ref := plumbing.NewHashReference(refName, commitHash)
-	if err := s.repo.Storer.SetReference(ref); err != nil {
+	if err := s.repo.SetReference(ref); err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to update shadow branch reference: %w", err)
 	}
 
@@ -330,7 +331,7 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 			return plumbing.ZeroHash, fmt.Errorf("failed to marshal incremental checkpoint: %w", err)
 		}
 
-		cpBlobHash, err := CreateBlobFromContent(s.repo, cpData)
+		cpBlobHash, err := createBlobFromContentProvider(s.repo, cpData)
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("failed to create incremental checkpoint blob: %w", err)
 		}
@@ -358,7 +359,7 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 				} else {
 					for i, chunk := range chunks {
 						chunkPath := sessionMetadataDir + "/" + agent.ChunkFileName(paths.TranscriptFileName, i)
-						blobHash, blobErr := CreateBlobFromContent(s.repo, chunk)
+						blobHash, blobErr := createBlobFromContentProvider(s.repo, chunk)
 						if blobErr != nil {
 							logging.Warn(ctx, "failed to create blob for transcript chunk",
 								slog.String("error", blobErr.Error()),
@@ -388,7 +389,7 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 					redacted = redact.Bytes(agentContent)
 				}
 				agentContent = redacted
-				if blobHash, blobErr := CreateBlobFromContent(s.repo, agentContent); blobErr == nil {
+				if blobHash, blobErr := createBlobFromContentProvider(s.repo, agentContent); blobErr == nil {
 					agentPath := taskMetadataDir + "/agent-" + opts.AgentID + ".jsonl"
 					changes = append(changes, TreeChange{
 						Path:  agentPath,
@@ -406,7 +407,7 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
   "agent_id": %q
 }`, opts.SessionID, opts.ToolUseID, opts.CheckpointUUID, opts.AgentID)
 
-		blobHash, err := CreateBlobFromContent(s.repo, []byte(checkpointJSON))
+		blobHash, err := createBlobFromContentProvider(s.repo, []byte(checkpointJSON))
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("failed to create checkpoint blob: %w", err)
 		}
@@ -417,7 +418,7 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 		})
 	}
 
-	return ApplyTreeChanges(s.repo, baseTreeHash, changes)
+	return applyTreeChangesProvider(s.repo, baseTreeHash, changes)
 }
 
 // ListTemporaryCheckpoints lists all checkpoint commits on a shadow branch.
@@ -445,7 +446,7 @@ func (s *GitStore) listCheckpointsForBranch(ctx context.Context, shadowBranchNam
 
 	refName := plumbing.NewBranchReferenceName(shadowBranchName)
 
-	ref, err := s.repo.Reference(refName, true)
+	ref, err := s.repo.GetReference(refName, true)
 	if err != nil {
 		return nil, nil //nolint:nilerr // No shadow branch is expected case
 	}
@@ -618,7 +619,7 @@ func (s *GitStore) GetTranscriptFromCommit(ctx context.Context, commitHash plumb
 func (s *GitStore) ShadowBranchExists(baseCommit, worktreeID string) bool {
 	shadowBranchName := ShadowBranchNameForCommit(baseCommit, worktreeID)
 	refName := plumbing.NewBranchReferenceName(shadowBranchName)
-	_, err := s.repo.Reference(refName, true)
+	_, err := s.repo.GetReference(refName, true)
 	return err == nil
 }
 
@@ -672,7 +673,7 @@ func ParseShadowBranchName(branchName string) (commitPrefix, worktreeHash string
 // Returns (parentHash, baseTreeHash, error).
 func (s *GitStore) getOrCreateShadowBranch(branchName string) (plumbing.Hash, plumbing.Hash, error) {
 	refName := plumbing.NewBranchReferenceName(branchName)
-	ref, err := s.repo.Reference(refName, true)
+	ref, err := s.repo.GetReference(refName, true)
 
 	if err == nil {
 		// Branch exists
@@ -735,7 +736,7 @@ func (s *GitStore) buildTreeWithChanges(
 			continue
 		}
 
-		blobHash, mode, blobErr := createBlobFromFile(s.repo, absPath)
+		blobHash, mode, blobErr := createBlobFromFileProvider(s.repo, absPath)
 		if blobErr != nil {
 			// Skip files that can't be staged (may have been deleted since detection)
 			continue
@@ -759,12 +760,12 @@ func (s *GitStore) buildTreeWithChanges(
 		changes = append(changes, metaChanges...)
 	}
 
-	return ApplyTreeChanges(s.repo, baseTreeHash, changes)
+	return applyTreeChangesProvider(s.repo, baseTreeHash, changes)
 }
 
 // createCommit creates a commit object.
 func (s *GitStore) createCommit(treeHash, parentHash plumbing.Hash, message, authorName, authorEmail string) (plumbing.Hash, error) {
-	return CreateCommit(s.repo, treeHash, parentHash, message, authorName, authorEmail)
+	return createCommitProvider(s.repo, treeHash, parentHash, message, authorName, authorEmail)
 }
 
 // Helper functions extracted from strategy/common.go
@@ -772,6 +773,11 @@ func (s *GitStore) createCommit(treeHash, parentHash plumbing.Hash, message, aut
 
 // FlattenTree recursively flattens a tree into a map of full paths to entries.
 func FlattenTree(repo *git.Repository, tree *object.Tree, prefix string, entries map[string]object.TreeEntry) error {
+	return flattenTreeProvider(gitprovider.NewGoGit(repo), tree, prefix, entries)
+}
+
+// flattenTreeProvider is the provider-based implementation of FlattenTree.
+func flattenTreeProvider(repo gitprovider.ObjectProvider, tree *object.Tree, prefix string, entries map[string]object.TreeEntry) error {
 	for _, entry := range tree.Entries {
 		fullPath := entry.Name
 		if prefix != "" {
@@ -784,7 +790,7 @@ func FlattenTree(repo *git.Repository, tree *object.Tree, prefix string, entries
 			if err != nil {
 				return fmt.Errorf("failed to get subtree %s: %w", fullPath, err)
 			}
-			if err := FlattenTree(repo, subtree, fullPath, entries); err != nil {
+			if err := flattenTreeProvider(repo, subtree, fullPath, entries); err != nil {
 				return err
 			}
 		} else {
@@ -806,6 +812,11 @@ func fileExists(path string) bool {
 
 // createBlobFromFile creates a blob object from a file in the working directory.
 func createBlobFromFile(repo *git.Repository, filePath string) (plumbing.Hash, filemode.FileMode, error) {
+	return createBlobFromFileProvider(gitprovider.NewGoGit(repo), filePath)
+}
+
+// createBlobFromFileProvider is the provider-based implementation of createBlobFromFile.
+func createBlobFromFileProvider(repo gitprovider.ObjectProvider, filePath string) (plumbing.Hash, filemode.FileMode, error) {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return plumbing.ZeroHash, 0, fmt.Errorf("failed to stat file: %w", err)
@@ -827,7 +838,7 @@ func createBlobFromFile(repo *git.Repository, filePath string) (plumbing.Hash, f
 	}
 
 	// Create blob object
-	obj := repo.Storer.NewEncodedObject()
+	obj := repo.Storer().NewEncodedObject()
 	obj.SetType(plumbing.BlobObject)
 	obj.SetSize(int64(len(content)))
 
@@ -845,7 +856,7 @@ func createBlobFromFile(repo *git.Repository, filePath string) (plumbing.Hash, f
 		return plumbing.ZeroHash, 0, fmt.Errorf("failed to close blob writer: %w", err)
 	}
 
-	hash, err := repo.Storer.SetEncodedObject(obj)
+	hash, err := repo.Storer().SetEncodedObject(obj)
 	if err != nil {
 		return plumbing.ZeroHash, 0, fmt.Errorf("failed to store blob object: %w", err)
 	}
@@ -855,6 +866,11 @@ func createBlobFromFile(repo *git.Repository, filePath string) (plumbing.Hash, f
 
 // addDirectoryToEntriesWithAbsPath recursively adds all files in a directory to the entries map.
 func addDirectoryToEntriesWithAbsPath(repo *git.Repository, dirPathAbs, dirPathRel string, entries map[string]object.TreeEntry) error {
+	return addDirectoryToEntriesWithAbsPathProvider(gitprovider.NewGoGit(repo), dirPathAbs, dirPathRel, entries)
+}
+
+// addDirectoryToEntriesWithAbsPathProvider is the provider-based implementation.
+func addDirectoryToEntriesWithAbsPathProvider(repo gitprovider.ObjectProvider, dirPathAbs, dirPathRel string, entries map[string]object.TreeEntry) error {
 	err := filepath.Walk(dirPathAbs, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -921,7 +937,7 @@ type treeNode struct {
 // addDirectoryToChanges walks a filesystem directory and returns TreeChange entries
 // for each file, suitable for use with ApplyTreeChanges.
 // dirPathAbs is the absolute filesystem path; dirPathRel is the git tree-relative path.
-func addDirectoryToChanges(repo *git.Repository, dirPathAbs, dirPathRel string) ([]TreeChange, error) {
+func addDirectoryToChanges(repo gitprovider.ObjectProvider, dirPathAbs, dirPathRel string) ([]TreeChange, error) {
 	var changes []TreeChange
 	err := filepath.Walk(dirPathAbs, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -973,6 +989,11 @@ func addDirectoryToChanges(repo *git.Repository, dirPathAbs, dirPathRel string) 
 // BuildTreeFromEntries builds a proper git tree structure from flattened file entries.
 // Exported for use by strategy package (push_common.go, session_test.go)
 func BuildTreeFromEntries(repo *git.Repository, entries map[string]object.TreeEntry) (plumbing.Hash, error) {
+	return buildTreeFromEntriesProvider(gitprovider.NewGoGit(repo), entries)
+}
+
+// buildTreeFromEntriesProvider is the provider-based implementation of BuildTreeFromEntries.
+func buildTreeFromEntriesProvider(repo gitprovider.ObjectProvider, entries map[string]object.TreeEntry) (plumbing.Hash, error) {
 	// Build a tree structure
 	root := &treeNode{
 		entries: make(map[string]*treeNode),
@@ -1013,7 +1034,7 @@ func insertIntoTree(node *treeNode, pathParts []string, entry object.TreeEntry) 
 }
 
 // buildTreeObject recursively builds tree objects from a treeNode.
-func buildTreeObject(repo *git.Repository, node *treeNode) (plumbing.Hash, error) {
+func buildTreeObject(repo gitprovider.ObjectProvider, node *treeNode) (plumbing.Hash, error) {
 	var treeEntries []object.TreeEntry
 
 	// Add files
@@ -1038,12 +1059,12 @@ func buildTreeObject(repo *git.Repository, node *treeNode) (plumbing.Hash, error
 	// Create tree object
 	tree := &object.Tree{Entries: treeEntries}
 
-	obj := repo.Storer.NewEncodedObject()
+	obj := repo.Storer().NewEncodedObject()
 	if err := tree.Encode(obj); err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to encode tree: %w", err)
 	}
 
-	hash, err := repo.Storer.SetEncodedObject(obj)
+	hash, err := repo.Storer().SetEncodedObject(obj)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to store tree: %w", err)
 	}
@@ -1092,13 +1113,12 @@ type changedFilesResult struct {
 // The base tree from HEAD already contains all unchanged tracked files.
 //
 // Uses `git status --porcelain -z` for reliable parsing of filenames with special characters.
-func collectChangedFiles(ctx context.Context, repo *git.Repository) (changedFilesResult, error) {
+func collectChangedFiles(ctx context.Context) (changedFilesResult, error) {
 	// Get worktree root directory for running git command
-	wt, err := repo.Worktree()
+	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return changedFilesResult{}, fmt.Errorf("failed to get worktree: %w", err)
+		return changedFilesResult{}, fmt.Errorf("failed to get worktree root: %w", err)
 	}
-	repoRoot := wt.Filesystem.Root()
 
 	// Use -z for NUL-separated output (handles quoted filenames with spaces/special chars)
 	// Use -uall to list individual untracked files instead of collapsed directories.

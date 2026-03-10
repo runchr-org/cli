@@ -113,6 +113,14 @@ linters:
         - github.com/go-git/go-git/v6/plumbing.EncodedObject
         - github.com/go-git/go-git/v6/storage.Storer
         - github.com/go-git/go-git/v6/plumbing/storer.EncodedObjectIter
+        - github.com/go-git/go-git/v6/plumbing/object.CommitIter
+        - github.com/entireio/cli/cmd/entire/cli/gitprovider.Repository
+        - github.com/entireio/cli/cmd/entire/cli/gitprovider.ReferenceProvider
+        - github.com/entireio/cli/cmd/entire/cli/gitprovider.ObjectProvider
+        - github.com/entireio/cli/cmd/entire/cli/gitprovider.WorktreeProvider
+        - github.com/entireio/cli/cmd/entire/cli/gitprovider.RemoteProvider
+        - github.com/entireio/cli/cmd/entire/cli/gitprovider.ConfigProvider
+        - github.com/entireio/cli/cmd/entire/cli/gitprovider.DiffProvider
         - github.com/entireio/cli/e2e/agents.Session
         - github.com/go-git/go-billy/v6.Filesystem
     nolintlint:

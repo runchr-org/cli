@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 
@@ -104,7 +105,7 @@ func setupResumeTestRepo(t *testing.T, tmpDir string, createFeatureBranch bool) 
 	}
 
 	// Ensure entire/checkpoints/v1 branch exists
-	if err := strategy.EnsureMetadataBranch(repo); err != nil {
+	if err := strategy.EnsureMetadataBranch(gitprovider.WrapGoGit(repo)); err != nil {
 		t.Fatalf("Failed to create metadata branch: %v", err)
 	}
 
@@ -281,7 +282,7 @@ func createCheckpointOnMetadataBranchFull(t *testing.T, repo *git.Repository, se
 	t.Helper()
 
 	// Get existing metadata branch or create it
-	if err := strategy.EnsureMetadataBranch(repo); err != nil {
+	if err := strategy.EnsureMetadataBranch(gitprovider.WrapGoGit(repo)); err != nil {
 		t.Fatalf("Failed to ensure metadata branch: %v", err)
 	}
 

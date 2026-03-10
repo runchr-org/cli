@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
+
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
 )
 
 // DiffTreeFiles returns the set of files changed between two commits using git diff-tree.
@@ -34,24 +35,12 @@ func DiffTreeFileList(ctx context.Context, repoDir, commit1, commit2 string) ([]
 
 // diffTreeRaw runs git diff-tree in the given directory and returns the list of changed file paths.
 func diffTreeRaw(ctx context.Context, dir, commit1, commit2 string) ([]string, error) {
-	var cmd *exec.Cmd
-	if commit1 == "" {
-		// Initial commit (no parent): list all files in the tree
-		cmd = exec.CommandContext(ctx, "git", "diff-tree", "--root", "--no-commit-id", "-r", "-z", commit2)
-	} else {
-		cmd = exec.CommandContext(ctx, "git", "diff-tree", "--no-commit-id", "-r", "-z", commit1, commit2)
+	cli := gitprovider.NewCLI(dir)
+	files, err := cli.DiffTree(ctx, dir, commit1, commit2)
+	if err != nil {
+		return nil, fmt.Errorf("diff-tree failed: %w", err)
 	}
-	cmd.Dir = dir
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("git diff-tree failed: %w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-
-	return parseDiffTreeOutput(stdout.Bytes()), nil
+	return files, nil
 }
 
 // parseDiffTreeOutput parses null-separated git diff-tree -r -z output.

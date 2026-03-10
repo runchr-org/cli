@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -19,6 +18,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
@@ -51,7 +51,7 @@ var errStop = errors.New("stop iteration")
 // After git-init, HEAD points to an unborn branch (e.g., refs/heads/main)
 // whose target does not yet exist. repo.Head() returns ErrReferenceNotFound
 // in this case.
-func IsEmptyRepository(repo *git.Repository) bool {
+func IsEmptyRepository(repo gitprovider.Repository) bool {
 	_, err := repo.Head()
 	return errors.Is(err, plumbing.ErrReferenceNotFound)
 }
@@ -63,7 +63,7 @@ func EnsureSetup(ctx context.Context) error {
 	}
 
 	// Ensure the entire/checkpoints/v1 orphan branch exists for permanent session storage
-	repo, err := OpenRepository(ctx)
+	repo, err := OpenProvider(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open git repository: %w", err)
 	}
@@ -118,7 +118,7 @@ func IsAncestorOf(ctx context.Context, repo *git.Repository, commit, target plum
 // ListCheckpoints returns all checkpoints from the entire/checkpoints/v1 branch.
 // Scans sharded paths: <id[:2]>/<id[2:]>/ directories containing metadata.json.
 func ListCheckpoints(ctx context.Context) ([]CheckpointInfo, error) {
-	repo, err := OpenRepository(ctx)
+	repo, err := OpenProvider(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
@@ -127,7 +127,7 @@ func ListCheckpoints(ctx context.Context) ([]CheckpointInfo, error) {
 	WarnIfMetadataDisconnected()
 
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
-	ref, err := repo.Reference(refName, true)
+	ref, err := repo.GetReference(refName, true)
 	if err != nil {
 		//nolint:nilerr // No sessions branch yet is expected, return empty list
 		return []CheckpointInfo{}, nil
@@ -288,18 +288,18 @@ func resolveAgentType(ctxAgentType types.AgentType, state *SessionState) types.A
 // If the remote-tracking branch (origin/entire/checkpoints/v1) exists and the local
 // branch is missing or empty, creates/updates the local branch from it.
 // Otherwise creates an empty orphan.
-func EnsureMetadataBranch(repo *git.Repository) error {
+func EnsureMetadataBranch(repo gitprovider.Repository) error {
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 
 	// Check if remote-tracking branch exists (e.g., after clone/fetch)
 	remoteRefName := plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
-	remoteRef, remoteErr := repo.Reference(remoteRefName, true)
+	remoteRef, remoteErr := repo.GetReference(remoteRefName, true)
 	if remoteErr != nil && !errors.Is(remoteErr, plumbing.ErrReferenceNotFound) {
 		return fmt.Errorf("failed to check remote metadata branch: %w", remoteErr)
 	}
 
 	// Check if local branch already exists
-	localRef, err := repo.Reference(refName, true)
+	localRef, err := repo.GetReference(refName, true)
 	if err == nil {
 		if remoteErr == nil && localRef.Hash() != remoteRef.Hash() {
 			// Local and remote exist but differ — determine relationship
@@ -310,7 +310,7 @@ func EnsureMetadataBranch(repo *git.Repository) error {
 			if isEmpty {
 				// Empty orphan — just point to remote
 				ref := plumbing.NewHashReference(refName, remoteRef.Hash())
-				if setErr := repo.Storer.SetReference(ref); setErr != nil {
+				if setErr := repo.SetReference(ref); setErr != nil {
 					return fmt.Errorf("failed to update metadata branch from remote: %w", setErr)
 				}
 				fmt.Fprintf(os.Stderr, "[entire] Updated local branch '%s' from origin\n", paths.MetadataBranchName)
@@ -333,7 +333,7 @@ func EnsureMetadataBranch(repo *git.Repository) error {
 	// Local branch doesn't exist — create from remote if available
 	if remoteErr == nil {
 		ref := plumbing.NewHashReference(refName, remoteRef.Hash())
-		if err := repo.Storer.SetReference(ref); err != nil {
+		if err := repo.SetReference(ref); err != nil {
 			return fmt.Errorf("failed to create metadata branch from remote: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "✓ Created local branch '%s' from origin\n", paths.MetadataBranchName)
@@ -342,18 +342,18 @@ func EnsureMetadataBranch(repo *git.Repository) error {
 
 	// No local or remote branch — create empty orphan
 	emptyTree := &object.Tree{Entries: []object.TreeEntry{}}
-	obj := repo.Storer.NewEncodedObject()
+	obj := repo.Storer().NewEncodedObject()
 	if err := emptyTree.Encode(obj); err != nil {
 		return fmt.Errorf("failed to encode empty tree: %w", err)
 	}
-	emptyTreeHash, err := repo.Storer.SetEncodedObject(obj)
+	emptyTreeHash, err := repo.Storer().SetEncodedObject(obj)
 	if err != nil {
 		return fmt.Errorf("failed to store empty tree: %w", err)
 	}
 
 	// Create orphan commit (no parent)
 	now := time.Now()
-	authorName, authorEmail := GetGitAuthorFromRepo(repo)
+	authorName, authorEmail := getGitAuthorFromProvider(repo)
 	sig := object.Signature{
 		Name:  authorName,
 		Email: authorEmail,
@@ -368,18 +368,18 @@ func EnsureMetadataBranch(repo *git.Repository) error {
 	}
 	// Note: No ParentHashes - this is an orphan commit
 
-	commitObj := repo.Storer.NewEncodedObject()
+	commitObj := repo.Storer().NewEncodedObject()
 	if err := commit.Encode(commitObj); err != nil {
 		return fmt.Errorf("failed to encode orphan commit: %w", err)
 	}
-	commitHash, err := repo.Storer.SetEncodedObject(commitObj)
+	commitHash, err := repo.Storer().SetEncodedObject(commitObj)
 	if err != nil {
 		return fmt.Errorf("failed to store orphan commit: %w", err)
 	}
 
 	// Create branch reference
 	ref := plumbing.NewHashReference(refName, commitHash)
-	if err := repo.Storer.SetReference(ref); err != nil {
+	if err := repo.SetReference(ref); err != nil {
 		return fmt.Errorf("failed to create metadata branch: %w", err)
 	}
 
@@ -390,7 +390,7 @@ func EnsureMetadataBranch(repo *git.Repository) error {
 // isEmptyMetadataBranch returns true if the branch ref points to a commit with an empty tree.
 // Only checks the tip commit — if a data commit sits on top of an empty orphan, this returns
 // false, which is correct: the bug this detects creates a single empty orphan as the tip.
-func isEmptyMetadataBranch(repo *git.Repository, ref *plumbing.Reference) (bool, error) {
+func isEmptyMetadataBranch(repo gitprovider.Repository, ref *plumbing.Reference) (bool, error) {
 	commit, err := repo.CommitObject(ref.Hash())
 	if err != nil {
 		return false, fmt.Errorf("failed to get commit: %w", err)
@@ -471,9 +471,9 @@ func ReadCheckpointMetadata(tree *object.Tree, checkpointPath string) (*Checkpoi
 }
 
 // GetMetadataBranchTree returns the tree object for the entire/checkpoints/v1 branch.
-func GetMetadataBranchTree(repo *git.Repository) (*object.Tree, error) {
+func GetMetadataBranchTree(repo gitprovider.Repository) (*object.Tree, error) {
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
-	ref, err := repo.Reference(refName, true)
+	ref, err := repo.GetReference(refName, true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get metadata branch reference: %w", err)
 	}
@@ -693,6 +693,15 @@ func OpenRepository(ctx context.Context) (*git.Repository, error) {
 	return repo, nil
 }
 
+// OpenProvider opens a gitprovider.Repository using the default configuration.
+func OpenProvider(ctx context.Context) (gitprovider.Repository, error) {
+	repo, err := gitprovider.OpenDefault(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open provider: %w", err)
+	}
+	return repo, nil
+}
+
 // IsInsideWorktree returns true if the current directory is inside a git worktree
 // (as opposed to the main repository). Worktrees have .git as a file pointing
 // to the main repo, while the main repo has .git as a directory.
@@ -754,22 +763,15 @@ func GetMainRepoRoot(ctx context.Context) (string, error) {
 // In a worktree, this is the main repo's .git/ (not .git/worktrees/<name>/)
 // Uses git rev-parse --git-common-dir for reliable handling of worktrees.
 func GetGitCommonDir(ctx context.Context) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--git-common-dir")
-	cmd.Dir = "."
-	output, err := cmd.Output()
+	repo, err := OpenProvider(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to get git common dir: %w", err)
 	}
-
-	commonDir := strings.TrimSpace(string(output))
-
-	// git rev-parse --git-common-dir returns relative paths from the working directory,
-	// so we need to make it absolute if it isn't already
-	if !filepath.IsAbs(commonDir) {
-		commonDir = filepath.Join(".", commonDir)
+	dir, err := repo.GitCommonDir(ctx)
+	if err != nil {
+		return "", fmt.Errorf("git common dir: %w", err)
 	}
-
-	return filepath.Clean(commonDir), nil
+	return dir, nil
 }
 
 // EnsureEntireGitignore ensures all required entries are in .entire/.gitignore
@@ -1139,23 +1141,21 @@ var ErrBranchNotFound = errors.New("branch not found")
 // Returns ErrBranchNotFound if the branch does not exist, allowing callers
 // to use errors.Is for idempotent deletion patterns.
 func DeleteBranchCLI(ctx context.Context, branchName string) error {
-	// Pre-check: verify the branch exists so callers get a structured error
-	// instead of parsing git's output string (which varies across locales).
-	// git show-ref exits 1 for "not found" and 128+ for fatal errors (corrupt
-	// repo, permissions, not a git directory). Only map exit code 1 to
-	// ErrBranchNotFound; propagate other failures as-is.
-	check := exec.CommandContext(ctx, "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
-	if err := check.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-			return fmt.Errorf("%w: %s", ErrBranchNotFound, branchName)
-		}
-		return fmt.Errorf("failed to check branch %s: %w", branchName, err)
+	repo, err := OpenProvider(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open provider for branch deletion: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "branch", "-D", "--", branchName)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to delete branch %s: %s: %w", branchName, strings.TrimSpace(string(output)), err)
+	exists, err := repo.BranchExists(branchName)
+	if err != nil {
+		return fmt.Errorf("failed to check branch %s: %w", branchName, err)
+	}
+	if !exists {
+		return fmt.Errorf("%w: %s", ErrBranchNotFound, branchName)
+	}
+
+	if err := repo.DeleteBranch(branchName); err != nil {
+		return fmt.Errorf("failed to delete branch %s: %w", branchName, err)
 	}
 	return nil
 }
@@ -1163,9 +1163,17 @@ func DeleteBranchCLI(ctx context.Context, branchName string) error {
 // branchExistsCLI checks if a branch exists using git CLI.
 // Returns nil if the branch exists, or an error if it does not.
 func branchExistsCLI(ctx context.Context, branchName string) error {
-	cmd := exec.CommandContext(ctx, "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("branch %s not found: %w", branchName, err)
+	repo, err := OpenProvider(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open provider for branch check: %w", err)
+	}
+
+	exists, err := repo.BranchExists(branchName)
+	if err != nil {
+		return fmt.Errorf("failed to check branch %s: %w", branchName, err)
+	}
+	if !exists {
+		return fmt.Errorf("branch %s not found", branchName)
 	}
 	return nil
 }
@@ -1175,13 +1183,17 @@ func branchExistsCLI(ctx context.Context, branchName string) error {
 // deletes untracked directories (like .entire/) even when they're in .gitignore.
 // Returns the short commit ID (7 chars) on success for display purposes.
 func HardResetWithProtection(ctx context.Context, commitHash plumbing.Hash) (shortID string, err error) {
-	hashStr := commitHash.String()
-	cmd := exec.CommandContext(ctx, "git", "reset", "--hard", hashStr)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("reset failed: %s: %w", strings.TrimSpace(string(output)), err)
+	repo, err := OpenProvider(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to open provider for hard reset: %w", err)
+	}
+
+	if err := repo.HardReset(ctx, commitHash); err != nil {
+		return "", fmt.Errorf("reset failed: %w", err)
 	}
 
 	// Return short commit ID for display
+	hashStr := commitHash.String()
 	shortID = hashStr
 	if len(shortID) > 7 {
 		shortID = shortID[:7]
@@ -1196,29 +1208,22 @@ func HardResetWithProtection(ctx context.Context, commitHash plumbing.Hash) (sho
 // avoiding bloated session state from large ignored directories like node_modules/.
 // Returns paths relative to the repository root.
 func collectUntrackedFiles(ctx context.Context) ([]string, error) {
-	repoRoot, err := paths.WorktreeRoot(ctx)
+	repo, err := OpenProvider(ctx)
 	if err != nil {
-		repoRoot = "."
+		return nil, fmt.Errorf("failed to open provider for untracked files: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "ls-files", "--others", "--exclude-standard", "-z")
-	cmd.Dir = repoRoot
-	output, err := cmd.Output()
+	rawFiles, err := repo.UntrackedFiles(ctx)
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return nil, fmt.Errorf("git ls-files failed: %s: %w", strings.TrimSpace(string(exitErr.Stderr)), err)
-		}
 		return nil, fmt.Errorf("git ls-files failed: %w", err)
 	}
 
-	raw := string(output)
-	if raw == "" {
+	if len(rawFiles) == 0 {
 		return nil, nil
 	}
 
 	var files []string
-	for _, f := range strings.Split(raw, "\x00") {
+	for _, f := range rawFiles {
 		// Defense-in-depth: filter protected paths even though --exclude-standard should already handle them
 		if f != "" && !isProtectedPath(f) {
 			files = append(files, f)
@@ -1361,6 +1366,26 @@ func getSessionDescriptionFromTree(tree *object.Tree, metadataDir string) string
 // callers within the strategy package don't need a qualified import.
 func GetGitAuthorFromRepo(repo *git.Repository) (name, email string) {
 	return checkpoint.GetGitAuthorFromRepo(repo)
+}
+
+// getGitAuthorFromProvider retrieves the git user.name and user.email from a gitprovider.Repository.
+// Uses the same logic as GetGitAuthorFromRepo but works with the provider interface.
+func getGitAuthorFromProvider(repo gitprovider.Repository) (name, email string) {
+	// Extract author from the storer's config (same as checkpoint.GetGitAuthorFromRepo)
+	cfg, err := repo.Storer().Config()
+	if err == nil {
+		name = cfg.User.Name
+		email = cfg.User.Email
+	}
+
+	// Provide sensible defaults if git user is not configured
+	if name == "" {
+		name = "Unknown"
+	}
+	if email == "" {
+		email = "unknown@example.com"
+	}
+	return name, email
 }
 
 // GetCurrentBranchName returns the short name of the current branch if HEAD points to a branch.

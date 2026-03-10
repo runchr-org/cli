@@ -17,6 +17,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitprovider"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -939,7 +940,7 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 	// Fetch metadata branch tree once for reading session prompts (cheap tree lookups).
 	// This avoids calling ReadLatestSessionContent per checkpoint which reads+parses
 	// the full JSONL transcript — extremely slow with hundreds of checkpoints.
-	metadataTree, _ := strategy.GetMetadataBranchTree(repo) //nolint:errcheck // Best-effort, continue without prompts
+	metadataTree, _ := strategy.GetMetadataBranchTree(gitprovider.WrapGoGit(repo)) //nolint:errcheck // Best-effort, continue without prompts
 
 	var points []strategy.RewindPoint
 
