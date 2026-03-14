@@ -15,6 +15,22 @@ import (
 const ProtocolVersion = 1
 
 // InfoResponse is the JSON returned by the "info" subcommand.
+//
+// Declarative fields allow external agents to avoid implementing subcommands
+// for common patterns. When a declarative field is set, the CLI handles the
+// logic internally instead of invoking a subcommand. This reduces the minimum
+// required subcommands from 15 to just 2 (info + parse-hook).
+//
+// Declarative fields:
+//   - detect_paths: replaces "detect" subcommand
+//   - transcript_format: replaces "chunk-transcript" and "reassemble-transcript"
+//   - session_dir_template: replaces "get-session-dir"
+//   - session_file_template: replaces "resolve-session-file"
+//   - resume_command_template: replaces "format-resume-command"
+//
+// Subcommand fallback: if a declarative field is empty, the CLI falls back to
+// invoking the corresponding subcommand. Agents can mix declarative and
+// subcommand-based approaches.
 type InfoResponse struct {
 	ProtocolVersion int                `json:"protocol_version"`
 	Name            string             `json:"name"`
@@ -24,6 +40,36 @@ type InfoResponse struct {
 	ProtectedDirs   []string           `json:"protected_dirs"`
 	HookNames       []string           `json:"hook_names"`
 	Capabilities    agent.DeclaredCaps `json:"capabilities"`
+
+	// --- Declarative fields (all optional, replace subcommands when set) ---
+
+	// DetectPaths lists repo-relative file/directory paths to check for agent presence.
+	// If set, the CLI checks whether any of these paths exist under the repo root,
+	// replacing the "detect" subcommand.
+	// Example: [".myagent/config.json"]
+	DetectPaths []string `json:"detect_paths,omitempty"`
+
+	// TranscriptFormat declares the transcript format for built-in chunking/reassembly.
+	// Supported values: "jsonl" (line-delimited JSON) or "json" (JSON with messages array).
+	// If set, the CLI handles ChunkTranscript/ReassembleTranscript internally.
+	TranscriptFormat string `json:"transcript_format,omitempty"`
+
+	// SessionDirTemplate is a Go text/template that produces the session directory path.
+	// Available variables: {{.RepoPath}} (absolute repo root), {{.RepoHash}} (SHA256 hex
+	// of repo path), {{.HomeDir}} (user home directory).
+	// Example: "{{.HomeDir}}/.myagent/sessions/{{.RepoHash}}"
+	SessionDirTemplate string `json:"session_dir_template,omitempty"`
+
+	// SessionFileTemplate is a Go text/template that produces the session file path.
+	// Available variables: {{.SessionDir}} (result of session_dir_template or get-session-dir),
+	// {{.SessionID}} (agent session ID).
+	// Example: "{{.SessionDir}}/{{.SessionID}}.jsonl"
+	SessionFileTemplate string `json:"session_file_template,omitempty"`
+
+	// ResumeCommandTemplate is a Go text/template for the resume command string.
+	// Available variables: {{.SessionID}} (session ID to resume).
+	// Example: "myagent --resume {{.SessionID}}"
+	ResumeCommandTemplate string `json:"resume_command_template,omitempty"`
 }
 
 // DetectResponse is the JSON returned by the "detect" subcommand.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -77,6 +78,16 @@ func (e *Agent) IsPreview() bool {
 }
 
 func (e *Agent) DetectPresence(ctx context.Context) (bool, error) {
+	// Declarative: check detect_paths if set
+	if len(e.info.DetectPaths) > 0 {
+		repoRoot, err := paths.WorktreeRoot(ctx)
+		if err != nil {
+			return false, fmt.Errorf("detect: resolve repo root: %w", err)
+		}
+		return detectByPaths(repoRoot, e.info.DetectPaths), nil
+	}
+
+	// Fallback: invoke "detect" subcommand
 	stdout, err := e.run(ctx, nil, "detect")
 	if err != nil {
 		return false, fmt.Errorf("detect: %w", err)
@@ -95,10 +106,31 @@ func (e *Agent) ProtectedDirs() []string {
 // --- Agent interface: Transcript Storage ---
 
 func (e *Agent) ReadTranscript(sessionRef string) ([]byte, error) {
+	// Declarative: if transcript_format is set, read the file directly
+	// (sessionRef is typically a file path provided by parse-hook events)
+	if e.info.TranscriptFormat != "" && sessionRef != "" {
+		data, err := os.ReadFile(sessionRef) //nolint:gosec // sessionRef from agent hook is trusted
+		if err != nil {
+			return nil, fmt.Errorf("read transcript file: %w", err)
+		}
+		return data, nil
+	}
+
+	// Fallback: invoke "read-transcript" subcommand
 	return e.run(context.Background(), nil, "read-transcript", "--session-ref", sessionRef)
 }
 
 func (e *Agent) ChunkTranscript(ctx context.Context, content []byte, maxSize int) ([][]byte, error) {
+	// Declarative: use built-in chunking if transcript_format is set
+	if e.info.TranscriptFormat != "" {
+		chunks, err := chunkByFormat(e.info.TranscriptFormat, content, maxSize)
+		if chunks != nil || err != nil {
+			return chunks, err
+		}
+		// Unknown format → fall through to subcommand
+	}
+
+	// Fallback: invoke "chunk-transcript" subcommand
 	stdout, err := e.run(ctx, content, "chunk-transcript", "--max-size", strconv.Itoa(maxSize))
 	if err != nil {
 		return nil, fmt.Errorf("chunk-transcript: %w", err)
@@ -111,6 +143,16 @@ func (e *Agent) ChunkTranscript(ctx context.Context, content []byte, maxSize int
 }
 
 func (e *Agent) ReassembleTranscript(chunks [][]byte) ([]byte, error) {
+	// Declarative: use built-in reassembly if transcript_format is set
+	if e.info.TranscriptFormat != "" {
+		result, err := reassembleByFormat(e.info.TranscriptFormat, chunks)
+		if result != nil || err != nil {
+			return result, err
+		}
+		// Unknown format → fall through to subcommand
+	}
+
+	// Fallback: invoke "reassemble-transcript" subcommand
 	input, err := json.Marshal(ChunkResponse{Chunks: chunks})
 	if err != nil {
 		return nil, fmt.Errorf("reassemble-transcript: marshal: %w", err)
@@ -121,6 +163,14 @@ func (e *Agent) ReassembleTranscript(chunks [][]byte) ([]byte, error) {
 // --- Agent interface: Legacy methods ---
 
 func (e *Agent) GetSessionID(input *agent.HookInput) string {
+	// Declarative: extract session_id directly from hook input when any
+	// declarative template is set (indicating the agent uses the simplified protocol).
+	// The session ID is always present in the hook input from parse-hook events.
+	if e.hasDeclarativeTemplates() && input != nil && input.SessionID != "" {
+		return input.SessionID
+	}
+
+	// Fallback: invoke "get-session-id" subcommand
 	data, err := marshalHookInput(input)
 	if err != nil {
 		return ""
@@ -137,6 +187,12 @@ func (e *Agent) GetSessionID(input *agent.HookInput) string {
 }
 
 func (e *Agent) GetSessionDir(repoPath string) (string, error) {
+	// Declarative: expand session_dir_template if set
+	if e.info.SessionDirTemplate != "" {
+		return expandSessionDirTemplate(e.info.SessionDirTemplate, repoPath)
+	}
+
+	// Fallback: invoke "get-session-dir" subcommand
 	stdout, err := e.run(context.Background(), nil, "get-session-dir", "--repo-path", repoPath)
 	if err != nil {
 		return "", fmt.Errorf("get-session-dir: %w", err)
@@ -149,6 +205,16 @@ func (e *Agent) GetSessionDir(repoPath string) (string, error) {
 }
 
 func (e *Agent) ResolveSessionFile(sessionDir, agentSessionID string) string {
+	// Declarative: expand session_file_template if set
+	if e.info.SessionFileTemplate != "" {
+		result, err := expandSessionFileTemplate(e.info.SessionFileTemplate, sessionDir, agentSessionID)
+		if err != nil {
+			return ""
+		}
+		return result
+	}
+
+	// Fallback: invoke "resolve-session-file" subcommand
 	stdout, err := e.run(context.Background(), nil, "resolve-session-file",
 		"--session-dir", sessionDir, "--session-id", agentSessionID)
 	if err != nil {
@@ -162,6 +228,26 @@ func (e *Agent) ResolveSessionFile(sessionDir, agentSessionID string) string {
 }
 
 func (e *Agent) ReadSession(input *agent.HookInput) (*agent.AgentSession, error) {
+	// Declarative: build AgentSession from hook input + transcript_format when
+	// the agent uses the simplified protocol (has templates or transcript_format set).
+	if e.hasDeclarativeTemplates() && input != nil {
+		session := &agent.AgentSession{
+			SessionID:  input.SessionID,
+			AgentName:  types.AgentName(e.info.Name),
+			SessionRef: input.SessionRef,
+			StartTime:  input.Timestamp,
+		}
+		// Read transcript data if session_ref is a file path
+		if input.SessionRef != "" && e.info.TranscriptFormat != "" {
+			data, err := os.ReadFile(input.SessionRef)
+			if err == nil {
+				session.NativeData = data
+			}
+		}
+		return session, nil
+	}
+
+	// Fallback: invoke "read-session" subcommand
 	data, err := marshalHookInput(input)
 	if err != nil {
 		return nil, fmt.Errorf("read-session: marshal: %w", err)
@@ -178,6 +264,13 @@ func (e *Agent) ReadSession(input *agent.HookInput) (*agent.AgentSession, error)
 }
 
 func (e *Agent) WriteSession(ctx context.Context, session *agent.AgentSession) error {
+	// Declarative: no-op when using simplified protocol. The agent manages
+	// its own session storage; the CLI only needs to read transcripts.
+	if e.hasDeclarativeTemplates() {
+		return nil
+	}
+
+	// Fallback: invoke "write-session" subcommand
 	data, err := marshalAgentSession(session)
 	if err != nil {
 		return fmt.Errorf("write-session: marshal: %w", err)
@@ -190,6 +283,16 @@ func (e *Agent) WriteSession(ctx context.Context, session *agent.AgentSession) e
 }
 
 func (e *Agent) FormatResumeCommand(sessionID string) string {
+	// Declarative: expand resume_command_template if set
+	if e.info.ResumeCommandTemplate != "" {
+		result, err := expandResumeCommandTemplate(e.info.ResumeCommandTemplate, sessionID)
+		if err != nil {
+			return ""
+		}
+		return result
+	}
+
+	// Fallback: invoke "format-resume-command" subcommand
 	stdout, err := e.run(context.Background(), nil, "format-resume-command", "--session-id", sessionID)
 	if err != nil {
 		return ""
@@ -446,6 +549,16 @@ func (e *Agent) run(ctx context.Context, stdin []byte, args ...string) ([]byte, 
 	}
 
 	return stdoutBuf.Bytes(), nil
+}
+
+// hasDeclarativeTemplates returns true if the agent has any declarative template
+// or transcript_format set in its info response, indicating it uses the
+// simplified protocol where the CLI handles session management internally.
+func (e *Agent) hasDeclarativeTemplates() bool {
+	return e.info.TranscriptFormat != "" ||
+		e.info.SessionDirTemplate != "" ||
+		e.info.SessionFileTemplate != "" ||
+		e.info.ResumeCommandTemplate != ""
 }
 
 // --- Helpers ---
