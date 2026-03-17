@@ -1320,6 +1320,181 @@ func TestHandleTurnEnd_PartialFailure(t *testing.T) {
 	}
 }
 
+// TestPostCommit_FailedCondensation_StillTracksTurnCheckpointID verifies that when
+// condensation is attempted but fails (e.g., empty transcript at commit time),
+// the checkpoint ID is still recorded in TurnCheckpointIDs so the stop-time
+// finalizer can retry.
+//
+// This simulates the Cursor race condition: cursor commits before writing its
+// transcript, so there's no shadow branch and the live transcript is empty.
+func TestPostCommit_FailedCondensation_StillTracksTurnCheckpointID(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+	head, err := repo.Head()
+	require.NoError(t, err)
+
+	s := &ManualCommitStrategy{}
+	sessionID := "test-failed-condense-tracks-id"
+
+	// Create session state directly WITHOUT a shadow branch — simulates Cursor
+	// which doesn't call SaveStep (no tool-use hooks). Condensation will go
+	// through extractSessionDataFromLiveTranscript, not the shadow branch path.
+	emptyTranscript := filepath.Join(dir, ".entire", "metadata", sessionID, "empty.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(emptyTranscript), 0o755))
+	require.NoError(t, os.WriteFile(emptyTranscript, []byte(""), 0o644))
+
+	// Use paths.WorktreeRoot to get the resolved path (macOS /private/var vs /var).
+	worktreePath, err := paths.WorktreeRoot(context.Background())
+	require.NoError(t, err)
+
+	now := time.Now()
+	state := &SessionState{
+		SessionID:           sessionID,
+		BaseCommit:          head.Hash().String(),
+		WorktreePath:        worktreePath,
+		Phase:               session.PhaseActive,
+		AgentType:           "cursor",
+		TranscriptPath:      emptyTranscript,
+		StartedAt:           now,
+		LastInteractionTime: &now,
+	}
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	commitWithCheckpointTrailer(t, repo, dir, "dead0000beef")
+
+	err = s.PostCommit(context.Background())
+	require.NoError(t, err)
+
+	// Verify TurnCheckpointIDs was populated even though condensation failed
+	state, err = s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"dead0000beef"}, state.TurnCheckpointIDs,
+		"TurnCheckpointIDs should contain the checkpoint ID even when condensation fails")
+
+	// Verify the checkpoint does NOT exist on the metadata branch (condensation failed)
+	store := checkpoint.NewGitStore(repo)
+	cpID := id.MustCheckpointID("dead0000beef")
+	_, readErr := store.ReadSessionContent(context.Background(), cpID, 0)
+	assert.Error(t, readErr,
+		"Checkpoint should NOT exist on metadata branch since condensation failed")
+}
+
+// TestHandleTurnEnd_CreatesCheckpointOnCondensationFailure verifies that when a
+// checkpoint ID was tracked but condensation failed at commit time (no checkpoint
+// on the metadata branch), HandleTurnEnd creates the checkpoint from scratch
+// using the full transcript now available.
+//
+// This is the second half of the Cursor race condition fix: the stop-time
+// finalizer retries the failed condensation with the transcript now written.
+func TestHandleTurnEnd_CreatesCheckpointOnCondensationFailure(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+	head, err := repo.Head()
+	require.NoError(t, err)
+
+	s := &ManualCommitStrategy{}
+	sessionID := "test-create-missing-checkpoint"
+
+	// Create session state without shadow branch (simulates Cursor)
+	emptyTranscript := filepath.Join(dir, ".entire", "metadata", sessionID, "empty.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(emptyTranscript), 0o755))
+	require.NoError(t, os.WriteFile(emptyTranscript, []byte(""), 0o644))
+
+	worktreePath, err := paths.WorktreeRoot(context.Background())
+	require.NoError(t, err)
+
+	now := time.Now()
+	state := &SessionState{
+		SessionID:           sessionID,
+		BaseCommit:          head.Hash().String(),
+		WorktreePath:        worktreePath,
+		Phase:               session.PhaseActive,
+		AgentType:           "cursor",
+		TranscriptPath:      emptyTranscript,
+		StartedAt:           now,
+		LastInteractionTime: &now,
+	}
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	// Commit — condensation will fail (empty transcript, no shadow branch) but ID is tracked
+	commitWithCheckpointTrailer(t, repo, dir, "cafe0000babe")
+	require.NoError(t, s.PostCommit(context.Background()))
+
+	// Confirm checkpoint is missing and ID was tracked
+	state, err = s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"cafe0000babe"}, state.TurnCheckpointIDs)
+
+	// Now write the full transcript (simulating cursor finishing its turn)
+	fullTranscript := `{"type":"human","message":{"content":"create a file about red"}}
+{"type":"assistant","message":{"content":"I created docs/red.md"}}
+`
+	transcriptPath := filepath.Join(dir, ".entire", "metadata", sessionID, "full.jsonl")
+	require.NoError(t, os.WriteFile(transcriptPath, []byte(fullTranscript), 0o644))
+	state.TranscriptPath = transcriptPath
+
+	// HandleTurnEnd should create the missing checkpoint
+	err = s.HandleTurnEnd(context.Background(), state)
+	require.NoError(t, err)
+
+	// Verify the checkpoint was created on the metadata branch
+	store := checkpoint.NewGitStore(repo)
+	cpID := id.MustCheckpointID("cafe0000babe")
+	content, readErr := store.ReadSessionContent(context.Background(), cpID, 0)
+	require.NoError(t, readErr,
+		"Checkpoint should now exist on metadata branch after HandleTurnEnd")
+	assert.Contains(t, string(content.Transcript), "create a file about red",
+		"Checkpoint should contain the full transcript")
+
+	// TurnCheckpointIDs should be cleared
+	assert.Empty(t, state.TurnCheckpointIDs,
+		"TurnCheckpointIDs should be cleared after HandleTurnEnd")
+}
+
+// TestFilesTouchedByCheckpointTrailer verifies that filesTouchedByCheckpointTrailer
+// finds the correct files changed in a commit identified by its Entire-Checkpoint trailer.
+func TestFilesTouchedByCheckpointTrailer(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	// Create a file and commit with a checkpoint trailer
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "docs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docs/red.md"), []byte("red"), 0o644))
+
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	_, err = wt.Add("docs/red.md")
+	require.NoError(t, err)
+	commitMsg := "add red\n\n" + trailers.CheckpointTrailerKey + ": abcd1234ef56\n"
+	_, err = wt.Commit(commitMsg, &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	files := filesTouchedByCheckpointTrailer(context.Background(), dir, "abcd1234ef56")
+	assert.Equal(t, []string{"docs/red.md"}, files,
+		"Should find docs/red.md as the changed file")
+}
+
+// TestFilesTouchedByCheckpointTrailer_NotFound verifies that filesTouchedByCheckpointTrailer
+// returns nil when no commit matches the checkpoint ID.
+func TestFilesTouchedByCheckpointTrailer_NotFound(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	files := filesTouchedByCheckpointTrailer(context.Background(), dir, "000000000000")
+	assert.Nil(t, files, "Should return nil when no commit matches")
+}
+
 // setupSessionWithCheckpoint initializes a session and creates one checkpoint
 // on the shadow branch so there is content available for condensation.
 // Also modifies test.txt to "agent modified content" and includes it in the checkpoint,

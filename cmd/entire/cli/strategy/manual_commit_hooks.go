@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -632,7 +633,8 @@ type postCommitActionHandler struct {
 	shadowTree *object.Tree        // Per-session shadow commit tree (nil if branch doesn't exist)
 
 	// Output: set by handler methods, read by caller after TransitionAndLog.
-	condensed bool
+	condensed         bool // true if condensation succeeded
+	condenseAttempted bool // true if condensation was attempted (regardless of outcome)
 }
 
 func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
@@ -648,6 +650,7 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 	)
 
 	if shouldCondense {
+		h.condenseAttempted = true
 		h.condensed = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
 			shadowRef:      h.shadowRef,
 			headTree:       h.headTree,
@@ -674,6 +677,7 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 	)
 
 	if shouldCondense {
+		h.condenseAttempted = true
 		h.condensed = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
 			shadowRef:      h.shadowRef,
 			headTree:       h.headTree,
@@ -1014,7 +1018,13 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	// NOTE: This check runs AFTER TransitionAndLog updated the phase. It relies on
 	// ACTIVE + GitCommit → ACTIVE (phase stays ACTIVE). If that state machine
 	// transition ever changed, this guard would silently stop recording IDs.
-	if handler.condensed && state.Phase.IsActive() {
+	//
+	// Track the ID when condensation was attempted (condenseAttempted), even if it
+	// failed (e.g., empty transcript at commit time). The stop-time finalizer will
+	// retry failed condensations with the full transcript available.
+	// Do NOT track when condensation wasn't attempted (shouldCondense was false) —
+	// that means the commit wasn't eligible for condensation.
+	if handler.condenseAttempted && state.Phase.IsActive() {
 		state.TurnCheckpointIDs = append(state.TurnCheckpointIDs, checkpointID.String())
 	}
 
@@ -2246,6 +2256,14 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 
 	store := checkpoint.NewGitStore(repo)
 
+	// Get author info and branch name for potential WriteCommitted fallback.
+	authorName, authorEmail := GetGitAuthorFromRepo(repo)
+	branchName := GetCurrentBranchName(repo)
+	repoDir, repoErr := paths.WorktreeRoot(ctx)
+	if repoErr != nil {
+		repoDir = ""
+	}
+
 	// Update each checkpoint with the full transcript
 	for _, cpIDStr := range state.TurnCheckpointIDs {
 		cpID, parseErr := id.NewCheckpointID(cpIDStr)
@@ -2265,19 +2283,60 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 			Prompts:      prompts,
 			Agent:        state.AgentType,
 		})
-		if updateErr != nil {
-			logging.Warn(logCtx, "finalize: failed to update checkpoint",
+		if updateErr == nil {
+			logging.Info(logCtx, "finalize: checkpoint updated with full transcript",
 				slog.String("checkpoint_id", cpIDStr),
-				slog.String("error", updateErr.Error()),
+				slog.String("session_id", state.SessionID),
 			)
-			errCount++
 			continue
 		}
 
-		logging.Info(logCtx, "finalize: checkpoint updated with full transcript",
+		// If the checkpoint doesn't exist (condensation failed at commit time,
+		// e.g., because the transcript was empty), create it from scratch.
+		if errors.Is(updateErr, checkpoint.ErrCheckpointNotFound) {
+			logging.Info(logCtx, "finalize: checkpoint missing, creating from full transcript",
+				slog.String("checkpoint_id", cpIDStr),
+				slog.String("session_id", state.SessionID),
+			)
+
+			filesTouched := filesTouchedByCheckpointTrailer(ctx, repoDir, cpIDStr)
+
+			writeErr := store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+				CheckpointID:                cpID,
+				SessionID:                   state.SessionID,
+				Strategy:                    StrategyNameManualCommit,
+				Branch:                      branchName,
+				Transcript:                  fullTranscript,
+				Prompts:                     prompts,
+				FilesTouched:                filesTouched,
+				AuthorName:                  authorName,
+				AuthorEmail:                 authorEmail,
+				Agent:                       state.AgentType,
+				Model:                       state.ModelName,
+				TurnID:                      state.TurnID,
+				CheckpointTranscriptStart:   state.CheckpointTranscriptStart,
+				TranscriptIdentifierAtStart: state.TranscriptIdentifierAtStart,
+			})
+			if writeErr != nil {
+				logging.Warn(logCtx, "finalize: failed to create missing checkpoint",
+					slog.String("checkpoint_id", cpIDStr),
+					slog.String("error", writeErr.Error()),
+				)
+				errCount++
+			} else {
+				logging.Info(logCtx, "finalize: checkpoint created with full transcript",
+					slog.String("checkpoint_id", cpIDStr),
+					slog.String("session_id", state.SessionID),
+				)
+			}
+			continue
+		}
+
+		logging.Warn(logCtx, "finalize: failed to update checkpoint",
 			slog.String("checkpoint_id", cpIDStr),
-			slog.String("session_id", state.SessionID),
+			slog.String("error", updateErr.Error()),
 		)
+		errCount++
 	}
 
 	// Clear turn checkpoint IDs. Do NOT update CheckpointTranscriptStart here — it was
@@ -2288,6 +2347,38 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 	state.TurnCheckpointIDs = nil
 
 	return errCount
+}
+
+// filesTouchedByCheckpointTrailer finds the commit with a given Entire-Checkpoint trailer
+// and returns the files changed in that commit. Used as a fallback when condensation failed
+// at commit time and needs to be retried at stop time.
+func filesTouchedByCheckpointTrailer(ctx context.Context, repoDir string, cpID string) []string {
+	if repoDir == "" {
+		return nil
+	}
+
+	// Find the commit with this checkpoint trailer.
+	out, err := exec.CommandContext(ctx, "git", "-C", repoDir,
+		"log", "--all", "--grep=Entire-Checkpoint: "+cpID, "--format=%H", "-1").Output()
+	if err != nil || len(bytes.TrimSpace(out)) == 0 {
+		return nil
+	}
+	hash := strings.TrimSpace(string(out))
+
+	// Get files changed in that commit.
+	filesOut, err := exec.CommandContext(ctx, "git", "-C", repoDir,
+		"diff-tree", "--no-commit-id", "--name-only", "-r", hash).Output()
+	if err != nil {
+		return nil
+	}
+
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(filesOut)), "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files
 }
 
 // filesChangedInCommit returns the set of files changed in a commit using git diff-tree.
