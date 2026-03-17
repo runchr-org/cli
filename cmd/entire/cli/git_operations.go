@@ -8,10 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitauth"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 
 	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/config"
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
@@ -310,31 +312,36 @@ func ValidateBranchName(ctx context.Context, branchName string) error {
 }
 
 // FetchAndCheckoutRemoteBranch fetches a branch from origin and creates a local tracking branch.
-// Uses git CLI instead of go-git for fetch because go-git doesn't use credential helpers,
-// which breaks HTTPS URLs that require authentication.
+// Uses go-git with credential helper / SSH agent auth.
 func FetchAndCheckoutRemoteBranch(ctx context.Context, branchName string) error {
-	// Validate branch name before using in shell command (branchName comes from user CLI input)
 	if err := ValidateBranchName(ctx, branchName); err != nil {
 		return err
 	}
 
-	// Use git CLI for fetch (go-git's fetch can be tricky with auth)
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-
-	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
-
-	fetchCmd := exec.CommandContext(ctx, "git", "fetch", "origin", refSpec)
-	if output, err := fetchCmd.CombinedOutput(); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return errors.New("fetch timed out after 2 minutes")
-		}
-		return fmt.Errorf("failed to fetch branch from origin: %s: %w", strings.TrimSpace(string(output)), err)
-	}
 
 	repo, err := openRepository(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	remoteURL := gitauth.RemoteURL(repo, "origin")
+	auth := gitauth.ResolveAuth(ctx, remoteURL)
+
+	refSpec := config.RefSpec(fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName))
+	err = repo.FetchContext(ctx, &git.FetchOptions{
+		RemoteName: "origin",
+		RefSpecs:   []config.RefSpec{refSpec},
+		Auth:       auth,
+		Tags:       git.NoTags,
+		Force:      true,
+	})
+	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+		if ctx.Err() == context.DeadlineExceeded {
+			return errors.New("fetch timed out after 2 minutes")
+		}
+		return fmt.Errorf("failed to fetch branch from origin: %w", err)
 	}
 
 	// Get the remote branch reference
@@ -345,8 +352,7 @@ func FetchAndCheckoutRemoteBranch(ctx context.Context, branchName string) error 
 
 	// Create local branch pointing to the same commit
 	localRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), remoteRef.Hash())
-	err = repo.Storer.SetReference(localRef)
-	if err != nil {
+	if err := repo.Storer.SetReference(localRef); err != nil {
 		return fmt.Errorf("failed to create local branch: %w", err)
 	}
 
@@ -356,28 +362,34 @@ func FetchAndCheckoutRemoteBranch(ctx context.Context, branchName string) error 
 
 // FetchMetadataBranch fetches the entire/checkpoints/v1 branch from origin and creates/updates the local branch.
 // This is used when the metadata branch exists on remote but not locally.
-// Uses git CLI instead of go-git for fetch because go-git doesn't use credential helpers,
-// which breaks HTTPS URLs that require authentication.
+// Uses go-git with credential helper / SSH agent auth.
 func FetchMetadataBranch(ctx context.Context) error {
 	branchName := paths.MetadataBranchName
 
-	// Use git CLI for fetch (go-git's fetch can be tricky with auth)
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-
-	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
-
-	fetchCmd := exec.CommandContext(ctx, "git", "fetch", "origin", refSpec)
-	if output, err := fetchCmd.CombinedOutput(); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return errors.New("fetch timed out after 2 minutes")
-		}
-		return fmt.Errorf("failed to fetch %s from origin: %s: %w", branchName, strings.TrimSpace(string(output)), err)
-	}
 
 	repo, err := openRepository(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	remoteURL := gitauth.RemoteURL(repo, "origin")
+	auth := gitauth.ResolveAuth(ctx, remoteURL)
+
+	refSpec := config.RefSpec(fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName))
+	err = repo.FetchContext(ctx, &git.FetchOptions{
+		RemoteName: "origin",
+		RefSpecs:   []config.RefSpec{refSpec},
+		Auth:       auth,
+		Tags:       git.NoTags,
+		Force:      true,
+	})
+	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+		if ctx.Err() == context.DeadlineExceeded {
+			return errors.New("fetch timed out after 2 minutes")
+		}
+		return fmt.Errorf("failed to fetch %s from origin: %w", branchName, err)
 	}
 
 	// Get the remote branch reference

@@ -5,15 +5,19 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
 
+	"errors"
+
+	"github.com/entireio/cli/cmd/entire/cli/gitauth"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 
+	"github.com/go-git/go-git/v6"
+	gitconfig "github.com/go-git/go-git/v6/config"
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
@@ -292,12 +296,20 @@ func fetchMetadataBranchIfMissing(ctx context.Context, remoteURL string) error {
 
 	tmpRef := "refs/entire-fetch-tmp/" + branchName
 	refSpec := fmt.Sprintf("+refs/heads/%s:%s", branchName, tmpRef)
-	fetchCmd := exec.CommandContext(fetchCtx, "git", "fetch", "--no-tags", remoteURL, refSpec)
-	fetchCmd.Stdin = nil
-	fetchCmd.Env = append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0", // Prevent interactive auth prompts
-	)
-	if err := fetchCmd.Run(); err != nil {
+
+	auth := gitauth.ResolveAuth(fetchCtx, remoteURL)
+	remote := git.NewRemote(repo.Storer, &gitconfig.RemoteConfig{
+		Name: "anonymous",
+		URLs: []string{remoteURL},
+	})
+	fetchErr := remote.FetchContext(fetchCtx, &git.FetchOptions{
+		RemoteName: "anonymous",
+		RefSpecs:   []gitconfig.RefSpec{gitconfig.RefSpec(refSpec)},
+		Auth:       auth,
+		Tags:       git.NoTags,
+		Force:      true,
+	})
+	if fetchErr != nil && !errors.Is(fetchErr, git.NoErrAlreadyUpToDate) {
 		// Fetch failed - remote may be unreachable or branch doesn't exist there yet.
 		// Not fatal: push will create it on the remote when it succeeds.
 		return nil

@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitauth"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
@@ -20,6 +20,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/config"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/spf13/cobra"
 )
@@ -561,14 +562,23 @@ func runTrailCreateInteractive(title, body, branch, statusStr *string) error {
 func fetchTrailsBranch() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	branchName := paths.TrailsBranchName
-	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
 
-	cmd := exec.CommandContext(ctx, "git", "fetch", "origin", refSpec)
-	// Ensure non-interactive fetch in hook/agent contexts
-	cmd.Stdin = nil
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	_ = cmd.Run() //nolint:errcheck // best-effort fetch
+	repo, err := openRepository(ctx)
+	if err != nil {
+		return
+	}
+
+	remoteURL := gitauth.RemoteURL(repo, "origin")
+	auth := gitauth.ResolveAuth(ctx, remoteURL)
+
+	branchName := paths.TrailsBranchName
+	refSpec := config.RefSpec(fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName))
+	_ = repo.FetchContext(ctx, &git.FetchOptions{ //nolint:errcheck // best-effort fetch
+		RemoteName: "origin",
+		RefSpecs:   []config.RefSpec{refSpec},
+		Auth:       auth,
+		Tags:       git.NoTags,
+	})
 }
 
 // getTrailAuthor returns the GitHub username for the trail author.

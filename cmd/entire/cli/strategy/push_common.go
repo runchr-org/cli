@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/gitauth"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 
 	"github.com/go-git/go-git/v6"
+	gitconfig "github.com/go-git/go-git/v6/config"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
@@ -145,6 +147,11 @@ func fetchAndMergeSessionsCommon(ctx context.Context, target, branchName string)
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
+	repo, err := OpenRepository(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open git repository: %w", err)
+	}
+
 	// Determine fetch refspec. When target is a URL, use a temp ref;
 	// when it's a remote name, use the standard remote-tracking ref.
 	var fetchedRefName plumbing.ReferenceName
@@ -158,16 +165,42 @@ func fetchAndMergeSessionsCommon(ctx context.Context, target, branchName string)
 		fetchedRefName = plumbing.NewRemoteReferenceName(target, branchName)
 	}
 
-	// Use git CLI for fetch (go-git's fetch can be tricky with auth)
-	fetchCmd := exec.CommandContext(ctx, "git", "fetch", target, refSpec)
-	fetchCmd.Stdin = nil
-	if output, err := fetchCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("fetch failed: %s", output)
+	// Resolve auth and fetch using go-git
+	var remoteURL string
+	if isURL(target) {
+		remoteURL = target
+	} else {
+		remoteURL = gitauth.RemoteURL(repo, target)
 	}
+	auth := gitauth.ResolveAuth(ctx, remoteURL)
 
-	repo, err := OpenRepository(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to open git repository: %w", err)
+	if isURL(target) {
+		// URL-only fetch: create anonymous remote
+		remote := git.NewRemote(repo.Storer, &gitconfig.RemoteConfig{
+			Name: "anonymous",
+			URLs: []string{target},
+		})
+		fetchErr := remote.FetchContext(ctx, &git.FetchOptions{
+			RemoteName: "anonymous",
+			RefSpecs:   []gitconfig.RefSpec{gitconfig.RefSpec(refSpec)},
+			Auth:       auth,
+			Tags:       git.NoTags,
+			Force:      true,
+		})
+		if fetchErr != nil && !errors.Is(fetchErr, git.NoErrAlreadyUpToDate) {
+			return fmt.Errorf("fetch failed: %w", fetchErr)
+		}
+	} else {
+		fetchErr := repo.FetchContext(ctx, &git.FetchOptions{
+			RemoteName: target,
+			RefSpecs:   []gitconfig.RefSpec{gitconfig.RefSpec(refSpec)},
+			Auth:       auth,
+			Tags:       git.NoTags,
+			Force:      true,
+		})
+		if fetchErr != nil && !errors.Is(fetchErr, git.NoErrAlreadyUpToDate) {
+			return fmt.Errorf("fetch failed: %w", fetchErr)
+		}
 	}
 
 	// Reconcile disconnected metadata branches before merging trees.
