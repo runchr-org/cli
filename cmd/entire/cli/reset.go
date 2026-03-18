@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/huh"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -39,9 +40,16 @@ Example: If HEAD is at commit abc1234567890, the command will:
 Without --force, prompts for confirmation before deleting.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			// Check if in git repository
+			// Check if in git repository first, before logging init
 			if _, err := paths.WorktreeRoot(ctx); err != nil {
 				return errors.New("not a git repository")
+			}
+
+			// Initialize logging after confirming git repo context.
+			// Error is non-fatal: if logging init fails, logs go to stderr.
+			logging.SetLogLevelGetter(GetLogLevel)
+			if err := logging.Init(ctx, ""); err == nil {
+				defer logging.Close()
 			}
 
 			// Get current strategy
@@ -94,7 +102,7 @@ Without --force, prompts for confirmation before deleting.`,
 			}
 
 			// Call strategy's Reset method
-			if err := strat.Reset(ctx); err != nil {
+			if err := strat.Reset(ctx, cmd.ErrOrStderr()); err != nil {
 				return fmt.Errorf("reset failed: %w", err)
 			}
 
@@ -146,7 +154,7 @@ func runResetSession(ctx context.Context, cmd *cobra.Command, strat *strategy.Ma
 		}
 	}
 
-	if err := strat.ResetSession(ctx, sessionID); err != nil {
+	if err := strat.ResetSession(ctx, cmd.ErrOrStderr(), sessionID); err != nil {
 		return fmt.Errorf("reset session failed: %w", err)
 	}
 

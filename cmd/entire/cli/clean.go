@@ -33,17 +33,16 @@ This command finds and removes orphaned data from any strategy:
     reference them.
 
   Checkpoint metadata (entire/checkpoints/v1 branch)
-    Checkpoints are permanent (condensed session history) and are
-    never considered orphaned.
+    Orphaned checkpoint entries (e.g., entries whose linked commit no longer
+    exists) may be removed from the branch. The entire/checkpoints/v1 branch
+    itself is preserved.
 
   Temporary files (.entire/tmp/)
     Cached transcripts and other temporary data. Safe to delete when no
     active sessions are using them.
 
 Default: shows a preview of items that would be deleted.
-With --force, actually deletes the orphaned items.
-
-The entire/checkpoints/v1 branch itself is never deleted.`,
+With --force, actually deletes the orphaned items.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runClean(cmd.Context(), cmd.OutOrStdout(), forceFlag)
 		},
@@ -55,6 +54,12 @@ The entire/checkpoints/v1 branch itself is never deleted.`,
 }
 
 func runClean(ctx context.Context, w io.Writer, force bool) error {
+	// Verify we're in a git repository before initializing logging,
+	// otherwise logging.Init falls back to cwd and creates .entire/logs/ outside a repo.
+	if _, err := paths.WorktreeRoot(ctx); err != nil {
+		return fmt.Errorf("not a git repository: %w", err)
+	}
+
 	// Initialize logging so structured logs go to .entire/logs/ instead of stderr.
 	// Error is non-fatal: if logging init fails, logs go to stderr (acceptable fallback).
 	logging.SetLogLevelGetter(GetLogLevel)
