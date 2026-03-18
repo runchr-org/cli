@@ -53,12 +53,12 @@ func runTrailShow(w io.Writer) error {
 		return runTrailListAll(w, "", false, false)
 	}
 
-	repo, err := strategy.OpenRepository(context.Background())
+	ctx := context.Background()
+	store, err := resolveTrailStore(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to open repository: %w", err)
+		return fmt.Errorf("failed to open trail store: %w", err)
 	}
 
-	store := trail.NewStore(repo)
 	metadata, err := store.FindByBranch(branch)
 	if err != nil || metadata == nil {
 		return runTrailListAll(w, "", false, false)
@@ -109,15 +109,17 @@ func newTrailListCmd() *cobra.Command {
 }
 
 func runTrailListAll(w io.Writer, statusFilter string, jsonOutput, showAll bool) error {
-	// Fetch remote trails branch so we see trails from collaborators
-	fetchTrailsBranch()
-
-	repo, err := strategy.OpenRepository(context.Background())
+	ctx := context.Background()
+	store, err := resolveTrailStore(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to open repository: %w", err)
+		return fmt.Errorf("failed to open trail store: %w", err)
 	}
 
-	store := trail.NewStore(repo)
+	// Only fetch git branch when using git-backed store
+	if !trail.IsAPIBacked(store) {
+		fetchTrailsBranch()
+	}
+
 	trails, err := store.List()
 	if err != nil {
 		return fmt.Errorf("failed to list trails: %w", err)
@@ -270,8 +272,14 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 		fmt.Fprintf(errW, "Note: trail will be created for branch %q (not the current branch)\n", branch)
 	}
 
+	// Resolve trail store (API or git)
+	ctx := context.Background()
+	store, err := resolveTrailStore(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open trail store: %w", err)
+	}
+
 	// Check if trail already exists for this branch
-	store := trail.NewStore(repo)
 	existing, err := store.FindByBranch(branch)
 	if err == nil && existing != nil {
 		fmt.Fprintf(w, "Trail already exists for branch %q (ID: %s)\n", branch, existing.TrailID)
@@ -327,8 +335,11 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 			fmt.Fprintf(w, "Pushed branch %s to origin\n", branch)
 		}
 	}
-	if err := strategy.PushTrailsBranch(context.Background(), "origin"); err != nil {
-		fmt.Fprintf(errW, "Warning: failed to push trail data: %v\n", err)
+	// Only push trails branch when using git-backed store
+	if !trail.IsAPIBacked(store) {
+		if err := strategy.PushTrailsBranch(context.Background(), "origin"); err != nil {
+			fmt.Fprintf(errW, "Warning: failed to push trail data: %v\n", err)
+		}
 	}
 
 	// Checkout the branch if requested or prompted
@@ -381,20 +392,22 @@ func newTrailUpdateCmd() *cobra.Command {
 }
 
 func runTrailUpdate(w, errW io.Writer, statusStr, title, body, branch string, labelAdd, labelRemove []string) error {
-	repo, err := strategy.OpenRepository(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to open repository: %w", err)
-	}
+	ctx := context.Background()
 
 	// Determine branch
+	var err error
 	if branch == "" {
-		branch, err = GetCurrentBranch(context.Background())
+		branch, err = GetCurrentBranch(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to determine current branch: %w", err)
 		}
 	}
 
-	store := trail.NewStore(repo)
+	store, err := resolveTrailStore(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open trail store: %w", err)
+	}
+
 	metadata, err := store.FindByBranch(branch)
 	if err != nil {
 		return fmt.Errorf("failed to find trail: %w", err)
@@ -476,8 +489,11 @@ func runTrailUpdate(w, errW io.Writer, statusStr, title, body, branch string, la
 
 	fmt.Fprintf(w, "Updated trail for branch %s\n", branch)
 
-	if err := strategy.PushTrailsBranch(context.Background(), "origin"); err != nil {
-		fmt.Fprintf(errW, "Warning: failed to push trail data: %v\n", err)
+	// Only push trails branch when using git-backed store
+	if !trail.IsAPIBacked(store) {
+		if err := strategy.PushTrailsBranch(context.Background(), "origin"); err != nil {
+			fmt.Fprintf(errW, "Warning: failed to push trail data: %v\n", err)
+		}
 	}
 
 	return nil
@@ -635,4 +651,17 @@ func pushBranchToOrigin(branchName string) error {
 		return fmt.Errorf("%s: %w", strings.TrimSpace(string(output)), err)
 	}
 	return nil
+}
+
+// resolveTrailStore returns the best available trail store (API or git-backed).
+func resolveTrailStore(ctx context.Context) (trail.Store, error) { //nolint:ireturn // intentional interface return for store abstraction
+	repo, err := strategy.OpenRepository(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open repository: %w", err)
+	}
+	store, err := trail.ResolveStore(ctx, repo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve trail store: %w", err)
+	}
+	return store, nil
 }

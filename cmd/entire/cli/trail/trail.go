@@ -1,7 +1,9 @@
 // Package trail provides types and helpers for managing trail metadata.
-// Trails are branch-centric work tracking abstractions stored on the
-// entire/trails/v1 orphan branch. They answer "why/what" (human intent)
-// while checkpoints answer "how/when" (machine snapshots).
+// Trails are branch-centric work tracking abstractions. They answer "why/what"
+// (human intent) while checkpoints answer "how/when" (machine snapshots).
+//
+// Trails can be stored either locally on the entire/trails/v1 git orphan branch
+// (GitStore) or remotely via the Entire API (APIStore).
 package trail
 
 import (
@@ -12,6 +14,18 @@ import (
 	"strings"
 	"time"
 )
+
+// Store is the interface for trail CRUD operations.
+// Both GitStore (git-backed) and APIStore (API-backed) implement this.
+type Store interface {
+	Write(metadata *Metadata, discussion *Discussion, checkpoints *Checkpoints) error
+	Read(trailID ID) (*Metadata, *Discussion, *Checkpoints, error)
+	FindByBranch(branchName string) (*Metadata, error)
+	List() ([]*Metadata, error)
+	Update(trailID ID, updateFn func(*Metadata)) error
+	AddCheckpoint(trailID ID, ref CheckpointRef) error
+	Delete(trailID ID) error
+}
 
 const idLength = 6 // 6 bytes = 12 hex chars
 

@@ -25,18 +25,25 @@ const (
 // ErrTrailNotFound is returned when a trail cannot be found.
 var ErrTrailNotFound = errors.New("trail not found")
 
-// Store provides CRUD operations for trail metadata on the entire/trails/v1 branch.
-type Store struct {
+// GitStore provides CRUD operations for trail metadata on the entire/trails/v1 branch.
+type GitStore struct {
 	repo *git.Repository
 }
 
 // NewStore creates a new trail store backed by the given git repository.
-func NewStore(repo *git.Repository) *Store {
-	return &Store{repo: repo}
+//
+// Deprecated: Use NewGitStore or ResolveStore instead.
+func NewStore(repo *git.Repository) *GitStore {
+	return NewGitStore(repo)
+}
+
+// NewGitStore creates a new trail store backed by the given git repository.
+func NewGitStore(repo *git.Repository) *GitStore {
+	return &GitStore{repo: repo}
 }
 
 // EnsureBranch creates the entire/trails/v1 orphan branch if it doesn't exist.
-func (s *Store) EnsureBranch() error {
+func (s *GitStore) EnsureBranch() error {
 	refName := plumbing.NewBranchReferenceName(paths.TrailsBranchName)
 	_, err := s.repo.Reference(refName, true)
 	if err == nil {
@@ -64,7 +71,7 @@ func (s *Store) EnsureBranch() error {
 
 // Write writes trail metadata, discussion, and checkpoints to the entire/trails/v1 branch.
 // If checkpoints is nil, an empty checkpoints list is written.
-func (s *Store) Write(metadata *Metadata, discussion *Discussion, checkpoints *Checkpoints) error {
+func (s *GitStore) Write(metadata *Metadata, discussion *Discussion, checkpoints *Checkpoints) error {
 	if metadata.TrailID.IsEmpty() {
 		return errors.New("trail ID is required")
 	}
@@ -101,7 +108,7 @@ func (s *Store) Write(metadata *Metadata, discussion *Discussion, checkpoints *C
 }
 
 // buildTrailEntries creates blob objects for a trail's 3 files and returns them as tree entries.
-func (s *Store) buildTrailEntries(metadata *Metadata, discussion *Discussion, checkpoints *Checkpoints) ([]object.TreeEntry, error) {
+func (s *GitStore) buildTrailEntries(metadata *Metadata, discussion *Discussion, checkpoints *Checkpoints) ([]object.TreeEntry, error) {
 	if discussion == nil {
 		discussion = &Discussion{Comments: []Comment{}}
 	}
@@ -140,7 +147,7 @@ func (s *Store) buildTrailEntries(metadata *Metadata, discussion *Discussion, ch
 }
 
 // Read reads a trail by its ID from the entire/trails/v1 branch.
-func (s *Store) Read(trailID ID) (*Metadata, *Discussion, *Checkpoints, error) {
+func (s *GitStore) Read(trailID ID) (*Metadata, *Discussion, *Checkpoints, error) {
 	if err := ValidateID(string(trailID)); err != nil {
 		return nil, nil, nil, err
 	}
@@ -207,7 +214,7 @@ func (s *Store) Read(trailID ID) (*Metadata, *Discussion, *Checkpoints, error) {
 
 // FindByBranch finds a trail for the given branch name.
 // Returns (nil, nil) if no trail exists for the branch.
-func (s *Store) FindByBranch(branchName string) (*Metadata, error) {
+func (s *GitStore) FindByBranch(branchName string) (*Metadata, error) {
 	trails, err := s.List()
 	if err != nil {
 		return nil, err
@@ -222,7 +229,7 @@ func (s *Store) FindByBranch(branchName string) (*Metadata, error) {
 }
 
 // List returns all trail metadata from the entire/trails/v1 branch.
-func (s *Store) List() ([]*Metadata, error) {
+func (s *GitStore) List() ([]*Metadata, error) {
 	tree, err := s.getBranchTree()
 	if err != nil {
 		// Branch doesn't exist yet — no trails
@@ -265,7 +272,7 @@ func (s *Store) List() ([]*Metadata, error) {
 
 // Update updates an existing trail's metadata. It reads the current metadata,
 // applies the provided update function, and writes it back.
-func (s *Store) Update(trailID ID, updateFn func(*Metadata)) error {
+func (s *GitStore) Update(trailID ID, updateFn func(*Metadata)) error {
 	// ValidateID is called by Read, no need to duplicate here
 	metadata, discussion, checkpoints, err := s.Read(trailID)
 	if err != nil {
@@ -280,7 +287,7 @@ func (s *Store) Update(trailID ID, updateFn func(*Metadata)) error {
 
 // AddCheckpoint prepends a checkpoint reference to a trail's checkpoints list (newest first).
 // Only reads and writes the checkpoints.json file — metadata and discussion are untouched.
-func (s *Store) AddCheckpoint(trailID ID, ref CheckpointRef) error {
+func (s *GitStore) AddCheckpoint(trailID ID, ref CheckpointRef) error {
 	if err := ValidateID(string(trailID)); err != nil {
 		return err
 	}
@@ -336,7 +343,7 @@ func (s *Store) AddCheckpoint(trailID ID, ref CheckpointRef) error {
 }
 
 // Delete removes a trail from the entire/trails/v1 branch.
-func (s *Store) Delete(trailID ID) error {
+func (s *GitStore) Delete(trailID ID) error {
 	if err := ValidateID(string(trailID)); err != nil {
 		return err
 	}
@@ -375,7 +382,7 @@ func (s *Store) Delete(trailID ID) error {
 }
 
 // navigateToTrailTree walks rootTree → shard → suffix and returns the trail's subtree.
-func (s *Store) navigateToTrailTree(rootTreeHash plumbing.Hash, shard, suffix string) (*object.Tree, error) {
+func (s *GitStore) navigateToTrailTree(rootTreeHash plumbing.Hash, shard, suffix string) (*object.Tree, error) {
 	rootTree, err := s.repo.TreeObject(rootTreeHash)
 	if err != nil {
 		return nil, fmt.Errorf("trail %s/%s not found: %w", shard, suffix, err)
@@ -406,7 +413,7 @@ func (s *Store) navigateToTrailTree(rootTreeHash plumbing.Hash, shard, suffix st
 
 // readCheckpointsFromTrailTree reads checkpoints.json from a trail's subtree.
 // Returns empty checkpoints if the file doesn't exist yet.
-func (s *Store) readCheckpointsFromTrailTree(trailTree *object.Tree) (*Checkpoints, error) {
+func (s *GitStore) readCheckpointsFromTrailTree(trailTree *object.Tree) (*Checkpoints, error) {
 	cpEntry, err := trailTree.FindEntry(checkpointsFile)
 	if err != nil {
 		// No checkpoints file yet — return empty
@@ -433,7 +440,7 @@ func (s *Store) readCheckpointsFromTrailTree(trailTree *object.Tree) (*Checkpoin
 }
 
 // commitAndUpdateRef creates a commit and updates the trails branch reference.
-func (s *Store) commitAndUpdateRef(treeHash, parentHash plumbing.Hash, message string) error {
+func (s *GitStore) commitAndUpdateRef(treeHash, parentHash plumbing.Hash, message string) error {
 	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(s.repo)
 	commitHash, err := checkpoint.CreateCommit(s.repo, treeHash, parentHash, message, authorName, authorEmail)
 	if err != nil {
@@ -449,7 +456,7 @@ func (s *Store) commitAndUpdateRef(treeHash, parentHash plumbing.Hash, message s
 
 // getBranchRef returns the commit hash and root tree hash for the entire/trails/v1 branch HEAD
 // without flattening the tree. Falls back to remote tracking branch if local is missing.
-func (s *Store) getBranchRef() (commitHash, rootTreeHash plumbing.Hash, err error) {
+func (s *GitStore) getBranchRef() (commitHash, rootTreeHash plumbing.Hash, err error) {
 	refName := plumbing.NewBranchReferenceName(paths.TrailsBranchName)
 	ref, refErr := s.repo.Reference(refName, true)
 	if refErr != nil {
@@ -470,7 +477,7 @@ func (s *Store) getBranchRef() (commitHash, rootTreeHash plumbing.Hash, err erro
 }
 
 // getBranchTree returns the tree for the entire/trails/v1 branch HEAD.
-func (s *Store) getBranchTree() (*object.Tree, error) {
+func (s *GitStore) getBranchTree() (*object.Tree, error) {
 	_, rootTreeHash, err := s.getBranchRef()
 	if err != nil {
 		return nil, err
