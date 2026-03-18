@@ -244,7 +244,7 @@ func buildAgentOptions(installedSet map[types.AgentName]struct{}) ([]huh.Option[
 	}
 
 	// Add "External Agents" toggle option at the end.
-	externalOpt := huh.NewOption("External Agents (entire-agent-* on $PATH)", externalAgentsSentinel)
+	externalOpt := huh.NewOption("External Agents", externalAgentsSentinel)
 	if settings.IsExternalAgentsEnabled(context.Background()) {
 		externalOpt = externalOpt.Selected(true)
 	}
@@ -263,15 +263,7 @@ func promptAddAgents(options []huh.Option[string], installedNames []types.AgentN
 				Description("Use space to select, enter to confirm.").
 				Options(options...).
 				Validate(func(selected []string) error {
-					// Check if at least one real agent is selected.
-					hasRealAgent := false
-					for _, s := range selected {
-						if s != externalAgentsSentinel {
-							hasRealAgent = true
-							break
-						}
-					}
-					if !hasRealAgent {
+					if len(selected) == 0 {
 						return errors.New("please select at least one agent")
 					}
 					// Ensure previously installed agents are still selected
@@ -925,7 +917,7 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 	}
 
 	// Add "External Agents" toggle option at the end.
-	externalOpt := huh.NewOption("External Agents (entire-agent-* on $PATH)", externalAgentsSentinel)
+	externalOpt := huh.NewOption("External Agents", externalAgentsSentinel)
 	if externalAgentsPreSelected {
 		externalOpt = externalOpt.Selected(true)
 	}
@@ -959,13 +951,10 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 					Description("Use space to select, enter to confirm.").
 					Options(options...).
 					Validate(func(selected []string) error {
-						// Check if at least one real agent is selected (not just the external agents toggle).
-						for _, s := range selected {
-							if s != externalAgentsSentinel {
-								return nil
-							}
+						if len(selected) == 0 {
+							return errors.New("please select at least one agent")
 						}
-						return errors.New("please select at least one agent")
+						return nil
 					}).
 					Value(&selectedAgentNames),
 			),
