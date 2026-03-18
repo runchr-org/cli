@@ -2261,6 +2261,9 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 	branchName := GetCurrentBranchName(repo)
 	repoDir, repoErr := paths.WorktreeRoot(ctx)
 	if repoErr != nil {
+		logging.Warn(ctx, "finalize: failed to resolve worktree root, filesTouched fallback unavailable",
+			slog.String("error", repoErr.Error()),
+		)
 		repoDir = ""
 	}
 
@@ -2357,26 +2360,22 @@ func filesTouchedByCheckpointTrailer(ctx context.Context, repoDir string, cpID s
 		return nil
 	}
 
-	// Find the commit with this checkpoint trailer.
+	// Find the commit with this checkpoint trailer on the current branch.
 	out, err := exec.CommandContext(ctx, "git", "-C", repoDir,
-		"log", "--all", "--grep=Entire-Checkpoint: "+cpID, "--format=%H", "-1").Output()
+		"log", "HEAD", "--grep=Entire-Checkpoint: "+cpID, "--format=%H", "-1").Output()
 	if err != nil || len(bytes.TrimSpace(out)) == 0 {
 		return nil
 	}
 	hash := strings.TrimSpace(string(out))
 
-	// Get files changed in that commit.
-	filesOut, err := exec.CommandContext(ctx, "git", "-C", repoDir,
-		"diff-tree", "--no-commit-id", "--name-only", "-r", hash).Output()
+	// Get the parent hash for diff-tree (empty string triggers --root mode for initial commits).
+	parentOut, _ := exec.CommandContext(ctx, "git", "-C", repoDir,
+		"rev-parse", "--verify", hash+"~1").Output()
+	parentHash := strings.TrimSpace(string(parentOut))
+
+	files, err := gitops.DiffTreeFileList(ctx, repoDir, parentHash, hash)
 	if err != nil {
 		return nil
-	}
-
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(string(filesOut)), "\n") {
-		if line != "" {
-			files = append(files, line)
-		}
 	}
 	return files
 }
