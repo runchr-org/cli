@@ -156,9 +156,9 @@ func executeAgentHook(cmd *cobra.Command, agentName types.AgentName, hookName st
 		hookErr = DispatchLifecycleEvent(ctx, ag, event)
 	}
 
-	// ErrEmptyRepository is a graceful no-op: print the message but exit 0
+	// ErrEmptyRepository is a graceful no-op: silently exit 0
 	// so agents don't treat it as a hook failure.
-	if hookErr != nil && errors.Is(hookErr, strategy.ErrEmptyRepository) {
+	if hookErr != nil && event != nil && event.Type == agent.TurnEnd && errors.Is(hookErr, strategy.ErrEmptyRepository) {
 		hookErr = nil
 	}
 
