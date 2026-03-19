@@ -61,6 +61,17 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes" # keyless signing (Sigstore/Fulcio OIDC)
+    artifacts: checksum
+
 
 homebrew_casks:
   - name: entire
