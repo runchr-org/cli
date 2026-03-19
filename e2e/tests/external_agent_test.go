@@ -29,7 +29,7 @@ func TestExternalAgentSingleSessionManualCommit(t *testing.T) {
 		s.Git(t, "commit", "-m", "Add hello file via external agent")
 
 		testutil.AssertNewCommits(t, s, 1)
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		testutil.AssertCheckpointAdvanced(t, s)
 
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
@@ -69,7 +69,7 @@ func TestExternalAgentMultipleTurnsManualCommit(t *testing.T) {
 		s.Git(t, "commit", "-m", "Add alpha and beta via external agent")
 
 		testutil.AssertNewCommits(t, s, 1)
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		testutil.AssertCheckpointAdvanced(t, s)
 
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
@@ -99,7 +99,7 @@ func TestExternalAgentDeepCheckpointValidation(t *testing.T) {
 		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Deep checkpoint validation test")
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 
@@ -125,7 +125,7 @@ func TestExternalAgentSessionMetadata(t *testing.T) {
 		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Metadata test commit")
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 

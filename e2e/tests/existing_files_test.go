@@ -37,7 +37,7 @@ func TestModifyExistingTrackedFile(t *testing.T) {
 		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Update config.go")
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		testutil.AssertCheckpointAdvanced(t, s)
 
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
@@ -72,7 +72,7 @@ func TestMixedNewAndModifiedFiles(t *testing.T) {
 		s.Git(t, "add", "src/main.go")
 		s.Git(t, "commit", "-m", "Update main.go")
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		cpID1 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 		cpBranch1 := testutil.GitOutput(t, s.Dir, "rev-parse", "entire/checkpoints/v1")
 
@@ -80,7 +80,7 @@ func TestMixedNewAndModifiedFiles(t *testing.T) {
 		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Add utils.go and types.go")
 
-		testutil.WaitForCheckpointAdvanceFrom(t, s.Dir, cpBranch1, 15*time.Second)
+		testutil.WaitForCheckpointAdvanceFrom(t, s.Dir, cpBranch1, s.CheckpointTimeout())
 		cpID2 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 
 		assert.NotEqual(t, cpID1, cpID2, "checkpoint IDs should be distinct")
@@ -114,7 +114,7 @@ func TestInteractiveContentOverlapRevertNewFile(t *testing.T) {
 		// Wait for session to transition from ACTIVE to IDLE. The prompt
 		// pattern may appear before the turn-end hook completes (race between
 		// TUI rendering and hook execution, especially with OpenCode).
-		testutil.WaitForSessionIdle(t, s.Dir, 15*time.Second)
+		testutil.WaitForSessionIdle(t, s.Dir, s.CheckpointTimeout())
 
 		// Session is now idle (turn ended, waiting for next prompt).
 		// User replaces the content entirely.
@@ -167,7 +167,7 @@ func TestModifiedFileAlwaysGetsCheckpoint(t *testing.T) {
 		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Rewrite config.go")
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		testutil.AssertCheckpointAdvanced(t, s)
 
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")

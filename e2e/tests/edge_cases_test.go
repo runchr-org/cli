@@ -26,7 +26,7 @@ func TestAgentContinuesAfterCommit(t *testing.T) {
 			t.Fatalf("agent prompt 1 failed: %v", err)
 		}
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		cpID1 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 		cpBranchAfterFirst := testutil.GitOutput(t, s.Dir, "rev-parse", "entire/checkpoints/v1")
 
@@ -41,7 +41,7 @@ func TestAgentContinuesAfterCommit(t *testing.T) {
 		s.Git(t, "commit", "-m", "Add blue.md")
 
 		// Wait for checkpoint branch to advance past the first checkpoint.
-		deadline := time.Now().Add(15 * time.Second)
+		deadline := time.Now().Add(s.CheckpointTimeout())
 		for time.Now().Before(deadline) {
 			after := testutil.GitOutput(t, s.Dir, "rev-parse", "entire/checkpoints/v1")
 			if after != cpBranchAfterFirst {
@@ -70,7 +70,7 @@ func TestAgentAmendsCommit(t *testing.T) {
 		}
 
 		testutil.AssertFileExists(t, s.Dir, "docs/red.md")
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 
 		// Agent creates another file and amends the previous commit.
@@ -109,7 +109,7 @@ func TestDirtyWorkingTree(t *testing.T) {
 			t.Fatalf("agent failed: %v", err)
 		}
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		testutil.AssertFileExists(t, s.Dir, "docs/red.md")
 
 		// Human's uncommitted file should be untouched.
@@ -176,13 +176,13 @@ func TestAgentCommitsMidTurnUserCommitsRemainder(t *testing.T) {
 
 		testutil.AssertNewCommits(t, s, 1)
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		cpBranchAfterAgent := testutil.GitOutput(t, s.Dir, "rev-parse", "entire/checkpoints/v1")
 
 		s.Git(t, "add", "user_remainder.go")
 		s.Git(t, "commit", "-m", "Add user remainder")
 
-		testutil.WaitForCheckpointAdvanceFrom(t, s.Dir, cpBranchAfterAgent, 15*time.Second)
+		testutil.WaitForCheckpointAdvanceFrom(t, s.Dir, cpBranchAfterAgent, s.CheckpointTimeout())
 		userCpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 		agentCpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD~1")
 

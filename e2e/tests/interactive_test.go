@@ -29,7 +29,7 @@ func TestInteractiveMultiStep(t *testing.T) {
 		s.WaitFor(t, session, prompt, 60*time.Second)
 		testutil.AssertNewCommits(t, s, 1)
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		testutil.AssertCommitLinkedToCheckpoint(t, s.Dir, "HEAD")
 		testutil.AssertNoShadowBranches(t, s.Dir)
 	})

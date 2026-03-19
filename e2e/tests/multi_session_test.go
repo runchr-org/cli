@@ -29,7 +29,7 @@ func TestMultiSessionManualCommit(t *testing.T) {
 		testutil.AssertFileExists(t, s.Dir, "docs/*.md")
 		testutil.AssertNewCommits(t, s, 1)
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		testutil.AssertCheckpointAdvanced(t, s)
 
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
@@ -56,7 +56,7 @@ func TestMultiSessionSequential(t *testing.T) {
 		testutil.AssertFileExists(t, s.Dir, "docs/*.md")
 		testutil.AssertNewCommits(t, s, 2)
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		testutil.AssertCheckpointAdvanced(t, s)
 
 		cpID1 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")

@@ -412,6 +412,12 @@ func (s *RepoState) WaitFor(t *testing.T, session agents.Session, pattern string
 	}
 }
 
+// CheckpointTimeout returns the checkpoint polling timeout scaled by the
+// agent's TimeoutMultiplier. The base timeout is 15 seconds.
+func (s *RepoState) CheckpointTimeout() time.Duration {
+	return time.Duration(float64(15*time.Second) * s.Agent.TimeoutMultiplier())
+}
+
 // IsExternalAgent returns true if the agent implements the ExternalAgent
 // interface and reports itself as external.
 func (s *RepoState) IsExternalAgent() bool {

@@ -25,7 +25,7 @@ func (c *CopilotCLI) Name() string               { return "copilot-cli" }
 func (c *CopilotCLI) Binary() string             { return "copilot" }
 func (c *CopilotCLI) EntireAgent() string        { return "copilot-cli" }
 func (c *CopilotCLI) PromptPattern() string      { return `❯` }
-func (c *CopilotCLI) TimeoutMultiplier() float64 { return 1.5 }
+func (c *CopilotCLI) TimeoutMultiplier() float64 { return 2.5 }
 
 func (c *CopilotCLI) IsTransientError(out Output, err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {

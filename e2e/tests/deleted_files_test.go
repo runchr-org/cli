@@ -39,7 +39,7 @@ func TestDeletedFilesCommitDeletion(t *testing.T) {
 
 		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Add replacement")
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		cpID1 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 		testutil.AssertCheckpointExists(t, s.Dir, cpID1)
 

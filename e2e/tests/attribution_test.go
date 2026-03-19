@@ -29,7 +29,7 @@ func TestLineAttributionReasonable(t *testing.T) {
 		s.Git(t, "add", "docs/")
 		s.Git(t, "commit", "-m", "Add example.md")
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 		sm := testutil.ReadSessionMetadata(t, s.Dir, cpID, 0)
@@ -62,7 +62,7 @@ func TestInteractiveAttributionOnAgentCommit(t *testing.T) {
 		s.WaitFor(t, session, prompt, 90*time.Second)
 		testutil.AssertNewCommits(t, s, 1)
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 		sm := testutil.ReadSessionMetadata(t, s.Dir, cpID, 0)
 
@@ -93,7 +93,7 @@ func TestInteractiveAttributionMultiCommitSameSession(t *testing.T) {
 		s.WaitFor(t, session, prompt, 60*time.Second)
 		testutil.AssertNewCommits(t, s, 1)
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		cpBranch1 := testutil.GitOutput(t, s.Dir, "rev-parse", "entire/checkpoints/v1")
 
 		// Second prompt: modify same file and commit again.
@@ -101,7 +101,7 @@ func TestInteractiveAttributionMultiCommitSameSession(t *testing.T) {
 		s.WaitFor(t, session, prompt, 90*time.Second)
 		testutil.AssertNewCommits(t, s, 2)
 
-		testutil.WaitForCheckpointAdvanceFrom(t, s.Dir, cpBranch1, 15*time.Second)
+		testutil.WaitForCheckpointAdvanceFrom(t, s.Dir, cpBranch1, s.CheckpointTimeout())
 		cpID2 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 		sm := testutil.WaitForSessionMetadata(t, s.Dir, cpID2, 0, 10*time.Second)
 
@@ -133,7 +133,7 @@ func TestInteractiveShadowBranchCleanedAfterAgentCommit(t *testing.T) {
 		s.WaitFor(t, session, prompt, 90*time.Second)
 		testutil.AssertNewCommits(t, s, 1)
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 
 		testutil.AssertNoShadowBranches(t, s.Dir)
 	})
@@ -170,7 +170,7 @@ func TestAttributionMixedHumanAndAgent(t *testing.T) {
 		s.Git(t, "add", "agent.txt", "human.txt")
 		s.Git(t, "commit", "-m", "Add agent and human files")
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 		sm := testutil.ReadSessionMetadata(t, s.Dir, cpID, 0)

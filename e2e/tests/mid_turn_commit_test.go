@@ -52,7 +52,7 @@ func TestMidTurnCommit_DifferentFilesThanPreviousTurn(t *testing.T) {
 		// CRITICAL: The mid-turn commit should have triggered condensation
 		// to entire/checkpoints/v1, even though committed files differ from
 		// Turn 1's tracked files. This is the regression assertion.
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		testutil.AssertCheckpointAdvanced(t, s)
 
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")

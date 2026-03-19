@@ -33,14 +33,14 @@ func TestEndedSessionUserCommitsAfterExit(t *testing.T) {
 
 		s.Git(t, "add", "ended_a.go", "ended_b.go")
 		s.Git(t, "commit", "-m", "Add ended files A and B")
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		cpID1 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 
 		cpBranchAfterFirst := testutil.GitOutput(t, s.Dir, "rev-parse", "entire/checkpoints/v1")
 
 		s.Git(t, "add", "ended_c.go")
 		s.Git(t, "commit", "-m", "Add ended file C")
-		testutil.WaitForCheckpointAdvanceFrom(t, s.Dir, cpBranchAfterFirst, 15*time.Second)
+		testutil.WaitForCheckpointAdvanceFrom(t, s.Dir, cpBranchAfterFirst, s.CheckpointTimeout())
 		cpID2 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 
 		assert.NotEqual(t, cpID1, cpID2, "each commit should have its own checkpoint ID")
@@ -66,7 +66,7 @@ func TestSessionDepletedManualEditNoCheckpoint(t *testing.T) {
 
 		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Add depleted.go")
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 		testutil.AssertCheckpointExists(t, s.Dir, cpID)
 

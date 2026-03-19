@@ -53,7 +53,7 @@ func TestSingleSessionManualCommit(t *testing.T) {
 		testutil.AssertFileExists(t, s.Dir, "docs/*.md")
 		testutil.AssertNewCommits(t, s, 1)
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		testutil.AssertCheckpointAdvanced(t, s)
 
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
@@ -76,7 +76,7 @@ func TestSingleSessionAgentCommitInTurn(t *testing.T) {
 
 		testutil.AssertFileExists(t, s.Dir, "docs/*.md")
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		testutil.AssertCheckpointAdvanced(t, s)
 
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
@@ -99,7 +99,7 @@ func TestSingleSessionSubagentCommitInTurn(t *testing.T) {
 
 		testutil.AssertFileExists(t, s.Dir, "docs/*.md")
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, s.CheckpointTimeout())
 		testutil.AssertCheckpointAdvanced(t, s)
 
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
