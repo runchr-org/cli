@@ -1102,6 +1102,78 @@ func (s *GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoint
 	return nil
 }
 
+// UpdateCheckpointSummary patches the root-level metadata.json (CheckpointSummary)
+// for an existing checkpoint, setting CombinedAttribution.
+// Returns ErrCheckpointNotFound if the checkpoint does not exist.
+func (s *GitStore) UpdateCheckpointSummary(ctx context.Context, opts UpdateCheckpointSummaryOptions) error {
+	if err := ctx.Err(); err != nil {
+		return err //nolint:wrapcheck // Propagating context cancellation
+	}
+
+	if err := s.ensureSessionsBranch(); err != nil {
+		return fmt.Errorf("failed to ensure sessions branch: %w", err)
+	}
+
+	parentHash, rootTreeHash, err := s.getSessionsBranchRef()
+	if err != nil {
+		return err
+	}
+
+	basePath := opts.CheckpointID.Path() + "/"
+	checkpointPath := opts.CheckpointID.Path()
+	entries, err := s.flattenCheckpointEntries(rootTreeHash, checkpointPath)
+	if err != nil {
+		return err
+	}
+
+	rootMetadataPath := basePath + paths.MetadataFileName
+	entry, exists := entries[rootMetadataPath]
+	if !exists {
+		return ErrCheckpointNotFound
+	}
+
+	summary, err := s.readSummaryFromBlob(entry.Hash)
+	if err != nil {
+		return fmt.Errorf("failed to read checkpoint summary: %w", err)
+	}
+
+	summary.CombinedAttribution = opts.CombinedAttribution
+
+	summaryJSON, err := jsonutil.MarshalIndentWithNewline(summary, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal summary: %w", err)
+	}
+	summaryHash, err := CreateBlobFromContent(s.repo, summaryJSON)
+	if err != nil {
+		return fmt.Errorf("failed to create summary blob: %w", err)
+	}
+	entries[rootMetadataPath] = object.TreeEntry{
+		Name: rootMetadataPath,
+		Mode: filemode.Regular,
+		Hash: summaryHash,
+	}
+
+	newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, opts.CheckpointID, basePath, entries)
+	if err != nil {
+		return err
+	}
+
+	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
+	commitMsg := fmt.Sprintf("Update combined attribution for checkpoint %s", opts.CheckpointID)
+	newCommitHash, err := s.createCommit(newTreeHash, parentHash, commitMsg, authorName, authorEmail)
+	if err != nil {
+		return err
+	}
+
+	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	newRef := plumbing.NewHashReference(refName, newCommitHash)
+	if err := s.repo.Storer.SetReference(newRef); err != nil {
+		return fmt.Errorf("failed to set branch reference: %w", err)
+	}
+
+	return nil
+}
+
 // UpdateCommitted replaces the transcript, prompts, and context for an existing
 // committed checkpoint. Uses replace semantics: the full session transcript is
 // written, replacing whatever was stored at initial condensation time.

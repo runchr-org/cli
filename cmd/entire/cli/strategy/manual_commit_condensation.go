@@ -85,6 +85,65 @@ func (s *ManualCommitStrategy) getCheckpointLog(ctx context.Context, checkpointI
 	return content.Transcript, nil
 }
 
+// sessionAttrData captures per-session data needed to compute combined attribution
+// after the condensation loop has cleared state.PromptAttributions.
+type sessionAttrData struct {
+	promptAttributions []PromptAttribution
+	filesTouched       []string
+	shadowRef          *plumbing.Reference
+	headTree           *object.Tree
+	parentTree         *object.Tree
+	repoDir            string
+	attrBase           string
+	headCommit         string
+	parentCommit       string
+}
+
+// computeCombinedAttribution merges PromptAttributions from all sessions sharing
+// a shadow branch and computes attribution once with the merged data.
+// Returns nil for fewer than 2 sessions — single-session checkpoints don't need combining.
+func computeCombinedAttribution(
+	ctx context.Context,
+	repo *git.Repository,
+	sessions []sessionAttrData,
+) *cpkg.InitialAttribution {
+	if len(sessions) < 2 {
+		return nil
+	}
+
+	var merged []PromptAttribution
+	seenFiles := make(map[string]struct{})
+	var allFilesTouched []string
+	for _, s := range sessions {
+		merged = append(merged, s.promptAttributions...)
+		for _, f := range s.filesTouched {
+			if _, ok := seenFiles[f]; !ok {
+				seenFiles[f] = struct{}{}
+				allFilesTouched = append(allFilesTouched, f)
+			}
+		}
+	}
+
+	first := sessions[0]
+	syntheticState := &SessionState{
+		PromptAttributions:    merged,
+		AttributionBaseCommit: first.attrBase,
+		BaseCommit:            first.attrBase,
+	}
+	syntheticData := &ExtractedSessionData{
+		FilesTouched: allFilesTouched,
+	}
+
+	return calculateSessionAttributions(ctx, repo, first.shadowRef, syntheticData, syntheticState, attributionOpts{
+		headTree:              first.headTree,
+		parentTree:            first.parentTree,
+		repoDir:               first.repoDir,
+		attributionBaseCommit: first.attrBase,
+		headCommitHash:        first.headCommit,
+		parentCommitHash:      first.parentCommit,
+	})
+}
+
 // condenseOpts provides pre-resolved git objects to avoid redundant reads.
 type condenseOpts struct {
 	shadowRef        *plumbing.Reference // Pre-resolved shadow branch ref (nil = resolve from repo)

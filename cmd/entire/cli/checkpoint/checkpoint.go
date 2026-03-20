@@ -108,6 +108,11 @@ type Store interface {
 	// session transcript (prompt to stop event).
 	// Returns ErrCheckpointNotFound if the checkpoint doesn't exist.
 	UpdateCommitted(ctx context.Context, opts UpdateCommittedOptions) error
+
+	// UpdateCheckpointSummary patches the root CheckpointSummary for an existing checkpoint.
+	// Used after all sessions are condensed to store combined multi-session attribution.
+	// Returns ErrCheckpointNotFound if the checkpoint does not exist.
+	UpdateCheckpointSummary(ctx context.Context, opts UpdateCheckpointSummaryOptions) error
 }
 
 // WriteTemporaryResult contains the result of writing a temporary checkpoint.
@@ -312,6 +317,15 @@ type UpdateCommittedOptions struct {
 	Agent types.AgentType
 }
 
+// UpdateCheckpointSummaryOptions holds options for patching the root CheckpointSummary.
+type UpdateCheckpointSummaryOptions struct {
+	// CheckpointID identifies the checkpoint whose root metadata.json to update.
+	CheckpointID id.CheckpointID
+
+	// CombinedAttribution is the merged attribution computed across all sessions.
+	CombinedAttribution *InitialAttribution
+}
+
 // CommittedInfo contains summary information about a committed checkpoint.
 type CommittedInfo struct {
 	// CheckpointID is the stable 12-hex-char identifier
@@ -451,6 +465,10 @@ type CheckpointSummary struct {
 	FilesTouched     []string           `json:"files_touched"`
 	Sessions         []SessionFilePaths `json:"sessions"`
 	TokenUsage       *agent.TokenUsage  `json:"token_usage,omitempty"`
+	// CombinedAttribution is computed once across all sessions sharing a shadow branch.
+	// Only present for multi-session checkpoints written by CLI v0.x+.
+	// When present, prefer this over per-session InitialAttribution in aggregation.
+	CombinedAttribution *InitialAttribution `json:"combined_attribution,omitempty"`
 }
 
 // SessionMetrics contains hook-provided session metrics from agents that report

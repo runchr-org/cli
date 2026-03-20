@@ -1334,3 +1334,22 @@ func TestCalculatePromptAttribution_PopulatesPerFile(t *testing.T) {
 		t.Errorf("UserAddedPerFile[b.go] = %d, want 1", result.UserAddedPerFile["b.go"])
 	}
 }
+
+func TestComputeCombinedAttribution_EmptyInput_ReturnsNil(t *testing.T) {
+	t.Parallel()
+	result := computeCombinedAttribution(context.Background(), nil, nil)
+	if result != nil {
+		t.Errorf("expected nil for empty input, got %+v", result)
+	}
+}
+
+func TestComputeCombinedAttribution_SingleSession_ReturnsNil(t *testing.T) {
+	t.Parallel()
+	sessions := []sessionAttrData{
+		{promptAttributions: []PromptAttribution{{UserLinesAdded: 5}}},
+	}
+	result := computeCombinedAttribution(context.Background(), nil, sessions)
+	if result != nil {
+		t.Errorf("expected nil for single session (no-op), got %+v", result)
+	}
+}
