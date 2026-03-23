@@ -131,11 +131,10 @@ jobs:
         env:
           SLACK_CHANNEL: ${{ steps.set.outputs.slack_channel }}
           SLACK_THREAD_TS: ${{ steps.set.outputs.slack_thread_ts }}
-          AGENTS_CSV: ${{ steps.set.outputs.agents_csv }}
-          TRIAGE_RUN_URL: ${{ steps.set.outputs.run_url }}
+          TRIAGE_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
         run: |
-          scripts/post-slack-message.sh "Starting E2E triage for \`${AGENTS_CSV}\` on <${TRIAGE_RUN_URL}|this run>."
+          scripts/post-slack-message.sh ":hourglass_flowing_sand: E2E triage started — <${TRIAGE_RUN_URL}|view triage run>"
 
   triage:
     needs: [setup]
@@ -333,45 +332,61 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Post triage completion
+      - name: Post triage result
         if: ${{ always() && (steps.triage.outputs.outcome == 'success' || steps.triage.outputs.outcome == 'failure') && env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != '' }}
         shell: bash
         env:
           TRIAGE_OUTCOME: ${{ steps.triage.outputs.outcome }}
+          TRIAGE_OUTPUT_OUTCOME: ${{ steps.triage_output.outcome }}
+          TRIAGE_RUN_ID: ${{ github.run_id }}
+          SUMMARY_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
 
-          if [ "$TRIAGE_OUTCOME" = "success" ]; then
-            message="E2E triage complete for \`$FAILED_AGENTS\`."
-          else
-            message="E2E triage failed for \`$FAILED_AGENTS\`."
+          if [ "$TRIAGE_OUTCOME" != "success" ]; then
+            scripts/post-slack-message.sh ":x: E2E triage failed — <${SUMMARY_URL}|view run>"
+            exit 0
           fi
 
-          scripts/post-slack-message.sh "$message"
-
-      - name: Post fix plan to Slack
-        if: steps.triage_output.outcome == 'success' && env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != ''
-        shell: bash
-        env:
-          PLAN_FILE: ${{ github.workspace }}/e2e-triage-artifacts/plan.md
-          TRIAGE_RUN_ID: ${{ github.run_id }}
-        run: |
-          set -euo pipefail
-
-          # Extract first few lines as summary
-          summary="$(head -20 "$PLAN_FILE" | sed '/^$/d' | head -5)"
+          if [ "$TRIAGE_OUTPUT_OUTCOME" != "success" ]; then
+            scripts/post-slack-message.sh ":warning: E2E triage completed but output extraction failed — <${SUMMARY_URL}|view run>"
+            exit 0
+          fi
 
           # Construct Fix It URL
           encoded_run_url="$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['RUN_URL'], safe=''))")"
           encoded_agents="$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['FAILED_AGENTS'], safe=''))")"
           fix_url="https://e2e-triage.entireio.workers.dev/fix?triage_run_id=${TRIAGE_RUN_ID}&run_url=${encoded_run_url}&failed_agents=${encoded_agents}&slack_channel=${SLACK_CHANNEL}&slack_thread_ts=${SLACK_THREAD_TS}"
 
-          message="Fix plan ready for \`$FAILED_AGENTS\`:
-          ${summary}
+          # Block Kit payload with button
+          payload="$(jq -n \
+            --arg summary_url "$SUMMARY_URL" \
+            --arg fix_url "$fix_url" \
+            '{
+              text: "E2E triage complete",
+              blocks: [
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: (":white_check_mark: E2E triage complete — <" + $summary_url + "|view results>")
+                  }
+                },
+                {
+                  type: "actions",
+                  elements: [
+                    {
+                      type: "button",
+                      text: { type: "plain_text", text: "Fix It" },
+                      url: $fix_url,
+                      style: "primary"
+                    }
+                  ]
+                }
+              ]
+            }')"
 
-          <${fix_url}|Fix It> — applies the plan and creates a draft PR"
-
-          scripts/post-slack-message.sh "$message"
+          scripts/post-slack-message.sh --payload "$payload"
 
       - name: Upload triage output
         if: always()
