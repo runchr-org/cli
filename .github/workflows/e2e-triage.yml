@@ -369,7 +369,7 @@ jobs:
                   type: "section",
                   text: {
                     type: "mrkdwn",
-                    text: (":white_check_mark: E2E triage complete — <" + $summary_url + "|view results>")
+                    text: (":white_check_mark: E2E triage complete — <" + $summary_url + "|view results>\nClick *Fix It* to apply the plan and create a draft PR.")
                   }
                 },
                 {
