@@ -468,6 +468,60 @@ func TestCompact_FactoryDroidNonMessageEntriesDropped(t *testing.T) {
 	assertJSONLines(t, result, expected)
 }
 
+// --- Gemini format tests ---
+
+func TestCompact_GeminiAssistantType(t *testing.T) {
+	t.Parallel()
+
+	geminiOpts := CompactOptions{
+		Agent:      "gemini-cli",
+		CLIVersion: "0.5.1",
+		StartLine:  0,
+	}
+
+	// Gemini transcripts use type:"gemini" for assistant messages.
+	input := []byte(`{"type":"user","timestamp":"t1","message":{"content":"hello"}}
+{"type":"gemini","timestamp":"t2","message":{"id":"g1","content":[{"type":"text","text":"Hi from Gemini!"}]}}
+`)
+
+	expected := []string{
+		`{"v":1,"agent":"gemini-cli","cli_version":"0.5.1","type":"user","ts":"t1","content":"hello"}`,
+		`{"v":1,"agent":"gemini-cli","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"g1","content":[{"type":"text","text":"Hi from Gemini!"}]}`,
+	}
+
+	result, err := Compact(input, geminiOpts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertJSONLines(t, result, expected)
+}
+
+func TestCompact_GeminiStringContent(t *testing.T) {
+	t.Parallel()
+
+	geminiOpts := CompactOptions{
+		Agent:      "gemini-cli",
+		CLIVersion: "0.5.1",
+		StartLine:  0,
+	}
+
+	// Gemini assistant messages may have string content rather than content blocks.
+	input := []byte(`{"type":"user","timestamp":"t1","message":{"content":"what is 2+2?"}}
+{"type":"gemini","timestamp":"t2","message":{"id":"g1","content":"It's 4."}}
+`)
+
+	expected := []string{
+		`{"v":1,"agent":"gemini-cli","cli_version":"0.5.1","type":"user","ts":"t1","content":"what is 2+2?"}`,
+		`{"v":1,"agent":"gemini-cli","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"g1","content":"It's 4."}`,
+	}
+
+	result, err := Compact(input, geminiOpts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertJSONLines(t, result, expected)
+}
+
 // --- IDE context tag stripping tests ---
 
 func TestCompact_StripsIDEContextTags(t *testing.T) {

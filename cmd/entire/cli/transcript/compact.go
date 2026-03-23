@@ -73,6 +73,7 @@ var userAliases = map[string]bool{
 // assistantAliases maps transcript type/role values to the canonical "assistant" kind.
 var assistantAliases = map[string]bool{
 	"assistant": true,
+	"gemini":    true,
 }
 
 // normalizeKind returns the canonical entry kind ("user" or "assistant") for a
