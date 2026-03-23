@@ -78,6 +78,15 @@ jobs:
 
           mkdir -p triage-plans
 
+          # Normalize: extract numeric ID if a full URL was passed
+          if echo "$TRIAGE_RUN_ID" | grep -qE '^https?://'; then
+            TRIAGE_RUN_ID=$(echo "$TRIAGE_RUN_ID" | grep -oE '/runs/[0-9]+' | grep -oE '[0-9]+')
+            if [ -z "$TRIAGE_RUN_ID" ]; then
+              echo "error: could not extract run ID from triage_run_id URL" >&2
+              exit 1
+            fi
+          fi
+
           gh run download "$TRIAGE_RUN_ID" \
             --name "e2e-triage" \
             --dir "triage-plans" || {
