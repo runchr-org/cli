@@ -71,9 +71,21 @@ type EntireSettings struct {
 	// plugins (entire-agent-* binaries on $PATH). Defaults to false.
 	ExternalAgents bool `json:"external_agents,omitempty"`
 
+	// TranscriptFilters defines user-supplied clean/smudge filters applied to
+	// transcripts before storage. Each entry's Match is replaced by
+	// __ent_user__/<Key> on clean; the substitution is reversed on smudge.
+	TranscriptFilters []TranscriptFilter `json:"transcript_filters,omitempty"`
+
 	// Deprecated: no longer used. Exists to tolerate old settings files
 	// that still contain "strategy": "auto-commit" or similar.
 	Strategy string `json:"strategy,omitempty"`
+}
+
+// TranscriptFilter is a user-configured find-and-replace pair for transcripts.
+// Match is the literal string to find; Key becomes __ent_user__/<Key> as the replacement.
+type TranscriptFilter struct {
+	Match string `json:"match"`
+	Key   string `json:"key"`
 }
 
 // RedactionSettings configures redaction behavior beyond the default secret detection.
@@ -277,6 +289,15 @@ func mergeJSON(settings *EntireSettings, data []byte) error {
 				return fmt.Errorf("invalid commit_linking value %q: must be %q or %q", cl, CommitLinkingAlways, CommitLinkingPrompt)
 			}
 		}
+	}
+
+	// Override transcript_filters if present (wholesale replace, not merge)
+	if tfRaw, ok := raw["transcript_filters"]; ok {
+		var tf []TranscriptFilter
+		if err := json.Unmarshal(tfRaw, &tf); err != nil {
+			return fmt.Errorf("parsing transcript_filters field: %w", err)
+		}
+		settings.TranscriptFilters = tf
 	}
 
 	// Override external_agents if present

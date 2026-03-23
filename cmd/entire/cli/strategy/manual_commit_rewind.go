@@ -15,6 +15,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/filter"
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
@@ -210,7 +211,7 @@ func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limi
 		var sessionPrompt string
 		var sessionPrompts []string
 		if metadataTree != nil {
-			checkpointPath := paths.CheckpointPath(cpInfo.CheckpointID) //nolint:staticcheck // already present in codebase
+			checkpointPath := paths.CheckpointPath(cpInfo.CheckpointID)
 			// For multi-session checkpoints, read all prompts
 			if cpInfo.SessionCount > 1 && len(cpInfo.SessionIDs) > 1 {
 				sessionPrompts = ReadAllSessionPromptsFromTree(metadataTree, checkpointPath, cpInfo.SessionCount, cpInfo.SessionIDs)
@@ -670,6 +671,9 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 		fmt.Fprintf(w, "Restoring %d sessions from checkpoint:\n", totalSessions)
 	}
 
+	// Construct filter pipeline once for all sessions (avoids re-reading settings per session)
+	pipeline := filter.FromContext(ctx)
+
 	// Restore all sessions (oldest to newest, using 0-based indexing)
 	var restored []RestoredSession
 	for i := range totalSessions {
@@ -735,7 +739,7 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 			AgentName:  sessionAgent.Name(),
 			RepoPath:   repoRoot,
 			SessionRef: sessionFile,
-			NativeData: content.Transcript,
+			NativeData: pipeline.Smudge(content.Transcript),
 		}
 		if writeErr := sessionAgent.WriteSession(ctx, agentSession); writeErr != nil {
 			if totalSessions > 1 {

@@ -18,6 +18,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/filter"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -333,6 +334,9 @@ func (s *GitStore) writeStandardCheckpointEntries(ctx context.Context, opts Writ
 func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCommittedOptions, sessionPath string, entries map[string]object.TreeEntry) (SessionFilePaths, error) {
 	filePaths := SessionFilePaths{}
 
+	// Construct filter pipeline once for both transcript and prompts
+	pipeline := filter.FromContext(ctx)
+
 	// Clear any existing entries at this path so stale files from a previous
 	// write (e.g. prompt.txt) don't persist on overwrite.
 	for key := range entries {
@@ -342,7 +346,7 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 	}
 
 	// Write transcript
-	if err := s.writeTranscript(ctx, opts, sessionPath, entries); err != nil {
+	if err := s.writeTranscript(ctx, opts, sessionPath, entries, pipeline); err != nil {
 		return filePaths, err
 	}
 	filePaths.Transcript = "/" + sessionPath + paths.TranscriptFileName
@@ -350,7 +354,7 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 
 	// Write prompts
 	if len(opts.Prompts) > 0 {
-		promptContent := redact.String(strings.Join(opts.Prompts, "\n\n---\n\n"))
+		promptContent := pipeline.CleanString(redact.String(strings.Join(opts.Prompts, "\n\n---\n\n")))
 		blobHash, err := CreateBlobFromContent(s.repo, []byte(promptContent))
 		if err != nil {
 			return filePaths, err
@@ -544,7 +548,8 @@ func aggregateTokenUsage(a, b *agent.TokenUsage) *agent.TokenUsage {
 
 // writeTranscript writes the transcript file from in-memory content or file path.
 // If the transcript exceeds MaxChunkSize, it's split into multiple chunk files.
-func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptions, basePath string, entries map[string]object.TreeEntry) error {
+// pipeline may be nil (no-op filtering).
+func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptions, basePath string, entries map[string]object.TreeEntry, pipeline *filter.Pipeline) error {
 	transcript := opts.Transcript
 	if len(transcript) == 0 && opts.TranscriptPath != "" {
 		var readErr error
@@ -558,11 +563,12 @@ func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptio
 		return nil
 	}
 
-	// Redact secrets before chunking so content hash reflects redacted content
+	// Redact secrets then normalize machine-specific paths
 	transcript, err := redact.JSONLBytes(transcript)
 	if err != nil {
 		return fmt.Errorf("failed to redact transcript secrets: %w", err)
 	}
+	transcript = pipeline.Clean(transcript)
 
 	// Chunk the transcript if it's too large
 	chunks, err := agent.ChunkTranscript(ctx, transcript, opts.Agent)
@@ -1115,6 +1121,9 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 		return errors.New("invalid update options: checkpoint ID is required")
 	}
 
+	// Construct filter pipeline once for both transcript and prompt updates
+	pipeline := filter.FromContext(ctx)
+
 	// Ensure sessions branch exists
 	if err := s.ensureSessionsBranch(); err != nil {
 		return fmt.Errorf("failed to ensure sessions branch: %w", err)
@@ -1180,6 +1189,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 		if err != nil {
 			return fmt.Errorf("failed to redact transcript secrets: %w", err)
 		}
+		transcript = pipeline.Clean(transcript)
 		if err := s.replaceTranscript(ctx, transcript, opts.Agent, sessionPath, entries); err != nil {
 			return fmt.Errorf("failed to replace transcript: %w", err)
 		}
@@ -1187,7 +1197,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 
 	// Replace prompts (apply redaction as safety net)
 	if len(opts.Prompts) > 0 {
-		promptContent := redact.String(strings.Join(opts.Prompts, "\n\n---\n\n"))
+		promptContent := pipeline.CleanString(redact.String(strings.Join(opts.Prompts, "\n\n---\n\n")))
 		blobHash, err := CreateBlobFromContent(s.repo, []byte(promptContent))
 		if err != nil {
 			return fmt.Errorf("failed to create prompt blob: %w", err)
@@ -1402,8 +1412,9 @@ func (s *GitStore) copyMetadataDir(metadataDir, basePath string, entries map[str
 			return fmt.Errorf("path traversal detected: %s", relPath)
 		}
 
-		// Create blob from file with secrets redaction
-		blobHash, mode, err := createRedactedBlobFromFile(s.repo, path, relPath)
+		// Create blob from file with secrets redaction (no transcript filter —
+		// copyMetadataDir is used for task checkpoint metadata, not transcripts)
+		blobHash, mode, err := createRedactedBlobFromFile(s.repo, path, relPath, nil)
 		if err != nil {
 			return fmt.Errorf("failed to create blob for %s: %w", path, err)
 		}
@@ -1424,9 +1435,11 @@ func (s *GitStore) copyMetadataDir(metadataDir, basePath string, entries map[str
 	return nil
 }
 
-// createRedactedBlobFromFile reads a file, applies secrets redaction, and creates a git blob.
+// createRedactedBlobFromFile reads a file, applies secrets redaction and optional
+// transcript filters, and creates a git blob.
+// pipeline may be nil (no-op filtering).
 // JSONL files get JSONL-aware redaction; all other files get plain string redaction.
-func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string) (plumbing.Hash, filemode.FileMode, error) {
+func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string, pipeline *filter.Pipeline) (plumbing.Hash, filemode.FileMode, error) {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return plumbing.ZeroHash, 0, fmt.Errorf("failed to stat file: %w", err)
@@ -1462,6 +1475,8 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string)
 	} else {
 		content = redact.Bytes(content)
 	}
+
+	content = pipeline.Clean(content)
 
 	hash, err := CreateBlobFromContent(repo, content)
 	if err != nil {
