@@ -188,7 +188,14 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           prompt: |
-            /e2e:triage-ci ${{ steps.artifacts.outputs.path }} --agent ${{ matrix.agent }} --sha ${{ needs.matrix-setup.outputs.sha }}
+            Read and follow the full E2E triage procedure from .claude/skills/e2e/triage-ci.md.
+
+            Inputs:
+            - Local artifact path: ${{ steps.artifacts.outputs.path }}
+            - Agent: ${{ matrix.agent }}
+            - SHA: ${{ needs.matrix-setup.outputs.sha }}
+
+            This is a CI artifact analysis (local path provided) -- skip Steps L2-L5 and go straight to Shared Analysis.
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: "--allowedTools 'Read,Grep,Glob'"
           display_report: true
@@ -205,7 +212,12 @@ jobs:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         with:
           prompt: |
-            /e2e:triage-ci ${{ env.RUN_URL }} --agent ${{ matrix.agent }} --sha ${{ needs.matrix-setup.outputs.sha }}
+            Read and follow the full E2E triage procedure from .claude/skills/e2e/triage-ci.md.
+
+            Inputs:
+            - CI run URL: ${{ env.RUN_URL }}
+            - Agent: ${{ matrix.agent }}
+            - SHA: ${{ needs.matrix-setup.outputs.sha }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: "--allowedTools 'Read,Grep,Glob,Bash(mise:*),Bash(scripts:*)'"
           display_report: true
@@ -251,7 +263,9 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           prompt: |
-            /e2e:implement Read the triage findings at ${{ github.workspace }}/e2e-triage-artifacts/${{ matrix.agent }}/triage.md for agent ${{ matrix.agent }}.
+            Read and follow the fix implementation procedure from .claude/skills/e2e/implement.md.
+
+            Read the triage findings at ${{ github.workspace }}/e2e-triage-artifacts/${{ matrix.agent }}/triage.md for agent ${{ matrix.agent }}.
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: "--allowedTools 'Read,Grep,Glob,Write,EnterPlanMode,ExitPlanMode,Bash(mise:*)'"
           display_report: true
