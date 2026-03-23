@@ -204,7 +204,7 @@ jobs:
             When done, call ExitPlanMode.
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: "--allowedTools 'Read,Grep,Glob,Write,EnterPlanMode,ExitPlanMode'"
-          display_report: true
+          display_report: false
           github_token: ${{ github.token }}
 
       - name: Run triage (with re-runs)
@@ -233,7 +233,7 @@ jobs:
             When done, call ExitPlanMode.
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: "--allowedTools 'Read,Grep,Glob,Write,EnterPlanMode,ExitPlanMode,Bash(mise:*),Bash(scripts:*)'"
-          display_report: true
+          display_report: false
           github_token: ${{ github.token }}
 
       - name: Resolve triage outcome
@@ -286,6 +286,35 @@ jobs:
             echo "$combined" > "$PLAN_FILE"
           fi
 
+          # Copy execution JSON to artifacts for debugging
+          cp "$EXECUTION_FILE" "$(dirname "$TRIAGE_OUTPUT_FILE")/execution.json" 2>/dev/null || true
+
+      - name: Write job summary
+        if: always() && steps.triage_output.outcome == 'success'
+        shell: bash
+        env:
+          TRIAGE_FILE: ${{ github.workspace }}/e2e-triage-artifacts/${{ matrix.agent }}/triage.md
+          PLAN_FILE: ${{ github.workspace }}/e2e-triage-artifacts/${{ matrix.agent }}/plan.md
+        run: |
+          set -euo pipefail
+          {
+            echo "# E2E Triage: ${{ matrix.agent }}"
+            echo ""
+            if [ -s "$TRIAGE_FILE" ]; then
+              cat "$TRIAGE_FILE"
+            else
+              echo "_No triage findings._"
+            fi
+            echo ""
+            echo "---"
+            echo ""
+            if [ -s "$PLAN_FILE" ]; then
+              cat "$PLAN_FILE"
+            else
+              echo "_No fix plan._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Post triage completion
         if: ${{ always() && (steps.triage.outputs.outcome == 'success' || steps.triage.outputs.outcome == 'failure') && env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != '' }}
         shell: bash
@@ -333,10 +362,3 @@ jobs:
           path: e2e-triage-artifacts/
           retention-days: 7
 
-      - name: Upload plan artifact
-        if: always() && steps.triage_output.outcome == 'success'
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-plan-${{ matrix.agent }}
-          path: e2e-triage-artifacts/${{ matrix.agent }}/plan.md
-          retention-days: 7
