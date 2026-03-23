@@ -37,7 +37,7 @@ concurrency:
 jobs:
   fix:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     env:
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       SLACK_CHANNEL: ${{ inputs.slack_channel }}
@@ -100,42 +100,183 @@ jobs:
             2. mise run lint
             3. mise run test:e2e:canary
 
-            If verification passes, create a git branch fix/e2e-${{ github.run_id }}, commit all changes,
-            push, and create a draft PR with a summary of what was fixed.
-
             If verification fails, fix the issues and retry. Do not give up without attempting to fix lint/format errors.
+
+            Do NOT create a git branch or PR yet — E2E verification will happen in a later step.
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: "--allowedTools 'Edit,Write,Read,Glob,Grep,Bash(git:*),Bash(mise:*),Bash(gh:*)'"
 
-      - name: Post success to Slack
-        if: success() && env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != ''
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Install agent CLIs
+        env:
+          FAILED_AGENTS: ${{ inputs.failed_agents }}
+        run: |
+          for agent in $(echo "$FAILED_AGENTS" | tr ',' ' ' | xargs); do
+            case "$agent" in
+              claude-code) curl -fsSL https://claude.ai/install.sh | bash ;;
+              opencode)    curl -fsSL https://opencode.ai/install | bash ;;
+              gemini-cli)  npm install -g @google/gemini-cli ;;
+              cursor-cli)  curl https://cursor.com/install -fsS | bash ;;
+              factoryai-droid) curl -fsSL https://app.factory.ai/cli | sh ;;
+              copilot-cli)  npm install -g @github/copilot ;;
+              roger-roger) ;; # installed by mise
+            esac
+          done
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Bootstrap agents
+        env:
+          FAILED_AGENTS: ${{ inputs.failed_agents }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          # Skip bootstrap if only roger-roger
+          agents=$(echo "$FAILED_AGENTS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^roger-roger$' || true)
+          if [ -n "$agents" ]; then
+            go run ./e2e/bootstrap
+          fi
+
+      - name: Verify E2E tests (attempt 1)
+        id: verify1
+        continue-on-error: true
+        env:
+          FAILED_AGENTS: ${{ inputs.failed_agents }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: scripts/verify-e2e-tests.sh 1 e2e-verify-output.txt
+
+      - name: Retry fix with failure context
+        id: fix2
+        if: steps.verify1.outcome == 'failure'
+        uses: anthropics/claude-code-action@v1
+        with:
+          prompt: |
+            The previous E2E fix was applied but the E2E tests still fail.
+            Read the test failure output in e2e-verify-output.txt.
+
+            Also read the original triage findings in triage-plans/triage.md and fix plan in triage-plans/plan.md for context.
+
+            Diagnose why the tests are still failing and apply additional fixes. After fixing, run:
+            1. mise run fmt
+            2. mise run lint
+            3. mise run test:e2e:canary
+
+            Do NOT create a git branch or PR yet.
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: "--allowedTools 'Edit,Write,Read,Glob,Grep,Bash(git:*),Bash(mise:*),Bash(gh:*)'"
+
+      - name: Clean artifacts between attempts
+        if: steps.verify1.outcome == 'failure'
+        run: rm -rf e2e/artifacts/
+
+      - name: Verify E2E tests (attempt 2)
+        id: verify2
+        if: steps.verify1.outcome == 'failure'
+        continue-on-error: true
+        env:
+          FAILED_AGENTS: ${{ inputs.failed_agents }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: scripts/verify-e2e-tests.sh 2 e2e-verify-output-2.txt
+
+      - name: Create fix PR
+        id: create_pr
+        if: steps.verify1.outcome == 'success' || steps.verify2.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FIX_BRANCH: fix/e2e-${{ github.run_id }}
+          ORIGINAL_RUN_URL: ${{ inputs.run_url }}
+          FAILED_AGENTS: ${{ inputs.failed_agents }}
+          TRIAGE_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ inputs.triage_run_id }}
+          VERIFY1_OUTCOME: ${{ steps.verify1.outcome }}
+        run: |
+          set -euo pipefail
+
+          attempt="1"
+          if [ "$VERIFY1_OUTCOME" != "success" ]; then
+            attempt="2"
+          fi
+
+          git checkout -b "$FIX_BRANCH"
+          git add -A
+          git commit -m "$(cat <<COMMIT_EOF
+          fix: resolve E2E test failures
+
+          Automated fix applied by E2E fix workflow.
+          Original failure: ${ORIGINAL_RUN_URL}
+
+          Co-Authored-By: Claude <noreply@anthropic.com>
+          COMMIT_EOF
+          )"
+          git push -u origin "$FIX_BRANCH"
+
+          gh pr create --draft \
+            --title "fix: resolve E2E test failures" \
+            --body "$(cat <<PR_EOF
+          ## Summary
+          Automated fix for E2E test failures.
+
+          - Original failure: ${ORIGINAL_RUN_URL}
+          - Failed agents: ${FAILED_AGENTS}
+          - Fix verified: E2E tests passed 2/2 runs (attempt $attempt)
+          - Triage run: ${TRIAGE_RUN_URL}
+          PR_EOF
+          )"
+
+      - name: Post result to Slack
+        if: always() && env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           FIX_BRANCH: fix/e2e-${{ github.run_id }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FIX_OUTCOME: ${{ steps.fix.outcome }}
+          VERIFY1_OUTCOME: ${{ steps.verify1.outcome }}
+          VERIFY2_OUTCOME: ${{ steps.verify2.outcome }}
         run: |
           set -euo pipefail
 
-          pr_url="$(gh pr list --head "$FIX_BRANCH" --json url -q '.[0].url' 2>/dev/null || true)"
+          if [ "$FIX_OUTCOME" != "success" ]; then
+            scripts/post-slack-message.sh ":x: E2E fix failed to apply — <${RUN_URL}|view run>"
+            exit 0
+          fi
 
-          if [ -n "$pr_url" ]; then
-            payload="$(jq -n \
-              --arg pr_url "$pr_url" \
-              '{
-                text: (":review: E2E fix applied: " + $pr_url),
+          if [ "$VERIFY1_OUTCOME" = "success" ] || [ "$VERIFY2_OUTCOME" = "success" ]; then
+            pr_url="$(gh pr list --head "$FIX_BRANCH" --json url -q '.[0].url' 2>/dev/null || true)"
+            attempt="1"
+            [ "$VERIFY1_OUTCOME" != "success" ] && attempt="2"
+
+            if [ -n "$pr_url" ]; then
+              payload="$(jq -n --arg pr_url "$pr_url" --arg attempt "$attempt" '{
+                text: (":white_check_mark: E2E fix verified (" + $attempt + "/2 attempts, 2/2 test passes): " + $pr_url),
                 reply_broadcast: true,
                 unfurl_links: true
               }')"
-            scripts/post-slack-message.sh --payload "$payload"
+              scripts/post-slack-message.sh --payload "$payload"
+            else
+              scripts/post-slack-message.sh ":warning: E2E fix verified but no PR created — <${RUN_URL}|view run>"
+            fi
           else
-            scripts/post-slack-message.sh ":warning: E2E fix complete but no PR was created — <${RUN_URL}|view run>"
+            scripts/post-slack-message.sh ":x: E2E fix failed verification after 2 attempts — <${RUN_URL}|view run>"
           fi
 
-      - name: Post failure to Slack
-        if: failure() && env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != ''
-        shell: bash
-        env:
-          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          scripts/post-slack-message.sh ":x: E2E fix failed — <${RUN_URL}|view run>"
+      - name: Upload verification artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-fix-verification
+          path: |
+            e2e/artifacts/
+            e2e-verify-output*.txt
+          retention-days: 7
