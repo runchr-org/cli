@@ -28,14 +28,18 @@ func FromContext(ctx context.Context) *Pipeline {
 		return nil
 	}
 
+	var userFilters []settings.TranscriptFilter
 	s, err := settings.Load(ctx)
 	if err != nil {
-		logging.Warn(ctx, "filter: failed to load settings, transcript filtering disabled",
+		logging.Warn(ctx, "filter: failed to load settings, user transcript filters unavailable",
 			slog.String("error", err.Error()))
-		return nil
+		// Continue with built-in filters only — repo root and home dir
+		// normalization still works even when settings are broken.
+	} else {
+		userFilters = s.TranscriptFilters
 	}
 
-	p, err := NewPipeline(repoRoot, homeDir, s.TranscriptFilters)
+	p, err := NewPipeline(repoRoot, homeDir, userFilters)
 	if err != nil {
 		logging.Warn(ctx, "filter: failed to build pipeline, transcript filtering disabled",
 			slog.String("error", err.Error()))
