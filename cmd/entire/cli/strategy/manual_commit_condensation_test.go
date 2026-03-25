@@ -338,43 +338,8 @@ func TestCalculateTokenUsage_DroidStartOffsetBeyondEnd(t *testing.T) {
 	}
 }
 
-func TestTotalTokensFromUsage_Nil(t *testing.T) {
-	t.Parallel()
-
-	if got := totalTokensFromUsage(nil); got != 0 {
-		t.Errorf("totalTokensFromUsage(nil) = %d, want 0", got)
-	}
-}
-
-func TestTotalTokensFromUsage_Flat(t *testing.T) {
-	t.Parallel()
-
-	tu := &agent.TokenUsage{
-		InputTokens:         100,
-		CacheCreationTokens: 20,
-		CacheReadTokens:     30,
-		OutputTokens:        50,
-	}
-	if got := totalTokensFromUsage(tu); got != 200 {
-		t.Errorf("totalTokensFromUsage(flat) = %d, want 200", got)
-	}
-}
-
-func TestTotalTokensFromUsage_WithSubagent(t *testing.T) {
-	t.Parallel()
-
-	tu := &agent.TokenUsage{
-		InputTokens:  100,
-		OutputTokens: 50,
-		SubagentTokens: &agent.TokenUsage{
-			InputTokens:  40,
-			OutputTokens: 10,
-		},
-	}
-	if got := totalTokensFromUsage(tu); got != 200 {
-		t.Errorf("totalTokensFromUsage(with subagent) = %d, want 200", got)
-	}
-}
+// TotalTokens tests are in termstyle/termstyle_test.go — the strategy package
+// delegates to termstyle.TotalTokens.
 
 func TestTurnCountFromState_UsesTurnCount(t *testing.T) {
 	t.Parallel()

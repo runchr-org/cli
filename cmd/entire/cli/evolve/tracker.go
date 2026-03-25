@@ -10,41 +10,35 @@ type Tracker struct {
 	Records map[string]*SuggestionRecord
 }
 
-// NewTracker creates a new Tracker with an empty record map.
 func NewTracker() *Tracker {
 	return &Tracker{Records: make(map[string]*SuggestionRecord)}
 }
 
-// AddSuggestion registers a new suggestion.
 func (t *Tracker) AddSuggestion(rec SuggestionRecord) {
 	t.Records[rec.ID] = &rec
 }
 
-// Get returns a suggestion by ID, or nil if not found.
 func (t *Tracker) Get(id string) *SuggestionRecord {
 	return t.Records[id]
 }
 
 // Accept marks a suggestion as accepted and records the resolution time.
 func (t *Tracker) Accept(id string) error {
-	rec, ok := t.Records[id]
-	if !ok {
-		return fmt.Errorf("suggestion %q not found", id)
-	}
-	now := time.Now()
-	rec.Status = "accepted"
-	rec.ResolvedAt = &now
-	return nil
+	return t.resolve(id, "accepted")
 }
 
 // Reject marks a suggestion as rejected and records the resolution time.
 func (t *Tracker) Reject(id string) error {
+	return t.resolve(id, "rejected")
+}
+
+func (t *Tracker) resolve(id, status string) error {
 	rec, ok := t.Records[id]
 	if !ok {
 		return fmt.Errorf("suggestion %q not found", id)
 	}
 	now := time.Now()
-	rec.Status = "rejected"
+	rec.Status = status
 	rec.ResolvedAt = &now
 	return nil
 }
@@ -61,7 +55,6 @@ func (t *Tracker) MeasureImpact(id string, scoresBefore, scoresAfter []float64) 
 	return rec
 }
 
-// Pending returns all suggestions with "pending" status.
 func (t *Tracker) Pending() []SuggestionRecord {
 	var result []SuggestionRecord
 	for _, rec := range t.Records {
@@ -72,8 +65,6 @@ func (t *Tracker) Pending() []SuggestionRecord {
 	return result
 }
 
-// avgOrNil computes the average of a float64 slice.
-// Returns nil if the slice is empty.
 func avgOrNil(scores []float64) *float64 {
 	if len(scores) == 0 {
 		return nil

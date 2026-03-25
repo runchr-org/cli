@@ -15,6 +15,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/llmcli"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
+	"github.com/entireio/cli/cmd/entire/cli/stringutil"
 	"github.com/entireio/cli/cmd/entire/cli/summarize"
 	"github.com/entireio/cli/cmd/entire/cli/termstyle"
 	"github.com/spf13/cobra"
@@ -243,12 +244,9 @@ func sessionRowsToSummaries(rows []insightsdb.SessionRow) []improve.SessionSumma
 	return summaries
 }
 
-// truncateString truncates s to at most maxLen bytes, appending "..." if truncated.
+// truncateString truncates s to at most maxLen runes, appending "..." if truncated.
 func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
+	return stringutil.TruncateRunes(s, maxLen, "...")
 }
 
 // renderImproveJSON marshals the full report to JSON and writes it to w.

@@ -24,6 +24,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/summarize"
+	"github.com/entireio/cli/cmd/entire/cli/termstyle"
 	"github.com/entireio/cli/cmd/entire/cli/textutil"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 
@@ -249,7 +250,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 	var sessionScore *insights.SessionScore
 	if summary != nil {
 		data := insights.SessionData{
-			TotalTokens:   totalTokensFromUsage(sessionData.TokenUsage),
+			TotalTokens:   termstyle.TotalTokens(sessionData.TokenUsage),
 			FilesCount:    len(sessionData.FilesTouched),
 			FrictionCount: len(summary.Friction),
 			TurnCount:     turnCountFromState(state),
@@ -323,18 +324,6 @@ func buildSessionMetrics(state *SessionState) *cpkg.SessionMetrics {
 		ContextTokens:     state.ContextTokens,
 		ContextWindowSize: state.ContextWindowSize,
 	}
-}
-
-// totalTokensFromUsage flattens TokenUsage for scoring.
-func totalTokensFromUsage(tu *agent.TokenUsage) int {
-	if tu == nil {
-		return 0
-	}
-	total := tu.InputTokens + tu.CacheCreationTokens + tu.CacheReadTokens + tu.OutputTokens
-	if tu.SubagentTokens != nil {
-		total += totalTokensFromUsage(tu.SubagentTokens)
-	}
-	return total
 }
 
 // turnCountFromState extracts the turn count from session state.

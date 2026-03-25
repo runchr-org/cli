@@ -2,6 +2,10 @@ package improve
 
 import "strings"
 
+// maxFrictionExamples caps the number of raw examples stored per friction theme
+// to prevent unbounded growth in LLM prompts.
+const maxFrictionExamples = 10
+
 // SessionSummaryData pairs a session identifier with its friction and learnings.
 // This is populated from the insightsdb cache.
 type SessionSummaryData struct {
@@ -77,7 +81,9 @@ func AnalyzePatterns(summaries []SessionSummaryData) PatternAnalysis {
 				byTheme[theme] = acc
 			}
 			acc.count++
-			acc.examples = append(acc.examples, f)
+			if len(acc.examples) < maxFrictionExamples {
+				acc.examples = append(acc.examples, f)
+			}
 			if s.CheckpointID != "" {
 				acc.sessions[s.CheckpointID] = struct{}{}
 			}

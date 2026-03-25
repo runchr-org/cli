@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -264,19 +265,9 @@ func (idb *InsightsDB) loadLearnings(ctx context.Context, checkpointID string, s
 	return learnings, nil
 }
 
-// splitCSV splits a GROUP_CONCAT result on commas.
 func splitCSV(s string) []string {
 	if s == "" {
 		return nil
 	}
-	var parts []string
-	start := 0
-	for i := range len(s) {
-		if s[i] == ',' {
-			parts = append(parts, s[start:i])
-			start = i + 1
-		}
-	}
-	parts = append(parts, s[start:])
-	return parts
+	return strings.Split(s, ",")
 }

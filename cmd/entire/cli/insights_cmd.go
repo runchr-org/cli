@@ -191,7 +191,7 @@ func metadataToSessionRow(cpID string, sessionIndex int, meta *checkpoint.Commit
 	if meta.TokenUsage != nil {
 		row.InputTokens = meta.TokenUsage.InputTokens + meta.TokenUsage.CacheCreationTokens + meta.TokenUsage.CacheReadTokens
 		row.OutputTokens = meta.TokenUsage.OutputTokens
-		row.TotalTokens = row.InputTokens + row.OutputTokens
+		row.TotalTokens = termstyle.TotalTokens(meta.TokenUsage)
 		row.APICallCount = meta.TokenUsage.APICallCount
 	}
 
