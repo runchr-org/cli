@@ -32,13 +32,19 @@ type suggestionJSON struct {
 	Diff        string          `json:"diff"`
 }
 
+// GenerateResult holds the suggestions and usage info from a Generate call.
+type GenerateResult struct {
+	Suggestions []Suggestion
+	Usage       *llmcli.UsageInfo
+}
+
 // Generate produces context file improvement suggestions.
 // analysis contains friction patterns and transcript excerpts.
 // contextFiles contains the current context file contents.
-func (g *Generator) Generate(ctx context.Context, analysis PatternAnalysis, contextFiles []ContextFile) ([]Suggestion, error) {
+func (g *Generator) Generate(ctx context.Context, analysis PatternAnalysis, contextFiles []ContextFile) (*GenerateResult, error) {
 	prompt := buildPrompt(analysis, contextFiles)
 
-	raw, err := g.Runner.Execute(ctx, prompt)
+	raw, usage, err := g.Runner.Execute(ctx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute improvement prompt: %w", err)
 	}
@@ -65,7 +71,7 @@ func (g *Generator) Generate(ctx context.Context, analysis PatternAnalysis, cont
 		})
 	}
 
-	return suggestions, nil
+	return &GenerateResult{Suggestions: suggestions, Usage: usage}, nil
 }
 
 // buildPrompt constructs the prompt for the Claude CLI.

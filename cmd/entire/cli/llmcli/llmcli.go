@@ -32,19 +32,37 @@ type Runner struct {
 	CommandRunner func(ctx context.Context, name string, args ...string) *exec.Cmd
 }
 
-// claudeCLIResponse represents the JSON response from the Claude CLI.
-type claudeCLIResponse struct {
-	Result string `json:"result"`
+// UsageInfo contains token usage and cost data from a Claude CLI invocation.
+type UsageInfo struct {
+	InputTokens  int     `json:"input_tokens"`
+	OutputTokens int     `json:"output_tokens"`
+	TotalCostUSD float64 `json:"total_cost_usd"`
 }
 
-// Execute runs a prompt through the Claude CLI and returns the raw text result.
+// claudeCLIResponse represents the JSON response from the Claude CLI.
+type claudeCLIResponse struct {
+	Result       string          `json:"result"`
+	TotalCostUSD float64         `json:"total_cost_usd"`
+	Usage        json.RawMessage `json:"usage"`
+}
+
+// claudeCLIUsage represents the usage field in the Claude CLI JSON response.
+type claudeCLIUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+}
+
+// Execute runs a prompt through the Claude CLI and returns the raw text result
+// along with token usage and cost information.
 //
 // It handles:
 //   - CLI invocation with --print --output-format json --model --setting-sources ""
 //   - Git isolation (TempDir cwd, strip GIT_* env vars)
 //   - Response parsing ({"result": "string"} format)
 //   - Markdown code block extraction from the result field
-func (r *Runner) Execute(ctx context.Context, prompt string) (string, error) {
+func (r *Runner) Execute(ctx context.Context, prompt string) (string, *UsageInfo, error) {
 	runner := r.CommandRunner
 	if runner == nil {
 		runner = exec.CommandContext
@@ -84,26 +102,35 @@ func (r *Runner) Execute(ctx context.Context, prompt string) (string, error) {
 	if err != nil {
 		var execErr *exec.Error
 		if errors.As(err, &execErr) {
-			return "", fmt.Errorf("claude CLI not found: %w", err)
+			return "", nil, fmt.Errorf("claude CLI not found: %w", err)
 		}
 
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return "", fmt.Errorf("claude CLI failed (exit %d): %s", exitErr.ExitCode(), stderr.String())
+			return "", nil, fmt.Errorf("claude CLI failed (exit %d): %s", exitErr.ExitCode(), stderr.String())
 		}
 
-		return "", fmt.Errorf("failed to run claude CLI: %w", err)
+		return "", nil, fmt.Errorf("failed to run claude CLI: %w", err)
 	}
 
 	var cliResponse claudeCLIResponse
 	if err := json.Unmarshal(stdout.Bytes(), &cliResponse); err != nil {
-		return "", fmt.Errorf("failed to parse claude CLI response: %w", err)
+		return "", nil, fmt.Errorf("failed to parse claude CLI response: %w", err)
 	}
 
 	// Extract JSON if it's wrapped in markdown code blocks.
 	result := ExtractJSONFromMarkdown(cliResponse.Result)
 
-	return result, nil
+	usage := &UsageInfo{TotalCostUSD: cliResponse.TotalCostUSD}
+	if len(cliResponse.Usage) > 0 {
+		var u claudeCLIUsage
+		if err := json.Unmarshal(cliResponse.Usage, &u); err == nil {
+			usage.InputTokens = u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
+			usage.OutputTokens = u.OutputTokens
+		}
+	}
+
+	return result, usage, nil
 }
 
 // StripGitEnv returns a copy of env with all GIT_* variables removed.

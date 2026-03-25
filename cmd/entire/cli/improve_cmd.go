@@ -115,14 +115,14 @@ func runImprove(ctx context.Context, w io.Writer, last int, dryRun bool, outputJ
 	applyExcerpts(analysis.RepeatedFriction, patterns)
 
 	gen := improve.Generator{Runner: &llmcli.Runner{}}
-	suggestions, err := gen.Generate(ctx, analysis, contextFiles)
+	result, err := gen.Generate(ctx, analysis, contextFiles)
 	if err != nil {
 		return fmt.Errorf("generate suggestions: %w", err)
 	}
 
 	report := improve.ImprovementReport{
 		ContextFiles:  contextFiles,
-		Suggestions:   suggestions,
+		Suggestions:   result.Suggestions,
 		SessionsUsed:  len(rows),
 		FrictionTotal: frictionTotal,
 		PatternsFound: len(analysis.RepeatedFriction),
@@ -132,6 +132,9 @@ func runImprove(ctx context.Context, w io.Writer, last int, dryRun bool, outputJ
 		return renderImproveJSON(w, report)
 	}
 	renderImproveTerminal(w, report)
+	if result.Usage != nil {
+		renderUsageLine(w, result.Usage)
+	}
 	return nil
 }
 
@@ -348,6 +351,14 @@ func renderImproveTerminalDryRun(w io.Writer, themes []insightsdb.FrictionTheme,
 			fmt.Fprintln(w, s.Render(s.Gray, "       sessions: "+strings.Join(t.Sessions, ", ")))
 		}
 	}
+}
+
+// renderUsageLine prints a single-line cost/token summary after the report.
+func renderUsageLine(w io.Writer, usage *llmcli.UsageInfo) {
+	s := termstyle.New(w)
+	tokens := termstyle.FormatTokenCount(usage.InputTokens + usage.OutputTokens)
+	line := fmt.Sprintf("\nCost: $%.4f (%s tokens)", usage.TotalCostUSD, tokens)
+	fmt.Fprintln(w, s.Render(s.Dim, line))
 }
 
 // renderDiff writes a unified diff with colored lines to w.

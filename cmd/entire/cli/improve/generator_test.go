@@ -72,16 +72,16 @@ func TestGenerator_Generate_ReturnsSuggestions(t *testing.T) {
 		},
 	}
 
-	suggestions, err := gen.Generate(context.Background(), analysis, contextFiles)
+	result, err := gen.Generate(context.Background(), analysis, contextFiles)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(suggestions) != 1 {
-		t.Fatalf("expected 1 suggestion, got %d", len(suggestions))
+	if len(result.Suggestions) != 1 {
+		t.Fatalf("expected 1 suggestion, got %d", len(result.Suggestions))
 	}
 
-	s := suggestions[0]
+	s := result.Suggestions[0]
 	if s.FileType != improve.ContextFileCLAUDEMD {
 		t.Errorf("expected file_type CLAUDE.md, got %q", s.FileType)
 	}
@@ -120,12 +120,12 @@ func TestGenerator_Generate_EmptySuggestions(t *testing.T) {
 
 	gen := &improve.Generator{Runner: runner}
 
-	suggestions, err := gen.Generate(context.Background(), improve.PatternAnalysis{}, nil)
+	result, err := gen.Generate(context.Background(), improve.PatternAnalysis{}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(suggestions) != 0 {
-		t.Errorf("expected 0 suggestions, got %d", len(suggestions))
+	if len(result.Suggestions) != 0 {
+		t.Errorf("expected 0 suggestions, got %d", len(result.Suggestions))
 	}
 }
 
@@ -172,8 +172,7 @@ func TestGenerator_Generate_PromptContainsFriction(t *testing.T) {
 	}
 
 	// Verify that a prompt with friction patterns executes without error.
-	_, err := gen.Generate(context.Background(), analysis, nil)
-	if err != nil {
+	if _, err := gen.Generate(context.Background(), analysis, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -206,11 +205,11 @@ func TestGenerator_Generate_PromptIncludesContextFiles(t *testing.T) {
 	}
 
 	// No panic and no error = prompt was constructed and sent correctly
-	suggestions, err := gen.Generate(context.Background(), improve.PatternAnalysis{}, contextFiles)
+	result, err := gen.Generate(context.Background(), improve.PatternAnalysis{}, contextFiles)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if suggestions == nil {
+	if result.Suggestions == nil {
 		t.Error("expected non-nil suggestions slice")
 	}
 }
@@ -234,16 +233,16 @@ func TestGenerator_Generate_IDsAreUnique(t *testing.T) {
 
 	gen := &improve.Generator{Runner: runner}
 
-	suggestions, err := gen.Generate(context.Background(), improve.PatternAnalysis{}, nil)
+	result, err := gen.Generate(context.Background(), improve.PatternAnalysis{}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(suggestions) != 2 {
-		t.Fatalf("expected 2 suggestions, got %d", len(suggestions))
+	if len(result.Suggestions) != 2 {
+		t.Fatalf("expected 2 suggestions, got %d", len(result.Suggestions))
 	}
 
-	if suggestions[0].ID == suggestions[1].ID {
+	if result.Suggestions[0].ID == result.Suggestions[1].ID {
 		t.Error("expected unique IDs for different suggestions")
 	}
 }
@@ -268,19 +267,19 @@ func TestGenerator_Generate_CreatedAtIsSet(t *testing.T) {
 
 	gen := &improve.Generator{Runner: runner}
 
-	suggestions, err := gen.Generate(context.Background(), improve.PatternAnalysis{}, nil)
+	result, err := gen.Generate(context.Background(), improve.PatternAnalysis{}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	after := time.Now()
 
-	if len(suggestions) != 1 {
+	if len(result.Suggestions) != 1 {
 		t.Fatalf("expected 1 suggestion")
 	}
 
-	if suggestions[0].CreatedAt.Before(before) || suggestions[0].CreatedAt.After(after) {
-		t.Errorf("CreatedAt %v not within expected range [%v, %v]", suggestions[0].CreatedAt, before, after)
+	if result.Suggestions[0].CreatedAt.Before(before) || result.Suggestions[0].CreatedAt.After(after) {
+		t.Errorf("CreatedAt %v not within expected range [%v, %v]", result.Suggestions[0].CreatedAt, before, after)
 	}
 }
 
@@ -295,8 +294,7 @@ func TestGenerator_Generate_RunnerError(t *testing.T) {
 
 	gen := &improve.Generator{Runner: runner}
 
-	_, err := gen.Generate(context.Background(), improve.PatternAnalysis{}, nil)
-	if err == nil {
+	if _, err := gen.Generate(context.Background(), improve.PatternAnalysis{}, nil); err == nil {
 		t.Fatal("expected error when runner fails")
 	}
 }

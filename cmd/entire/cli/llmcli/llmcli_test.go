@@ -123,7 +123,7 @@ func TestRunner_Execute_GitIsolation(t *testing.T) {
 	t.Setenv("GIT_WORK_TREE", "/some/repo")
 	t.Setenv("GIT_INDEX_FILE", "/some/repo/.git/index")
 
-	_, err := runner.Execute(context.Background(), "test prompt")
+	_, _, err := runner.Execute(context.Background(), "test prompt")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestRunner_Execute_ValidResponse(t *testing.T) {
 		},
 	}
 
-	result, err := runner.Execute(context.Background(), "test prompt")
+	result, _, err := runner.Execute(context.Background(), "test prompt")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestRunner_Execute_MarkdownResult(t *testing.T) {
 		},
 	}
 
-	result, err := runner.Execute(context.Background(), "test prompt")
+	result, _, err := runner.Execute(context.Background(), "test prompt")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestRunner_Execute_CommandNotFound(t *testing.T) {
 		},
 	}
 
-	_, err := runner.Execute(context.Background(), "test prompt")
+	_, _, err := runner.Execute(context.Background(), "test prompt")
 	if err == nil {
 		t.Fatal("expected error when command not found")
 	}
@@ -215,7 +215,7 @@ func TestRunner_Execute_NonZeroExit(t *testing.T) {
 		},
 	}
 
-	_, err := runner.Execute(context.Background(), "test prompt")
+	_, _, err := runner.Execute(context.Background(), "test prompt")
 	if err == nil {
 		t.Fatal("expected error on non-zero exit")
 	}
@@ -234,7 +234,7 @@ func TestRunner_Execute_InvalidJSONResponse(t *testing.T) {
 		},
 	}
 
-	_, err := runner.Execute(context.Background(), "test prompt")
+	_, _, err := runner.Execute(context.Background(), "test prompt")
 	if err == nil {
 		t.Fatal("expected error for invalid JSON response")
 	}
@@ -259,7 +259,7 @@ func TestRunner_Defaults(t *testing.T) {
 		},
 	}
 
-	_, err := runner.Execute(context.Background(), "test prompt")
+	_, _, err := runner.Execute(context.Background(), "test prompt")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -281,6 +281,65 @@ func TestRunner_Defaults(t *testing.T) {
 	}
 }
 
+func TestRunner_Execute_ParsesUsage(t *testing.T) {
+	t.Parallel()
+
+	response := `{"result":"ok","total_cost_usd":0.0123,"usage":{"input_tokens":100,"cache_creation_input_tokens":50,"cache_read_input_tokens":25,"output_tokens":200}}`
+
+	runner := &llmcli.Runner{
+		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+response+"'")
+		},
+	}
+
+	result, usage, err := runner.Execute(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "ok" {
+		t.Errorf("expected result 'ok', got %q", result)
+	}
+	if usage == nil {
+		t.Fatal("expected non-nil usage")
+	}
+	if usage.TotalCostUSD != 0.0123 {
+		t.Errorf("expected TotalCostUSD=0.0123, got %f", usage.TotalCostUSD)
+	}
+	if usage.InputTokens != 175 { // 100 + 50 + 25
+		t.Errorf("expected InputTokens=175, got %d", usage.InputTokens)
+	}
+	if usage.OutputTokens != 200 {
+		t.Errorf("expected OutputTokens=200, got %d", usage.OutputTokens)
+	}
+}
+
+func TestRunner_Execute_UsageMissing(t *testing.T) {
+	t.Parallel()
+
+	response := `{"result":"ok"}`
+
+	runner := &llmcli.Runner{
+		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+response+"'")
+		},
+	}
+
+	_, usage, err := runner.Execute(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if usage == nil {
+		t.Fatal("expected non-nil usage")
+	}
+	// Zero values when usage field is absent
+	if usage.InputTokens != 0 {
+		t.Errorf("expected InputTokens=0, got %d", usage.InputTokens)
+	}
+	if usage.OutputTokens != 0 {
+		t.Errorf("expected OutputTokens=0, got %d", usage.OutputTokens)
+	}
+}
+
 func TestRunner_CustomClaudePathAndModel(t *testing.T) {
 	t.Parallel()
 
@@ -298,7 +357,7 @@ func TestRunner_CustomClaudePathAndModel(t *testing.T) {
 		},
 	}
 
-	_, err := runner.Execute(context.Background(), "test prompt")
+	_, _, err := runner.Execute(context.Background(), "test prompt")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
