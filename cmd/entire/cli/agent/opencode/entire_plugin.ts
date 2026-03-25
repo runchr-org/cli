@@ -117,9 +117,10 @@ export const EntirePlugin: Plugin = async ({ directory }) => {
 
           case "session.idle":
           case "session.status": {
-            // session.status fires with status.type "idle" when the agent finishes.
-            // session.idle is a separate event that some OpenCode versions emit instead.
-            // Handle both for compatibility across OpenCode versions.
+            // OpenCode ≤1.2.x: session.status with status.type "idle" signals turn end.
+            // OpenCode ≥1.3.x: session.status only carries "busy"/"retry"; a separate
+            //   session.idle event fires when the agent finishes.
+            // Handle both for cross-version compatibility.
             let sessionID: string | null = null
             if (event.type === "session.idle") {
               sessionID = (event as any).properties?.sessionID ?? currentSessionID
