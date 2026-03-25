@@ -18,7 +18,7 @@ import (
 func TestExternalAgentSingleSessionManualCommit(t *testing.T) {
 	testutil.ForEachAgent(t, 2*time.Minute, func(t *testing.T, s *testutil.RepoState, ctx context.Context) {
 		_, err := s.RunPrompt(t, ctx,
-			"create a file called docs/hello.md")
+			"Create a file at docs/hello.md with the content 'Hello World'. Do not ask for confirmation.")
 		if err != nil {
 			t.Fatalf("agent failed: %v", err)
 		}
