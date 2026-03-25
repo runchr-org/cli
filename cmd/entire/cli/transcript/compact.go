@@ -511,14 +511,28 @@ func compactOpenCode(content []byte, opts CompactOptions) ([]byte, error) {
 }
 
 func convertOpenCodeUser(msg openCodeMessage, ts json.RawMessage, meta compactMeta) [][]byte {
-	var texts []string
+	content := make([]map[string]json.RawMessage, 0, len(msg.Parts))
+
 	for _, part := range msg.Parts {
-		if unquote(part["type"]) == ContentTypeText {
-			text := textutil.StripIDEContextTags(unquote(part[ContentTypeText]))
-			if text != "" {
-				texts = append(texts, text)
-			}
+		if unquote(part["type"]) != ContentTypeText {
+			continue
 		}
+		text := textutil.StripIDEContextTags(unquote(part[ContentTypeText]))
+		if text == "" {
+			continue
+		}
+		block := map[string]json.RawMessage{
+			"text": mustMarshal(text),
+		}
+		if id := part["id"]; id != nil {
+			block["id"] = id
+		}
+		content = append(content, block)
+	}
+
+	contentJSON, err := json.Marshal(content)
+	if err != nil {
+		return nil
 	}
 
 	b := marshalOrdered(
@@ -527,7 +541,7 @@ func convertOpenCodeUser(msg openCodeMessage, ts json.RawMessage, meta compactMe
 		"cli_version", meta.cliVersion,
 		"type", mustMarshal(TypeUser),
 		"ts", ts,
-		"content", mustMarshal(strings.Join(texts, "\n\n")),
+		"content", json.RawMessage(contentJSON),
 	)
 	if b == nil {
 		return nil
@@ -557,13 +571,14 @@ func convertOpenCodeAssistant(msg openCodeMessage, ts json.RawMessage, meta comp
 			if toolName := part["tool"]; toolName != nil {
 				toolBlock["name"] = toolName
 			}
-			// Extract input from state.input if available.
+			// Extract input and result from state if available.
 			if stateRaw := part["state"]; stateRaw != nil {
 				var state map[string]json.RawMessage
 				if json.Unmarshal(stateRaw, &state) == nil {
 					if inp := state["input"]; inp != nil {
 						toolBlock["input"] = inp
 					}
+					toolBlock["result"] = openCodeToolResult(state)
 				}
 			}
 			content = append(content, toolBlock)
@@ -589,6 +604,20 @@ func convertOpenCodeAssistant(msg openCodeMessage, ts json.RawMessage, meta comp
 		return nil
 	}
 	return [][]byte{b}
+}
+
+// openCodeToolResult builds the compact {"output":"...","status":"done"|"error"}
+// object from an OpenCode tool state map.
+func openCodeToolResult(state map[string]json.RawMessage) json.RawMessage {
+	status := "done"
+	if s := unquote(state["status"]); s != "" && s != "completed" {
+		status = "error"
+	}
+	result := map[string]string{
+		"output": unquote(state["output"]),
+		"status": status,
+	}
+	return mustMarshal(result)
 }
 
 // msToTimestamp converts a Unix millisecond timestamp to an RFC3339 JSON string.
