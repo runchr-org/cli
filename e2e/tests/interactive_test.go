@@ -44,7 +44,7 @@ func TestInteractiveMidTurnCommit(t *testing.T) {
 		s.Send(t, session, "create a markdown file at docs/red.md with a paragraph about the colour red, then commit it. Do not ask for confirmation, just make the change.")
 		s.WaitFor(t, session, prompt, 90*time.Second)
 
-		testutil.AssertFileExists(t, s.Dir, "docs/*.md")
+		testutil.WaitForFileExists(t, s.Dir, "docs/red.md", 30*time.Second)
 		testutil.AssertNewCommits(t, s, 1)
 
 		testutil.WaitForCheckpoint(t, s, 15*time.Second)
