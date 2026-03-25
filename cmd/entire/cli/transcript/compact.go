@@ -461,7 +461,7 @@ func isOpenCodeFormat(content []byte) bool {
 
 // openCodeMessage mirrors the OpenCode message structure for unmarshaling.
 type openCodeMessage struct {
-	Info  openCodeMessageInfo      `json:"info"`
+	Info  openCodeMessageInfo          `json:"info"`
 	Parts []map[string]json.RawMessage `json:"parts"`
 }
 
@@ -567,7 +567,7 @@ func convertOpenCodeAssistant(msg openCodeMessage, ts json.RawMessage, meta comp
 				}
 			}
 			content = append(content, toolBlock)
-		// step-start, step-finish carry no transcript-relevant data.
+			// step-start, step-finish carry no transcript-relevant data.
 		}
 	}
 
