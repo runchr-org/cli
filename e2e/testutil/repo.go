@@ -28,6 +28,7 @@ type RepoState struct {
 	ConsoleLog       *os.File
 	session          agents.Session // interactive session, if started via StartSession
 	skipArtifacts    bool           // suppresses artifact capture on scenario restart
+	hasSentInput     bool           // true after first Send — enables session idle check in WaitFor
 }
 
 // SetupRepo creates a fresh git repository in a temporary directory, seeds it
@@ -406,12 +407,35 @@ func (s *RepoState) StartSession(t *testing.T, ctx context.Context) agents.Sessi
 
 // WaitFor waits for a pattern in the interactive session's pane and logs the
 // pane content to ConsoleLog after the wait completes (success or failure).
+//
+// After the TUI pattern matches and settles, WaitFor additionally checks the
+// session state file (.git/entire-sessions/) to confirm the agent has truly
+// finished its turn (phase != "active"). This prevents false positives with
+// agents like gemini-cli where the prompt text ("Type your message") is
+// permanently visible in the TUI — even while the agent is still processing.
 func (s *RepoState) WaitFor(t *testing.T, session agents.Session, pattern string, timeout time.Duration) {
 	t.Helper()
+	start := time.Now()
 	content, err := session.WaitFor(pattern, timeout)
 	fmt.Fprintf(s.ConsoleLog, "> pane after WaitFor(%q):\n%s\n", pattern, content)
 	if err != nil {
 		t.Fatalf("WaitFor(%q): %v", pattern, err)
+	}
+
+	// Guard against premature settling: the TUI pattern may match while the
+	// agent is still processing (e.g. gemini-cli always shows "Type your
+	// message" in its input area). Wait for the session state to transition
+	// out of "active" before returning.
+	//
+	// Only check after Send has been called — the initial prompt wait
+	// (before any input) should not wait for session idle because the
+	// session may still be in its startup phase.
+	if s.hasSentInput {
+		remaining := timeout - time.Since(start)
+		if remaining < 5*time.Second {
+			remaining = 5 * time.Second
+		}
+		WaitForSessionIdle(t, s.Dir, remaining)
 	}
 }
 
@@ -426,6 +450,7 @@ func (s *RepoState) IsExternalAgent() bool {
 // Fails the test on error.
 func (s *RepoState) Send(t *testing.T, session agents.Session, input string) {
 	t.Helper()
+	s.hasSentInput = true
 	s.ConsoleLog.WriteString("> send: " + input + "\n")
 	if err := session.Send(input); err != nil {
 		t.Fatalf("send failed: %v", err)
