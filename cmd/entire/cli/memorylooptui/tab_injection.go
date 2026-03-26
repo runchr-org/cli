@@ -43,7 +43,7 @@ func newInjectionModel(s tuiStyles) injectionModel {
 		Bold(false).
 		Faint(true)
 	st.Selected = st.Selected.
-		Foreground(lipgloss.Color("6")).
+		Foreground(lipgloss.Color("214")).
 		Bold(false)
 	t.SetStyles(st)
 

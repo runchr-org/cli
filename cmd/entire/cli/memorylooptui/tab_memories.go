@@ -63,13 +63,14 @@ func newMemoriesModel(s tuiStyles) memoriesModel {
 		Bold(false).
 		Faint(true)
 	st.Selected = st.Selected.
-		Foreground(lipgloss.Color("6")).
+		Foreground(lipgloss.Color("214")).
 		Bold(false)
 	t.SetStyles(st)
 
 	return memoriesModel{
-		styles: s,
-		table:  t,
+		styles:     s,
+		table:      t,
+		showDetail: true,
 	}
 }
 
