@@ -1,14 +1,12 @@
-package transcript
+package compact
 
 import (
-	"encoding/json"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 )
 
-var defaultOpts = CompactOptions{
+var defaultOpts = Options{
 	Agent:      "claude-code",
 	CLIVersion: "0.5.1",
 	StartLine:  0,
@@ -142,18 +140,20 @@ func TestCompact_AssistantStringContent(t *testing.T) {
 }
 
 func TestCompact_RealFile(t *testing.T) {
-	content, err := os.ReadFile("../../../../full-example.jsonl")
+	content, err := os.ReadFile("../../../../../full-example.jsonl")
 	if err != nil {
 		t.Skip("no full-example.jsonl found")
 	}
-	result, err := Compact(content, CompactOptions{
+	result, err := Compact(content, Options{
 		Agent:      "claude-code",
 		CLIVersion: "0.5.1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile("../../../../transcript-output.jsonl", result, 0644)
+	if err := os.WriteFile("../../../../../transcript-output.jsonl", result, 0644); err != nil {
+		t.Fatalf("failed to write output: %v", err)
+	}
 	t.Logf("wrote %d bytes", len(result))
 }
 
@@ -173,7 +173,7 @@ var fixtureFullJSONL = strings.Join([]string{
 func TestCompact_FullFixture_WithTruncation(t *testing.T) {
 	t.Parallel()
 
-	opts := CompactOptions{Agent: "claude-code", CLIVersion: "0.5.1", StartLine: 3}
+	opts := Options{Agent: "claude-code", CLIVersion: "0.5.1", StartLine: 3}
 
 	expected := []string{
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":"now fix the bug"}`,
@@ -278,74 +278,12 @@ func TestCompact_ToolResultWithoutToolUseResult(t *testing.T) {
 	assertJSONLines(t, result, expected)
 }
 
-// --- Edge case tests ---
-
-func TestCompact_EmptyInput(t *testing.T) {
-	t.Parallel()
-
-	result, err := Compact([]byte{}, defaultOpts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertJSONLines(t, result, nil)
-}
-
-func TestCompact_StartLineBeyondEnd(t *testing.T) {
-	t.Parallel()
-
-	input := []byte(`{"type":"user","uuid":"u1","timestamp":"t1","message":{"content":"hello"}}
-`)
-	opts := CompactOptions{Agent: "claude-code", CLIVersion: "0.5.1", StartLine: 100}
-
-	result, err := Compact(input, opts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertJSONLines(t, result, nil)
-}
-
-func TestCompact_MalformedLinesSkipped(t *testing.T) {
-	t.Parallel()
-
-	input := []byte(`{"type":"user","uuid":"u1","timestamp":"t1","message":{"content":"hello"}}
-not valid json at all
-{"type":"assistant","timestamp":"t2","requestId":"r1","message":{"id":"m1","content":"hi"}}
-`)
-
-	expected := []string{
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"t1","content":"hello"}`,
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"m1","content":"hi"}`,
-	}
-
-	result, err := Compact(input, defaultOpts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertJSONLines(t, result, expected)
-}
-
-func TestCompact_OnlyDroppedTypes(t *testing.T) {
-	t.Parallel()
-
-	input := []byte(`{"type":"progress","message":{"content":"..."}}
-{"type":"file-history-snapshot","files":[]}
-{"type":"queue-operation","op":"enqueue"}
-{"type":"system","message":{"content":"reminder"}}
-`)
-
-	result, err := Compact(input, defaultOpts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertJSONLines(t, result, nil)
-}
-
 // --- Cross-agent format tests ---
 
 func TestCompact_CursorRoleOnly(t *testing.T) {
 	t.Parallel()
 
-	cursorOpts := CompactOptions{
+	cursorOpts := Options{
 		Agent:      "cursor",
 		CLIVersion: "0.5.1",
 		StartLine:  0,
@@ -391,7 +329,7 @@ func TestCompact_HumanTypeAlias(t *testing.T) {
 func TestCompact_MixedFormats(t *testing.T) {
 	t.Parallel()
 
-	cursorOpts := CompactOptions{
+	cursorOpts := Options{
 		Agent:      "cursor",
 		CLIVersion: "0.5.1",
 		StartLine:  0,
@@ -421,143 +359,6 @@ func TestCompact_MixedFormats(t *testing.T) {
 	assertJSONLines(t, result, expected)
 }
 
-// --- Factory AI Droid envelope tests ---
-
-func TestCompact_FactoryDroidEnvelope(t *testing.T) {
-	t.Parallel()
-
-	droidOpts := CompactOptions{
-		Agent:      "factoryai-droid",
-		CLIVersion: "0.5.1",
-		StartLine:  0,
-	}
-
-	// Factory AI Droid wraps messages in a type:"message" envelope with role inside.
-	input := []byte(`{"type":"message","id":"m1","timestamp":"t1","message":{"role":"user","content":[{"type":"text","text":"create a file"}]}}
-{"type":"message","id":"m2","timestamp":"t2","message":{"role":"assistant","content":[{"type":"text","text":"Done!"},{"type":"tool_use","id":"tu-1","name":"Write","input":{"file_path":"hello.txt","content":"hi"}}]}}
-`)
-
-	expected := []string{
-		`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"user","ts":"t1","content":"create a file"}`,
-		`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"assistant","ts":"t2","content":[{"type":"text","text":"Done!"},{"type":"tool_use","id":"tu-1","name":"Write","input":{"file_path":"hello.txt","content":"hi"}}]}`,
-	}
-
-	result, err := Compact(input, droidOpts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertJSONLines(t, result, expected)
-}
-
-func TestCompact_FactoryDroidWithToolResult(t *testing.T) {
-	t.Parallel()
-
-	droidOpts := CompactOptions{
-		Agent:      "factoryai-droid",
-		CLIVersion: "0.5.1",
-		StartLine:  0,
-	}
-
-	// Droid user message with tool_result blocks inside the envelope.
-	input := []byte(`{"type":"message","id":"m1","timestamp":"t1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-1","content":"success"},{"type":"text","text":"next step"}]}}
-`)
-
-	expected := []string{
-		`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"user","ts":"t1","content":"next step"}`,
-		`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"user_tool_result","ts":"t1","tool_use_id":"tu-1","result":{}}`,
-	}
-
-	result, err := Compact(input, droidOpts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertJSONLines(t, result, expected)
-}
-
-func TestCompact_FactoryDroidNonMessageEntriesDropped(t *testing.T) {
-	t.Parallel()
-
-	droidOpts := CompactOptions{
-		Agent:      "factoryai-droid",
-		CLIVersion: "0.5.1",
-		StartLine:  0,
-	}
-
-	// Non-message Droid entries (session_start, etc.) should be dropped.
-	input := []byte(`{"type":"session_start","id":"sess-1","title":"test"}
-{"type":"message","id":"m1","timestamp":"t1","message":{"role":"user","content":"hello"}}
-{"type":"session_event","data":"something"}
-{"type":"message","id":"m2","timestamp":"t2","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}
-`)
-
-	expected := []string{
-		`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"user","ts":"t1","content":"hello"}`,
-		`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"assistant","ts":"t2","content":[{"type":"text","text":"hi"}]}`,
-	}
-
-	result, err := Compact(input, droidOpts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertJSONLines(t, result, expected)
-}
-
-// --- Gemini format tests ---
-
-func TestCompact_GeminiFixture(t *testing.T) {
-	t.Parallel()
-
-	input, err := os.ReadFile("testdata/gemini_full.jsonl")
-	if err != nil {
-		t.Fatalf("failed to read fixture: %v", err)
-	}
-
-	geminiOpts := CompactOptions{
-		Agent:      "gemini-cli",
-		CLIVersion: "0.5.1",
-		StartLine:  0,
-	}
-
-	expected, err := os.ReadFile("testdata/gemini_expected.jsonl")
-	if err != nil {
-		t.Fatalf("failed to read expected output: %v", err)
-	}
-
-	result, err := Compact(input, geminiOpts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertJSONLines(t, result, nonEmptyLines(expected))
-}
-
-// --- OpenCode format tests ---
-
-func TestCompact_OpenCodeFixture(t *testing.T) {
-	t.Parallel()
-
-	input, err := os.ReadFile("testdata/opencode_full.jsonl")
-	if err != nil {
-		t.Fatalf("failed to read fixture: %v", err)
-	}
-
-	openCodeOpts := CompactOptions{
-		Agent:      "opencode",
-		CLIVersion: "0.5.1",
-		StartLine:  0,
-	}
-
-	expected, err := os.ReadFile("testdata/opencode_expected.jsonl")
-	if err != nil {
-		t.Fatalf("failed to read expected output: %v", err)
-	}
-
-	result, err := Compact(input, openCodeOpts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertJSONLines(t, result, nonEmptyLines(expected))
-}
-
 // --- IDE context tag stripping tests ---
 
 func TestCompact_StripsIDEContextTags(t *testing.T) {
@@ -567,7 +368,7 @@ func TestCompact_StripsIDEContextTags(t *testing.T) {
 	input := []byte(`{"role":"user","timestamp":"t1","message":{"content":"<user_query>\nhello world\n</user_query>"}}
 `)
 
-	cursorOpts := CompactOptions{
+	cursorOpts := Options{
 		Agent:      "cursor",
 		CLIVersion: "0.5.1",
 		StartLine:  0,
@@ -600,47 +401,4 @@ func TestCompact_StripsIDEContextTagsFromContentBlocks(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertJSONLines(t, result, expected)
-}
-
-// --- Helpers ---
-
-func nonEmptyLines(data []byte) []string {
-	var lines []string
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.TrimSpace(line) != "" {
-			lines = append(lines, line)
-		}
-	}
-	return lines
-}
-
-// assertJSONLines compares actual output lines against expected JSON strings,
-// using semantic JSON equality (order-independent for object keys).
-func assertJSONLines(t *testing.T, actual []byte, expected []string) {
-	t.Helper()
-
-	actualLines := nonEmptyLines(actual)
-
-	if len(expected) == 0 && len(actualLines) == 0 {
-		return
-	}
-
-	if len(actualLines) != len(expected) {
-		t.Fatalf("line count mismatch: got %d, want %d\nactual:\n%s", len(actualLines), len(expected), string(actual))
-	}
-
-	for i := range expected {
-		var got, want interface{}
-		if err := json.Unmarshal([]byte(actualLines[i]), &got); err != nil {
-			t.Fatalf("line %d: failed to parse actual JSON: %v\nline: %s", i, err, actualLines[i])
-		}
-		if err := json.Unmarshal([]byte(expected[i]), &want); err != nil {
-			t.Fatalf("line %d: failed to parse expected JSON: %v\nline: %s", i, err, expected[i])
-		}
-		if !reflect.DeepEqual(got, want) {
-			prettyGot, _ := json.MarshalIndent(got, "", "  ")
-			prettyWant, _ := json.MarshalIndent(want, "", "  ")
-			t.Errorf("line %d mismatch:\ngot:\n%s\nwant:\n%s", i, prettyGot, prettyWant)
-		}
-	}
 }
