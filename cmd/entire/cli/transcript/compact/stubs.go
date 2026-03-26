@@ -6,10 +6,8 @@ import "encoding/json"
 // before all agent-specific files are added. Remove this file once
 // claudecode.go, opencode.go, and gemini.go are in place.
 
-func isOpenCodeFormat(_ []byte) bool                      { return false }
-func compactOpenCode(_ []byte, _ Options) ([]byte, error) { return nil, nil }
-func isGeminiFormat(_ []byte) bool                        { return false }
-func compactGemini(_ []byte, _ Options) ([]byte, error)   { return nil, nil }
+func isGeminiFormat(_ []byte) bool                      { return false }
+func compactGemini(_ []byte, _ Options) ([]byte, error) { return nil, nil }
 
 // compactJSONL is the default JSONL converter (Claude Code, Cursor, Factory AI Droid).
 // Stubbed until claudecode.go is added.
