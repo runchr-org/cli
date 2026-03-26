@@ -23,13 +23,18 @@ type suggestionResponse struct {
 
 // suggestionJSON is the per-suggestion JSON structure in the Claude CLI response.
 type suggestionJSON struct {
-	FileType    ContextFileType `json:"file_type"`
-	Category    string          `json:"category"`
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	Evidence    []string        `json:"evidence"`
-	Priority    string          `json:"priority"`
-	Diff        string          `json:"diff"`
+	TargetKind           string          `json:"target_kind"`
+	FileType             ContextFileType `json:"file_type"`
+	FilePath             string          `json:"file_path"`
+	SkillName            string          `json:"skill_name"`
+	Category             string          `json:"category"`
+	Title                string          `json:"title"`
+	Description          string          `json:"description"`
+	Evidence             []string        `json:"evidence"`
+	Priority             string          `json:"priority"`
+	CopyablePrompt       string          `json:"copyable_prompt"`
+	SuggestedInstruction string          `json:"suggested_instruction"`
+	Diff                 string          `json:"diff"`
 }
 
 // GenerateResult holds the suggestions and usage info from a Generate call.
@@ -43,6 +48,10 @@ type GenerateResult struct {
 // contextFiles contains the current context file contents.
 func (g *Generator) Generate(ctx context.Context, analysis PatternAnalysis, contextFiles []ContextFile) (*GenerateResult, error) {
 	prompt := buildPrompt(analysis, contextFiles)
+
+	if g.Runner == nil {
+		g.Runner = &llmcli.Runner{}
+	}
 
 	raw, usage, err := g.Runner.Execute(ctx, prompt)
 	if err != nil {
@@ -58,16 +67,21 @@ func (g *Generator) Generate(ctx context.Context, analysis PatternAnalysis, cont
 	suggestions := make([]Suggestion, 0, len(resp.Suggestions))
 	for i, s := range resp.Suggestions {
 		suggestions = append(suggestions, Suggestion{
-			ID:          fmt.Sprintf("sug-%d-%d", now.Unix(), i),
-			FileType:    s.FileType,
-			Category:    s.Category,
-			Title:       s.Title,
-			Description: s.Description,
-			Evidence:    s.Evidence,
-			Priority:    s.Priority,
-			Diff:        s.Diff,
-			CreatedAt:   now,
-			Status:      "pending",
+			ID:                   fmt.Sprintf("sug-%d-%d", now.Unix(), i),
+			TargetKind:           s.TargetKind,
+			FileType:             s.FileType,
+			FilePath:             s.FilePath,
+			SkillName:            s.SkillName,
+			Category:             s.Category,
+			Title:                s.Title,
+			Description:          s.Description,
+			Evidence:             s.Evidence,
+			Priority:             s.Priority,
+			CopyablePrompt:       s.CopyablePrompt,
+			SuggestedInstruction: s.SuggestedInstruction,
+			Diff:                 s.Diff,
+			CreatedAt:            now,
+			Status:               "pending",
 		})
 	}
 
@@ -81,7 +95,7 @@ func buildPrompt(analysis PatternAnalysis, contextFiles []ContextFile) string {
 	var sb strings.Builder
 
 	sb.WriteString(`Analyze recurring patterns from recent AI coding sessions and suggest
-improvements to the project's context files.
+improvements to prompts, repo instructions, and project skills.
 
 `)
 
@@ -101,6 +115,65 @@ improvements to the project's context files.
 		}
 	}
 	sb.WriteString("</repeated_friction>\n\n")
+
+	sb.WriteString("<repeated_instructions>\n")
+	if len(analysis.RepeatedInstructions) == 0 {
+		sb.WriteString("(no repeated user instructions found)\n")
+	} else {
+		for _, signal := range analysis.RepeatedInstructions {
+			fmt.Fprintf(&sb, "Instruction: %s (occurred %d times)\n", signal.Value, signal.Count)
+			for _, evidence := range signal.Evidence {
+				fmt.Fprintf(&sb, "  - %q\n", evidence)
+			}
+		}
+	}
+	sb.WriteString("</repeated_instructions>\n\n")
+
+	sb.WriteString("<missing_context>\n")
+	if len(analysis.MissingContextSignals) == 0 {
+		sb.WriteString("(no missing context patterns found)\n")
+	} else {
+		for _, signal := range analysis.MissingContextSignals {
+			fmt.Fprintf(&sb, "Missing: %s (occurred %d times)\n", signal.Value, signal.Count)
+			for _, evidence := range signal.Evidence {
+				fmt.Fprintf(&sb, "  - %q\n", evidence)
+			}
+		}
+	}
+	sb.WriteString("</missing_context>\n\n")
+
+	sb.WriteString("<failure_loops>\n")
+	if len(analysis.FailureLoops) == 0 {
+		sb.WriteString("(no failure loops found)\n")
+	} else {
+		for _, signal := range analysis.FailureLoops {
+			fmt.Fprintf(&sb, "Loop: %s (score %d)\n", signal.Value, signal.Count)
+			for _, evidence := range signal.Evidence {
+				fmt.Fprintf(&sb, "  - %q\n", evidence)
+			}
+		}
+	}
+	sb.WriteString("</failure_loops>\n\n")
+
+	sb.WriteString("<skill_opportunities>\n")
+	if len(analysis.SkillOpportunities) == 0 {
+		sb.WriteString("(no skill-related opportunities found)\n")
+	} else {
+		for _, skill := range analysis.SkillOpportunities {
+			fmt.Fprintf(&sb, "Skill: %s\n", skill.SkillName)
+			if skill.SkillPath != "" {
+				fmt.Fprintf(&sb, "  Path: %s\n", skill.SkillPath)
+			}
+			fmt.Fprintf(&sb, "  Count: %d\n", skill.Count)
+			if skill.MissingInstruction != "" {
+				fmt.Fprintf(&sb, "  Missing instruction: %s\n", skill.MissingInstruction)
+			}
+			for _, friction := range skill.Friction {
+				fmt.Fprintf(&sb, "  Friction: %q\n", friction)
+			}
+		}
+	}
+	sb.WriteString("</skill_opportunities>\n\n")
 
 	// Transcript excerpts section
 	sb.WriteString("<transcript_excerpts>\n")
@@ -148,22 +221,27 @@ improvements to the project's context files.
 	sb.WriteString(`Return a JSON object with this structure:
 {
   "suggestions": [{
+    "target_kind": "prompt_recommendation|skill_recommendation|workflow_recommendation",
     "file_type": "CLAUDE.md",
-    "category": "fix_friction|add_rule|add_pattern",
+    "file_path": "/abs/path/to/file",
+    "skill_name": "optional skill name",
+    "category": "missing_context|skill_gap|workflow_gap|fix_friction",
     "title": "Short title",
     "description": "Why this helps",
     "evidence": ["friction quote 1"],
     "priority": "high|medium|low",
-    "diff": "unified diff"
+    "copyable_prompt": "Optional prompt text the developer can reuse",
+    "suggested_instruction": "Optional instruction block or skill change",
+    "diff": "Optional unified diff"
   }]
 }
 
 Guidelines:
-- Focus on REPEATED friction (2+ occurrences)
-- Include learnings NOT already in context files
-- Each suggestion must have a unified diff
+- Focus on repeated structured signals, not one-off complaints
+- Prefer prompt recommendations and skill updates over raw diagnostics
+- Include concrete wording the developer can copy into prompts or skill files
+- Unified diffs are optional; only include them when clearly helpful
 - Priority: high for 3+ occurrences, medium for 2, low for learnings
-- Do NOT remove existing content unless it contradicts patterns
 `)
 
 	return sb.String()

@@ -1,6 +1,10 @@
 package improve
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/entireio/cli/cmd/entire/cli/facets"
+)
 
 // maxFrictionExamples caps the number of raw examples stored per friction theme
 // to prevent unbounded growth in LLM prompts.
@@ -13,6 +17,7 @@ type SessionSummaryData struct {
 	Friction     []string
 	Learnings    []LearningEntry
 	OpenItems    []string
+	Facets       facets.SessionFacets
 }
 
 // LearningEntry represents a single learning from a session.
@@ -32,11 +37,16 @@ var frictionThemeKeywords = []struct {
 	{"import", []string{"import"}},
 	{"compile", []string{"compile", "build error", "compilation"}},
 	{"format", []string{"format", "fmt", "gofmt"}},
-	{"test", []string{"test", "testing"}},
+	{"test", []string{"test", "testing", "test failure"}},
 	{"type", []string{"type assertion", "type error", "type mismatch", "type check"}},
 	{"permission", []string{"permission", "denied", "unauthorized"}},
 	{"timeout", []string{"timeout", "timed out"}},
 	{"retry", []string{"retry", "retrying"}},
+	{"api", []string{"api", "500", "http error", "rate limit"}},
+	{"ci", []string{"ci failure", "ci ", "pipeline"}},
+	{"conflict", []string{"conflict", "merge", "concurrent edit", "rebase"}},
+	{"review", []string{"review", "pr review", "copilot review"}},
+	{"scope", []string{"scope", "out of scope", "unrelated"}},
 }
 
 // classifyFriction returns the theme keyword for a friction string,
@@ -60,6 +70,20 @@ type frictionAccumulator struct {
 	sessions map[string]struct{} // deduplicated session IDs
 }
 
+type recurringSignalAccumulator struct {
+	count    int
+	evidence []string
+	sessions map[string]struct{}
+}
+
+type skillOpportunityAccumulator struct {
+	skillPath          string
+	count              int
+	friction           []string
+	missingInstruction string
+	sessions           map[string]struct{}
+}
+
 // AnalyzePatterns extracts recurring patterns from session summary data.
 // This is the "index phase" — it works on data already in memory from SQLite.
 func AnalyzePatterns(summaries []SessionSummaryData) PatternAnalysis {
@@ -69,6 +93,10 @@ func AnalyzePatterns(summaries []SessionSummaryData) PatternAnalysis {
 
 	// Accumulate friction by theme
 	byTheme := make(map[string]*frictionAccumulator)
+	instructionSignals := make(map[string]*recurringSignalAccumulator)
+	missingContextSignals := make(map[string]*recurringSignalAccumulator)
+	failureLoopSignals := make(map[string]*recurringSignalAccumulator)
+	skillSignals := make(map[string]*skillOpportunityAccumulator)
 
 	for _, s := range summaries {
 		for _, f := range s.Friction {
@@ -84,6 +112,48 @@ func AnalyzePatterns(summaries []SessionSummaryData) PatternAnalysis {
 			if len(acc.examples) < maxFrictionExamples {
 				acc.examples = append(acc.examples, f)
 			}
+			if s.CheckpointID != "" {
+				acc.sessions[s.CheckpointID] = struct{}{}
+			}
+		}
+
+		for _, instruction := range s.Facets.RepeatedUserInstructions {
+			accumulateRecurringSignal(instructionSignals, instruction.Instruction, instruction.Evidence, s.CheckpointID)
+		}
+		for _, signal := range s.Facets.MissingContext {
+			accumulateRecurringSignal(missingContextSignals, signal.Item, signal.Evidence, s.CheckpointID)
+		}
+		for _, loop := range s.Facets.FailureLoops {
+			key := loop.Description
+			acc := failureLoopSignals[key]
+			if acc == nil {
+				acc = &recurringSignalAccumulator{sessions: make(map[string]struct{})}
+				failureLoopSignals[key] = acc
+			}
+			acc.count += max(loop.Count, 1)
+			accumulateEvidence(acc, loop.Evidence)
+			if s.CheckpointID != "" {
+				acc.sessions[s.CheckpointID] = struct{}{}
+			}
+		}
+		for _, signal := range s.Facets.SkillSignals {
+			key := signal.SkillName
+			if key == "" {
+				continue
+			}
+			acc := skillSignals[key]
+			if acc == nil {
+				acc = &skillOpportunityAccumulator{sessions: make(map[string]struct{})}
+				skillSignals[key] = acc
+			}
+			acc.count++
+			if acc.skillPath == "" {
+				acc.skillPath = signal.SkillPath
+			}
+			if acc.missingInstruction == "" {
+				acc.missingInstruction = signal.MissingInstruction
+			}
+			acc.friction = appendLimited(acc.friction, signal.Friction, maxFrictionExamples)
 			if s.CheckpointID != "" {
 				acc.sessions[s.CheckpointID] = struct{}{}
 			}
@@ -107,6 +177,11 @@ func AnalyzePatterns(summaries []SessionSummaryData) PatternAnalysis {
 			AffectedSessions: sessions,
 		})
 	}
+
+	repeatedInstructions := buildRecurringSignals(instructionSignals)
+	missingSignals := buildRecurringSignals(missingContextSignals)
+	failureLoops := buildRecurringSignals(failureLoopSignals)
+	skillOpportunities := buildSkillOpportunities(skillSignals)
 
 	// Deduplicate learnings by scope
 	repoSeen := make(map[string]struct{})
@@ -143,10 +218,86 @@ func AnalyzePatterns(summaries []SessionSummaryData) PatternAnalysis {
 	}
 
 	return PatternAnalysis{
-		RepeatedFriction:  repeated,
-		RepoLearnings:     repoLearnings,
-		WorkflowLearnings: workflowLearnings,
-		OpenItems:         openItems,
-		SessionCount:      len(summaries),
+		RepeatedFriction:      repeated,
+		RepeatedInstructions:  repeatedInstructions,
+		MissingContextSignals: missingSignals,
+		FailureLoops:          failureLoops,
+		SkillOpportunities:    skillOpportunities,
+		RepoLearnings:         repoLearnings,
+		WorkflowLearnings:     workflowLearnings,
+		OpenItems:             openItems,
+		SessionCount:          len(summaries),
 	}
+}
+
+func accumulateRecurringSignal(target map[string]*recurringSignalAccumulator, value string, evidence []string, checkpointID string) {
+	if value == "" {
+		return
+	}
+	acc := target[value]
+	if acc == nil {
+		acc = &recurringSignalAccumulator{sessions: make(map[string]struct{})}
+		target[value] = acc
+	}
+	acc.count++
+	accumulateEvidence(acc, evidence)
+	if checkpointID != "" {
+		acc.sessions[checkpointID] = struct{}{}
+	}
+}
+
+func accumulateEvidence(acc *recurringSignalAccumulator, evidence []string) {
+	acc.evidence = appendLimited(acc.evidence, evidence, maxFrictionExamples)
+}
+
+func appendLimited(dst, src []string, limit int) []string {
+	for _, item := range src {
+		if item == "" || len(dst) >= limit {
+			break
+		}
+		dst = append(dst, item)
+	}
+	return dst
+}
+
+func buildRecurringSignals(byValue map[string]*recurringSignalAccumulator) []RecurringSignal {
+	signals := make([]RecurringSignal, 0, len(byValue))
+	for value, acc := range byValue {
+		if acc.count < 2 {
+			continue
+		}
+		signals = append(signals, RecurringSignal{
+			Value:            value,
+			Count:            acc.count,
+			Evidence:         acc.evidence,
+			AffectedSessions: sessionIDs(acc.sessions),
+		})
+	}
+	return signals
+}
+
+func buildSkillOpportunities(bySkill map[string]*skillOpportunityAccumulator) []SkillOpportunity {
+	opportunities := make([]SkillOpportunity, 0, len(bySkill))
+	for skillName, acc := range bySkill {
+		if acc.count < 2 {
+			continue
+		}
+		opportunities = append(opportunities, SkillOpportunity{
+			SkillName:          skillName,
+			SkillPath:          acc.skillPath,
+			Count:              acc.count,
+			Friction:           acc.friction,
+			MissingInstruction: acc.missingInstruction,
+			AffectedSessions:   sessionIDs(acc.sessions),
+		})
+	}
+	return opportunities
+}
+
+func sessionIDs(values map[string]struct{}) []string {
+	out := make([]string, 0, len(values))
+	for id := range values {
+		out = append(out, id)
+	}
+	return out
 }

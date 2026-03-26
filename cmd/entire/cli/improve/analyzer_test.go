@@ -3,6 +3,7 @@ package improve_test
 import (
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/facets"
 	"github.com/entireio/cli/cmd/entire/cli/improve"
 )
 
@@ -259,5 +260,100 @@ func TestAnalyzePatterns_MultipleFrictionThemes(t *testing.T) {
 	}
 	if themeSet["import"] {
 		t.Error("import appears once only, should not be repeated")
+	}
+}
+
+func TestAnalyzePatterns_UsesStructuredFacetsForRecurringSignals(t *testing.T) {
+	t.Parallel()
+
+	summaries := []improve.SessionSummaryData{
+		{
+			CheckpointID: "s1",
+			Facets: facets.SessionFacets{
+				RepeatedUserInstructions: []facets.RepeatedInstruction{
+					{Instruction: "Run golangci-lint before committing", Evidence: []string{"User repeated lint expectation"}},
+				},
+				MissingContext: []facets.MissingContextSignal{
+					{Item: "Repo requires gofmt after edits", Evidence: []string{"Agent skipped fmt"}},
+				},
+				FailureLoops: []facets.FailureLoop{
+					{Description: "Lint issue returned after fmt", Count: 2, Evidence: []string{"reappeared after formatting"}},
+				},
+			},
+		},
+		{
+			CheckpointID: "s2",
+			Facets: facets.SessionFacets{
+				RepeatedUserInstructions: []facets.RepeatedInstruction{
+					{Instruction: "Run golangci-lint before committing", Evidence: []string{"Lint request repeated"}},
+				},
+				MissingContext: []facets.MissingContextSignal{
+					{Item: "Repo requires gofmt after edits", Evidence: []string{"Formatting missed again"}},
+				},
+				FailureLoops: []facets.FailureLoop{
+					{Description: "Lint issue returned after fmt", Count: 2, Evidence: []string{"same loop happened again"}},
+				},
+			},
+		},
+	}
+
+	result := improve.AnalyzePatterns(summaries)
+
+	if len(result.RepeatedInstructions) != 1 {
+		t.Fatalf("expected 1 repeated instruction, got %d", len(result.RepeatedInstructions))
+	}
+	if result.RepeatedInstructions[0].Value != "Run golangci-lint before committing" {
+		t.Fatalf("unexpected instruction value: %q", result.RepeatedInstructions[0].Value)
+	}
+	if len(result.MissingContextSignals) != 1 {
+		t.Fatalf("expected 1 missing context signal, got %d", len(result.MissingContextSignals))
+	}
+	if len(result.FailureLoops) != 1 {
+		t.Fatalf("expected 1 failure loop, got %d", len(result.FailureLoops))
+	}
+}
+
+func TestAnalyzePatterns_CreatesSkillOpportunities(t *testing.T) {
+	t.Parallel()
+
+	summaries := []improve.SessionSummaryData{
+		{
+			CheckpointID: "s1",
+			Facets: facets.SessionFacets{
+				SkillSignals: []facets.SkillSignal{
+					{
+						SkillName:          "project:go-linting",
+						SkillPath:          ".codex/skills/go-linting/SKILL.md",
+						Friction:           []string{"Skill did not warn about gofmt removing inline nolint comments"},
+						MissingInstruction: "Warn about trailing nolint comments on function signatures",
+					},
+				},
+			},
+		},
+		{
+			CheckpointID: "s2",
+			Facets: facets.SessionFacets{
+				SkillSignals: []facets.SkillSignal{
+					{
+						SkillName:          "project:go-linting",
+						SkillPath:          ".codex/skills/go-linting/SKILL.md",
+						Friction:           []string{"Same lint issue came back after following the skill"},
+						MissingInstruction: "Warn about trailing nolint comments on function signatures",
+					},
+				},
+			},
+		},
+	}
+
+	result := improve.AnalyzePatterns(summaries)
+
+	if len(result.SkillOpportunities) != 1 {
+		t.Fatalf("expected 1 skill opportunity, got %d", len(result.SkillOpportunities))
+	}
+	if result.SkillOpportunities[0].SkillName != "project:go-linting" {
+		t.Fatalf("unexpected skill opportunity: %+v", result.SkillOpportunities[0])
+	}
+	if result.SkillOpportunities[0].Count != 2 {
+		t.Fatalf("expected skill opportunity count 2, got %d", result.SkillOpportunities[0].Count)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/facets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -168,6 +169,53 @@ func TestInsertSession_WithDenormalizedFields(t *testing.T) {
 	assert.ElementsMatch(t, []string{"main.go", "util.go", "README.md"}, got.FilesTouched)
 	assert.ElementsMatch(t, []string{"had to retry", "tool failed twice"}, got.Friction)
 	require.Len(t, got.Learnings, 2)
+}
+
+func TestInsertSession_WithStructuredFacets(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	row := insightsdb.SessionRow{
+		CheckpointID: "chk-facets",
+		SessionID:    "sess-facets",
+		SessionIndex: 0,
+		CreatedAt:    time.Now(),
+		Facets: facets.SessionFacets{
+			RepeatedUserInstructions: []facets.RepeatedInstruction{
+				{Instruction: "Run golangci-lint before committing", Evidence: []string{"User repeated lint guidance"}},
+			},
+			MissingContext: []facets.MissingContextSignal{
+				{Item: "Repo has nolint formatting gotcha", Evidence: []string{"Agent missed repo rule"}},
+			},
+			FailureLoops: []facets.FailureLoop{
+				{Description: "Lint issue reappeared after fmt", Count: 2, Evidence: []string{"Returned after formatting"}},
+			},
+			SkillSignals: []facets.SkillSignal{
+				{
+					SkillName:          "project:go-linting",
+					SkillPath:          ".codex/skills/go-linting/SKILL.md",
+					Friction:           []string{"Skill missed gofmt/nolint interaction"},
+					MissingInstruction: "Warn about trailing nolint comments on signatures",
+				},
+			},
+		},
+	}
+
+	err := db.InsertSession(ctx, row)
+	require.NoError(t, err)
+
+	sessions, err := db.QueryLastNSessions(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+
+	got := sessions[0]
+	assert.True(t, got.HasFacets)
+	require.Len(t, got.Facets.RepeatedUserInstructions, 1)
+	assert.Equal(t, "Run golangci-lint before committing", got.Facets.RepeatedUserInstructions[0].Instruction)
+	require.Len(t, got.Facets.SkillSignals, 1)
+	assert.Equal(t, "project:go-linting", got.Facets.SkillSignals[0].SkillName)
 }
 
 func TestInsertSession_ScoreFields(t *testing.T) {

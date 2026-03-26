@@ -94,6 +94,7 @@ func (idb *InsightsDB) migrate() error {
 			score_friction       REAL,
 			score_focus          REAL,
 			has_summary          INTEGER DEFAULT 0,
+			has_facets           INTEGER DEFAULT 0,
 			PRIMARY KEY (checkpoint_id, session_index)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at)`,
@@ -115,6 +116,40 @@ func (idb *InsightsDB) migrate() error {
 			scope         TEXT NOT NULL,
 			finding       TEXT NOT NULL,
 			path          TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS tool_calls (
+			checkpoint_id TEXT NOT NULL,
+			session_index INTEGER NOT NULL,
+			tool_name     TEXT NOT NULL,
+			count         INTEGER DEFAULT 1
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(checkpoint_id, session_index)`,
+		`CREATE TABLE IF NOT EXISTS repeated_user_instructions (
+			checkpoint_id TEXT NOT NULL,
+			session_index INTEGER NOT NULL,
+			instruction   TEXT NOT NULL,
+			evidence      TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS missing_context_signals (
+			checkpoint_id TEXT NOT NULL,
+			session_index INTEGER NOT NULL,
+			item          TEXT NOT NULL,
+			evidence      TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS failure_loops (
+			checkpoint_id TEXT NOT NULL,
+			session_index INTEGER NOT NULL,
+			description   TEXT NOT NULL,
+			count         INTEGER DEFAULT 1,
+			evidence      TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS skill_signals (
+			checkpoint_id       TEXT NOT NULL,
+			session_index       INTEGER NOT NULL,
+			skill_name          TEXT NOT NULL,
+			skill_path          TEXT,
+			friction            TEXT,
+			missing_instruction TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS suggestions (
 			id          TEXT PRIMARY KEY,

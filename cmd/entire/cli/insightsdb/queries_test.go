@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/facets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -245,4 +246,31 @@ func TestSessionCount_AfterInserts(t *testing.T) {
 	count, err := db.SessionCount(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 5, count)
+}
+
+func TestQueryLastNSessions_LoadsStructuredFacets(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	row := minimalSessionRow("chk-fq", "sess", 0)
+	row.Facets = facets.SessionFacets{
+		RepeatedUserInstructions: []facets.RepeatedInstruction{
+			{Instruction: "Run tests before committing", Evidence: []string{"User asked twice"}},
+		},
+		MissingContext: []facets.MissingContextSignal{
+			{Item: "Repo requires canary after prompt changes", Evidence: []string{"Vogon parser mismatch"}},
+		},
+	}
+	require.NoError(t, db.InsertSession(ctx, row))
+
+	sessions, err := db.QueryLastNSessions(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.True(t, sessions[0].HasFacets)
+	require.Len(t, sessions[0].Facets.RepeatedUserInstructions, 1)
+	assert.Equal(t, "Run tests before committing", sessions[0].Facets.RepeatedUserInstructions[0].Instruction)
+	require.Len(t, sessions[0].Facets.MissingContext, 1)
+	assert.Equal(t, "Repo requires canary after prompt changes", sessions[0].Facets.MissingContext[0].Item)
 }

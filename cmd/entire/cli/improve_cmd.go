@@ -10,6 +10,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	checkpointid "github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/facets"
 	"github.com/entireio/cli/cmd/entire/cli/improve"
 	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
 	"github.com/entireio/cli/cmd/entire/cli/llmcli"
@@ -75,12 +76,7 @@ func runImprove(ctx context.Context, w io.Writer, last int, dryRun bool, outputJ
 	// Generate summaries for recent sessions that lack them.
 	if !dryRun {
 		backfillSummaries(ctx, w, idb, last)
-	}
-
-	// Phase 1: Query SQLite index for recurring friction themes (2+ occurrences).
-	frictionThemes, err := idb.QueryRecurringFriction(ctx, 2)
-	if err != nil {
-		return fmt.Errorf("query recurring friction: %w", err)
+		backfillFacets(ctx, idb, last)
 	}
 
 	// Fetch the last N sessions for summary stats.
@@ -95,29 +91,26 @@ func runImprove(ctx context.Context, w io.Writer, last int, dryRun bool, outputJ
 		frictionTotal += len(r.Friction)
 	}
 
+	// Use keyword-based theme classification for pattern detection.
+	// This groups friction by theme (lint, api, conflict, etc.) instead of exact text match.
+	summaries := sessionRowsToSummaries(rows)
+	analysis := improve.AnalyzePatterns(summaries)
+
 	if dryRun {
 		if outputJSON {
-			return renderImproveJSONDryRun(w, frictionThemes, len(rows), frictionTotal)
+			return renderImproveJSONDryRunThemes(w, analysis, len(rows), frictionTotal)
 		}
-		renderImproveTerminalDryRun(w, frictionThemes, len(rows), frictionTotal)
+		renderImproveTerminalDryRun(w, analysis, len(rows), frictionTotal)
 		return nil
 	}
 
-	// Phase 2: Deep-read transcripts for top friction themes.
-	patterns := buildFrictionPatterns(frictionThemes)
-	if err = attachTranscriptExcerpts(ctx, idb, patterns, worktreeRoot); err != nil {
-		// Non-fatal: proceed without transcript excerpts.
-		_ = err
+	// Deep-read transcripts for top friction themes.
+	if err = attachTranscriptExcerpts(ctx, idb, analysis.RepeatedFriction, worktreeRoot); err != nil {
+		_ = err // Non-fatal: proceed without transcript excerpts.
 	}
 
-	// Phase 3: Detect context files.
+	// Detect context files.
 	contextFiles := improve.DetectContextFiles(worktreeRoot)
-
-	// Phase 4: Build analysis from session data + friction patterns, then generate.
-	summaries := sessionRowsToSummaries(rows)
-	analysis := improve.AnalyzePatterns(summaries)
-	// Overlay the transcript excerpts we fetched into the analysis.
-	applyExcerpts(analysis.RepeatedFriction, patterns)
 
 	gen := improve.Generator{Runner: &llmcli.Runner{}}
 	result, err := gen.Generate(ctx, analysis, contextFiles)
@@ -128,9 +121,11 @@ func runImprove(ctx context.Context, w io.Writer, last int, dryRun bool, outputJ
 	report := improve.ImprovementReport{
 		ContextFiles:  contextFiles,
 		Suggestions:   result.Suggestions,
+		Facets:        facetSummary(analysis),
+		FacetCounts:   facetCounts(analysis),
 		SessionsUsed:  len(rows),
 		FrictionTotal: frictionTotal,
-		PatternsFound: len(analysis.RepeatedFriction),
+		PatternsFound: analysisPatternCount(analysis),
 	}
 
 	if outputJSON {
@@ -143,23 +138,10 @@ func runImprove(ctx context.Context, w io.Writer, last int, dryRun bool, outputJ
 	return nil
 }
 
-// buildFrictionPatterns converts insightsdb friction themes to improve.FrictionPattern values.
-func buildFrictionPatterns(themes []insightsdb.FrictionTheme) []improve.FrictionPattern {
-	patterns := make([]improve.FrictionPattern, 0, len(themes))
-	for _, t := range themes {
-		patterns = append(patterns, improve.FrictionPattern{
-			Theme:            t.Text,
-			Count:            t.Count,
-			AffectedSessions: t.Sessions,
-		})
-	}
-	return patterns
-}
-
-// attachTranscriptExcerpts fetches transcript excerpts for top friction themes and
-// attaches them to the corresponding patterns in-place.
+// attachTranscriptExcerpts fetches transcript excerpts for top friction patterns and
+// attaches them in-place. Uses the pattern's AffectedSessions to find relevant checkpoints.
 // Errors are non-fatal; unreadable sessions are silently skipped.
-func attachTranscriptExcerpts(ctx context.Context, idb *insightsdb.InsightsDB, patterns []improve.FrictionPattern, _ string) error {
+func attachTranscriptExcerpts(ctx context.Context, _ *insightsdb.InsightsDB, patterns []improve.FrictionPattern, _ string) error {
 	repo, err := openRepository(ctx)
 	if err != nil {
 		return fmt.Errorf("open git repository: %w", err)
@@ -173,10 +155,7 @@ func attachTranscriptExcerpts(ctx context.Context, idb *insightsdb.InsightsDB, p
 	}
 
 	for i := range patterns[:limit] {
-		cpIDs, queryErr := idb.QuerySessionsWithFriction(ctx, "%"+patterns[i].Theme+"%")
-		if queryErr != nil {
-			continue
-		}
+		cpIDs := patterns[i].AffectedSessions
 
 		// Limit to top 2 sessions per theme.
 		sessionLimit := 2
@@ -216,22 +195,6 @@ func attachTranscriptExcerpts(ctx context.Context, idb *insightsdb.InsightsDB, p
 	return nil
 }
 
-// applyExcerpts copies TranscriptExcerpt values from src patterns into dst patterns
-// by matching on theme text.
-func applyExcerpts(dst []improve.FrictionPattern, src []improve.FrictionPattern) {
-	excerptByTheme := make(map[string]string, len(src))
-	for _, p := range src {
-		if p.TranscriptExcerpt != "" {
-			excerptByTheme[p.Theme] = p.TranscriptExcerpt
-		}
-	}
-	for i := range dst {
-		if excerpt, ok := excerptByTheme[dst[i].Theme]; ok {
-			dst[i].TranscriptExcerpt = excerpt
-		}
-	}
-}
-
 // sessionRowsToSummaries converts insightsdb rows into improve.SessionSummaryData values.
 func sessionRowsToSummaries(rows []insightsdb.SessionRow) []improve.SessionSummaryData {
 	summaries := make([]improve.SessionSummaryData, 0, len(rows))
@@ -239,6 +202,7 @@ func sessionRowsToSummaries(rows []insightsdb.SessionRow) []improve.SessionSumma
 		s := improve.SessionSummaryData{
 			CheckpointID: r.CheckpointID,
 			Friction:     r.Friction,
+			Facets:       r.Facets,
 		}
 		for _, l := range r.Learnings {
 			s.Learnings = append(s.Learnings, improve.LearningEntry{
@@ -267,12 +231,27 @@ func renderImproveJSON(w io.Writer, report improve.ImprovementReport) error {
 	return nil
 }
 
-// renderImproveJSONDryRun marshals the dry-run friction data to JSON and writes it to w.
-func renderImproveJSONDryRun(w io.Writer, themes []insightsdb.FrictionTheme, sessionCount, frictionTotal int) error {
+// renderImproveJSONDryRunThemes marshals the dry-run theme-grouped friction data to JSON.
+func renderImproveJSONDryRunThemes(w io.Writer, analysis improve.PatternAnalysis, sessionCount, frictionTotal int) error {
+	type themeJSON struct {
+		Theme    string   `json:"theme"`
+		Count    int      `json:"count"`
+		Examples []string `json:"examples"`
+		Sessions []string `json:"sessions"`
+	}
 	type dryRunReport struct {
-		SessionsAnalyzed int                        `json:"sessions_analyzed"`
-		FrictionTotal    int                        `json:"friction_total"`
-		RecurringThemes  []insightsdb.FrictionTheme `json:"recurring_themes"`
+		SessionsAnalyzed int         `json:"sessions_analyzed"`
+		FrictionTotal    int         `json:"friction_total"`
+		RecurringThemes  []themeJSON `json:"recurring_themes"`
+	}
+	themes := make([]themeJSON, 0, len(analysis.RepeatedFriction))
+	for _, p := range analysis.RepeatedFriction {
+		themes = append(themes, themeJSON{
+			Theme:    p.Theme,
+			Count:    p.Count,
+			Examples: p.Examples,
+			Sessions: p.AffectedSessions,
+		})
 	}
 	report := dryRunReport{
 		SessionsAnalyzed: sessionCount,
@@ -309,7 +288,7 @@ func renderImproveTerminal(w io.Writer, report improve.ImprovementReport) {
 	fmt.Fprintln(w)
 
 	// Suggestions section.
-	fmt.Fprintln(w, s.SectionRule(fmt.Sprintf("Suggestions (%d)", len(report.Suggestions))))
+	fmt.Fprintln(w, s.SectionRule("Top Recommendations"))
 	if len(report.Suggestions) == 0 {
 		fmt.Fprintln(w, "  No suggestions generated.")
 	}
@@ -318,42 +297,77 @@ func renderImproveTerminal(w io.Writer, report improve.ImprovementReport) {
 		titleLine := fmt.Sprintf("  %d. %s  %s", i+1, sug.Title, sug.Priority)
 		fmt.Fprintln(w, s.Render(s.Bold, titleLine))
 
-		// Category and file.
-		metaLine := fmt.Sprintf("     %s → %s", sug.Category, sug.FileType)
+		target := sug.TargetKind
+		switch {
+		case sug.SkillName != "":
+			target = sug.SkillName
+		case sug.FilePath != "":
+			target = sug.FilePath
+		case sug.FileType != "":
+			target = string(sug.FileType)
+		}
+		metaLine := fmt.Sprintf("     %s → %s", sug.Category, target)
 		fmt.Fprintln(w, s.Render(s.Dim, metaLine))
 
-		// Description.
 		if sug.Description != "" {
 			fmt.Fprintf(w, "     %s\n", sug.Description)
 		}
+		if sug.CopyablePrompt != "" {
+			fmt.Fprintf(w, "     Prompt: %s\n", sug.CopyablePrompt)
+		}
+		if sug.SuggestedInstruction != "" {
+			fmt.Fprintf(w, "     Instruction: %s\n", sug.SuggestedInstruction)
+		}
 
-		// Diff rendering.
 		if sug.Diff != "" {
 			fmt.Fprintln(w)
 			renderDiff(w, s, sug.Diff)
 		}
 		fmt.Fprintln(w)
 	}
+
+	renderSuggestionGroup(w, s, "Prompt Changes", report.Suggestions, "prompt_recommendation")
+	renderSuggestionGroup(w, s, "Project Skill Updates", report.Suggestions, "skill_recommendation")
 }
 
 // renderImproveTerminalDryRun writes a styled terminal view of the dry-run friction data.
-func renderImproveTerminalDryRun(w io.Writer, themes []insightsdb.FrictionTheme, sessionCount, frictionTotal int) {
+func renderImproveTerminalDryRun(w io.Writer, analysis improve.PatternAnalysis, sessionCount, frictionTotal int) {
 	s := termstyle.New(w)
 
 	fmt.Fprintln(w, s.Render(s.Bold, "Entire Improve (dry run)"))
-	fmt.Fprintf(w, "Analyzed %d sessions | %d friction points | %d patterns found\n\n",
-		sessionCount, frictionTotal, len(themes))
+	fmt.Fprintf(w, "Analyzed %d sessions | %d friction points | %d signals found\n\n",
+		sessionCount, frictionTotal, analysisPatternCount(analysis))
 
-	fmt.Fprintln(w, s.SectionRule("Recurring Friction"))
-	if len(themes) == 0 {
-		fmt.Fprintln(w, "  No recurring friction patterns found.")
+	fmt.Fprintln(w, s.SectionRule("Recurring Friction Themes"))
+	if len(analysis.RepeatedFriction) == 0 {
+		fmt.Fprintln(w, "  No recurring friction themes found.")
 		return
 	}
-	for _, t := range themes {
-		countLine := fmt.Sprintf("  [%dx] %s", t.Count, t.Text)
-		fmt.Fprintln(w, s.Render(s.Bold, countLine))
-		if len(t.Sessions) > 0 {
-			fmt.Fprintln(w, s.Render(s.Gray, "       sessions: "+strings.Join(t.Sessions, ", ")))
+	for _, p := range analysis.RepeatedFriction {
+		headerLine := fmt.Sprintf("  [%dx] %s (%d sessions)", p.Count, p.Theme, len(p.AffectedSessions))
+		fmt.Fprintln(w, s.Render(s.Bold, headerLine))
+		limit := 3
+		if len(p.Examples) < limit {
+			limit = len(p.Examples)
+		}
+		for _, ex := range p.Examples[:limit] {
+			fmt.Fprintln(w, s.Render(s.Gray, "    "+ex))
+		}
+	}
+
+	renderRecurringSignals(w, s, "Repeated Instructions", analysis.RepeatedInstructions)
+	renderRecurringSignals(w, s, "Missing Context", analysis.MissingContextSignals)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, s.SectionRule("Project Skill Updates"))
+	if len(analysis.SkillOpportunities) == 0 {
+		fmt.Fprintln(w, "  No recurring skill-related opportunities found.")
+		return
+	}
+	for _, opportunity := range analysis.SkillOpportunities {
+		fmt.Fprintf(w, "  [%dx] %s\n", opportunity.Count, opportunity.SkillName)
+		if opportunity.MissingInstruction != "" {
+			fmt.Fprintf(w, "    %s\n", opportunity.MissingInstruction)
 		}
 	}
 }
@@ -380,6 +394,112 @@ func renderDiff(w io.Writer, s termstyle.Styles, diff string) {
 			fmt.Fprintln(w, s.Render(s.Red, line))
 		default:
 			fmt.Fprintln(w, s.Render(s.Dim, line))
+		}
+	}
+}
+
+func renderSuggestionGroup(w io.Writer, s termstyle.Styles, title string, suggestions []improve.Suggestion, targetKind string) {
+	fmt.Fprintln(w, s.SectionRule(title))
+	count := 0
+	for _, suggestion := range suggestions {
+		if suggestion.TargetKind != targetKind {
+			continue
+		}
+		count++
+		fmt.Fprintf(w, "  %d. %s\n", count, suggestion.Title)
+	}
+	if count == 0 {
+		fmt.Fprintln(w, "  No suggestions in this category.")
+	}
+	fmt.Fprintln(w)
+}
+
+func renderRecurringSignals(w io.Writer, s termstyle.Styles, title string, signals []improve.RecurringSignal) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, s.SectionRule(title))
+	if len(signals) == 0 {
+		fmt.Fprintln(w, "  None found.")
+		return
+	}
+	for _, signal := range signals {
+		fmt.Fprintf(w, "  [%dx] %s\n", signal.Count, signal.Value)
+	}
+}
+
+func analysisPatternCount(analysis improve.PatternAnalysis) int {
+	return len(analysis.RepeatedFriction) +
+		len(analysis.RepeatedInstructions) +
+		len(analysis.MissingContextSignals) +
+		len(analysis.FailureLoops) +
+		len(analysis.SkillOpportunities)
+}
+
+func facetCounts(analysis improve.PatternAnalysis) improve.FacetCounts {
+	return improve.FacetCounts{
+		RepeatedInstructions: len(analysis.RepeatedInstructions),
+		MissingContext:       len(analysis.MissingContextSignals),
+		FailureLoops:         len(analysis.FailureLoops),
+		SkillSignals:         len(analysis.SkillOpportunities),
+	}
+}
+
+func facetSummary(analysis improve.PatternAnalysis) improve.FacetSummary {
+	return improve.FacetSummary{
+		RepeatedInstructions: analysis.RepeatedInstructions,
+		MissingContext:       analysis.MissingContextSignals,
+		FailureLoops:         analysis.FailureLoops,
+		SkillOpportunities:   analysis.SkillOpportunities,
+	}
+}
+
+func backfillFacets(ctx context.Context, idb *insightsdb.InsightsDB, lastN int) {
+	rows, err := idb.QueryLastNSessions(ctx, lastN)
+	if err != nil {
+		return
+	}
+
+	repo, err := openRepository(ctx)
+	if err != nil {
+		return
+	}
+
+	store := checkpoint.NewGitStore(repo)
+	extractor := &facets.Extractor{Runner: &llmcli.Runner{}}
+
+	for _, row := range rows {
+		if row.HasFacets {
+			continue
+		}
+
+		cpID, parseErr := checkpointid.NewCheckpointID(row.CheckpointID)
+		if parseErr != nil {
+			continue
+		}
+
+		content, readErr := store.ReadSessionContent(ctx, cpID, row.SessionIndex)
+		if readErr != nil || len(content.Transcript) == 0 {
+			continue
+		}
+
+		condensed, buildErr := summarize.BuildCondensedTranscriptFromBytes(content.Transcript, content.Metadata.Agent)
+		if buildErr != nil || len(condensed) == 0 {
+			continue
+		}
+
+		formatted := summarize.FormatCondensedTranscript(summarize.Input{
+			Transcript:   condensed,
+			FilesTouched: row.FilesTouched,
+		})
+
+		extracted, _, extractErr := extractor.Extract(ctx, formatted)
+		if extractErr != nil || extracted == nil {
+			continue
+		}
+
+		row.Facets = *extracted
+		row.HasFacets = true
+		if updateErr := idb.UpdateSessionFacets(ctx, row); updateErr != nil {
+			continue
 		}
 	}
 }

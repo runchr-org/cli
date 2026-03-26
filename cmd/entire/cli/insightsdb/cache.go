@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/entireio/cli/cmd/entire/cli/facets"
 )
 
 // SessionRow represents a single session for insertion into the cache.
@@ -35,10 +38,13 @@ type SessionRow struct {
 	ScoreFriction  float64
 	ScoreFocus     float64
 	HasSummary     bool
+	HasFacets      bool
 	// Denormalized arrays
 	FilesTouched []string
 	Friction     []string
 	Learnings    []LearningRow
+	ToolCounts   map[string]int // tool name → invocation count
+	Facets       facets.SessionFacets
 }
 
 // LearningRow represents a single learning entry within a session.
@@ -119,6 +125,12 @@ func (idb *InsightsDB) InsertSession(ctx context.Context, row SessionRow) error 
 	if err = insertLearnings(ctx, tx, row); err != nil {
 		return err
 	}
+	if err = insertToolCalls(ctx, tx, row); err != nil {
+		return err
+	}
+	if err = insertFacets(ctx, tx, row); err != nil {
+		return err
+	}
 
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
@@ -131,6 +143,10 @@ func insertSessionRow(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 	if row.HasSummary {
 		hasSummary = 1
 	}
+	hasFacets := 0
+	if row.HasFacets || !isEmptyFacets(row.Facets) {
+		hasFacets = 1
+	}
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO sessions (
 			checkpoint_id, session_id, session_index,
@@ -139,7 +155,7 @@ func insertSessionRow(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 			api_call_count, duration_ms, turn_count,
 			intent, outcome, agent_percentage,
 			overall_score, score_token_efficiency, score_first_pass,
-			score_friction, score_focus, has_summary
+			score_friction, score_focus, has_summary, has_facets
 		) VALUES (
 			?, ?, ?,
 			?, ?, ?, ?,
@@ -147,7 +163,7 @@ func insertSessionRow(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 			?, ?, ?,
 			?, ?, ?,
 			?, ?, ?,
-			?, ?, ?
+			?, ?, ?, ?
 		)`,
 		row.CheckpointID, row.SessionID, row.SessionIndex,
 		nullableString(row.Agent), nullableString(row.Model), nullableString(row.Branch),
@@ -157,7 +173,7 @@ func insertSessionRow(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 		nullableString(row.Intent), nullableString(row.Outcome), row.AgentPct,
 		row.OverallScore, row.ScoreTokenEff,
 		row.ScoreFirstPass, row.ScoreFriction,
-		row.ScoreFocus, hasSummary,
+		row.ScoreFocus, hasSummary, hasFacets,
 	)
 	if err != nil {
 		return fmt.Errorf("insert session row: %w", err)
@@ -196,6 +212,59 @@ func insertLearnings(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 			row.CheckpointID, row.SessionIndex, l.Scope, l.Finding, nullableString(l.Path),
 		); err != nil {
 			return fmt.Errorf("insert learnings: %w", err)
+		}
+	}
+	return nil
+}
+
+func insertToolCalls(ctx context.Context, tx *sql.Tx, row SessionRow) error {
+	for tool, count := range row.ToolCounts {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT INTO tool_calls (checkpoint_id, session_index, tool_name, count) VALUES (?, ?, ?, ?)",
+			row.CheckpointID, row.SessionIndex, tool, count,
+		); err != nil {
+			return fmt.Errorf("insert tool_calls: %w", err)
+		}
+	}
+	return nil
+}
+
+func insertFacets(ctx context.Context, tx *sql.Tx, row SessionRow) error {
+	for _, instruction := range row.Facets.RepeatedUserInstructions {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO repeated_user_instructions (checkpoint_id, session_index, instruction, evidence)
+			 VALUES (?, ?, ?, ?)`,
+			row.CheckpointID, row.SessionIndex, instruction.Instruction, joinEvidence(instruction.Evidence),
+		); err != nil {
+			return fmt.Errorf("insert repeated_user_instructions: %w", err)
+		}
+	}
+	for _, signal := range row.Facets.MissingContext {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO missing_context_signals (checkpoint_id, session_index, item, evidence)
+			 VALUES (?, ?, ?, ?)`,
+			row.CheckpointID, row.SessionIndex, signal.Item, joinEvidence(signal.Evidence),
+		); err != nil {
+			return fmt.Errorf("insert missing_context_signals: %w", err)
+		}
+	}
+	for _, loop := range row.Facets.FailureLoops {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO failure_loops (checkpoint_id, session_index, description, count, evidence)
+			 VALUES (?, ?, ?, ?, ?)`,
+			row.CheckpointID, row.SessionIndex, loop.Description, loop.Count, joinEvidence(loop.Evidence),
+		); err != nil {
+			return fmt.Errorf("insert failure_loops: %w", err)
+		}
+	}
+	for _, signal := range row.Facets.SkillSignals {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO skill_signals (checkpoint_id, session_index, skill_name, skill_path, friction, missing_instruction)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			row.CheckpointID, row.SessionIndex, signal.SkillName, nullableString(signal.SkillPath),
+			joinEvidence(signal.Friction), nullableString(signal.MissingInstruction),
+		); err != nil {
+			return fmt.Errorf("insert skill_signals: %w", err)
 		}
 	}
 	return nil
@@ -252,6 +321,50 @@ func (idb *InsightsDB) UpdateSessionSummary(ctx context.Context, row SessionRow)
 	return nil
 }
 
+// UpdateSessionFacets updates an existing session row with extracted structured facets.
+func (idb *InsightsDB) UpdateSessionFacets(ctx context.Context, row SessionRow) error {
+	tx, err := idb.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback() //nolint:errcheck // Rollback after failed tx; error is irrelevant
+		}
+	}()
+
+	if _, err = tx.ExecContext(ctx, `
+		UPDATE sessions SET has_facets = 1
+		WHERE checkpoint_id = ? AND session_index = ?`,
+		row.CheckpointID, row.SessionIndex,
+	); err != nil {
+		return fmt.Errorf("update session facets: %w", err)
+	}
+
+	for _, table := range []string{
+		"repeated_user_instructions",
+		"missing_context_signals",
+		"failure_loops",
+		"skill_signals",
+	} {
+		if _, err = tx.ExecContext(ctx,
+			"DELETE FROM "+table+" WHERE checkpoint_id = ? AND session_index = ?", //nolint:gosec // table name is hardcoded
+			row.CheckpointID, row.SessionIndex,
+		); err != nil {
+			return fmt.Errorf("delete old %s: %w", table, err)
+		}
+	}
+
+	if err = insertFacets(ctx, tx, row); err != nil {
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
+}
+
 // nullableString converts an empty string to a SQL NULL value.
 // Non-empty strings are passed through as-is.
 func nullableString(s string) interface{} {
@@ -259,4 +372,20 @@ func nullableString(s string) interface{} {
 		return nil
 	}
 	return s
+}
+
+func joinEvidence(values []string) interface{} {
+	if len(values) == 0 {
+		return nil
+	}
+	return strings.Join(values, "\n")
+}
+
+func isEmptyFacets(v facets.SessionFacets) bool {
+	return len(v.RepeatedUserInstructions) == 0 &&
+		len(v.MissingContext) == 0 &&
+		len(v.FailureLoops) == 0 &&
+		len(v.SkillSignals) == 0 &&
+		len(v.RepoGotchas) == 0 &&
+		len(v.WorkflowGaps) == 0
 }

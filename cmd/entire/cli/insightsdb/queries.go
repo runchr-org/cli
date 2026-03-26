@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/entireio/cli/cmd/entire/cli/facets"
 )
 
 // FrictionTheme groups recurring friction entries by their text content.
@@ -106,7 +108,7 @@ const sessionColumns = `
 	api_call_count, duration_ms, turn_count,
 	intent, outcome, agent_percentage,
 	overall_score, score_token_efficiency, score_first_pass,
-	score_friction, score_focus, has_summary`
+	score_friction, score_focus, has_summary, has_facets`
 
 // querySessions executes a SELECT on sessions with the given args,
 // then populates denormalized fields for each row.
@@ -142,7 +144,7 @@ func scanSession(rows *sql.Rows) (SessionRow, error) {
 	var row SessionRow
 	var createdAt string
 	var agent, model, branch, intent, outcome sql.NullString
-	var hasSummary int
+	var hasSummary, hasFacets int
 
 	err := rows.Scan(
 		&row.CheckpointID, &row.SessionID, &row.SessionIndex,
@@ -151,7 +153,7 @@ func scanSession(rows *sql.Rows) (SessionRow, error) {
 		&row.APICallCount, &row.DurationMs, &row.TurnCount,
 		&intent, &outcome, &row.AgentPct,
 		&row.OverallScore, &row.ScoreTokenEff, &row.ScoreFirstPass,
-		&row.ScoreFriction, &row.ScoreFocus, &hasSummary,
+		&row.ScoreFriction, &row.ScoreFocus, &hasSummary, &hasFacets,
 	)
 	if err != nil {
 		return row, fmt.Errorf("scan session row: %w", err)
@@ -163,6 +165,7 @@ func scanSession(rows *sql.Rows) (SessionRow, error) {
 	row.Intent = intent.String
 	row.Outcome = outcome.String
 	row.HasSummary = hasSummary == 1
+	row.HasFacets = hasFacets == 1
 
 	t, err := time.Parse(time.RFC3339, createdAt)
 	if err != nil {
@@ -184,6 +187,14 @@ func (idb *InsightsDB) populateDenormalized(ctx context.Context, row *SessionRow
 		return err
 	}
 	row.Learnings, err = idb.loadLearnings(ctx, row.CheckpointID, row.SessionIndex)
+	if err != nil {
+		return err
+	}
+	row.ToolCounts, err = idb.loadToolCalls(ctx, row.CheckpointID, row.SessionIndex)
+	if err != nil {
+		return err
+	}
+	row.Facets, err = idb.loadFacets(ctx, row.CheckpointID, row.SessionIndex)
 	return err
 }
 
@@ -261,9 +272,184 @@ func (idb *InsightsDB) loadLearnings(ctx context.Context, checkpointID string, s
 	return learnings, nil
 }
 
+func (idb *InsightsDB) loadToolCalls(ctx context.Context, checkpointID string, sessionIndex int) (map[string]int, error) {
+	rows, err := idb.db.QueryContext(ctx,
+		"SELECT tool_name, count FROM tool_calls WHERE checkpoint_id = ? AND session_index = ?",
+		checkpointID, sessionIndex,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load tool_calls: %w", err)
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var name string
+		var count int
+		if err = rows.Scan(&name, &count); err != nil {
+			return nil, fmt.Errorf("scan tool_call: %w", err)
+		}
+		counts[name] = count
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tool_calls: %w", err)
+	}
+	return counts, nil
+}
+
 func splitCSV(s string) []string {
 	if s == "" {
 		return nil
 	}
 	return strings.Split(s, ",")
+}
+
+func (idb *InsightsDB) loadFacets(ctx context.Context, checkpointID string, sessionIndex int) (facets.SessionFacets, error) {
+	var result facets.SessionFacets
+	var err error
+
+	result.RepeatedUserInstructions, err = idb.loadRepeatedInstructions(ctx, checkpointID, sessionIndex)
+	if err != nil {
+		return result, err
+	}
+	result.MissingContext, err = idb.loadMissingContext(ctx, checkpointID, sessionIndex)
+	if err != nil {
+		return result, err
+	}
+	result.FailureLoops, err = idb.loadFailureLoops(ctx, checkpointID, sessionIndex)
+	if err != nil {
+		return result, err
+	}
+	result.SkillSignals, err = idb.loadSkillSignals(ctx, checkpointID, sessionIndex)
+	if err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func (idb *InsightsDB) loadRepeatedInstructions(ctx context.Context, checkpointID string, sessionIndex int) ([]facets.RepeatedInstruction, error) {
+	rows, err := idb.db.QueryContext(ctx,
+		`SELECT instruction, evidence FROM repeated_user_instructions
+		 WHERE checkpoint_id = ? AND session_index = ?`,
+		checkpointID, sessionIndex,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load repeated_user_instructions: %w", err)
+	}
+	defer rows.Close()
+
+	var values []facets.RepeatedInstruction
+	for rows.Next() {
+		var instruction string
+		var evidence sql.NullString
+		if err = rows.Scan(&instruction, &evidence); err != nil {
+			return nil, fmt.Errorf("scan repeated_user_instruction: %w", err)
+		}
+		values = append(values, facets.RepeatedInstruction{
+			Instruction: instruction,
+			Evidence:    splitEvidence(evidence.String),
+		})
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate repeated_user_instructions: %w", err)
+	}
+	return values, nil
+}
+
+func (idb *InsightsDB) loadMissingContext(ctx context.Context, checkpointID string, sessionIndex int) ([]facets.MissingContextSignal, error) {
+	rows, err := idb.db.QueryContext(ctx,
+		`SELECT item, evidence FROM missing_context_signals
+		 WHERE checkpoint_id = ? AND session_index = ?`,
+		checkpointID, sessionIndex,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load missing_context_signals: %w", err)
+	}
+	defer rows.Close()
+
+	var values []facets.MissingContextSignal
+	for rows.Next() {
+		var item string
+		var evidence sql.NullString
+		if err = rows.Scan(&item, &evidence); err != nil {
+			return nil, fmt.Errorf("scan missing_context_signal: %w", err)
+		}
+		values = append(values, facets.MissingContextSignal{
+			Item:     item,
+			Evidence: splitEvidence(evidence.String),
+		})
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate missing_context_signals: %w", err)
+	}
+	return values, nil
+}
+
+func (idb *InsightsDB) loadFailureLoops(ctx context.Context, checkpointID string, sessionIndex int) ([]facets.FailureLoop, error) {
+	rows, err := idb.db.QueryContext(ctx,
+		`SELECT description, count, evidence FROM failure_loops
+		 WHERE checkpoint_id = ? AND session_index = ?`,
+		checkpointID, sessionIndex,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load failure_loops: %w", err)
+	}
+	defer rows.Close()
+
+	var values []facets.FailureLoop
+	for rows.Next() {
+		var description string
+		var count int
+		var evidence sql.NullString
+		if err = rows.Scan(&description, &count, &evidence); err != nil {
+			return nil, fmt.Errorf("scan failure_loop: %w", err)
+		}
+		values = append(values, facets.FailureLoop{
+			Description: description,
+			Count:       count,
+			Evidence:    splitEvidence(evidence.String),
+		})
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate failure_loops: %w", err)
+	}
+	return values, nil
+}
+
+func (idb *InsightsDB) loadSkillSignals(ctx context.Context, checkpointID string, sessionIndex int) ([]facets.SkillSignal, error) {
+	rows, err := idb.db.QueryContext(ctx,
+		`SELECT skill_name, skill_path, friction, missing_instruction FROM skill_signals
+		 WHERE checkpoint_id = ? AND session_index = ?`,
+		checkpointID, sessionIndex,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load skill_signals: %w", err)
+	}
+	defer rows.Close()
+
+	var values []facets.SkillSignal
+	for rows.Next() {
+		var skillName string
+		var skillPath, frictionText, missingInstruction sql.NullString
+		if err = rows.Scan(&skillName, &skillPath, &frictionText, &missingInstruction); err != nil {
+			return nil, fmt.Errorf("scan skill_signal: %w", err)
+		}
+		values = append(values, facets.SkillSignal{
+			SkillName:          skillName,
+			SkillPath:          skillPath.String,
+			Friction:           splitEvidence(frictionText.String),
+			MissingInstruction: missingInstruction.String,
+		})
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate skill_signals: %w", err)
+	}
+	return values, nil
+}
+
+func splitEvidence(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
 }

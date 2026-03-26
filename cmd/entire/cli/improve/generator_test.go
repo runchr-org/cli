@@ -298,3 +298,112 @@ func TestGenerator_Generate_RunnerError(t *testing.T) {
 		t.Fatal("expected error when runner fails")
 	}
 }
+
+func TestGenerator_Generate_ParsesPromptRecommendationFields(t *testing.T) {
+	t.Parallel()
+
+	inner := `{
+		"suggestions": [
+			{
+				"target_kind": "prompt_recommendation",
+				"file_type": "CLAUDE.md",
+				"file_path": "/project/CLAUDE.md",
+				"category": "missing_context",
+				"title": "Add lint verification reminder",
+				"description": "The agent kept missing the repo lint expectation.",
+				"evidence": ["Run golangci-lint before committing"],
+				"priority": "high",
+				"copyable_prompt": "Before finishing, run gofmt and golangci-lint and report the result.",
+				"suggested_instruction": "Always verify fmt and lint before claiming completion."
+			}
+		]
+	}`
+
+	runner := &llmcli.Runner{
+		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			resp := buildCLIResponse(inner)
+			return exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("printf '%%s' '%s'", resp))
+		},
+	}
+
+	gen := &improve.Generator{Runner: runner}
+
+	result, err := gen.Generate(context.Background(), improve.PatternAnalysis{}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Suggestions) != 1 {
+		t.Fatalf("expected 1 suggestion, got %d", len(result.Suggestions))
+	}
+
+	got := result.Suggestions[0]
+	if got.TargetKind != "prompt_recommendation" {
+		t.Fatalf("expected prompt recommendation target, got %q", got.TargetKind)
+	}
+	if got.CopyablePrompt == "" {
+		t.Fatal("expected copyable prompt to be populated")
+	}
+	if got.SuggestedInstruction == "" {
+		t.Fatal("expected suggested instruction to be populated")
+	}
+}
+
+func TestGenerator_Generate_PromptIncludesStructuredSignals(t *testing.T) {
+	t.Parallel()
+
+	runner := &llmcli.Runner{
+		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			script := `
+input=$(cat)
+case "$input" in
+  *"<repeated_instructions>"* ) ;;
+  * ) exit 11 ;;
+esac
+case "$input" in
+  *"<missing_context>"* ) ;;
+  * ) exit 12 ;;
+esac
+case "$input" in
+  *"<skill_opportunities>"* ) ;;
+  * ) exit 13 ;;
+esac
+case "$input" in
+  *"copyable_prompt"* ) ;;
+  * ) exit 14 ;;
+esac
+case "$input" in
+  *"suggested_instruction"* ) ;;
+  * ) exit 15 ;;
+esac
+case "$input" in
+  *"target_kind"* ) ;;
+  * ) exit 16 ;;
+esac
+printf '%s' '` + buildCLIResponse(emptySuggestions) + `'
+`
+			return exec.CommandContext(ctx, "sh", "-c", script)
+		},
+	}
+
+	gen := &improve.Generator{Runner: runner}
+
+	_, err := gen.Generate(context.Background(), improve.PatternAnalysis{
+		RepeatedInstructions: []improve.RecurringSignal{
+			{Value: "Run golangci-lint before committing", Count: 2, Evidence: []string{"User repeated lint expectation"}},
+		},
+		MissingContextSignals: []improve.RecurringSignal{
+			{Value: "Repo requires canary after prompt changes", Count: 2},
+		},
+		SkillOpportunities: []improve.SkillOpportunity{
+			{
+				SkillName:          "project:go-linting",
+				SkillPath:          ".codex/skills/go-linting/SKILL.md",
+				Count:              2,
+				MissingInstruction: "Warn about trailing nolint comments on signatures",
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

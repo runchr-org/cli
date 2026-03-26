@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
@@ -75,6 +76,7 @@ func runInsights(ctx context.Context, w io.Writer, last int, agentFilter string,
 
 	// Generate summaries for recent sessions that lack them.
 	backfillSummaries(ctx, w, idb, last)
+	backfillFacets(ctx, idb, last)
 
 	var rows []insightsdb.SessionRow
 	if agentFilter != "" {
@@ -168,6 +170,7 @@ func refreshCacheIfStale(ctx context.Context, idb *insightsdb.InsightsDB) error 
 				continue
 			}
 			row := metadataToSessionRow(cpIDStr, i, &content.Metadata)
+			row.ToolCounts = extractToolCounts(content.Transcript, content.Metadata.Agent)
 			if insertErr := idb.InsertSession(ctx, row); insertErr != nil {
 				return fmt.Errorf("insert session %s/%d: %w", cpIDStr, i, insertErr)
 			}
@@ -254,6 +257,25 @@ func backfillSummaries(ctx context.Context, w io.Writer, idb *insightsdb.Insight
 	if generated > 0 {
 		fmt.Fprintf(w, "  Generated %d summaries\n\n", generated)
 	}
+}
+
+// extractToolCounts parses a transcript and counts tool invocations by name.
+// Returns nil if the transcript can't be parsed.
+func extractToolCounts(transcript []byte, agentType types.AgentType) map[string]int {
+	entries, err := summarize.BuildCondensedTranscriptFromBytes(transcript, agentType)
+	if err != nil || len(entries) == 0 {
+		return nil
+	}
+	counts := make(map[string]int)
+	for _, e := range entries {
+		if e.Type == summarize.EntryTypeTool && e.ToolName != "" {
+			counts[e.ToolName]++
+		}
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
 }
 
 // metadataToSessionRow converts CommittedMetadata into an insightsdb.SessionRow,
@@ -343,9 +365,61 @@ func sessionRowsToScores(rows []insightsdb.SessionRow) []insights.SessionScore {
 			FilesCount:    len(r.FilesTouched),
 			FrictionCount: len(r.Friction),
 			HasSummary:    r.HasSummary,
+			ToolCallCount: totalToolCalls(r.ToolCounts),
+			TopTools:      topToolNames(r.ToolCounts, 3),
+			SkillsUsed:    skillNames(r.ToolCounts),
 		})
 	}
 	return scores
+}
+
+func totalToolCalls(counts map[string]int) int {
+	total := 0
+	for _, c := range counts {
+		total += c
+	}
+	return total
+}
+
+func topToolNames(counts map[string]int, n int) []string {
+	if len(counts) == 0 {
+		return nil
+	}
+	type kv struct {
+		name  string
+		count int
+	}
+	sorted := make([]kv, 0, len(counts))
+	for k, v := range counts {
+		if k == "Skill" {
+			continue // skills shown separately
+		}
+		sorted = append(sorted, kv{k, v})
+	}
+	// Simple selection sort for small N.
+	for i := range min(n, len(sorted)) {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j].count > sorted[i].count {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+	limit := min(n, len(sorted))
+	names := make([]string, limit)
+	for i := range limit {
+		names[i] = sorted[i].name
+	}
+	return names
+}
+
+func skillNames(counts map[string]int) []string {
+	// Skill tool calls are counted under "Skill" in tool counts.
+	// We can't distinguish individual skill names from counts alone,
+	// so we just indicate whether skills were used.
+	if counts["Skill"] > 0 {
+		return []string{fmt.Sprintf("%d invocations", counts["Skill"])}
+	}
+	return nil
 }
 
 // renderInsightsJSON marshals the report to JSON and writes it to w.
@@ -400,6 +474,14 @@ func renderInsightsTerminal(w io.Writer, report insights.Report) {
 			statsLine += "  (no summary)"
 		}
 		fmt.Fprintln(w, s.Render(s.Gray, statsLine))
+
+		if len(ss.TopTools) > 0 {
+			toolsLine := "  Tools: " + strings.Join(ss.TopTools, ", ")
+			if len(ss.SkillsUsed) > 0 {
+				toolsLine += "  Skills: " + strings.Join(ss.SkillsUsed, ", ")
+			}
+			fmt.Fprintln(w, s.Render(s.Gray, toolsLine))
+		}
 		fmt.Fprintln(w)
 	}
 
@@ -444,6 +526,11 @@ func renderInsightsTerminal(w io.Writer, report insights.Report) {
 		)
 		fmt.Fprintln(w, s.Render(s.Gray, statsLine))
 
+		if len(ac.TopTools) > 0 {
+			toolLine := fmt.Sprintf("  Top tools: %s | Avg %.0f tool calls/session",
+				strings.Join(ac.TopTools, ", "), ac.AvgToolCalls)
+			fmt.Fprintln(w, s.Render(s.Gray, toolLine))
+		}
 		if ac.TopStrength != "" {
 			fmt.Fprintln(w, s.Render(s.Green, "  + "+ac.TopStrength))
 		}
