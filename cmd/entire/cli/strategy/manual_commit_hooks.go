@@ -25,7 +25,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
-	"github.com/entireio/cli/cmd/entire/cli/trail"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/perf"
 	"github.com/entireio/cli/redact"
@@ -1091,16 +1090,6 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 			slog.String("error", err.Error()),
 		)
 		return false
-	}
-
-	// Link checkpoint to trail (best-effort)
-	branchName := GetCurrentBranchName(repo)
-	if branchName != "" && branchName != GetDefaultBranchName(repo) {
-		store := trail.NewStore(repo)
-		existing, findErr := store.FindByBranch(branchName)
-		if findErr == nil && existing != nil {
-			appendCheckpointToExistingTrail(store, existing.TrailID, result.CheckpointID, head.Hash(), result.Prompts)
-		}
 	}
 
 	// Track this shadow branch for cleanup
@@ -2457,29 +2446,4 @@ func (s *ManualCommitStrategy) carryForwardToNewShadowBranch(
 		slog.String("session_id", state.SessionID),
 		slog.Int("remaining_files", len(remainingFiles)),
 	)
-}
-
-// appendCheckpointToExistingTrail links a checkpoint to the given trail.
-// Best-effort: silently returns on any error (trails are non-critical metadata).
-func appendCheckpointToExistingTrail(store *trail.Store, trailID trail.ID, cpID id.CheckpointID, commitSHA plumbing.Hash, prompts []string) {
-	var summary *string
-	if len(prompts) > 0 {
-		s := truncateForSummary(prompts[len(prompts)-1], 200)
-		summary = &s
-	}
-
-	//nolint:errcheck,gosec // best-effort: trail checkpoint linking is non-critical
-	store.AddCheckpoint(trailID, trail.CheckpointRef{
-		CheckpointID: cpID.String(),
-		CommitSHA:    commitSHA.String(),
-		CreatedAt:    time.Now().UTC(),
-		Summary:      summary,
-	})
-}
-
-// truncateForSummary takes the first line of s and truncates to maxLen runes.
-func truncateForSummary(s string, maxLen int) string {
-	line, _, _ := strings.Cut(s, "\n")
-	line = strings.TrimSpace(line)
-	return stringutil.TruncateRunes(line, maxLen, "...")
 }
