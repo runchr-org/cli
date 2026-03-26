@@ -121,9 +121,6 @@ func convertOpenCodeUser(msg openCodeMessage, ts json.RawMessage, meta compactMe
 		"ts", ts,
 		"content", json.RawMessage(contentJSON),
 	)
-	if b == nil {
-		return nil
-	}
 	return [][]byte{b}
 }
 
@@ -178,9 +175,6 @@ func convertOpenCodeAssistant(msg openCodeMessage, ts json.RawMessage, meta comp
 		"id", mustMarshal(msg.Info.ID),
 		"content", json.RawMessage(contentJSON),
 	)
-	if b == nil {
-		return nil
-	}
 	return [][]byte{b}
 }
 

@@ -1,17 +1,21 @@
 package compact
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+
+	"github.com/entireio/cli/cmd/entire/cli/transcript"
 )
 
 // isDroidFormat checks whether JSONL content uses Factory AI Droid's envelope
-// format. It scans lines looking for one with a "type" field — if the first
-// such line has type "message" with a nested "message" object, it's Droid format.
-// Non-typed lines (session_start, session_event) are skipped.
+// format. It scans lines looking for one with a recognizable "type" field — if
+// the first such line has type "message" with a nested "message" object, it's
+// Droid format. Unrecognized types (session_start, session_event) are skipped.
 func isDroidFormat(content []byte) bool {
-	for _, line := range bytes.Split(content, []byte("\n")) {
-		line = bytes.TrimSpace(line)
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
 			continue
 		}
@@ -26,7 +30,7 @@ func isDroidFormat(content []byte) bool {
 			return true
 		}
 		// If we hit a known Claude Code/Cursor type, it's not Droid.
-		if userAliases[probe.Type] || assistantAliases[probe.Type] || droppedTypes[probe.Type] {
+		if userAliases[probe.Type] || probe.Type == transcript.TypeAssistant || droppedTypes[probe.Type] {
 			return false
 		}
 	}
@@ -64,7 +68,7 @@ func unwrapDroidEnvelope(raw map[string]json.RawMessage) map[string]json.RawMess
 	}
 
 	innerRole := unquote(inner["role"])
-	if !userAliases[innerRole] && !assistantAliases[innerRole] {
+	if !userAliases[innerRole] && innerRole != transcript.TypeAssistant {
 		return raw
 	}
 

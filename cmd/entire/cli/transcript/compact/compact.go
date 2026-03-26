@@ -46,7 +46,7 @@ func newCompactMeta(opts Options) compactMeta {
 //	{"v":1,"agent":"claude-code","cli_version":"0.42.0","type":"user_tool_result","ts":"...","tool_use_id":"...","result":{...}}
 //	{"v":1,"agent":"claude-code","cli_version":"0.42.0","type":"assistant","ts":"...","id":"msg_xxx","content":[...]}
 func Compact(content []byte, opts Options) ([]byte, error) {
-	truncated := sliceFromLine(content, opts.StartLine)
+	truncated := transcript.SliceFromLine(content, opts.StartLine)
 	if truncated == nil {
 		truncated = []byte{}
 	}
@@ -81,11 +81,6 @@ var userAliases = map[string]bool{
 	"human":             true,
 }
 
-// assistantAliases maps JSONL type/role values to the canonical "assistant" kind.
-var assistantAliases = map[string]bool{
-	transcript.TypeAssistant: true,
-}
-
 // normalizeKind returns the canonical entry kind ("user" or "assistant") for a
 // JSONL transcript line. It checks the "type" field, then falls back to "role".
 // Returns "" for unrecognised or dropped entries.
@@ -101,7 +96,7 @@ func normalizeKind(raw map[string]json.RawMessage) string {
 	if userAliases[kind] {
 		return transcript.TypeUser
 	}
-	if assistantAliases[kind] {
+	if kind == transcript.TypeAssistant {
 		return transcript.TypeAssistant
 	}
 	return ""
@@ -186,9 +181,6 @@ func convertAssistant(raw map[string]json.RawMessage, meta compactMeta) [][]byte
 		"id", id,
 		"content", content,
 	)
-	if b == nil {
-		return nil
-	}
 	return [][]byte{b}
 }
 
@@ -213,9 +205,7 @@ func convertUser(raw map[string]json.RawMessage, meta compactMeta) [][]byte {
 		"ts", ts,
 		"content", mustMarshal(textContent),
 	)
-	if b != nil {
-		lines = append(lines, b)
-	}
+	lines = append(lines, b)
 
 	// full.jsonl has a single toolUseResult per user entry, not one per tool_use_id.
 	// When there are multiple tool_result blocks, each user_tool_result line gets the
@@ -240,9 +230,7 @@ func convertUser(raw map[string]json.RawMessage, meta compactMeta) [][]byte {
 			"tool_use_id", mustMarshal(tr.toolUseID),
 			"result", result,
 		)
-		if b != nil {
-			lines = append(lines, b)
-		}
+		lines = append(lines, b)
 	}
 
 	return lines
@@ -357,41 +345,6 @@ func minimizeToolUseResult(raw json.RawMessage) json.RawMessage {
 		"error", obj["error"],
 		"answers", obj["answers"],
 	)
-}
-
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
-// sliceFromLine returns the content starting from line number startLine (0-indexed).
-// This is used to extract only the checkpoint-specific portion of a cumulative transcript.
-// Returns empty slice if startLine exceeds the number of lines.
-func sliceFromLine(content []byte, startLine int) []byte {
-	if len(content) == 0 || startLine <= 0 {
-		return content
-	}
-
-	lineCount := 0
-	offset := 0
-	for i, b := range content {
-		if b == '\n' {
-			lineCount++
-			if lineCount == startLine {
-				offset = i + 1
-				break
-			}
-		}
-	}
-
-	if lineCount < startLine {
-		return nil
-	}
-
-	if offset >= len(content) {
-		return nil
-	}
-
-	return content[offset:]
 }
 
 // marshalOrdered produces a JSON object with keys in the given order.
