@@ -29,7 +29,6 @@ type memoriesKeys struct {
 	Escape     key.Binding
 }
 
-//nolint:unused // used in later task (injection tab implementation)
 type injectionKeys struct {
 	Up     key.Binding
 	Down   key.Binding
@@ -38,14 +37,12 @@ type injectionKeys struct {
 	Escape key.Binding
 }
 
-//nolint:unused // used in later task (history tab implementation)
 type historyKeys struct {
 	Up      key.Binding
 	Down    key.Binding
 	Refresh key.Binding
 }
 
-//nolint:unused // used in later task (settings tab implementation)
 type settingsKeys struct {
 	Mode    key.Binding
 	Policy  key.Binding
@@ -80,7 +77,6 @@ var memoriesKeyMap = memoriesKeys{
 	Escape:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 }
 
-//nolint:unused // used in later task (injection tab implementation)
 var injectionKeyMap = injectionKeys{
 	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "up")),
 	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "down")),
@@ -89,14 +85,12 @@ var injectionKeyMap = injectionKeys{
 	Escape: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "unfocus")),
 }
 
-//nolint:unused // used in later task (history tab implementation)
 var historyKeyMap = historyKeys{
 	Up:      key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "up")),
 	Down:    key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "down")),
 	Refresh: key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "refresh")),
 }
 
-//nolint:unused // used in later task (settings tab implementation)
 var settingsKeyMap = settingsKeys{
 	Mode:    key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "cycle mode")),
 	Policy:  key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "cycle policy")),

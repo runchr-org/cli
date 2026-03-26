@@ -42,8 +42,6 @@ type testPromptResultMsg struct {
 }
 
 // refreshStartedMsg indicates a refresh has begun.
-//
-//nolint:unused // used in later task (history tab implementation)
 type refreshStartedMsg struct{}
 
 // refreshProgressMsg reports refresh progress text.

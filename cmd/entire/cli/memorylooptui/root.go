@@ -49,11 +49,13 @@ func Run(ctx context.Context) error {
 
 	styles := newStyles()
 	m := rootModel{
-		ctx:         ctx,
-		styles:      styles,
-		width:       min(termstyle.GetTerminalWidth(os.Stdout), maxWidth),
-		spinner:     s,
-		memoriesTab: newMemoriesModel(styles),
+		ctx:          ctx,
+		styles:       styles,
+		width:        min(termstyle.GetTerminalWidth(os.Stdout), maxWidth),
+		spinner:      s,
+		memoriesTab:  newMemoriesModel(styles),
+		injectionTab: newInjectionModel(styles),
+		historyTab:   newHistoryModel(styles),
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -86,31 +88,43 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Global keys -- check before delegating to tabs
-		switch {
-		case key.Matches(msg, globalKeyMap.Quit):
+		// Allow ctrl+c to always quit, even when a sub-model captures input.
+		if key.Matches(msg, globalKeyMap.Quit) && msg.String() == "ctrl+c" {
 			return m, tea.Quit
-		case key.Matches(msg, globalKeyMap.Help):
-			m.showHelp = !m.showHelp
-			return m, nil
-		case key.Matches(msg, globalKeyMap.TabNext):
-			m.activeTab = (m.activeTab + 1) % 4
-			return m, nil
-		case key.Matches(msg, globalKeyMap.TabPrev):
-			m.activeTab = (m.activeTab + 3) % 4
-			return m, nil
-		case key.Matches(msg, globalKeyMap.Tab1):
-			m.activeTab = tabMemories
-			return m, nil
-		case key.Matches(msg, globalKeyMap.Tab2):
-			m.activeTab = tabInjection
-			return m, nil
-		case key.Matches(msg, globalKeyMap.Tab3):
-			m.activeTab = tabHistory
-			return m, nil
-		case key.Matches(msg, globalKeyMap.Tab4):
-			m.activeTab = tabSettings
-			return m, nil
+		}
+
+		// When a sub-model is capturing input (add form, search, text input),
+		// skip global key handling so Tab/Esc/number keys reach the sub-model.
+		tabCapturesInput := (m.activeTab == tabMemories && m.memoriesTab.capturesInput()) ||
+			(m.activeTab == tabInjection && m.injectionTab.inputFocus)
+
+		if !tabCapturesInput {
+			// Global keys -- check before delegating to tabs
+			switch {
+			case key.Matches(msg, globalKeyMap.Quit):
+				return m, tea.Quit
+			case key.Matches(msg, globalKeyMap.Help):
+				m.showHelp = !m.showHelp
+				return m, nil
+			case key.Matches(msg, globalKeyMap.TabNext):
+				m.activeTab = (m.activeTab + 1) % 4
+				return m, nil
+			case key.Matches(msg, globalKeyMap.TabPrev):
+				m.activeTab = (m.activeTab + 3) % 4
+				return m, nil
+			case key.Matches(msg, globalKeyMap.Tab1):
+				m.activeTab = tabMemories
+				return m, nil
+			case key.Matches(msg, globalKeyMap.Tab2):
+				m.activeTab = tabInjection
+				return m, nil
+			case key.Matches(msg, globalKeyMap.Tab3):
+				m.activeTab = tabHistory
+				return m, nil
+			case key.Matches(msg, globalKeyMap.Tab4):
+				m.activeTab = tabSettings
+				return m, nil
+			}
 		}
 
 	case stateLoadedMsg:
@@ -140,6 +154,16 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		matches := memoryloop.SelectRelevant(*m.state.Store, msg.prompt, time.Now())
 		return m, func() tea.Msg { return testPromptResultMsg{matches: matches} }
+
+	case refreshStartedMsg:
+		if m.isRefreshing {
+			return m, nil
+		}
+		m.isRefreshing = true
+		// Full async refresh will be added in a later task.
+		return m, func() tea.Msg {
+			return errorFlashMsg{text: "Refresh not yet implemented in TUI. Use: entire memory-loop refresh"}
+		}
 
 	case errorFlashMsg:
 		m.errFlash = msg.text
