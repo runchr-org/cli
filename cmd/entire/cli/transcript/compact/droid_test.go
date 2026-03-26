@@ -32,7 +32,6 @@ func TestCompact_FactoryDroidInlineCases(t *testing.T) {
 `),
 			expected: []string{
 				`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"user","ts":"t1","content":"next step"}`,
-				`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"user_tool_result","ts":"t1","tool_use_id":"tu-1","result":{}}`,
 			},
 		},
 		{

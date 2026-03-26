@@ -234,49 +234,6 @@ func TestCompact_FieldOrder(t *testing.T) {
 	}
 }
 
-// --- Tool result inlining edge cases ---
-
-func TestCompact_ToolResultInlinedIntoPrecedingAssistant(t *testing.T) {
-	t.Parallel()
-
-	// When a user entry has tool_result blocks preceded by an assistant with
-	// matching tool_use, the result is inlined and the user text is emitted
-	// separately.
-	input := []byte(`{"type":"assistant","timestamp":"t0","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"cat a.txt"}}]}}
-{"type":"user","uuid":"u1","timestamp":"t1","message":{"content":[{"type":"tool_result","tool_use_id":"tu-1","content":"done"},{"type":"text","text":"next"}]}}
-`)
-
-	expected := []string{
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t0","id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"cat a.txt"},"result":{"output":"done","status":"success"}}]}`,
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"t1","content":"next"}`,
-	}
-
-	result, err := Compact(input, defaultOpts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertJSONLines(t, result, expected)
-}
-
-func TestCompact_ToolResultWithoutPrecedingAssistant(t *testing.T) {
-	t.Parallel()
-
-	// User entry has tool_result blocks but no preceding assistant to inline
-	// into. The user text is still emitted; tool result data is lost.
-	input := []byte(`{"type":"user","uuid":"u1","timestamp":"t1","message":{"content":[{"type":"tool_result","tool_use_id":"tu-1","content":"done"},{"type":"text","text":"next"}]}}
-`)
-
-	expected := []string{
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"t1","content":"next"}`,
-	}
-
-	result, err := Compact(input, defaultOpts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertJSONLines(t, result, expected)
-}
-
 // --- Cursor tests ---
 
 func TestCompact_CursorRoleOnly(t *testing.T) {

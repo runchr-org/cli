@@ -328,8 +328,8 @@ func inlineToolResult(assistant, user parsedEntry) parsedEntry {
 		return assistant
 	}
 
-	// Find the tool_use block matching the user's tool_use_id (or the last one).
-	idx := len(blocks) - 1
+	// Find the tool_use block matching the user's tool_use_id.
+	idx := -1
 	for i := len(blocks) - 1; i >= 0; i-- {
 		if unquote(blocks[i]["type"]) == transcript.ContentTypeToolUse {
 			if user.toolUseID == "" || unquote(blocks[i]["id"]) == user.toolUseID {
@@ -337,6 +337,10 @@ func inlineToolResult(assistant, user parsedEntry) parsedEntry {
 				break
 			}
 		}
+	}
+	// No matching tool_use block: do not attach a result to unrelated content.
+	if idx == -1 {
+		return assistant
 	}
 
 	status := "success"
