@@ -219,6 +219,61 @@ func TestWriteCommitted_AgentField(t *testing.T) {
 	}
 }
 
+func TestWriteCommitted_OwnerFieldsPersisted(t *testing.T) {
+	tempDir := t.TempDir()
+
+	repo, err := git.PlainInit(tempDir, false)
+	require.NoError(t, err)
+
+	worktree, err := repo.Worktree()
+	require.NoError(t, err)
+
+	readmeFile := filepath.Join(tempDir, "README.md")
+	require.NoError(t, os.WriteFile(readmeFile, []byte("# Test"), 0o644))
+	_, err = worktree.Add("README.md")
+	require.NoError(t, err)
+	_, err = worktree.Commit("Initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com"},
+	})
+	require.NoError(t, err)
+
+	store := NewGitStore(repo)
+	checkpointID := id.MustCheckpointID("b1b2c3d4e5f6")
+
+	err = store.WriteCommitted(context.Background(), WriteCommittedOptions{
+		CheckpointID: checkpointID,
+		SessionID:    "test-session-owner-meta",
+		Strategy:     "manual-commit",
+		Transcript:   []byte("test transcript content"),
+		AuthorName:   "Condense Author",
+		AuthorEmail:  "condense@example.com",
+		OwnerName:    "Session Owner",
+		OwnerEmail:   "owner@example.com",
+	})
+	require.NoError(t, err)
+
+	ref, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
+	require.NoError(t, err)
+	commit, err := repo.CommitObject(ref.Hash())
+	require.NoError(t, err)
+	tree, err := commit.Tree()
+	require.NoError(t, err)
+
+	checkpointTree, err := tree.Tree(checkpointID.Path())
+	require.NoError(t, err)
+	sessionTree, err := checkpointTree.Tree("0")
+	require.NoError(t, err)
+	sessionMetadataFile, err := sessionTree.File(paths.MetadataFileName)
+	require.NoError(t, err)
+	sessionContent, err := sessionMetadataFile.Contents()
+	require.NoError(t, err)
+
+	var sessionMetadata CommittedMetadata
+	require.NoError(t, json.Unmarshal([]byte(sessionContent), &sessionMetadata))
+	require.Equal(t, "Session Owner", sessionMetadata.OwnerName)
+	require.Equal(t, "owner@example.com", sessionMetadata.OwnerEmail)
+}
+
 // readLatestSessionMetadata reads the session-specific metadata from the latest session subdirectory.
 // This is where session-specific fields like Summary are stored.
 func readLatestSessionMetadata(t *testing.T, repo *git.Repository, checkpointID id.CheckpointID) CommittedMetadata {

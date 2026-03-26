@@ -232,6 +232,12 @@ type WriteCommittedOptions struct {
 	// AuthorEmail is the email to use for commits
 	AuthorEmail string
 
+	// OwnerName and OwnerEmail identify who owned the session when it started.
+	// Unlike AuthorName/AuthorEmail, these are durable session-attribution fields,
+	// not metadata-branch commit authorship.
+	OwnerName  string
+	OwnerEmail string
+
 	// MetadataDir is a directory containing additional metadata files to copy
 	// If set, all files in this directory will be copied to the checkpoint path
 	// This is useful for copying task metadata files, subagent transcripts, etc.
@@ -373,6 +379,10 @@ type CommittedMetadata struct {
 
 	// Model is the LLM model used during the session (e.g., "claude-sonnet-4-20250514")
 	Model string `json:"model,omitempty"`
+
+	// OwnerName and OwnerEmail identify who owned the session when it started.
+	OwnerName  string `json:"owner_name,omitempty"`
+	OwnerEmail string `json:"owner_email,omitempty"`
 
 	// TurnID correlates checkpoints from the same agent turn.
 	// When a turn's work spans multiple commits, each gets its own checkpoint

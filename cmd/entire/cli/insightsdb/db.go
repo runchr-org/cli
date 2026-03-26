@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite" // SQLite driver
 )
@@ -77,6 +78,8 @@ func (idb *InsightsDB) migrate() error {
 			agent                TEXT,
 			model                TEXT,
 			branch               TEXT,
+			owner_name           TEXT,
+			owner_email          TEXT,
 			created_at           TEXT NOT NULL,
 			input_tokens         INTEGER DEFAULT 0,
 			cache_tokens         INTEGER DEFAULT 0,
@@ -170,7 +173,23 @@ func (idb *InsightsDB) migrate() error {
 			return fmt.Errorf("execute migration statement: %w", err)
 		}
 	}
+	for _, alter := range []string{
+		`ALTER TABLE sessions ADD COLUMN owner_name TEXT`,
+		`ALTER TABLE sessions ADD COLUMN owner_email TEXT`,
+	} {
+		if _, err := idb.db.ExecContext(ctx, alter); err != nil && !isDuplicateColumnError(err) {
+			return fmt.Errorf("execute migration statement: %w", err)
+		}
+	}
 	return nil
+}
+
+func isDuplicateColumnError(err error) bool {
+	return err != nil && (contains(err.Error(), "duplicate column name") || contains(err.Error(), "already exists"))
+}
+
+func contains(s, substr string) bool {
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
 // ListTables returns the names of all user tables in the database.

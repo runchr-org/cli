@@ -241,6 +241,23 @@ func TestInitializeSession_SetsModelName(t *testing.T) {
 		"InitializeSession should set ModelName from model parameter")
 }
 
+func TestInitializeSession_SetsOwnerFromGitConfig(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	s := &ManualCommitStrategy{}
+
+	err := s.InitializeSession(context.Background(), "test-session-owner", "OpenCode", "", "", "")
+	require.NoError(t, err)
+
+	state, err := s.loadSessionState(context.Background(), "test-session-owner")
+	require.NoError(t, err)
+	require.NotNil(t, state)
+
+	assert.Equal(t, "Test User", state.OwnerName)
+	assert.Equal(t, "test@test.com", state.OwnerEmail)
+}
+
 // TestInitializeSession_UpdatesModelOnSubsequentTurn verifies that model
 // is updated when the user switches models between turns.
 func TestInitializeSession_UpdatesModelOnSubsequentTurn(t *testing.T) {

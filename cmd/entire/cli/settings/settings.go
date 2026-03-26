@@ -23,6 +23,14 @@ const (
 	EntireSettingsLocalFile = ".entire/settings.local.json"
 )
 
+const (
+	memoryLoopModeOff                = "off"
+	memoryLoopModeManual             = "manual"
+	memoryLoopModeAuto               = "auto"
+	memoryLoopActivationPolicyReview = "review"
+	memoryLoopActivationPolicyAuto   = "auto"
+)
+
 // Commit linking mode constants.
 const (
 	// CommitLinkingAlways auto-links commits to sessions without prompting.
@@ -75,6 +83,9 @@ type EntireSettings struct {
 	// When enabled, automatically suggests improvements after N sessions.
 	EvolveConfig *EvolveSettings `json:"evolve,omitempty"`
 
+	// MemoryLoopConfig configures the repo-scoped memory loop PoC.
+	MemoryLoopConfig *MemoryLoopSettings `json:"memory_loop,omitempty"`
+
 	// Deprecated: no longer used. Exists to tolerate old settings files
 	// that still contain "strategy": "auto-commit" or similar.
 	Strategy string `json:"strategy,omitempty"`
@@ -106,6 +117,25 @@ type EvolveSettings struct {
 	SessionThreshold int `json:"session_threshold,omitempty"`
 }
 
+// MemoryLoopSettings configures the repo-scoped memory loop PoC.
+type MemoryLoopSettings struct {
+	Enabled                bool   `json:"enabled"`
+	Mode                   string `json:"mode,omitempty"`
+	ActivationPolicy       string `json:"activation_policy,omitempty"`
+	ClaudeInjectionEnabled *bool  `json:"claude_injection_enabled,omitempty"`
+	MaxInjected            int    `json:"max_injected,omitempty"`
+	DefaultRefreshWindow   int    `json:"default_refresh_window,omitempty"`
+}
+
+// MemoryLoopConfig is the effective memory-loop configuration with defaults applied.
+type MemoryLoopConfig struct {
+	Enabled              bool
+	Mode                 string
+	ActivationPolicy     string
+	MaxInjected          int
+	DefaultRefreshWindow int
+}
+
 // GetEvolveConfig returns the evolution loop configuration with defaults applied.
 func (s *EntireSettings) GetEvolveConfig() EvolveSettings {
 	if s.EvolveConfig == nil {
@@ -114,6 +144,51 @@ func (s *EntireSettings) GetEvolveConfig() EvolveSettings {
 	cfg := *s.EvolveConfig
 	if cfg.SessionThreshold == 0 {
 		cfg.SessionThreshold = 5
+	}
+	return cfg
+}
+
+// GetMemoryLoopConfig returns memory-loop configuration with defaults applied.
+func (s *EntireSettings) GetMemoryLoopConfig() MemoryLoopConfig {
+	cfg := MemoryLoopConfig{
+		MaxInjected:          3,
+		DefaultRefreshWindow: 20,
+		Mode:                 memoryLoopModeOff,
+		ActivationPolicy:     memoryLoopActivationPolicyReview,
+	}
+	if s.MemoryLoopConfig == nil {
+		return cfg
+	}
+	if s.MemoryLoopConfig.Mode != "" {
+		cfg.Enabled = true
+		cfg.Mode = s.MemoryLoopConfig.Mode
+	} else {
+		cfg.Enabled = s.MemoryLoopConfig.Enabled
+	}
+	if s.MemoryLoopConfig.ActivationPolicy != "" {
+		cfg.ActivationPolicy = s.MemoryLoopConfig.ActivationPolicy
+	}
+	if s.MemoryLoopConfig.Mode == "" && s.MemoryLoopConfig.ClaudeInjectionEnabled != nil {
+		switch {
+		case !cfg.Enabled:
+			cfg.Mode = memoryLoopModeOff
+		case *s.MemoryLoopConfig.ClaudeInjectionEnabled:
+			cfg.Mode = memoryLoopModeAuto
+		default:
+			cfg.Mode = memoryLoopModeManual
+		}
+	}
+	if s.MemoryLoopConfig.MaxInjected != 0 {
+		cfg.MaxInjected = s.MemoryLoopConfig.MaxInjected
+	}
+	if s.MemoryLoopConfig.DefaultRefreshWindow != 0 {
+		cfg.DefaultRefreshWindow = s.MemoryLoopConfig.DefaultRefreshWindow
+	}
+	if cfg.MaxInjected == 0 {
+		cfg.MaxInjected = 3
+	}
+	if cfg.DefaultRefreshWindow == 0 {
+		cfg.DefaultRefreshWindow = 20
 	}
 	return cfg
 }
@@ -162,6 +237,10 @@ func Load(ctx context.Context) (*EntireSettings, error) {
 		}
 	}
 
+	if err := validateSettings(settings); err != nil {
+		return nil, err
+	}
+
 	return settings, nil
 }
 
@@ -194,8 +273,8 @@ func loadFromFile(filePath string) (*EntireSettings, error) {
 	}
 
 	// Validate commit_linking if set
-	if settings.CommitLinking != "" && settings.CommitLinking != CommitLinkingAlways && settings.CommitLinking != CommitLinkingPrompt {
-		return nil, fmt.Errorf("invalid commit_linking value %q: must be %q or %q", settings.CommitLinking, CommitLinkingAlways, CommitLinkingPrompt)
+	if err := validateSettings(settings); err != nil {
+		return nil, err
 	}
 
 	return settings, nil
@@ -322,6 +401,103 @@ func mergeJSON(settings *EntireSettings, data []byte) error {
 			return fmt.Errorf("parsing evolve field: %w", err)
 		}
 		settings.EvolveConfig = &ev
+	}
+
+	// Override memory_loop if present
+	if memoryLoopRaw, ok := raw["memory_loop"]; ok {
+		if settings.MemoryLoopConfig == nil {
+			settings.MemoryLoopConfig = &MemoryLoopSettings{}
+		}
+		if err := mergeMemoryLoopSettings(settings.MemoryLoopConfig, memoryLoopRaw); err != nil {
+			return fmt.Errorf("parsing memory_loop field: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func validateSettings(settings *EntireSettings) error {
+	if settings.CommitLinking != "" && settings.CommitLinking != CommitLinkingAlways && settings.CommitLinking != CommitLinkingPrompt {
+		return fmt.Errorf("invalid commit_linking value %q: must be %q or %q", settings.CommitLinking, CommitLinkingAlways, CommitLinkingPrompt)
+	}
+	if settings.MemoryLoopConfig == nil {
+		return nil
+	}
+	if settings.MemoryLoopConfig.Mode != "" {
+		switch settings.MemoryLoopConfig.Mode {
+		case memoryLoopModeOff, memoryLoopModeManual, memoryLoopModeAuto:
+		default:
+			return fmt.Errorf(
+				"invalid memory_loop.mode value %q: must be %q, %q, or %q",
+				settings.MemoryLoopConfig.Mode,
+				memoryLoopModeOff,
+				memoryLoopModeManual,
+				memoryLoopModeAuto,
+			)
+		}
+	}
+	if settings.MemoryLoopConfig.ActivationPolicy != "" {
+		switch settings.MemoryLoopConfig.ActivationPolicy {
+		case memoryLoopActivationPolicyReview, memoryLoopActivationPolicyAuto:
+		default:
+			return fmt.Errorf(
+				"invalid memory_loop.activation_policy value %q: must be %q or %q",
+				settings.MemoryLoopConfig.ActivationPolicy,
+				memoryLoopActivationPolicyReview,
+				memoryLoopActivationPolicyAuto,
+			)
+		}
+	}
+	return nil
+}
+
+func mergeMemoryLoopSettings(dst *MemoryLoopSettings, data json.RawMessage) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parsing memory_loop: %w", err)
+	}
+
+	if enabledRaw, ok := raw["enabled"]; ok {
+		var enabled bool
+		if err := json.Unmarshal(enabledRaw, &enabled); err != nil {
+			return fmt.Errorf("parsing memory_loop.enabled: %w", err)
+		}
+		dst.Enabled = enabled
+	}
+	if modeRaw, ok := raw["mode"]; ok {
+		var mode string
+		if err := json.Unmarshal(modeRaw, &mode); err != nil {
+			return fmt.Errorf("parsing memory_loop.mode: %w", err)
+		}
+		dst.Mode = mode
+	}
+	if policyRaw, ok := raw["activation_policy"]; ok {
+		var policy string
+		if err := json.Unmarshal(policyRaw, &policy); err != nil {
+			return fmt.Errorf("parsing memory_loop.activation_policy: %w", err)
+		}
+		dst.ActivationPolicy = policy
+	}
+	if injectionRaw, ok := raw["claude_injection_enabled"]; ok {
+		var enabled bool
+		if err := json.Unmarshal(injectionRaw, &enabled); err != nil {
+			return fmt.Errorf("parsing memory_loop.claude_injection_enabled: %w", err)
+		}
+		dst.ClaudeInjectionEnabled = &enabled
+	}
+	if maxInjectedRaw, ok := raw["max_injected"]; ok {
+		var maxInjected int
+		if err := json.Unmarshal(maxInjectedRaw, &maxInjected); err != nil {
+			return fmt.Errorf("parsing memory_loop.max_injected: %w", err)
+		}
+		dst.MaxInjected = maxInjected
+	}
+	if refreshWindowRaw, ok := raw["default_refresh_window"]; ok {
+		var refreshWindow int
+		if err := json.Unmarshal(refreshWindowRaw, &refreshWindow); err != nil {
+			return fmt.Errorf("parsing memory_loop.default_refresh_window: %w", err)
+		}
+		dst.DefaultRefreshWindow = refreshWindow
 	}
 
 	return nil

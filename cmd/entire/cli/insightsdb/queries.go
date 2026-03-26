@@ -34,6 +34,22 @@ func (idb *InsightsDB) QueryByAgent(ctx context.Context, agent string, limit int
 	)
 }
 
+// QueryByBranch returns sessions filtered by branch, most recent first.
+func (idb *InsightsDB) QueryByBranch(ctx context.Context, branch string, limit int) ([]SessionRow, error) {
+	return idb.querySessions(ctx,
+		"SELECT "+sessionColumns+" FROM sessions WHERE branch = ? ORDER BY created_at DESC LIMIT ?",
+		branch, limit,
+	)
+}
+
+// QueryByOwnerEmail returns sessions filtered by owner email, most recent first.
+func (idb *InsightsDB) QueryByOwnerEmail(ctx context.Context, ownerEmail string, limit int) ([]SessionRow, error) {
+	return idb.querySessions(ctx,
+		"SELECT "+sessionColumns+" FROM sessions WHERE owner_email = ? ORDER BY created_at DESC LIMIT ?",
+		ownerEmail, limit,
+	)
+}
+
 // SessionCount returns the total number of cached sessions.
 func (idb *InsightsDB) SessionCount(ctx context.Context) (int, error) {
 	var count int
@@ -103,7 +119,7 @@ func (idb *InsightsDB) QuerySessionsWithFriction(ctx context.Context, pattern st
 // sessionColumns is the ordered column list for SELECT queries on the sessions table.
 const sessionColumns = `
 	checkpoint_id, session_id, session_index,
-	agent, model, branch, created_at,
+	agent, model, branch, owner_name, owner_email, created_at,
 	input_tokens, cache_tokens, output_tokens, total_tokens,
 	api_call_count, duration_ms, turn_count,
 	intent, outcome, agent_percentage,
@@ -143,12 +159,12 @@ func (idb *InsightsDB) querySessions(ctx context.Context, query string, args ...
 func scanSession(rows *sql.Rows) (SessionRow, error) {
 	var row SessionRow
 	var createdAt string
-	var agent, model, branch, intent, outcome sql.NullString
+	var agent, model, branch, ownerName, ownerEmail, intent, outcome sql.NullString
 	var hasSummary, hasFacets int
 
 	err := rows.Scan(
 		&row.CheckpointID, &row.SessionID, &row.SessionIndex,
-		&agent, &model, &branch, &createdAt,
+		&agent, &model, &branch, &ownerName, &ownerEmail, &createdAt,
 		&row.InputTokens, &row.CacheTokens, &row.OutputTokens, &row.TotalTokens,
 		&row.APICallCount, &row.DurationMs, &row.TurnCount,
 		&intent, &outcome, &row.AgentPct,
@@ -162,6 +178,8 @@ func scanSession(rows *sql.Rows) (SessionRow, error) {
 	row.Agent = agent.String
 	row.Model = model.String
 	row.Branch = branch.String
+	row.OwnerName = ownerName.String
+	row.OwnerEmail = ownerEmail.String
 	row.Intent = intent.String
 	row.Outcome = outcome.String
 	row.HasSummary = hasSummary == 1

@@ -19,13 +19,17 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
 	"github.com/entireio/cli/perf"
 )
+
+const memoryLoopClaudeAgentName = "claude-code"
 
 // DispatchLifecycleEvent routes a normalized lifecycle event to the appropriate handler.
 // Returns nil if the event was handled successfully.
@@ -250,7 +254,101 @@ func handleLifecycleTurnStart(ctx context.Context, ag agent.Agent, event *agent.
 	}
 	initSpan.End()
 
+	if err := maybeInjectMemoryLoop(ctx, ag, event); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Event) error {
+	if string(ag.Name()) != memoryLoopClaudeAgentName || event.Prompt == "" {
+		return nil
+	}
+
+	writer, ok := agent.AsHookResponseWriter(ag)
+	if !ok {
+		return nil
+	}
+
+	state, loadErr := memoryloop.LoadState(ctx)
+	if loadErr != nil {
+		state = &memoryloop.State{}
+	}
+	settingsValue, settingsErr := LoadEntireSettings(ctx)
+	if settingsErr != nil {
+		settingsValue = nil
+	}
+	if effectiveMemoryLoopMode(state, settingsValue) != memoryloop.ModeAuto {
+		return nil
+	}
+
+	if state.Snapshot == nil || !state.Snapshot.InjectionEnabled {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	matches := memoryloop.SelectRelevant(*state.Snapshot, event.Prompt, now)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	message := memoryloop.FormatInjectionBlock(matches)
+	if strings.TrimSpace(event.ResponseMessage) != "" {
+		message = strings.TrimSpace(event.ResponseMessage) + "\n\n" + message
+	}
+	if err := writer.WriteHookResponse(message); err != nil {
+		return fmt.Errorf("failed to write memory-loop hook response: %w", err)
+	}
+
+	ids := make([]string, 0, len(matches))
+	reasons := make([]string, 0, len(matches))
+	for _, match := range matches {
+		ids = append(ids, match.Record.ID)
+		if match.Reason != "" {
+			reasons = append(reasons, match.Reason)
+		}
+	}
+
+	logEntry := memoryloop.InjectionLog{
+		SessionID:         event.SessionID,
+		PromptPreview:     truncatePromptPreview(event.Prompt, 120),
+		InjectedMemoryIDs: ids,
+		InjectedAt:        now,
+		Reason:            strings.Join(reasons, ", "),
+	}
+	memoryloop.RecordInjectionActivity(state, matches, logEntry, now)
+	if err := memoryloop.SaveState(ctx, state); err != nil {
+		logging.Warn(logging.WithComponent(ctx, "lifecycle"), "failed to persist memory-loop injection activity",
+			slog.String("error", err.Error()))
+	}
+
+	return nil
+}
+
+func effectiveMemoryLoopMode(state *memoryloop.State, settingsValue *settings.EntireSettings) memoryloop.Mode {
+	if state != nil && state.Store != nil {
+		return state.Store.Mode
+	}
+	if settingsValue == nil || settingsValue.MemoryLoopConfig == nil {
+		return memoryloop.ModeOff
+	}
+	cfg := settingsValue.GetMemoryLoopConfig()
+	if cfg.Mode == "" && !cfg.Enabled {
+		return memoryloop.ModeOff
+	}
+	return memoryloop.Mode(cfg.Mode)
+}
+
+func truncatePromptPreview(prompt string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	runes := []rune(strings.TrimSpace(prompt))
+	if len(runes) <= maxLen {
+		return string(runes)
+	}
+	return string(runes[:maxLen]) + "..."
 }
 
 // handleLifecycleTurnEnd handles turn end: validates transcript, extracts metadata,

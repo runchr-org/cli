@@ -287,6 +287,8 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		EphemeralBranch:             shadowBranchName,
 		AuthorName:                  authorName,
 		AuthorEmail:                 authorEmail,
+		OwnerName:                   state.OwnerName,
+		OwnerEmail:                  state.OwnerEmail,
 		Agent:                       state.AgentType,
 		Model:                       state.ModelName,
 		TurnID:                      state.TurnID,

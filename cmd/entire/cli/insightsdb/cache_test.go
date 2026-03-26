@@ -100,6 +100,8 @@ func TestInsertSession_BasicFields(t *testing.T) {
 		Agent:        "claude-code",
 		Model:        "claude-3-5-sonnet",
 		Branch:       "main",
+		OwnerName:    "Test User",
+		OwnerEmail:   "test@example.com",
 		CreatedAt:    time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC),
 		InputTokens:  1000,
 		CacheTokens:  200,
@@ -127,6 +129,8 @@ func TestInsertSession_BasicFields(t *testing.T) {
 	assert.Equal(t, "claude-code", got.Agent)
 	assert.Equal(t, "claude-3-5-sonnet", got.Model)
 	assert.Equal(t, "main", got.Branch)
+	assert.Equal(t, "Test User", got.OwnerName)
+	assert.Equal(t, "test@example.com", got.OwnerEmail)
 	assert.Equal(t, 1000, got.InputTokens)
 	assert.Equal(t, 200, got.CacheTokens)
 	assert.Equal(t, 300, got.OutputTokens)

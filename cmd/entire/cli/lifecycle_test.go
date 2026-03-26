@@ -10,13 +10,17 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/stretchr/testify/require"
 )
+
+const testClaudeCodeAgentType = "Claude Code"
 
 // mockLifecycleAgent is a minimal Agent implementation for lifecycle tests.
 type mockLifecycleAgent struct {
@@ -176,6 +180,10 @@ func newMockHookResponseAgent() *mockHookResponseAgent {
 			agentType: "Mock HRW Agent",
 		},
 	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 func TestHandleLifecycleSessionStart_EmptyRepoWarning(t *testing.T) {
@@ -712,6 +720,270 @@ func TestHandleLifecycleTurnStart_WritesPromptContent(t *testing.T) {
 	if string(data) != "create a file called hello.txt" {
 		t.Errorf("expected prompt content 'create a file called hello.txt', got %q", string(data))
 	}
+}
+
+func TestHandleLifecycleTurnStart_InjectsMemoryForClaude(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir()
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".entire", "memory-loop.json"), []byte(`{
+  "snapshot": {
+    "version": 1,
+    "generated_at": "2026-03-25T12:00:00Z",
+    "source_window": 20,
+    "injection_enabled": true,
+    "max_injected": 3,
+    "records": [
+      {
+        "id": "lint",
+        "kind": "repo_rule",
+        "title": "Run lint before finishing",
+        "body": "Run golangci-lint before claiming completion.",
+        "why": "This repo frequently fails on lint after edits.",
+        "confidence": "high",
+        "strength": 5,
+        "status": "active",
+        "created_at": "2026-03-25T12:00:00Z",
+        "updated_at": "2026-03-25T12:00:00Z"
+      }
+    ]
+  }
+}`), 0o644))
+
+	ag := newMockHookResponseAgent()
+	ag.name = memoryLoopClaudeAgentName
+	ag.agentType = testClaudeCodeAgentType
+
+	event := &agent.Event{
+		Type:      agent.TurnStart,
+		SessionID: "test-memory-injection",
+		Prompt:    "fix the lint failure in capabilities.go",
+		Timestamp: time.Now(),
+	}
+
+	require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, event))
+	require.Contains(t, ag.lastMessage, "Memory For This Repo")
+	require.Contains(t, ag.lastMessage, "Run lint before finishing")
+}
+
+func TestHandleLifecycleTurnStart_RecordsMemoryActivityForInjectedMatches(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir()
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	require.NoError(t, memoryloop.SaveState(context.Background(), &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:          1,
+			GeneratedAt:      time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+			SourceWindow:     20,
+			Mode:             memoryloop.ModeAuto,
+			ActivationPolicy: memoryloop.ActivationPolicyReview,
+			MaxInjected:      3,
+			Records: []memoryloop.MemoryRecord{
+				{
+					ID:        "lint",
+					Kind:      memoryloop.KindRepoRule,
+					Title:     "Run lint before finishing",
+					Body:      "Run golangci-lint before claiming completion.",
+					Status:    memoryloop.StatusActive,
+					ScopeKind: memoryloop.ScopeKindMe,
+					CreatedAt: time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+					UpdatedAt: time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+				},
+			},
+		},
+	}))
+
+	ag := newMockHookResponseAgent()
+	ag.name = memoryLoopClaudeAgentName
+	ag.agentType = testClaudeCodeAgentType
+
+	event := &agent.Event{
+		Type:      agent.TurnStart,
+		SessionID: "test-memory-activity",
+		Prompt:    "fix the lint failure in capabilities.go",
+		Timestamp: time.Now(),
+	}
+
+	require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, event))
+
+	loaded, err := memoryloop.LoadState(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, loaded.Store)
+	require.Len(t, loaded.Store.Records, 1)
+	require.Equal(t, 1, loaded.Store.Records[0].MatchCount)
+	require.Equal(t, 1, loaded.Store.Records[0].InjectCount)
+	require.False(t, loaded.Store.Records[0].LastMatchedAt.IsZero())
+	require.False(t, loaded.Store.Records[0].LastInjectedAt.IsZero())
+	require.Len(t, loaded.InjectionLogs, 1)
+	require.Equal(t, "test-memory-activity", loaded.InjectionLogs[0].SessionID)
+}
+
+func TestHandleLifecycleTurnStart_StoreModeOverridesLegacySettingsGate(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir()
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".entire", "settings.json"), []byte(`{
+  "enabled": true,
+  "memory_loop": {
+    "enabled": true,
+    "claude_injection_enabled": false
+  }
+}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".entire", "memory-loop.json"), []byte(`{
+  "store": {
+    "version": 1,
+    "generated_at": "2026-03-25T12:00:00Z",
+    "source_window": 20,
+    "mode": "auto",
+    "activation_policy": "review",
+    "max_injected": 3,
+    "records": [
+      {
+        "id": "lint",
+        "kind": "repo_rule",
+        "title": "Run lint before finishing",
+        "body": "Run golangci-lint before claiming completion.",
+        "why": "This repo frequently fails on lint after edits.",
+        "confidence": "high",
+        "strength": 5,
+        "status": "active",
+        "created_at": "2026-03-25T12:00:00Z",
+        "updated_at": "2026-03-25T12:00:00Z"
+      }
+    ]
+  }
+}`), 0o644))
+
+	ag := newMockHookResponseAgent()
+	ag.name = memoryLoopClaudeAgentName
+	ag.agentType = testClaudeCodeAgentType
+
+	event := &agent.Event{
+		Type:      agent.TurnStart,
+		SessionID: "test-store-mode-overrides-settings",
+		Prompt:    "fix the lint failure in capabilities.go",
+		Timestamp: time.Now(),
+	}
+
+	require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, event))
+	require.Contains(t, ag.lastMessage, "Memory For This Repo")
+}
+
+func TestHandleLifecycleTurnStart_RecordsMemoryLoopActivity(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".entire", "memory-loop.json"), []byte(`{
+  "store": {
+    "version": 1,
+    "generated_at": "2026-03-25T12:00:00Z",
+    "source_window": 20,
+    "mode": "auto",
+    "activation_policy": "review",
+    "max_injected": 3,
+    "records": [
+      {
+        "id": "lint",
+        "kind": "repo_rule",
+        "title": "Run lint before finishing",
+        "body": "Run golangci-lint before claiming completion.",
+        "status": "active",
+        "created_at": "2026-03-25T12:00:00Z",
+        "updated_at": "2026-03-25T12:00:00Z"
+      }
+    ]
+  }
+}`), 0o644))
+
+	ag := newMockHookResponseAgent()
+	ag.name = memoryLoopClaudeAgentName
+	ag.agentType = testClaudeCodeAgentType
+
+	event := &agent.Event{
+		Type:      agent.TurnStart,
+		SessionID: "test-memory-activity",
+		Prompt:    "fix the lint failure in capabilities.go",
+		Timestamp: time.Now(),
+	}
+
+	require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, event))
+
+	state, err := memoryloop.LoadState(context.Background())
+	require.NoError(t, err)
+	require.Len(t, state.Store.Records, 1)
+	require.Equal(t, 1, state.Store.Records[0].MatchCount)
+	require.Equal(t, 1, state.Store.Records[0].InjectCount)
+	require.False(t, state.Store.Records[0].LastMatchedAt.IsZero())
+	require.False(t, state.Store.Records[0].LastInjectedAt.IsZero())
+	require.Len(t, state.InjectionLogs, 1)
+	require.Equal(t, "test-memory-activity", state.InjectionLogs[0].SessionID)
+}
+
+func TestEffectiveMemoryLoopMode_PreStoreUsesModeDerivedFromSettings(t *testing.T) {
+	t.Parallel()
+
+	settingsValue := &settings.EntireSettings{
+		MemoryLoopConfig: &settings.MemoryLoopSettings{
+			Enabled:                true,
+			ClaudeInjectionEnabled: boolPtr(false),
+		},
+	}
+	require.Equal(t, memoryloop.ModeManual, effectiveMemoryLoopMode(&memoryloop.State{}, settingsValue))
+
+	settingsValue = &settings.EntireSettings{
+		MemoryLoopConfig: &settings.MemoryLoopSettings{
+			Enabled:                true,
+			ClaudeInjectionEnabled: boolPtr(true),
+		},
+	}
+	require.Equal(t, memoryloop.ModeAuto, effectiveMemoryLoopMode(&memoryloop.State{}, settingsValue))
+
+	settingsValue = &settings.EntireSettings{
+		MemoryLoopConfig: &settings.MemoryLoopSettings{
+			Enabled:                true,
+			Mode:                   "manual",
+			ClaudeInjectionEnabled: boolPtr(true),
+		},
+	}
+	require.Equal(t, memoryloop.ModeManual, effectiveMemoryLoopMode(&memoryloop.State{}, settingsValue))
+}
+
+func TestEffectiveMemoryLoopMode_PreStoreExplicitModeBeatsLegacyEnabled(t *testing.T) {
+	t.Parallel()
+
+	settingsValue := &settings.EntireSettings{
+		MemoryLoopConfig: &settings.MemoryLoopSettings{
+			Enabled: false,
+			Mode:    "auto",
+		},
+	}
+	require.Equal(t, memoryloop.ModeAuto, effectiveMemoryLoopMode(&memoryloop.State{}, settingsValue))
 }
 
 func TestHandleLifecycleTurnEnd_BackfillsPromptFromTranscript(t *testing.T) {

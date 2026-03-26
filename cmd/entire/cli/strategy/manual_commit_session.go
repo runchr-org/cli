@@ -223,6 +223,8 @@ func (s *ManualCommitStrategy) initializeSession(ctx context.Context, repo *git.
 		return nil, fmt.Errorf("failed to generate turn ID: %w", err)
 	}
 
+	ownerName, ownerEmail := GetGitAuthorFromRepo(repo)
+
 	now := time.Now()
 	headHash := head.Hash().String()
 	state := &SessionState{
@@ -239,6 +241,8 @@ func (s *ManualCommitStrategy) initializeSession(ctx context.Context, repo *git.
 		UntrackedFilesAtStart: untrackedFiles,
 		AgentType:             agentType,
 		ModelName:             model,
+		OwnerName:             ownerName,
+		OwnerEmail:            ownerEmail,
 		TranscriptPath:        transcriptPath,
 		LastPrompt:            truncatePromptForStorage(userPrompt),
 	}

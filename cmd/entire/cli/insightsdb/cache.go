@@ -20,6 +20,8 @@ type SessionRow struct {
 	Agent        string
 	Model        string
 	Branch       string
+	OwnerName    string
+	OwnerEmail   string
 	CreatedAt    time.Time
 	InputTokens  int
 	CacheTokens  int
@@ -150,7 +152,7 @@ func insertSessionRow(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO sessions (
 			checkpoint_id, session_id, session_index,
-			agent, model, branch, created_at,
+			agent, model, branch, owner_name, owner_email, created_at,
 			input_tokens, cache_tokens, output_tokens, total_tokens,
 			api_call_count, duration_ms, turn_count,
 			intent, outcome, agent_percentage,
@@ -158,7 +160,7 @@ func insertSessionRow(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 			score_friction, score_focus, has_summary, has_facets
 		) VALUES (
 			?, ?, ?,
-			?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?,
 			?, ?, ?,
 			?, ?, ?,
@@ -167,6 +169,7 @@ func insertSessionRow(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 		)`,
 		row.CheckpointID, row.SessionID, row.SessionIndex,
 		nullableString(row.Agent), nullableString(row.Model), nullableString(row.Branch),
+		nullableString(row.OwnerName), nullableString(row.OwnerEmail),
 		row.CreatedAt.UTC().Format(time.RFC3339),
 		row.InputTokens, row.CacheTokens, row.OutputTokens, row.TotalTokens,
 		row.APICallCount, row.DurationMs, row.TurnCount,

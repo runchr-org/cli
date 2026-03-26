@@ -135,6 +135,11 @@ type State struct {
 	// Set from hook data when the agent provides it.
 	ModelName string `json:"model_name,omitempty"`
 
+	// OwnerName and OwnerEmail capture the git identity active when the session started.
+	// These fields are used for durable session attribution in shared repos/worktrees.
+	OwnerName  string `json:"owner_name,omitempty"`
+	OwnerEmail string `json:"owner_email,omitempty"`
+
 	// Token usage tracking (accumulated across all checkpoints in this session)
 	TokenUsage *agent.TokenUsage `json:"token_usage,omitempty"`
 

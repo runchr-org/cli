@@ -1,0 +1,1229 @@
+package memoryloop
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/entireio/cli/cmd/entire/cli/facets"
+	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/stretchr/testify/require"
+)
+
+func TestSaveAndLoadState(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	now := time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC)
+	state := &State{
+		Snapshot: &Snapshot{
+			Version:          1,
+			GeneratedAt:      now,
+			SourceWindow:     20,
+			InjectionEnabled: true,
+			MaxInjected:      3,
+			Records: []MemoryRecord{
+				{
+					ID:               "repo-rule-run-lint",
+					Kind:             KindRepoRule,
+					Title:            "Run lint before finishing",
+					Body:             "Run lint before claiming the task is complete.",
+					Why:              "This repo repeatedly fails on lint after otherwise-correct edits.",
+					Evidence:         []string{"lint failed after code changes"},
+					SourceSessionIDs: []string{"sess-1", "sess-2"},
+					Confidence:       "high",
+					Strength:         4,
+					Status:           StatusActive,
+					CreatedAt:        now,
+					UpdatedAt:        now,
+				},
+			},
+		},
+		InjectionLogs: []InjectionLog{
+			{
+				SessionID:         "sess-next",
+				PromptPreview:     "fix the lint issue in capabilities.go",
+				InjectedMemoryIDs: []string{"repo-rule-run-lint"},
+				InjectedAt:        now,
+				Reason:            "keyword overlap",
+			},
+		},
+	}
+
+	require.NoError(t, SaveState(context.Background(), state))
+
+	loaded, err := LoadState(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, loaded.Snapshot)
+	require.Len(t, loaded.Snapshot.Records, 1)
+	require.Equal(t, "Run lint before finishing", loaded.Snapshot.Records[0].Title)
+	require.Len(t, loaded.InjectionLogs, 1)
+	require.Equal(t, "sess-next", loaded.InjectionLogs[0].SessionID)
+}
+
+func TestSelectRelevantPrefersMatchingRecords(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC)
+	snapshot := Snapshot{
+		MaxInjected: 2,
+		Records: []MemoryRecord{
+			{
+				ID:         "lint",
+				Kind:       KindRepoRule,
+				Title:      "Run lint before finishing",
+				Body:       "Run golangci-lint before claiming completion.",
+				Strength:   5,
+				Status:     StatusActive,
+				UpdatedAt:  now,
+				Confidence: "high",
+			},
+			{
+				ID:         "skills",
+				Kind:       KindSkillPatch,
+				Title:      "Tighten the project skill",
+				Body:       "If a project skill causes friction, update the SKILL.md with the missing step.",
+				Strength:   4,
+				Status:     StatusActive,
+				UpdatedAt:  now,
+				Confidence: "medium",
+			},
+			{
+				ID:         "irrelevant",
+				Kind:       KindWorkflowRule,
+				Title:      "Keep commit messages short",
+				Body:       "Use concise commit subjects.",
+				Strength:   1,
+				Status:     StatusActive,
+				UpdatedAt:  now,
+				Confidence: "low",
+			},
+		},
+	}
+
+	matches := SelectRelevant(snapshot, "fix the lint failure and update the skill instructions", now)
+	require.Len(t, matches, 2)
+	require.Equal(t, "lint", matches[0].Record.ID)
+	require.Equal(t, "skills", matches[1].Record.ID)
+}
+
+func TestFormatInjectionBlock(t *testing.T) {
+	t.Parallel()
+
+	block := FormatInjectionBlock([]Match{
+		{
+			Record: MemoryRecord{
+				Title: "Run lint before finishing",
+				Body:  "Run golangci-lint before claiming completion.",
+				Why:   "This repo frequently fails on lint after edits.",
+			},
+			Reason: "keyword overlap",
+		},
+	})
+
+	require.Contains(t, block, "Memory For This Repo")
+	require.Contains(t, block, "Run lint before finishing")
+	require.Contains(t, block, "Run golangci-lint before claiming completion.")
+}
+
+func TestLoadState_BackfillsHeavyweightDefaultsFromLegacySnapshot(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	statePath := filepath.Join(tmpDir, paths.EntireDir, "memory-loop.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o755))
+	require.NoError(t, os.WriteFile(statePath, []byte(`{
+  "snapshot": {
+    "version": 1,
+    "generated_at": "2026-03-25T12:00:00Z",
+    "source_window": 20,
+    "injection_enabled": true,
+    "max_injected": 3,
+    "records": [{
+      "id": "repo-rule-run-lint",
+      "kind": "repo_rule",
+      "title": "Run lint before finishing",
+      "body": "Run lint before claiming the task is complete.",
+      "strength": 4
+    }]
+  }
+}`), 0o644))
+
+	loaded, err := LoadState(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, loaded.Store)
+	require.Equal(t, ModeAuto, loaded.Store.Mode)
+	require.Equal(t, ActivationPolicyReview, loaded.Store.ActivationPolicy)
+	require.Len(t, loaded.Store.Records, 1)
+	require.Equal(t, StatusActive, loaded.Store.Records[0].Status)
+	require.Equal(t, OriginGenerated, loaded.Store.Records[0].Origin)
+	require.Equal(t, ScopeKindMe, loaded.Store.Records[0].ScopeKind)
+	require.True(t, loaded.Store.Records[0].LegacyInferred)
+}
+
+func TestNormalizeState_DefaultsHeavyweightStoreFields(t *testing.T) {
+	t.Parallel()
+
+	state := &State{
+		Store: &Store{
+			Records: []MemoryRecord{
+				{
+					ID:    "memory-1",
+					Kind:  KindRepoRule,
+					Title: "Run lint before finishing",
+					Body:  "Run lint before claiming completion.",
+				},
+			},
+		},
+	}
+
+	normalizeState(state)
+
+	require.Equal(t, ModeManual, state.Store.Mode)
+	require.Equal(t, ActivationPolicyReview, state.Store.ActivationPolicy)
+	require.Equal(t, DefaultMaxInjected, state.Store.MaxInjected)
+	require.Len(t, state.Store.Records, 1)
+	require.Equal(t, StatusActive, state.Store.Records[0].Status)
+	require.Equal(t, OriginGenerated, state.Store.Records[0].Origin)
+	require.Equal(t, ScopeKindMe, state.Store.Records[0].ScopeKind)
+	require.NotEmpty(t, state.Store.Records[0].Fingerprint)
+}
+
+func TestNormalizeState_ModeWinsOverLegacyInjectionFlag(t *testing.T) {
+	t.Parallel()
+
+	state := &State{
+		Store: &Store{
+			Mode:             ModeOff,
+			InjectionEnabled: true,
+		},
+	}
+
+	normalizeState(state)
+
+	require.Equal(t, ModeOff, state.Store.Mode)
+	require.False(t, state.Store.InjectionEnabled)
+}
+
+func TestSaveState_SnapshotOnlyInputPreservesLegacyInference(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	now := time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC)
+	state := &State{
+		Snapshot: &Snapshot{
+			Version:          1,
+			GeneratedAt:      now,
+			SourceWindow:     20,
+			InjectionEnabled: true,
+			MaxInjected:      3,
+			Records: []MemoryRecord{
+				{
+					ID:       "repo-rule-run-lint",
+					Kind:     KindRepoRule,
+					Title:    "Run lint before finishing",
+					Body:     "Run lint before claiming completion.",
+					Strength: 4,
+				},
+			},
+		},
+	}
+
+	require.NoError(t, SaveState(context.Background(), state))
+
+	loaded, err := LoadState(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, loaded.Store)
+	require.Len(t, loaded.Store.Records, 1)
+	require.True(t, loaded.Store.Records[0].LegacyInferred)
+}
+
+func TestSaveState_ModeRemainsAuthoritativeOverInjectionEnabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	state := &State{
+		Store: &Store{
+			Version:          1,
+			GeneratedAt:      time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC),
+			SourceWindow:     20,
+			Mode:             ModeOff,
+			InjectionEnabled: true,
+			ActivationPolicy: ActivationPolicyReview,
+			MaxInjected:      3,
+		},
+	}
+
+	require.NoError(t, SaveState(context.Background(), state))
+
+	loaded, err := LoadState(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, ModeOff, loaded.Store.Mode)
+	require.False(t, loaded.Store.InjectionEnabled)
+}
+
+func TestBuildGeneratedRecords_ProducesCandidateRecords(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
+	records := buildGeneratedRecords(generateResponse{
+		Records: []generateRecord{
+			{
+				Kind:       KindRepoRule,
+				Title:      "Run lint before finishing",
+				Body:       "Run golangci-lint before claiming completion.",
+				Why:        "Lint failures recur after edits.",
+				Confidence: "high",
+				Strength:   4,
+			},
+		},
+	}, GenerateInput{
+		SourceWindow: 20,
+		MaxRecords:   5,
+	}, now)
+
+	require.Len(t, records, 1)
+	require.Equal(t, StatusCandidate, records[0].Status)
+	require.Equal(t, OriginGenerated, records[0].Origin)
+	require.NotEmpty(t, records[0].Fingerprint)
+	require.Equal(t, now, records[0].CreatedAt)
+}
+
+func TestBuildGeneratedRecords_EmptyKindNormalizesBeforeIDGeneration(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 12, 30, 0, 0, time.UTC)
+	records := buildGeneratedRecords(generateResponse{
+		Records: []generateRecord{
+			{
+				Kind:  "",
+				Title: "Run lint before finishing",
+				Body:  "Run golangci-lint before claiming completion.",
+			},
+		},
+	}, GenerateInput{
+		SourceWindow: 20,
+		MaxRecords:   5,
+	}, now)
+
+	require.Len(t, records, 1)
+	require.Equal(t, KindRepoRule, records[0].Kind)
+	require.Equal(t, "repo_rule-run-lint-before-finishing", records[0].ID)
+}
+
+func TestReconcileGeneratedRecords_PreservesSuppressedAndCountsOutcomes(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
+	existing := []MemoryRecord{
+		{
+			ID:          "suppressed-lint",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before finishing",
+			Body:        "Run golangci-lint before claiming completion.",
+			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
+			Status:      StatusSuppressed,
+			Origin:      OriginGenerated,
+		},
+		{
+			ID:          "archived-commit",
+			Kind:        KindWorkflowRule,
+			Title:       "Keep commit subjects concise",
+			Body:        "Use short imperative commit subjects.",
+			Fingerprint: fingerprintForRecord(KindWorkflowRule, "Keep commit subjects concise", "Use short imperative commit subjects."),
+			Status:      StatusArchived,
+			Origin:      OriginGenerated,
+		},
+	}
+	generated := []MemoryRecord{
+		{
+			ID:          "lint",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before finishing",
+			Body:        "Run golangci-lint before claiming completion.",
+			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
+			Status:      StatusCandidate,
+			Origin:      OriginGenerated,
+		},
+		{
+			ID:          "skills",
+			Kind:        KindSkillPatch,
+			Title:       "Tighten the project skill",
+			Body:        "Update the project skill with missing retry steps.",
+			Fingerprint: fingerprintForRecord(KindSkillPatch, "Tighten the project skill", "Update the project skill with missing retry steps."),
+			Status:      StatusCandidate,
+			Origin:      OriginGenerated,
+		},
+		{
+			ID:          "repo-rule",
+			Kind:        KindRepoRule,
+			Title:       "Keep generated repo memories pending",
+			Body:        "Require explicit promotion before shared repo memories inject.",
+			Fingerprint: fingerprintForRecord(KindRepoRule, "Keep generated repo memories pending", "Require explicit promotion before shared repo memories inject."),
+			ScopeKind:   ScopeKindRepo,
+			Status:      StatusCandidate,
+			Origin:      OriginGenerated,
+		},
+	}
+
+	result := ReconcileGeneratedRecords(existing, generated, ScopeKindMe, "", ActivationPolicyAuto, now)
+	require.Len(t, result.Records, 4)
+	require.Equal(t, StatusSuppressed, result.Records[0].Status)
+	require.Equal(t, StatusArchived, result.Records[1].Status)
+	require.Equal(t, StatusActive, result.Records[2].Status)
+	require.Equal(t, ScopeKindMe, result.Records[2].ScopeKind)
+	require.Equal(t, StatusCandidate, result.Records[3].Status)
+	require.Equal(t, ScopeKindRepo, result.Records[3].ScopeKind)
+	require.Equal(t, 3, result.History.GeneratedCount)
+	require.Equal(t, 1, result.History.ActivatedCount)
+	require.Equal(t, 1, result.History.CandidateCount)
+
+	repoResult := ReconcileGeneratedRecords(nil, generated[2:], ScopeKindRepo, "main", ActivationPolicyAuto, now)
+	require.Len(t, repoResult.Records, 1)
+	require.Equal(t, StatusCandidate, repoResult.Records[0].Status)
+	require.Equal(t, ScopeKindRepo, repoResult.Records[0].ScopeKind)
+	require.Equal(t, "main", repoResult.Records[0].ScopeValue)
+	require.Equal(t, 1, repoResult.History.CandidateCount)
+}
+
+func TestReconcileGeneratedRecords_ReconcilesIntoExistingRecord(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 13, 0, 0, 0, time.UTC)
+	fingerprint := fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion.")
+	existing := []MemoryRecord{
+		{
+			ID:          "suppressed-lint",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before finishing",
+			Body:        "Old body",
+			Why:         "Old why",
+			Fingerprint: fingerprint,
+			ScopeKind:   ScopeKindMe,
+			Status:      StatusSuppressed,
+			Origin:      OriginGenerated,
+			CreatedAt:   now.Add(-24 * time.Hour),
+			UpdatedAt:   now.Add(-24 * time.Hour),
+		},
+	}
+	generated := []MemoryRecord{
+		{
+			ID:          "lint",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before finishing",
+			Body:        "Run golangci-lint before claiming completion.",
+			Why:         "Lint failures recur after edits.",
+			Fingerprint: fingerprint,
+			Status:      StatusCandidate,
+			Origin:      OriginGenerated,
+		},
+	}
+
+	result := ReconcileGeneratedRecords(existing, generated, ScopeKindMe, "", ActivationPolicyAuto, now)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, "suppressed-lint", result.Records[0].ID)
+	require.Equal(t, StatusSuppressed, result.Records[0].Status)
+	require.Equal(t, "Run golangci-lint before claiming completion.", result.Records[0].Body)
+	require.Equal(t, "Lint failures recur after edits.", result.Records[0].Why)
+	require.Equal(t, now, result.Records[0].UpdatedAt)
+	require.Equal(t, 1, result.History.GeneratedCount)
+	require.Equal(t, 0, result.History.ActivatedCount)
+	require.Equal(t, 0, result.History.CandidateCount)
+}
+
+func TestReconcileGeneratedRecords_CountsReconciledActiveRecordsInHistory(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 15, 0, 0, 0, time.UTC)
+	fingerprint := fingerprintForRecord(KindSkillPatch, "Tighten the project skill", "Update the project skill with missing retry steps.")
+	existing := []MemoryRecord{
+		{
+			ID:          "skills",
+			Kind:        KindSkillPatch,
+			Title:       "Tighten the project skill",
+			Body:        "Old body",
+			Fingerprint: fingerprint,
+			ScopeKind:   ScopeKindMe,
+			Status:      StatusCandidate,
+			Origin:      OriginGenerated,
+			CreatedAt:   now.Add(-24 * time.Hour),
+			UpdatedAt:   now.Add(-24 * time.Hour),
+		},
+	}
+	generated := []MemoryRecord{
+		{
+			ID:          "skills-new",
+			Kind:        KindSkillPatch,
+			Title:       "Tighten the project skill",
+			Body:        "Update the project skill with missing retry steps.",
+			Fingerprint: fingerprint,
+			ScopeKind:   ScopeKindMe,
+			Status:      StatusCandidate,
+			Origin:      OriginGenerated,
+		},
+	}
+
+	result := ReconcileGeneratedRecords(existing, generated, ScopeKindMe, "", ActivationPolicyAuto, now)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, StatusActive, result.Records[0].Status)
+	require.Equal(t, 1, result.History.GeneratedCount)
+	require.Equal(t, 1, result.History.ActivatedCount)
+	require.Equal(t, 0, result.History.CandidateCount)
+}
+
+func TestReconcileGeneratedRecords_AllowsSameFingerprintAcrossScopes(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 14, 0, 0, 0, time.UTC)
+	fingerprint := fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion.")
+	existing := []MemoryRecord{
+		{
+			ID:          "personal-lint",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before finishing",
+			Body:        "Run golangci-lint before claiming completion.",
+			Fingerprint: fingerprint,
+			ScopeKind:   ScopeKindMe,
+			Status:      StatusActive,
+			Origin:      OriginGenerated,
+		},
+	}
+	generated := []MemoryRecord{
+		{
+			ID:          "repo-lint",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before finishing",
+			Body:        "Run golangci-lint before claiming completion.",
+			Fingerprint: fingerprint,
+			ScopeKind:   ScopeKindRepo,
+			Status:      StatusCandidate,
+			Origin:      OriginGenerated,
+		},
+	}
+
+	result := ReconcileGeneratedRecords(existing, generated, ScopeKindRepo, "main", ActivationPolicyAuto, now)
+	require.Len(t, result.Records, 2)
+	require.Equal(t, ScopeKindMe, result.Records[0].ScopeKind)
+	require.Equal(t, ScopeKindRepo, result.Records[1].ScopeKind)
+	require.Equal(t, StatusCandidate, result.Records[1].Status)
+	require.Equal(t, "main", result.Records[1].ScopeValue)
+	require.Equal(t, 1, result.History.GeneratedCount)
+	require.Equal(t, 1, result.History.CandidateCount)
+}
+
+func TestReconcileGeneratedRecords_ReviewPolicyKeepsExistingPersonalActive(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 16, 0, 0, 0, time.UTC)
+	fingerprint := fingerprintForRecord(KindWorkflowRule, "Keep commit subjects concise", "Use short imperative commit subjects.")
+	existing := []MemoryRecord{
+		{
+			ID:          "commit-subjects",
+			Kind:        KindWorkflowRule,
+			Title:       "Keep commit subjects concise",
+			Body:        "Old body",
+			Fingerprint: fingerprint,
+			ScopeKind:   ScopeKindMe,
+			Status:      StatusActive,
+			Origin:      OriginGenerated,
+			CreatedAt:   now.Add(-48 * time.Hour),
+			UpdatedAt:   now.Add(-48 * time.Hour),
+		},
+	}
+	generated := []MemoryRecord{
+		{
+			ID:          "commit-subjects-refresh",
+			Kind:        KindWorkflowRule,
+			Title:       "Keep commit subjects concise",
+			Body:        "Use short imperative commit subjects.",
+			Fingerprint: fingerprint,
+			ScopeKind:   ScopeKindMe,
+			Status:      StatusCandidate,
+			Origin:      OriginGenerated,
+		},
+	}
+
+	result := ReconcileGeneratedRecords(existing, generated, ScopeKindMe, "", ActivationPolicyReview, now)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, StatusActive, result.Records[0].Status)
+	require.Equal(t, "Use short imperative commit subjects.", result.Records[0].Body)
+	require.Equal(t, 1, result.History.GeneratedCount)
+	require.Equal(t, 1, result.History.ActivatedCount)
+	require.Equal(t, 0, result.History.CandidateCount)
+}
+
+func TestReconcileGeneratedRecords_RewordedSuppressedRecordReconcilesInPlace(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 17, 0, 0, 0, time.UTC)
+	existing := []MemoryRecord{
+		{
+			ID:          "suppressed-lint",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before finishing",
+			Body:        "Run golangci-lint before claiming completion.",
+			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
+			ScopeKind:   ScopeKindMe,
+			Status:      StatusSuppressed,
+			Origin:      OriginGenerated,
+			CreatedAt:   now.Add(-48 * time.Hour),
+			UpdatedAt:   now.Add(-48 * time.Hour),
+		},
+	}
+	generated := []MemoryRecord{
+		{
+			ID:          "lint-refresh",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before wrapping up",
+			Body:        "Run golangci-lint before you say the task is done.",
+			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before wrapping up", "Run golangci-lint before you say the task is done."),
+			ScopeKind:   ScopeKindMe,
+			Status:      StatusCandidate,
+			Origin:      OriginGenerated,
+		},
+	}
+
+	result := ReconcileGeneratedRecords(existing, generated, ScopeKindMe, "", ActivationPolicyAuto, now)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, "suppressed-lint", result.Records[0].ID)
+	require.Equal(t, StatusSuppressed, result.Records[0].Status)
+	require.Equal(t, "Run lint before wrapping up", result.Records[0].Title)
+	require.Equal(t, "Run golangci-lint before you say the task is done.", result.Records[0].Body)
+}
+
+func TestReconcileGeneratedRecords_RewordedActivePersonalRecordReconcilesInPlace(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 18, 0, 0, 0, time.UTC)
+	existing := []MemoryRecord{
+		{
+			ID:          "active-skill",
+			Kind:        KindSkillPatch,
+			Title:       "Tighten the project skill",
+			Body:        "Update the project skill with missing retry steps.",
+			Fingerprint: fingerprintForRecord(KindSkillPatch, "Tighten the project skill", "Update the project skill with missing retry steps."),
+			ScopeKind:   ScopeKindMe,
+			Status:      StatusActive,
+			Origin:      OriginGenerated,
+			CreatedAt:   now.Add(-72 * time.Hour),
+			UpdatedAt:   now.Add(-72 * time.Hour),
+		},
+	}
+	generated := []MemoryRecord{
+		{
+			ID:          "skill-refresh",
+			Kind:        KindSkillPatch,
+			Title:       "Strengthen the project skill",
+			Body:        "Add the missing retry step to the project skill instructions.",
+			Fingerprint: fingerprintForRecord(KindSkillPatch, "Strengthen the project skill", "Add the missing retry step to the project skill instructions."),
+			ScopeKind:   ScopeKindMe,
+			Status:      StatusCandidate,
+			Origin:      OriginGenerated,
+		},
+	}
+
+	result := ReconcileGeneratedRecords(existing, generated, ScopeKindMe, "", ActivationPolicyReview, now)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, "active-skill", result.Records[0].ID)
+	require.Equal(t, StatusActive, result.Records[0].Status)
+	require.Equal(t, "Strengthen the project skill", result.Records[0].Title)
+	require.Equal(t, "Add the missing retry step to the project skill instructions.", result.Records[0].Body)
+}
+
+func TestReconcileGeneratedRecords_DuplicateGeneratedRulesInOneRefreshDoNotForkOrPanic(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 19, 0, 0, 0, time.UTC)
+	generated := []MemoryRecord{
+		{
+			ID:          "lint-1",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before finishing",
+			Body:        "Run golangci-lint before claiming completion.",
+			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
+			ScopeKind:   ScopeKindMe,
+			ScopeValue:  "me@example.com",
+			Status:      StatusCandidate,
+			Origin:      OriginGenerated,
+		},
+		{
+			ID:          "lint-2",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before wrapping up",
+			Body:        "Run golangci-lint before you say the task is done.",
+			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before wrapping up", "Run golangci-lint before you say the task is done."),
+			ScopeKind:   ScopeKindMe,
+			ScopeValue:  "me@example.com",
+			Status:      StatusCandidate,
+			Origin:      OriginGenerated,
+		},
+	}
+
+	result := ReconcileGeneratedRecords(nil, generated, ScopeKindMe, "me@example.com", ActivationPolicyAuto, now)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, "lint-1", result.Records[0].ID)
+	require.Equal(t, "Run lint before wrapping up", result.Records[0].Title)
+	require.Equal(t, StatusActive, result.Records[0].Status)
+	require.Equal(t, 2, result.History.GeneratedCount)
+	require.Equal(t, 2, result.History.ActivatedCount)
+}
+
+func TestReconcileGeneratedRecords_LegacyPersonalRecordWithEmptyScopeValueStillMatches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 20, 0, 0, 0, time.UTC)
+	existing := []MemoryRecord{
+		{
+			ID:          "legacy-lint",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before finishing",
+			Body:        "Run golangci-lint before claiming completion.",
+			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
+			ScopeKind:   ScopeKindMe,
+			ScopeValue:  "",
+			Status:      StatusActive,
+			Origin:      OriginGenerated,
+		},
+	}
+	generated := []MemoryRecord{
+		{
+			ID:          "lint-refresh",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before wrapping up",
+			Body:        "Run golangci-lint before you say the task is done.",
+			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before wrapping up", "Run golangci-lint before you say the task is done."),
+			ScopeKind:   ScopeKindMe,
+			ScopeValue:  "me@example.com",
+			Status:      StatusCandidate,
+			Origin:      OriginGenerated,
+		},
+	}
+
+	result := ReconcileGeneratedRecords(existing, generated, ScopeKindMe, "me@example.com", ActivationPolicyReview, now)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, "legacy-lint", result.Records[0].ID)
+	require.Equal(t, StatusActive, result.Records[0].Status)
+	require.Equal(t, "Run lint before wrapping up", result.Records[0].Title)
+}
+
+func TestTransitionRecordLifecycle_ActivatePersonalCandidate(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 21, 0, 0, 0, time.UTC)
+	records := []MemoryRecord{
+		{
+			ID:         "candidate-skill",
+			Kind:       KindSkillPatch,
+			Title:      "Tighten the project skill",
+			ScopeKind:  ScopeKindMe,
+			Status:     StatusCandidate,
+			Origin:     OriginGenerated,
+			CreatedAt:  now.Add(-time.Hour),
+			UpdatedAt:  now.Add(-time.Hour),
+			History:    nil,
+			OwnerEmail: "me@example.com",
+		},
+	}
+
+	updated, changed, err := TransitionRecordLifecycle(records, "candidate-skill", LifecycleActionActivate, now)
+	require.NoError(t, err)
+	require.Len(t, updated, 1)
+	require.Equal(t, StatusActive, updated[0].Status)
+	require.Equal(t, now, updated[0].UpdatedAt)
+	require.Equal(t, now, updated[0].LastReviewedAt)
+	require.Len(t, updated[0].History, 1)
+	require.Equal(t, "activated", updated[0].History[0].Type)
+	require.Equal(t, StatusActive, changed.Status)
+}
+
+func TestTransitionRecordLifecycle_PromoteRepoCandidate(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 21, 30, 0, 0, time.UTC)
+	records := []MemoryRecord{
+		{
+			ID:         "repo-candidate",
+			Kind:       KindRepoRule,
+			Title:      "Keep generated repo memories pending",
+			ScopeKind:  ScopeKindRepo,
+			ScopeValue: "main",
+			Status:     StatusCandidate,
+			Origin:     OriginGenerated,
+			CreatedAt:  now.Add(-2 * time.Hour),
+			UpdatedAt:  now.Add(-2 * time.Hour),
+		},
+	}
+
+	updated, changed, err := TransitionRecordLifecycle(records, "repo-candidate", LifecycleActionPromote, now)
+	require.NoError(t, err)
+	require.Equal(t, StatusActive, updated[0].Status)
+	require.Equal(t, StatusActive, changed.Status)
+	require.Len(t, updated[0].History, 1)
+	require.Equal(t, "promoted", updated[0].History[0].Type)
+}
+
+func TestTransitionRecordLifecycle_ActivateRepoCandidateReturnsError(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 22, 0, 0, 0, time.UTC)
+	records := []MemoryRecord{
+		{
+			ID:         "repo-candidate",
+			Kind:       KindRepoRule,
+			Title:      "Keep generated repo memories pending",
+			ScopeKind:  ScopeKindRepo,
+			ScopeValue: "main",
+			Status:     StatusCandidate,
+		},
+	}
+
+	updated, _, err := TransitionRecordLifecycle(records, "repo-candidate", LifecycleActionActivate, now)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "promote")
+	require.Equal(t, StatusCandidate, updated[0].Status)
+}
+
+func TestTransitionRecordLifecycle_UnsuppressReturnsCandidate(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 22, 30, 0, 0, time.UTC)
+	records := []MemoryRecord{
+		{
+			ID:        "suppressed-lint",
+			Kind:      KindRepoRule,
+			Title:     "Run lint before finishing",
+			ScopeKind: ScopeKindMe,
+			Status:    StatusSuppressed,
+		},
+	}
+
+	updated, changed, err := TransitionRecordLifecycle(records, "suppressed-lint", LifecycleActionUnsuppress, now)
+	require.NoError(t, err)
+	require.Equal(t, StatusCandidate, updated[0].Status)
+	require.Equal(t, StatusCandidate, changed.Status)
+	require.Len(t, updated[0].History, 1)
+	require.Equal(t, "unsuppressed", updated[0].History[0].Type)
+}
+
+func TestTransitionRecordLifecycle_SuppressActiveRecord(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 22, 45, 0, 0, time.UTC)
+	records := []MemoryRecord{
+		{
+			ID:        "active-lint",
+			Kind:      KindRepoRule,
+			Title:     "Run lint before finishing",
+			ScopeKind: ScopeKindMe,
+			Status:    StatusActive,
+		},
+	}
+
+	updated, changed, err := TransitionRecordLifecycle(records, "active-lint", LifecycleActionSuppress, now)
+	require.NoError(t, err)
+	require.Equal(t, StatusSuppressed, updated[0].Status)
+	require.Equal(t, StatusSuppressed, changed.Status)
+	require.Len(t, updated[0].History, 1)
+	require.Equal(t, "suppressed", updated[0].History[0].Type)
+}
+
+func TestTransitionRecordLifecycle_ArchivePreservesHistory(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 23, 0, 0, 0, time.UTC)
+	records := []MemoryRecord{
+		{
+			ID:        "active-lint",
+			Kind:      KindRepoRule,
+			Title:     "Run lint before finishing",
+			ScopeKind: ScopeKindMe,
+			Status:    StatusActive,
+			History: []HistoryEvent{
+				{Type: "generated", At: now.Add(-2 * time.Hour)},
+			},
+		},
+	}
+
+	updated, changed, err := TransitionRecordLifecycle(records, "active-lint", LifecycleActionArchive, now)
+	require.NoError(t, err)
+	require.Equal(t, StatusArchived, updated[0].Status)
+	require.Equal(t, StatusArchived, changed.Status)
+	require.Len(t, updated[0].History, 2)
+	require.Equal(t, "archived", updated[0].History[1].Type)
+}
+
+func TestRecordInjectionActivity_UpdatesCountsAndLogs(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
+	state := &State{
+		Store: &Store{
+			Version: 1,
+			Records: []MemoryRecord{
+				{
+					ID:          "lint",
+					Kind:        KindRepoRule,
+					Title:       "Run lint before finishing",
+					Body:        "Run golangci-lint before claiming completion.",
+					Status:      StatusActive,
+					ScopeKind:   ScopeKindMe,
+					CreatedAt:   now.Add(-24 * time.Hour),
+					UpdatedAt:   now.Add(-24 * time.Hour),
+					Outcome:     OutcomeNeutral,
+					Strength:    3,
+					Fingerprint: "repo-rule-run-lint",
+				},
+			},
+		},
+	}
+
+	RecordInjectionActivity(state, []Match{
+		{
+			Record: state.Store.Records[0],
+			Score:  27,
+			Reason: "keyword overlap",
+		},
+	}, InjectionLog{
+		SessionID:         "sess-1",
+		PromptPreview:     "fix the lint failure",
+		InjectedMemoryIDs: []string{"lint"},
+		InjectedAt:        now,
+		Reason:            "keyword overlap",
+	}, now)
+
+	require.Len(t, state.Store.Records, 1)
+	require.Equal(t, 1, state.Store.Records[0].MatchCount)
+	require.Equal(t, 1, state.Store.Records[0].InjectCount)
+	require.Equal(t, now, state.Store.Records[0].LastMatchedAt)
+	require.Equal(t, now, state.Store.Records[0].LastInjectedAt)
+	require.Len(t, state.Store.Records[0].History, 2)
+	require.Equal(t, "matched", state.Store.Records[0].History[0].Type)
+	require.Equal(t, "injected", state.Store.Records[0].History[1].Type)
+	require.Len(t, state.InjectionLogs, 1)
+	require.Equal(t, "sess-1", state.InjectionLogs[0].SessionID)
+}
+
+func TestDeriveOutcomesFromEvidence_MarksReinforcedAndIneffective(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
+	records := []MemoryRecord{
+		{
+			ID:          "reinforced",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before finishing",
+			Body:        "Run golangci-lint before claiming completion.",
+			Status:      StatusActive,
+			Origin:      OriginGenerated,
+			Outcome:     OutcomeNeutral,
+			CreatedAt:   now.Add(-48 * time.Hour),
+			UpdatedAt:   now.Add(-48 * time.Hour),
+			Fingerprint: "reinforced",
+		},
+		{
+			ID:          "ineffective",
+			Kind:        KindSkillPatch,
+			Title:       "Tighten the project skill",
+			Body:        "Add the missing retry step.",
+			Status:      StatusActive,
+			Origin:      OriginGenerated,
+			Outcome:     OutcomeNeutral,
+			InjectCount: 3,
+			CreatedAt:   now.Add(-48 * time.Hour),
+			UpdatedAt:   now.Add(-48 * time.Hour),
+			Fingerprint: "ineffective",
+		},
+	}
+
+	updated := DeriveOutcomesFromEvidence(records, []string{
+		"Run lint before finishing to avoid repeat lint failures.",
+		"Lint still failed after edits.",
+		"Tighten the project skill because the retry step is still missing.",
+	}, now)
+
+	require.Equal(t, OutcomeReinforced, updated[0].Outcome)
+	require.Equal(t, OutcomeIneffective, updated[1].Outcome)
+}
+
+func TestPruneRecords_AppliesDefaultRules(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
+	records := []MemoryRecord{
+		{
+			ID:          "stale-candidate",
+			Kind:        KindRepoRule,
+			Title:       "Pending lint rule",
+			Status:      StatusCandidate,
+			Origin:      OriginGenerated,
+			CreatedAt:   now.Add(-31 * 24 * time.Hour),
+			UpdatedAt:   now.Add(-31 * 24 * time.Hour),
+			Fingerprint: "stale-candidate",
+		},
+		{
+			ID:          "stale-active",
+			Kind:        KindRepoRule,
+			Title:       "Old active memory",
+			Status:      StatusActive,
+			Origin:      OriginGenerated,
+			CreatedAt:   now.Add(-61 * 24 * time.Hour),
+			UpdatedAt:   now.Add(-61 * 24 * time.Hour),
+			Fingerprint: "stale-active",
+		},
+		{
+			ID:          "ineffective-active",
+			Kind:        KindSkillPatch,
+			Title:       "Retry skill",
+			Status:      StatusActive,
+			Origin:      OriginGenerated,
+			Outcome:     OutcomeIneffective,
+			InjectCount: 3,
+			CreatedAt:   now.Add(-10 * 24 * time.Hour),
+			UpdatedAt:   now.Add(-10 * 24 * time.Hour),
+			Fingerprint: "ineffective-active",
+		},
+		{
+			ID:          "manual-active",
+			Kind:        KindWorkflowRule,
+			Title:       "Personal preference",
+			Status:      StatusActive,
+			Origin:      OriginManual,
+			CreatedAt:   now.Add(-90 * 24 * time.Hour),
+			UpdatedAt:   now.Add(-90 * 24 * time.Hour),
+			Fingerprint: "manual-active",
+		},
+	}
+
+	updated, result := PruneRecords(records, now)
+
+	require.Equal(t, StatusArchived, updated[0].Status)
+	require.Equal(t, StatusArchived, updated[1].Status)
+	require.Equal(t, StatusArchived, updated[2].Status)
+	require.Equal(t, StatusActive, updated[3].Status)
+	require.Equal(t, 3, result.ArchivedCount)
+}
+
+func TestAddManualRecord_AddsPersonalActiveMemory(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 27, 0, 0, 0, 0, time.UTC)
+	records, added, err := AddManualRecord(nil, ManualRecordInput{
+		Kind:       KindRepoRule,
+		Title:      "Run lint before finishing",
+		Body:       "Run golangci-lint before claiming completion.",
+		ScopeKind:  ScopeKindMe,
+		ScopeValue: "me@example.com",
+		OwnerEmail: "me@example.com",
+	}, now)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, StatusActive, records[0].Status)
+	require.Equal(t, OriginManual, records[0].Origin)
+	require.Equal(t, ScopeKindMe, records[0].ScopeKind)
+	require.Equal(t, "me@example.com", records[0].ScopeValue)
+	require.Equal(t, "me@example.com", records[0].OwnerEmail)
+	require.NotEmpty(t, records[0].Fingerprint)
+	require.Len(t, records[0].History, 1)
+	require.Equal(t, "added", records[0].History[0].Type)
+	require.Equal(t, StatusActive, added.Status)
+}
+
+func TestAddManualRecord_DedupesExistingScopedFingerprint(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 27, 0, 30, 0, 0, time.UTC)
+	records, added, err := AddManualRecord([]MemoryRecord{
+		{
+			ID:          "suppressed-lint",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before finishing",
+			Body:        "Run golangci-lint before claiming completion.",
+			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
+			ScopeKind:   ScopeKindMe,
+			ScopeValue:  "me@example.com",
+			Status:      StatusSuppressed,
+			Origin:      OriginGenerated,
+			CreatedAt:   now.Add(-24 * time.Hour),
+			UpdatedAt:   now.Add(-24 * time.Hour),
+		},
+	}, ManualRecordInput{
+		Kind:       KindRepoRule,
+		Title:      "Run lint before finishing",
+		Body:       "Run golangci-lint before claiming completion.",
+		ScopeKind:  ScopeKindMe,
+		ScopeValue: "me@example.com",
+		OwnerEmail: "me@example.com",
+	}, now)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, "suppressed-lint", records[0].ID)
+	require.Equal(t, StatusActive, records[0].Status)
+	require.Equal(t, OriginManual, records[0].Origin)
+	require.Equal(t, "me@example.com", records[0].OwnerEmail)
+	require.Len(t, records[0].History, 1)
+	require.Equal(t, "added", records[0].History[0].Type)
+	require.Equal(t, "suppressed-lint", added.ID)
+}
+
+func TestRecordInjectionActivity_UpdatesMatchedAndInjectedCounts(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 27, 1, 0, 0, 0, time.UTC)
+	state := &State{
+		Store: &Store{
+			Records: []MemoryRecord{
+				{
+					ID:        "lint",
+					Kind:      KindRepoRule,
+					Title:     "Run lint before finishing",
+					ScopeKind: ScopeKindMe,
+					Status:    StatusActive,
+				},
+			},
+		},
+	}
+
+	RecordInjectionActivity(state, []Match{
+		{
+			Record: MemoryRecord{ID: "lint"},
+			Score:  4,
+			Reason: "keyword overlap",
+		},
+	}, InjectionLog{
+		SessionID:         "sess-1",
+		PromptPreview:     "fix the lint failure",
+		InjectedMemoryIDs: []string{"lint"},
+		InjectedAt:        now,
+		Reason:            "keyword overlap",
+	}, now)
+
+	require.Equal(t, 1, state.Store.Records[0].MatchCount)
+	require.Equal(t, 1, state.Store.Records[0].InjectCount)
+	require.Equal(t, now, state.Store.Records[0].LastMatchedAt)
+	require.Equal(t, now, state.Store.Records[0].LastInjectedAt)
+	require.Len(t, state.InjectionLogs, 1)
+}
+
+func TestDeriveOutcomes_MarksReinforcedAndIneffective(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 27, 1, 30, 0, 0, time.UTC)
+	records := []MemoryRecord{
+		{
+			ID:          "lint",
+			Kind:        KindRepoRule,
+			Title:       "Run lint before finishing",
+			Body:        "Run golangci-lint before claiming completion.",
+			Origin:      OriginGenerated,
+			InjectCount: 2,
+			Status:      StatusActive,
+		},
+		{
+			ID:     "skill",
+			Kind:   KindSkillPatch,
+			Title:  "Tighten the project skill",
+			Body:   "Add the missing retry step to the project skill.",
+			Origin: OriginGenerated,
+			Status: StatusCandidate,
+		},
+		{
+			ID:     "manual",
+			Kind:   KindWorkflowRule,
+			Title:  "Keep commit subjects concise",
+			Body:   "Use short imperative commit subjects.",
+			Origin: OriginManual,
+			Status: StatusActive,
+		},
+	}
+	sessions := []insightsdb.SessionRow{
+		{
+			Friction: []string{"lint failed again after the agent finished"},
+			Facets: facets.SessionFacets{
+				SkillSignals: []facets.SkillSignal{
+					{SkillName: "project skill", Friction: []string{"missing retry step in the project skill"}},
+				},
+			},
+		},
+	}
+
+	updated := DeriveOutcomes(records, sessions, now)
+	require.Equal(t, OutcomeIneffective, updated[0].Outcome)
+	require.Equal(t, OutcomeReinforced, updated[1].Outcome)
+	require.Equal(t, OutcomeNeutral, updated[2].Outcome)
+}
+
+func TestPruneRecords_ArchivesEligibleGeneratedRecordsButSkipsManual(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 27, 2, 0, 0, 0, time.UTC)
+	updated, result := PruneRecords([]MemoryRecord{
+		{
+			ID:        "old-candidate",
+			Kind:      KindRepoRule,
+			Title:     "Old candidate",
+			Origin:    OriginGenerated,
+			Status:    StatusCandidate,
+			CreatedAt: now.Add(-40 * 24 * time.Hour),
+			UpdatedAt: now.Add(-40 * 24 * time.Hour),
+		},
+		{
+			ID:        "stale-active",
+			Kind:      KindRepoRule,
+			Title:     "Stale active",
+			Origin:    OriginGenerated,
+			Status:    StatusActive,
+			CreatedAt: now.Add(-70 * 24 * time.Hour),
+			UpdatedAt: now.Add(-70 * 24 * time.Hour),
+		},
+		{
+			ID:          "ineffective",
+			Kind:        KindRepoRule,
+			Title:       "Ineffective active",
+			Origin:      OriginGenerated,
+			Status:      StatusActive,
+			InjectCount: 3,
+			Outcome:     OutcomeIneffective,
+			CreatedAt:   now.Add(-10 * 24 * time.Hour),
+			UpdatedAt:   now.Add(-10 * 24 * time.Hour),
+		},
+		{
+			ID:        "manual-active",
+			Kind:      KindWorkflowRule,
+			Title:     "Manual rule",
+			Origin:    OriginManual,
+			Status:    StatusActive,
+			CreatedAt: now.Add(-100 * 24 * time.Hour),
+			UpdatedAt: now.Add(-100 * 24 * time.Hour),
+		},
+	}, now)
+
+	require.Equal(t, StatusArchived, updated[0].Status)
+	require.Equal(t, StatusArchived, updated[1].Status)
+	require.Equal(t, StatusArchived, updated[2].Status)
+	require.Equal(t, StatusActive, updated[3].Status)
+	require.Equal(t, 3, result.ArchivedCount)
+}
