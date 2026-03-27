@@ -241,8 +241,8 @@ func (m rootModel) View() string {
 }
 
 func (m rootModel) contentHeight() int {
-	// Total height minus tab bar (1) and status bar (1) and newlines (2)
-	h := m.height - 4
+	// Total height minus tab bar (2) and status bar (1) and newlines (2)
+	h := m.height - 5
 	if h < 5 {
 		h = 5
 	}

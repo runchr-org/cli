@@ -32,6 +32,13 @@ type tuiStyles struct {
 	tabInactive lipgloss.Style
 	statusBar   lipgloss.Style
 	errorFlash  lipgloss.Style
+
+	// Tab bar & filter chips
+	appTitle           lipgloss.Style
+	tabUnderline       lipgloss.Style
+	filterChipActive   lipgloss.Style
+	filterChipInactive lipgloss.Style
+	sectionHeader      lipgloss.Style
 }
 
 func newStyles() tuiStyles {
@@ -69,6 +76,18 @@ func newStyles() tuiStyles {
 	s.tabInactive = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	s.statusBar = lipgloss.NewStyle().Faint(true)
 	s.errorFlash = lipgloss.NewStyle().Foreground(red)
+
+	s.appTitle = lipgloss.NewStyle().Bold(true).Foreground(amber)
+	s.tabUnderline = lipgloss.NewStyle().Foreground(amber)
+	s.filterChipActive = lipgloss.NewStyle().
+		Background(lipgloss.Color("214")).
+		Foreground(lipgloss.Color("0")).
+		Bold(true).
+		Padding(0, 1)
+	s.filterChipInactive = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245")).
+		Padding(0, 1)
+	s.sectionHeader = lipgloss.NewStyle().Bold(true).Faint(true)
 
 	return s
 }

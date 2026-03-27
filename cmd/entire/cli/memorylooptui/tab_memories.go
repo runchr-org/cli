@@ -23,7 +23,7 @@ const (
 	filterArchived
 )
 
-var filterLabels = [5]string{"all", "active", "candidate", "suppressed", "archived"}
+var filterLabels = [5]string{"ALL", "ACTIVE", "CANDIDATE", "SUPPRESSED", "ARCHIVED"}
 
 //nolint:recvcheck // bubbletea pattern: pointer receivers for mutation, value for update/view
 type memoriesModel struct {
@@ -397,15 +397,22 @@ func (m memoriesModel) renderFilterBar() string {
 	counts := m.statusCounts()
 	var parts []string
 	for i, label := range filterLabels {
-		count := counts[i]
-		text := fmt.Sprintf("%s (%d)", label, count)
-		if statusFilter(i) == m.filter {
-			parts = append(parts, m.styles.render(m.styles.title, text))
+		text := fmt.Sprintf("%s (%d)", label, counts[i])
+		if m.styles.colorEnabled {
+			if statusFilter(i) == m.filter {
+				parts = append(parts, m.styles.filterChipActive.Render(text))
+			} else {
+				parts = append(parts, m.styles.filterChipInactive.Render(text))
+			}
 		} else {
-			parts = append(parts, m.styles.render(m.styles.dim, text))
+			if statusFilter(i) == m.filter {
+				parts = append(parts, "["+text+"]")
+			} else {
+				parts = append(parts, " "+text+" ")
+			}
 		}
 	}
-	return "  " + strings.Join(parts, "  ")
+	return "  " + strings.Join(parts, " ")
 }
 
 func (m memoriesModel) statusCounts() [5]int {
@@ -434,6 +441,12 @@ func (m memoriesModel) renderDetail() string {
 	if r == nil {
 		return ""
 	}
+
+	var out strings.Builder
+	out.WriteString("  ")
+	out.WriteString(m.styles.render(m.styles.sectionHeader, "DETAILS"))
+	out.WriteString("\n")
+
 	var b strings.Builder
 	// Title line
 	b.WriteString(m.styles.render(m.styles.title, r.Title))
@@ -472,7 +485,8 @@ func (m memoriesModel) renderDetail() string {
 		BorderForeground(lipgloss.Color("245")).
 		Padding(0, 1).
 		Width(m.width - 2)
-	return cardStyle.Render(b.String())
+	out.WriteString(cardStyle.Render(b.String()))
+	return out.String()
 }
 
 func statusDotPlain(status memoryloop.Status) string {

@@ -14,15 +14,29 @@ var tabNames = [4]string{"Memories", "Injection", "History", "Settings"}
 func renderTabBar(s tuiStyles, activeTab int, width int, mode memoryloop.Mode, policy memoryloop.ActivationPolicy) string {
 	var b strings.Builder
 
+	// App title
+	b.WriteString(s.render(s.appTitle, "MEMORY LOOP"))
+	b.WriteString("   ")
+
+	// Track position for underline
+	titleWidth := len("MEMORY LOOP") + 3 // raw width of title + spacing
+	activeStart := 0
+	activeWidth := 0
+	pos := titleWidth
+
 	for i, name := range tabNames {
 		label := fmt.Sprintf("%d %s", i+1, name)
 		if i == activeTab {
+			activeStart = pos
+			activeWidth = len(label)
 			b.WriteString(s.render(s.tabActive, label))
 		} else {
 			b.WriteString(s.render(s.tabInactive, label))
 		}
+		pos += len(label)
 		if i < len(tabNames)-1 {
-			b.WriteString("  ")
+			b.WriteString("   ")
+			pos += 3
 		}
 	}
 
@@ -32,7 +46,6 @@ func renderTabBar(s tuiStyles, activeTab int, width int, mode memoryloop.Mode, p
 	policyStr := s.render(s.dim, fmt.Sprintf("· %s", policy))
 	right := modeStr + " " + policyStr
 
-	// Pad between left and right
 	leftLen := lipglossWidth(left)
 	rightLen := lipglossWidth(right)
 	padding := width - leftLen - rightLen
@@ -40,7 +53,13 @@ func renderTabBar(s tuiStyles, activeTab int, width int, mode memoryloop.Mode, p
 		padding = 1
 	}
 
-	return left + strings.Repeat(" ", padding) + right
+	line1 := left + strings.Repeat(" ", padding) + right
+
+	// Underline row: amber ─ chars aligned under the active tab
+	line2 := strings.Repeat(" ", activeStart) +
+		s.render(s.tabUnderline, strings.Repeat("─", activeWidth))
+
+	return line1 + "\n" + line2
 }
 
 func renderStatusBar(s tuiStyles, hints string, info string, width int) string {
