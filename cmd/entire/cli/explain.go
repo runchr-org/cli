@@ -124,6 +124,11 @@ Note: --session filters the list view; --commit and --checkpoint are mutually ex
 				return nil
 			}
 
+			logging.SetLogLevelGetter(GetLogLevel)
+			if err := logging.Init(cmd.Context(), ""); err == nil {
+				defer logging.Close()
+			}
+
 			// Validate flag dependencies
 			if generateFlag && checkpointFlag == "" {
 				return errors.New("--generate requires --checkpoint/-c flag")

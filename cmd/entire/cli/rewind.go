@@ -64,6 +64,11 @@ your agent's context.`,
 
 			ctx := cmd.Context()
 
+			logging.SetLogLevelGetter(GetLogLevel)
+			if err := logging.Init(ctx, ""); err == nil {
+				defer logging.Close()
+			}
+
 			// Discover external agents so checkpoints from external agents can be resolved.
 			external.DiscoverAndRegister(ctx)
 			w := cmd.OutOrStdout()

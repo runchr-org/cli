@@ -65,6 +65,12 @@ most recent commit with a checkpoint.  You'll be prompted to confirm resuming in
 }
 
 func runResume(ctx context.Context, cmd *cobra.Command, branchName string, force bool) error {
+	// Initialize logging so structured logs go to .entire/logs/ instead of stderr.
+	logging.SetLogLevelGetter(GetLogLevel)
+	if err := logging.Init(ctx, ""); err == nil {
+		defer logging.Close()
+	}
+
 	w := cmd.OutOrStdout()
 	errW := cmd.ErrOrStderr()
 
@@ -223,7 +229,7 @@ func resumeFromCurrentBranch(ctx context.Context, w, errW io.Writer, branchName 
 	// the entire metadata branch.
 	cpSubtree, cpErr := metadataTree.Tree(checkpointID.Path())
 	if cpErr != nil {
-		logging.Warn(logCtx, "checkpoint subtree not found in metadata tree",
+		logging.Debug(logCtx, "checkpoint subtree not found in metadata tree, trying remote",
 			slog.String("checkpoint_id", checkpointID.String()),
 			slog.String("checkpoint_path", checkpointID.Path()),
 			slog.String("tree_hash", metadataTree.Hash.String()),
