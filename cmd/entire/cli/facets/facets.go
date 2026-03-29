@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/llmcli"
 )
@@ -51,12 +52,20 @@ type Extractor struct {
 }
 
 // Extract builds a facet prompt from transcript text and parses the JSON response.
-func (e *Extractor) Extract(ctx context.Context, transcriptText string) (*SessionFacets, *llmcli.UsageInfo, error) {
+// knownSkillNames is an optional list of canonical skill names to guide extraction.
+func (e *Extractor) Extract(ctx context.Context, transcriptText string, knownSkillNames ...[]string) (*SessionFacets, *llmcli.UsageInfo, error) {
 	if e.Runner == nil {
 		e.Runner = &llmcli.Runner{}
 	}
 
-	raw, usage, err := e.Runner.Execute(ctx, BuildPrompt(transcriptText))
+	var prompt string
+	if len(knownSkillNames) > 0 && len(knownSkillNames[0]) > 0 {
+		prompt = BuildPromptWithSkills(transcriptText, knownSkillNames[0])
+	} else {
+		prompt = BuildPrompt(transcriptText)
+	}
+
+	raw, usage, err := e.Runner.Execute(ctx, prompt)
 	if err != nil {
 		return nil, nil, fmt.Errorf("execute facets prompt: %w", err)
 	}
@@ -97,4 +106,45 @@ Guidelines:
 - Prefer short evidence snippets
 - Use empty arrays when a category is absent
 - Return ONLY the JSON object`, transcriptText)
+}
+
+// BuildPromptWithSkills constructs the extraction prompt with a list of known skill names
+// so the LLM uses canonical names instead of inventing its own.
+func BuildPromptWithSkills(transcriptText string, skillNames []string) string {
+	skillList := strings.Join(skillNames, ", ")
+	return fmt.Sprintf(`Analyze this development session transcript and extract structured facets.
+
+<transcript>
+%s
+</transcript>
+
+<known_skills>
+The following are the canonical skill names in this project: %s
+When extracting skill_signals, use these exact names. If a skill in the transcript
+matches one of these (even as a sub-skill like "e2e:triage" for "e2e"), use the
+canonical name. Only use a non-canonical name if the skill clearly does not match
+any of the known skills.
+</known_skills>
+
+Return a JSON object with this exact structure:
+{
+  "repeated_user_instructions": [{"instruction": "instruction text", "evidence": ["short quote"]}],
+  "missing_context": [{"item": "missing rule or repo fact", "evidence": ["short quote"]}],
+  "failure_loops": [{"description": "repeat failure pattern", "count": 2, "evidence": ["short quote"]}],
+  "skill_signals": [{
+    "skill_name": "skill identifier (use canonical name from known_skills when possible)",
+    "skill_path": "optional/path/to/SKILL.md",
+    "friction": ["what went wrong after using the skill"],
+    "missing_instruction": "what the skill should add next time"
+  }],
+  "repo_gotchas": ["repo-specific gotcha"],
+  "workflow_gaps": ["workflow gap or missing step"]
+}
+
+Guidelines:
+- Focus on actionable repeated signals, not full summaries
+- Prefer short evidence snippets
+- Use empty arrays when a category is absent
+- For skill_signals, prefer canonical names from the known_skills list
+- Return ONLY the JSON object`, transcriptText, skillList)
 }

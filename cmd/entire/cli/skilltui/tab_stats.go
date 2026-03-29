@@ -102,8 +102,8 @@ func (m statsModel) renderSuccessRate(cardWidth int) string {
 	if st.TotalSessions > 0 {
 		successPct := float64(successCount) / float64(st.TotalSessions) * 100
 		frictionPct := float64(st.TotalFriction) / float64(st.TotalSessions) * 100
-		successFill := int(successPct / 100 * float64(barWidth))
-		frictionFill := int(frictionPct / 100 * float64(barWidth))
+		successFill := min(int(successPct/100*float64(barWidth)), barWidth)
+		frictionFill := min(int(frictionPct/100*float64(barWidth)), barWidth)
 
 		successBar := m.styles.render(m.styles.success, strings.Repeat("\u2588", successFill)) +
 			strings.Repeat("\u2591", barWidth-successFill)

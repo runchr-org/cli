@@ -496,26 +496,24 @@ func (idb *InsightsDB) QuerySkillSignalsForSkills(ctx context.Context, skillName
 	if len(skillNames) == 0 {
 		return nil, nil
 	}
-	placeholders := make([]string, len(skillNames))
-	args := make([]interface{}, len(skillNames))
-	for i, name := range skillNames {
-		placeholders[i] = "?"
-		args[i] = name
-	}
-	query := fmt.Sprintf( //nolint:gosec // placeholders are all "?" literals, not user input
-		`SELECT s.checkpoint_id, s.session_index, s.session_id,
+	// Fetch all signals and let the caller do fuzzy matching, since
+	// LLM-extracted skill names often differ from canonical discovered names
+	// (e.g. "e2e:triage" vs "e2e", "superpowers:writing-plans" vs "writing-plans").
+	return idb.QueryAllSkillSignals(ctx)
+}
+
+// QueryAllSkillSignals returns all skill signals joined with session metadata.
+func (idb *InsightsDB) QueryAllSkillSignals(ctx context.Context) ([]SkillSignalRow, error) {
+	rows, err := idb.db.QueryContext(ctx, `
+		SELECT s.checkpoint_id, s.session_index, s.session_id,
 		       s.agent, s.model, s.branch, s.created_at,
 		       s.total_tokens, s.turn_count, s.overall_score,
 		       ss.skill_name, ss.skill_path, ss.friction, ss.missing_instruction
 		FROM skill_signals ss
 		JOIN sessions s ON s.checkpoint_id = ss.checkpoint_id AND s.session_index = ss.session_index
-		WHERE ss.skill_name IN (%s)
-		ORDER BY s.created_at DESC`,
-		strings.Join(placeholders, ","),
-	)
-	rows, err := idb.db.QueryContext(ctx, query, args...)
+		ORDER BY s.created_at DESC`)
 	if err != nil {
-		return nil, fmt.Errorf("query skill signals: %w", err)
+		return nil, fmt.Errorf("query all skill signals: %w", err)
 	}
 	defer rows.Close()
 
@@ -618,4 +616,15 @@ func (idb *InsightsDB) QuerySkillToolCallSessions(ctx context.Context) ([]SkillT
 		return nil, fmt.Errorf("iterate skill tool call sessions: %w", err)
 	}
 	return results, nil
+}
+
+// HasOwnerData returns true if any session has a non-empty owner_email.
+func (idb *InsightsDB) HasOwnerData(ctx context.Context) (bool, error) {
+	var count int
+	err := idb.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM (SELECT 1 FROM sessions WHERE owner_email != '' LIMIT 1)`).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check owner data: %w", err)
+	}
+	return count > 0, nil
 }

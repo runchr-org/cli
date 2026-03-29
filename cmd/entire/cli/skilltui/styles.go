@@ -25,6 +25,11 @@ type tuiStyles struct {
 	tabUnderline  lipgloss.Style
 	sectionHeader lipgloss.Style
 
+	// Picker
+	selectedRow  lipgloss.Style
+	chipActive   lipgloss.Style
+	chipDisabled lipgloss.Style
+
 	// Skill-specific
 	priorityHigh   lipgloss.Style
 	priorityMedium lipgloss.Style
@@ -62,6 +67,9 @@ func newStyles() tuiStyles {
 	s.appTitle = lipgloss.NewStyle().Bold(true).Foreground(amber)
 	s.tabUnderline = lipgloss.NewStyle().Foreground(amber)
 	s.sectionHeader = lipgloss.NewStyle().Bold(true).Faint(true)
+	s.selectedRow = lipgloss.NewStyle().Bold(true)
+	s.chipActive = lipgloss.NewStyle().Bold(true).Foreground(amber)
+	s.chipDisabled = lipgloss.NewStyle().Faint(true)
 
 	s.priorityHigh = lipgloss.NewStyle().Foreground(red).Bold(true)
 	s.priorityMedium = lipgloss.NewStyle().Foreground(amber).Bold(true)

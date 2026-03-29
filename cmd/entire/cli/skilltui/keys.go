@@ -13,9 +13,10 @@ type globalKeys struct {
 }
 
 type pickerKeys struct {
-	Up    key.Binding
-	Down  key.Binding
-	Enter key.Binding
+	Up     key.Binding
+	Down   key.Binding
+	Enter  key.Binding
+	Filter key.Binding
 }
 
 type dashboardKeys struct {
@@ -40,9 +41,10 @@ var globalKeyMap = globalKeys{
 }
 
 var pickerKeyMap = pickerKeys{
-	Up:    key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "up")),
-	Down:  key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "down")),
-	Enter: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
+	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "up")),
+	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "down")),
+	Enter:  key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
+	Filter: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter")),
 }
 
 var dashboardKeyMap = dashboardKeys{

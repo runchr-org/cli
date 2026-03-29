@@ -34,6 +34,8 @@ func newImproveModel(styles tuiStyles) improveModel {
 
 func (m *improveModel) setData(improvements []skilldb.SkillImprovement) {
 	m.improvements = improvements
+	m.suggestions = nil // Clear stale suggestions from previous skill.
+	m.selected = 0
 }
 
 func (m *improveModel) setSize(w, h int) { m.width = w; m.height = h }
@@ -174,13 +176,13 @@ func (m improveModel) renderDiff(diff string) string {
 		prefix := "    "
 		switch {
 		case strings.HasPrefix(line, "+"):
-			b.WriteString(prefix + m.styles.render(m.styles.diffAdd, line) + "\n")
+			b.WriteString(prefix + m.styles.render(m.styles.diffAdd, "+ "+line[1:]) + "\n")
 		case strings.HasPrefix(line, "-"):
-			b.WriteString(prefix + m.styles.render(m.styles.diffRemove, line) + "\n")
+			b.WriteString(prefix + m.styles.render(m.styles.diffRemove, "- "+line[1:]) + "\n")
 		case strings.HasPrefix(line, "@@"):
 			b.WriteString(prefix + m.styles.render(m.styles.dim, line) + "\n")
 		default:
-			b.WriteString(prefix + m.styles.render(m.styles.dim, line) + "\n")
+			b.WriteString(prefix + m.styles.render(m.styles.dim, "  "+line) + "\n")
 		}
 	}
 	return b.String()

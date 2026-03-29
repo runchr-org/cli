@@ -114,6 +114,7 @@ func (m rootModel) loadData() tea.Cmd {
 				SourceAgent:  d.SourceAgent,
 				Path:         d.Path,
 				Kind:         d.Kind,
+				Scope:        d.Scope,
 				DiscoveredAt: now,
 				LastSeenAt:   now,
 			}
@@ -124,15 +125,10 @@ func (m rootModel) loadData() tea.Cmd {
 			return dataLoadedMsg{err: fmt.Errorf("refresh skill cache: %w", err)}
 		}
 
-		// Load all skills from database.
-		skills, err := m.skillDB.ListSkills(m.ctx)
-		if err != nil {
-			return dataLoadedMsg{err: fmt.Errorf("list skills: %w", err)}
-		}
-
-		// Load stats for each skill.
-		stats := make(map[string]*skilldb.SkillStatsResult, len(skills))
-		for _, skill := range skills {
+		// Load stats for each discovered skill.
+		// Use rows directly (not ListSkills) to preserve Scope from discovery.
+		stats := make(map[string]*skilldb.SkillStatsResult, len(rows))
+		for _, skill := range rows {
 			st, statsErr := m.skillDB.SkillStats(m.ctx, skill.Name, skill.SourceAgent)
 			if statsErr != nil {
 				return dataLoadedMsg{err: fmt.Errorf("skill stats for %q: %w", skill.Name, statsErr)}
@@ -140,7 +136,7 @@ func (m rootModel) loadData() tea.Cmd {
 			stats[skill.Name+"|"+skill.SourceAgent] = st
 		}
 
-		return dataLoadedMsg{skills: skills, stats: stats}
+		return dataLoadedMsg{skills: rows, stats: stats}
 	}
 }
 
@@ -358,7 +354,7 @@ func (m rootModel) View() string {
 	if m.screen == screenPicker {
 		b.WriteString(m.picker.view())
 		b.WriteString("\n")
-		hints := "j/k navigate \u00b7 enter select \u00b7 q quit"
+		hints := "j/k navigate \u00b7 f filter \u00b7 enter select \u00b7 q quit"
 		info := fmt.Sprintf("%d skills", len(m.picker.skills))
 		b.WriteString(renderStatusBar(m.styles, hints, info, m.width))
 		return b.String()

@@ -113,3 +113,31 @@ func TestBuildPrompt_IncludesFacetSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildPromptWithSkills_IncludesKnownSkills(t *testing.T) {
+	t.Parallel()
+
+	prompt := facets.BuildPromptWithSkills("some transcript", []string{"e2e", "dev", "reviewer"})
+
+	for _, want := range []string{
+		"<transcript>",
+		"<known_skills>",
+		"e2e, dev, reviewer",
+		"canonical skill names",
+		"skill_signals",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+}
+
+func TestBuildPromptWithSkills_IncludesTranscript(t *testing.T) {
+	t.Parallel()
+
+	prompt := facets.BuildPromptWithSkills("my test transcript content", []string{"e2e"})
+
+	if !strings.Contains(prompt, "my test transcript content") {
+		t.Fatal("prompt missing transcript content")
+	}
+}

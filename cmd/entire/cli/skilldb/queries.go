@@ -15,6 +15,7 @@ type SkillRow struct {
 	SourceAgent  string
 	Path         string
 	Kind         string
+	Scope        string // "repo" or "personal"
 	DiscoveredAt time.Time
 	LastSeenAt   time.Time
 }

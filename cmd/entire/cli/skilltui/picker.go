@@ -2,6 +2,7 @@ package skilltui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -11,12 +12,14 @@ import (
 
 //nolint:recvcheck // bubbletea pattern: pointer receivers for mutation, value for update/view
 type pickerModel struct {
-	skills   []skilldb.SkillRow
-	stats    map[string]*skilldb.SkillStatsResult
-	selected int
-	styles   tuiStyles
-	width    int
-	height   int
+	allSkills []skilldb.SkillRow // full list before filtering
+	skills    []skilldb.SkillRow // filtered view
+	stats     map[string]*skilldb.SkillStatsResult
+	selected  int
+	scope     int // 0 = all, 1 = repo only, 2 = personal only
+	styles         tuiStyles
+	width          int
+	height         int
 }
 
 func newPickerModel(styles tuiStyles) pickerModel {
@@ -27,9 +30,77 @@ func newPickerModel(styles tuiStyles) pickerModel {
 }
 
 func (m *pickerModel) setData(skills []skilldb.SkillRow, stats map[string]*skilldb.SkillStatsResult) {
-	m.skills = skills
-	m.stats = stats
-	m.selected = 0
+	// Deduplicate skills by name — the same skill may be discovered for
+	// multiple source agents (e.g. claude-code and gemini-cli).
+	// Keep one row per name and merge stats across agents.
+	seen := make(map[string]int) // name -> index in deduped
+	var deduped []skilldb.SkillRow
+	merged := make(map[string]*skilldb.SkillStatsResult)
+
+	for _, skill := range skills {
+		key := skill.Name + "|" + skill.SourceAgent
+		st := stats[key]
+
+		if idx, ok := seen[skill.Name]; ok {
+			// Merge stats into existing entry.
+			if existing := merged[deduped[idx].Name]; existing != nil && st != nil {
+				existing.TotalSessions += st.TotalSessions
+				existing.TotalFriction += st.TotalFriction
+				existing.TotalTokens += st.TotalTokens
+				if !st.FirstUsed.IsZero() && (existing.FirstUsed.IsZero() || st.FirstUsed.Before(existing.FirstUsed)) {
+					existing.FirstUsed = st.FirstUsed
+				}
+				if st.LastUsed.After(existing.LastUsed) {
+					existing.LastUsed = st.LastUsed
+				}
+				if existing.TotalSessions > 0 {
+					existing.SessionsPerWeek += st.SessionsPerWeek
+					existing.AvgScore = (existing.AvgScore*float64(existing.TotalSessions-st.TotalSessions) +
+						st.AvgScore*float64(st.TotalSessions)) / float64(existing.TotalSessions)
+				}
+			} else if existing == nil && st != nil {
+				merged[deduped[idx].Name] = st
+			}
+			continue
+		}
+
+		seen[skill.Name] = len(deduped)
+		deduped = append(deduped, skill)
+		if st != nil {
+			cp := *st
+			merged[skill.Name] = &cp
+		}
+	}
+
+	// Rekey stats by "name|sourceAgent" for the kept rows.
+	m.stats = make(map[string]*skilldb.SkillStatsResult, len(deduped))
+	for _, skill := range deduped {
+		key := skill.Name + "|" + skill.SourceAgent
+		m.stats[key] = merged[skill.Name]
+	}
+
+	m.allSkills = deduped
+	m.applyFilter()
+}
+
+func (m *pickerModel) applyFilter() {
+	if m.scope == 0 {
+		m.skills = m.allSkills
+	} else {
+		scopeName := skilldb.ScopeRepo
+		if m.scope == 2 {
+			scopeName = skilldb.ScopePersonal
+		}
+		m.skills = nil
+		for _, s := range m.allSkills {
+			if s.Scope == scopeName {
+				m.skills = append(m.skills, s)
+			}
+		}
+	}
+	if m.selected >= len(m.skills) {
+		m.selected = max(0, len(m.skills)-1)
+	}
 }
 
 func (m *pickerModel) setSize(w, h int) { m.width = w; m.height = h }
@@ -49,6 +120,9 @@ func (m pickerModel) update(msg tea.Msg) (pickerModel, tea.Cmd) {
 		if m.selected < len(m.skills)-1 {
 			m.selected++
 		}
+	case key.Matches(keyMsg, pickerKeyMap.Filter):
+		m.scope = (m.scope + 1) % 3
+		m.applyFilter()
 	case key.Matches(keyMsg, pickerKeyMap.Enter):
 		if len(m.skills) > 0 {
 			skill := m.skills[m.selected]
@@ -59,10 +133,20 @@ func (m pickerModel) update(msg tea.Msg) (pickerModel, tea.Cmd) {
 	return m, nil
 }
 
+func (m pickerModel) hasAnySessionData() bool {
+	for _, st := range m.stats {
+		if st != nil && st.TotalSessions > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (m pickerModel) view() string {
 	var b strings.Builder
 
 	b.WriteString(renderPickerHeader(m.styles))
+	b.WriteString(m.renderFilterChips())
 	b.WriteString("\n")
 
 	if len(m.skills) == 0 {
@@ -70,27 +154,54 @@ func (m pickerModel) view() string {
 		return b.String()
 	}
 
+	// If all skills have zero sessions, show an actionable empty state.
+	if !m.hasAnySessionData() {
+		fmt.Fprintf(&b, "  %d skills discovered, but no session data found.\n\n", len(m.skills))
+		b.WriteString(m.styles.render(m.styles.dim, "  To populate skill analytics:"))
+		b.WriteString("\n")
+		b.WriteString(m.styles.render(m.styles.dim, "    1. Run sessions with your agent (creates checkpoints)"))
+		b.WriteString("\n")
+		b.WriteString(m.styles.render(m.styles.dim, "    2. Run `entire insights` to extract skill signals"))
+		b.WriteString("\n")
+		b.WriteString(m.styles.render(m.styles.dim, "    3. Re-open this dashboard"))
+		b.WriteString("\n\n")
+		b.WriteString(m.styles.render(m.styles.sectionHeader, "  Skills found:"))
+		b.WriteString("\n")
+		for _, skill := range m.skills {
+			fmt.Fprintf(&b, "    %s  %s\n",
+				m.styles.render(m.styles.bold, skill.Name),
+				m.styles.render(m.styles.dim, skill.SourceAgent))
+		}
+		return b.String()
+	}
+
+	// Column widths
+	const colName = 24
+	const colSessions = 10
+	const colFreq = 12
+	const colScore = 10
+
 	// Column headers
-	header := fmt.Sprintf("  %-20s %-14s %8s %10s %9s", "Name", "Source", "Sessions", "Freq", "Avg Score")
+	header := "  " + padRight("Name", colName) +
+		padRight("Sessions", colSessions) + padRight("Freq", colFreq) + padRight("Score", colScore)
 	b.WriteString(m.styles.render(m.styles.dim, header))
 	b.WriteString("\n")
-	b.WriteString(m.styles.render(m.styles.dim, strings.Repeat("\u2500", min(m.width, 70))))
+	b.WriteString(m.styles.render(m.styles.dim, "  "+strings.Repeat("\u2500", colName+colSessions+colFreq+colScore)))
 	b.WriteString("\n")
 
 	for i, skill := range m.skills {
 		statsKey := skill.Name + "|" + skill.SourceAgent
 		st := m.stats[statsKey]
 
+		isSelected := i == m.selected
 		marker := "  "
-		nameStyle := m.styles.dim
-		if i == m.selected {
+		if isSelected {
 			marker = m.styles.render(m.styles.selected, "\u25b8 ")
-			nameStyle = m.styles.bold
 		}
 
 		sessions := 0
-		freqStr := m.styles.render(m.styles.dim, "\u2500 0.0/wk")
-		scoreStr := "\u2500"
+		freqStr := m.styles.render(m.styles.dim, "0.0/wk")
+		scoreStr := m.styles.render(m.styles.dim, "\u2500")
 		if st != nil {
 			sessions = st.TotalSessions
 			freqStr = formatFrequency(m.styles, st.SessionsPerWeek)
@@ -99,19 +210,43 @@ func (m pickerModel) view() string {
 			}
 		}
 
-		line := fmt.Sprintf("%s%-20s %-14s %8d %10s %9s",
-			marker,
-			m.styles.render(nameStyle, skill.Name),
-			skill.SourceAgent,
-			sessions,
-			freqStr,
-			scoreStr,
-		)
+		// Render name with style, then pad to visible width.
+		var nameStr string
+		if isSelected {
+			nameStr = m.styles.render(m.styles.selectedRow, skill.Name)
+		} else {
+			nameStr = skill.Name
+		}
+
+		sessStr := strconv.Itoa(sessions)
+		if sessions == 0 {
+			sessStr = m.styles.render(m.styles.dim, "0")
+		}
+
+		line := marker +
+			padRight(nameStr, colName) +
+			padRight(sessStr, colSessions) +
+			padRight(freqStr, colFreq) +
+			padRight(scoreStr, colScore)
+
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
 
 	return b.String()
+}
+
+func (m pickerModel) renderFilterChips() string {
+	labels := [3]string{"All", "Repo", "Personal"}
+	var chips []string
+	for i, label := range labels {
+		if i == m.scope {
+			chips = append(chips, m.styles.render(m.styles.chipActive, "[ "+label+" ]"))
+		} else {
+			chips = append(chips, m.styles.render(m.styles.chipDisabled, "  "+label+"  "))
+		}
+	}
+	return "  " + strings.Join(chips, " ") + "\n"
 }
 
 func formatFrequency(s tuiStyles, perWeek float64) string {

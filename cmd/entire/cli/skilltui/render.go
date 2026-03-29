@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 var tabNames = [3]string{"Stats", "Friction", "Improve"}
@@ -16,18 +18,16 @@ func renderTabBar(s tuiStyles, activeTab int, _ int, skillName string) string {
 	b.WriteString(s.render(s.appTitle, "SKILL IMPROVEMENT"))
 	b.WriteString("  ")
 
-	titleWidth := len("SKILL IMPROVEMENT") + 2
-
 	// Skill name indicator
 	skillLabel := fmt.Sprintf("\u2039 %s \u203a", skillName)
 	b.WriteString(s.render(s.dim, skillLabel))
 	b.WriteString("   ")
-	titleWidth += len(skillLabel) + 3
 
-	// Track position for underline
+	// Use visible width (not byte length) for underline alignment.
+	// lipgloss.Width strips ANSI codes and counts display columns correctly.
 	activeStart := 0
 	activeWidth := 0
-	pos := titleWidth
+	pos := lipgloss.Width(b.String())
 
 	for i, name := range tabNames {
 		label := fmt.Sprintf("%d %s", i+1, name)
@@ -38,7 +38,7 @@ func renderTabBar(s tuiStyles, activeTab int, _ int, skillName string) string {
 		} else {
 			b.WriteString(s.render(s.tabInactive, label))
 		}
-		pos += len(label)
+		pos += len(label) // tab labels are ASCII-only, len() is fine
 		if i < len(tabNames)-1 {
 			b.WriteString("   ")
 			pos += 3
@@ -47,7 +47,7 @@ func renderTabBar(s tuiStyles, activeTab int, _ int, skillName string) string {
 
 	line1 := b.String()
 
-	// Underline row: amber chars aligned under the active tab
+	// Underline row: spaces aligned to visible column position
 	line2 := strings.Repeat(" ", activeStart) +
 		s.render(s.tabUnderline, strings.Repeat("\u2500", activeWidth))
 
@@ -110,4 +110,13 @@ func formatDate(t time.Time) string {
 		return "-"
 	}
 	return t.Format("2006-01-02")
+}
+
+// padRight pads a string to a visible width, accounting for ANSI escape codes.
+func padRight(s string, width int) string {
+	visible := lipgloss.Width(s)
+	if visible >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-visible)
 }

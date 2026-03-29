@@ -7,7 +7,70 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 )
+
+// cacheVersion is bumped when matching logic changes to force cache invalidation.
+// v2: added ResolveSkillName fuzzy matching for LLM-extracted signal names.
+const cacheVersion = "v2"
+
+// resolveSkillName matches an LLM-extracted skill signal name to a discovered skill.
+// LLM-extracted names often differ from canonical names (e.g. "e2e:triage" for skill "e2e",
+// "superpowers:writing-plans" for "writing-plans", "cli-e2e-failure-fix" for "e2e").
+//
+// Match priority:
+//  1. Exact match
+//  2. Signal is a sub-skill: "parent:child" where parent matches a discovered skill
+//  3. Last segment match: "prefix:name" where name matches a discovered skill
+//  4. Discovered skill name is contained in the signal name as a word boundary
+func ResolveSkillName(signalName string, skillMap map[string]SkillRow) (SkillRow, bool) {
+	// 1. Exact match.
+	if skill, ok := skillMap[signalName]; ok {
+		return skill, true
+	}
+
+	// 2. Sub-skill: signal "e2e:triage" matches discovered "e2e".
+	if idx := strings.IndexByte(signalName, ':'); idx > 0 {
+		parent := signalName[:idx]
+		if skill, ok := skillMap[parent]; ok {
+			return skill, true
+		}
+	}
+
+	// 3. Last segment: signal "superpowers:writing-plans" matches discovered "writing-plans".
+	if idx := strings.LastIndexByte(signalName, ':'); idx >= 0 && idx < len(signalName)-1 {
+		lastSeg := signalName[idx+1:]
+		if skill, ok := skillMap[lastSeg]; ok {
+			return skill, true
+		}
+	}
+
+	// 4. Discovered skill name appears as a delimited segment in the signal.
+	// E.g. signal "cli-e2e-failure-fix" contains discovered skill "e2e".
+	// We check word boundaries using "-" and ":" as delimiters.
+	for name, skill := range skillMap {
+		if len(name) < 2 {
+			continue // skip very short names to avoid false positives
+		}
+		// Check if name appears bounded by delimiters or string edges.
+		searchIn := signalName
+		for {
+			idx := strings.Index(searchIn, name)
+			if idx < 0 {
+				break
+			}
+			leftOK := idx == 0 || searchIn[idx-1] == '-' || searchIn[idx-1] == ':'
+			rightEnd := idx + len(name)
+			rightOK := rightEnd == len(searchIn) || searchIn[rightEnd] == '-' || searchIn[rightEnd] == ':'
+			if leftOK && rightOK {
+				return skill, true
+			}
+			searchIn = searchIn[idx+1:]
+		}
+	}
+
+	return SkillRow{}, false
+}
 
 // PopulateFromInsightsDB populates the skill analytics DB from insightsdb data.
 // It queries skill_signals and tool_calls to find sessions that used discovered skills.
@@ -43,18 +106,22 @@ func (sdb *SkillDB) PopulateFromInsightsDB(ctx context.Context, idb *insightsdb.
 	inserted := make(map[sessionKey]bool)
 
 	// Step 1: From skill_signals — sessions with friction for specific skills.
-	signals, err := idb.QuerySkillSignalsForSkills(ctx, skillNames)
+	// Fetch all signals and resolve names in Go, since LLM-extracted names
+	// often differ from canonical discovered names.
+	signals, err := idb.QueryAllSkillSignals(ctx)
 	if err != nil {
 		return fmt.Errorf("query skill signals: %w", err)
 	}
 
 	for _, sig := range signals {
-		skill, ok := skillMap[sig.SkillName]
+		skill, ok := ResolveSkillName(sig.SkillName, skillMap)
 		if !ok {
+			logging.Debug(ctx, "skill signal name not matched to any discovered skill",
+				"signal_name", sig.SkillName)
 			continue
 		}
 
-		key := sessionKey{sig.SkillName, sig.CheckpointID, sig.SessionIndex}
+		key := sessionKey{skill.Name, sig.CheckpointID, sig.SessionIndex}
 		if inserted[key] {
 			continue
 		}
@@ -67,7 +134,7 @@ func (sdb *SkillDB) PopulateFromInsightsDB(ctx context.Context, idb *insightsdb.
 		}
 
 		if err = sdb.InsertSessionTx(ctx, tx, SkillSessionRow{
-			SkillName:     sig.SkillName,
+			SkillName:     skill.Name,
 			SourceAgent:   skill.SourceAgent,
 			CheckpointID:  sig.CheckpointID,
 			SessionIndex:  sig.SessionIndex,
@@ -88,7 +155,7 @@ func (sdb *SkillDB) PopulateFromInsightsDB(ctx context.Context, idb *insightsdb.
 		// Insert friction items.
 		for _, f := range sig.Friction {
 			if err = sdb.InsertFrictionTx(ctx, tx,
-				sig.SkillName, skill.SourceAgent,
+				skill.Name, skill.SourceAgent,
 				sig.CheckpointID, sig.SessionIndex,
 				f, "",
 			); err != nil {
@@ -100,7 +167,7 @@ func (sdb *SkillDB) PopulateFromInsightsDB(ctx context.Context, idb *insightsdb.
 		if sig.MissingInstruction != "" {
 			evidence := strings.Join(sig.Friction, "\n")
 			if err = sdb.InsertMissingInstructionTx(ctx, tx,
-				sig.SkillName, skill.SourceAgent,
+				skill.Name, skill.SourceAgent,
 				sig.CheckpointID, sig.SessionIndex,
 				sig.MissingInstruction, evidence,
 			); err != nil {
@@ -157,18 +224,22 @@ func (sdb *SkillDB) PopulateFromInsightsDB(ctx context.Context, idb *insightsdb.
 // RefreshFromInsightsDB checks if the cache is stale and repopulates if needed.
 // Returns true if the cache was refreshed.
 func (sdb *SkillDB) RefreshFromInsightsDB(ctx context.Context, idb *insightsdb.InsightsDB, discoveredSkills []SkillRow) (bool, error) {
-	// Check insightsdb branch tip.
+	// Check insightsdb branch tip with cache version prefix.
+	// Bumping cacheVersion forces re-population even if the branch tip hasn't changed,
+	// e.g. after fixing the skill name matching logic.
 	currentTip, err := idb.GetBranchTip(ctx)
 	if err != nil {
 		return false, fmt.Errorf("get insightsdb branch tip: %w", err)
 	}
+
+	versionedTip := cacheVersion + ":" + currentTip
 
 	cachedTip, err := sdb.GetCacheTip(ctx)
 	if err != nil {
 		return false, fmt.Errorf("get skilldb cache tip: %w", err)
 	}
 
-	if currentTip != "" && currentTip == cachedTip {
+	if versionedTip != "" && versionedTip == cachedTip {
 		return false, nil
 	}
 
@@ -197,9 +268,9 @@ func (sdb *SkillDB) RefreshFromInsightsDB(ctx context.Context, idb *insightsdb.I
 		return false, fmt.Errorf("populate from insightsdb: %w", err)
 	}
 
-	// Update cache tip.
-	if currentTip != "" {
-		if err = sdb.SetCacheTip(ctx, currentTip); err != nil {
+	// Update cache tip with version prefix.
+	if versionedTip != "" {
+		if err = sdb.SetCacheTip(ctx, versionedTip); err != nil {
 			return false, fmt.Errorf("set cache tip: %w", err)
 		}
 	}
