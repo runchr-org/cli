@@ -61,6 +61,10 @@ func hasUnpushedSessionsCommon(repo *git.Repository, remote string, localHash pl
 	return localHash != remoteRef.Hash()
 }
 
+// maxPushRetries is the maximum number of fetch+merge+push cycles to attempt
+// when the remote is updated between our fetch and push (race condition).
+const maxPushRetries = 3
+
 // doPushBranch pushes the given branch to the target with fetch+merge recovery.
 // The target can be a remote name or a URL.
 func doPushBranch(ctx context.Context, target, branchName string) error {
@@ -73,36 +77,54 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 	stop := startProgressDots(os.Stderr)
 
 	// Try pushing first
-	if err := tryPushSessionsCommon(ctx, target, branchName); err == nil {
+	pushErr := tryPushSessionsCommon(ctx, target, branchName)
+	if pushErr == nil {
 		stop(" done")
 		return nil
 	}
 	stop("")
 
-	// Push failed - likely non-fast-forward. Try to fetch and merge.
-	fmt.Fprintf(os.Stderr, "[entire] Syncing %s with remote...", branchName)
-	stop = startProgressDots(os.Stderr)
-
-	if err := fetchAndMergeSessionsCommon(ctx, target, branchName); err != nil {
-		stop("")
-		fmt.Fprintf(os.Stderr, "[entire] Warning: couldn't sync %s: %v\n", branchName, err)
+	// If not a non-fast-forward error, don't attempt merge recovery
+	if !errors.Is(pushErr, errNonFastForward) {
+		fmt.Fprintf(os.Stderr, "[entire] Warning: failed to push %s: %v\n", branchName, pushErr)
 		printCheckpointRemoteHint(target)
 		return nil // Don't fail the main push
 	}
-	stop(" done")
 
-	// Try pushing again after merge
-	fmt.Fprintf(os.Stderr, "[entire] Pushing %s to %s...", branchName, displayTarget)
-	stop = startProgressDots(os.Stderr)
+	// Non-fast-forward: retry fetch+merge+push up to maxPushRetries times.
+	// The remote can be updated between our fetch and push, so we may need
+	// multiple attempts.
+	for attempt := 1; attempt <= maxPushRetries; attempt++ {
+		fmt.Fprintf(os.Stderr, "[entire] Syncing %s with remote...", branchName)
+		stop = startProgressDots(os.Stderr)
 
-	if err := tryPushSessionsCommon(ctx, target, branchName); err != nil {
-		stop("")
-		fmt.Fprintf(os.Stderr, "[entire] Warning: failed to push %s after sync: %v\n", branchName, err)
-		printCheckpointRemoteHint(target)
-	} else {
+		if err := fetchAndMergeSessionsCommon(ctx, target, branchName); err != nil {
+			stop("")
+			fmt.Fprintf(os.Stderr, "[entire] Warning: couldn't sync %s: %v\n", branchName, err)
+			printCheckpointRemoteHint(target)
+			return nil // Don't fail the main push
+		}
 		stop(" done")
+
+		// Try pushing after merge
+		fmt.Fprintf(os.Stderr, "[entire] Pushing %s to %s...", branchName, displayTarget)
+		stop = startProgressDots(os.Stderr)
+
+		pushErr = tryPushSessionsCommon(ctx, target, branchName)
+		if pushErr == nil {
+			stop(" done")
+			return nil
+		}
+		stop("")
+
+		// If the retry failed for a reason other than non-fast-forward, stop retrying
+		if !errors.Is(pushErr, errNonFastForward) {
+			break
+		}
 	}
 
+	fmt.Fprintf(os.Stderr, "[entire] Warning: failed to push %s after sync: %v\n", branchName, pushErr)
+	printCheckpointRemoteHint(target)
 	return nil
 }
 
@@ -116,6 +138,10 @@ func printCheckpointRemoteHint(target string) {
 	fmt.Fprintln(os.Stderr, "[entire] Checkpoints are saved locally but not synced. Ensure you have access to the checkpoint remote.")
 }
 
+// errNonFastForward indicates a push was rejected because the remote has
+// commits not present locally. This is recoverable via fetch+merge.
+var errNonFastForward = errors.New("non-fast-forward")
+
 // tryPushSessionsCommon attempts to push the sessions branch.
 func tryPushSessionsCommon(ctx context.Context, remote, branchName string) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -127,12 +153,16 @@ func tryPushSessionsCommon(ctx context.Context, remote, branchName string) error
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// Check if it's a non-fast-forward error (we can try to recover)
-		if strings.Contains(string(output), "non-fast-forward") ||
-			strings.Contains(string(output), "rejected") {
-			return errors.New("non-fast-forward")
+		out := string(output)
+		// Check specifically for non-fast-forward hints from git.
+		// Git outputs "[rejected] ... (non-fast-forward)" and a hint about
+		// "fetch first". We check for the hint text to distinguish from
+		// other rejection reasons (e.g., branch protection, permissions).
+		if strings.Contains(out, "non-fast-forward") ||
+			(strings.Contains(out, "[rejected]") && strings.Contains(out, "fetch first")) {
+			return errNonFastForward
 		}
-		return fmt.Errorf("push failed: %s", output)
+		return fmt.Errorf("push failed: %s", out)
 	}
 	return nil
 }
