@@ -900,7 +900,7 @@ func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(ctx contex
 
 	summary, err := store.ReadCommitted(ctx, checkpointID)
 	if err != nil {
-		return err
+		return fmt.Errorf("reading checkpoint summary: %w", err)
 	}
 	if summary == nil || len(summary.Sessions) <= 1 {
 		return nil
@@ -919,7 +919,11 @@ func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(ctx contex
 		return nil
 	}
 
-	return store.UpdateCheckpointSummary(ctx, checkpointID, combined.snapshot())
+	if err := store.UpdateCheckpointSummary(ctx, checkpointID, combined.snapshot()); err != nil {
+		return fmt.Errorf("updating combined attribution: %w", err)
+	}
+
+	return nil
 }
 
 type checkpointAttributionAggregate struct {
