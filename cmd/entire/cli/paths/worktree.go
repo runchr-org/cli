@@ -3,18 +3,24 @@ package paths
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 )
 
 // GetWorktreeID returns the internal git worktree identifier for the given path.
 // For the main worktree (where .git is a directory), returns empty string.
 // For linked worktrees (where .git is a file), extracts the name from
 // .git/worktrees/<name>/ path. This name is stable across `git worktree move`.
+// Uses os.Root for traversal-resistant access.
 func GetWorktreeID(worktreePath string) (string, error) {
-	gitPath := filepath.Join(worktreePath, ".git")
+	root, err := os.OpenRoot(worktreePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open worktree path: %w", err)
+	}
+	defer root.Close()
 
-	info, err := os.Stat(gitPath)
+	info, err := root.Stat(".git")
 	if err != nil {
 		return "", fmt.Errorf("failed to stat .git: %w", err)
 	}
@@ -25,7 +31,7 @@ func GetWorktreeID(worktreePath string) (string, error) {
 	}
 
 	// Linked worktree has .git as a file with content: "gitdir: /path/to/.git/worktrees/<name>"
-	content, err := os.ReadFile(gitPath) //nolint:gosec // gitPath is constructed from worktreePath + ".git"
+	content, err := osroot.ReadFile(root, ".git")
 	if err != nil {
 		return "", fmt.Errorf("failed to read .git file: %w", err)
 	}

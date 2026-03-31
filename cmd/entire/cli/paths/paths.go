@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 )
 
 // Directory constants
@@ -116,6 +117,65 @@ func ClearWorktreeRootCache() {
 	worktreeRootCache = ""
 	worktreeRootCacheDir = ""
 	worktreeRootMu.Unlock()
+}
+
+// IsLinkedWorktree returns true if the given path is inside a linked git worktree
+// (as opposed to the main repository). Linked worktrees have .git as a file
+// pointing to the main repo, while the main repo has .git as a directory.
+// Uses os.Root for traversal-resistant access.
+func IsLinkedWorktree(worktreeRoot string) bool {
+	root, err := os.OpenRoot(worktreeRoot)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
+
+	info, err := root.Stat(".git")
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
+}
+
+// MainRepoRoot returns the root directory of the main repository.
+// In the main repo, this returns the same as WorktreeRoot.
+// In a linked worktree, this parses the .git file to find the main repo root.
+// Uses os.Root for traversal-resistant reads.
+//
+// Per gitrepository-layout(5), a worktree's .git file is a "gitfile" containing
+// "gitdir: <path>" pointing to $GIT_DIR/worktrees/<id> in the main repository.
+// See: https://git-scm.com/docs/gitrepository-layout
+func MainRepoRoot(ctx context.Context) (string, error) {
+	worktreeRoot, err := WorktreeRoot(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get worktree path: %w", err)
+	}
+
+	if !IsLinkedWorktree(worktreeRoot) {
+		return worktreeRoot, nil
+	}
+
+	root, err := os.OpenRoot(worktreeRoot)
+	if err != nil {
+		return "", fmt.Errorf("failed to open worktree root: %w", err)
+	}
+	defer root.Close()
+
+	// Worktree .git file contains: "gitdir: /path/to/main/.git/worktrees/<id>"
+	content, err := osroot.ReadFile(root, ".git")
+	if err != nil {
+		return "", fmt.Errorf("failed to read .git file: %w", err)
+	}
+
+	gitdir := strings.TrimSpace(string(content))
+	gitdir = strings.TrimPrefix(gitdir, "gitdir: ")
+
+	// Extract main repo root: everything before "/.git/"
+	idx := strings.LastIndex(gitdir, "/.git/")
+	if idx < 0 {
+		return "", fmt.Errorf("unexpected gitdir format: %s", gitdir)
+	}
+	return gitdir[:idx], nil
 }
 
 // AbsPath returns the absolute path for a relative path within the repository.

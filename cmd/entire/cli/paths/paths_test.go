@@ -1,9 +1,13 @@
 package paths
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 func TestIsSubpath(t *testing.T) {
@@ -100,6 +104,104 @@ func TestGetClaudeProjectDir_Override(t *testing.T) {
 	if result != "/tmp/test-claude-project" {
 		t.Errorf("GetClaudeProjectDir() = %q, want %q", result, "/tmp/test-claude-project")
 	}
+}
+
+func TestMainRepoRoot_MainRepo(t *testing.T) {
+	// Cannot use t.Parallel: uses t.Chdir
+	tmpDir := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(tmpDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	tmpDir = resolved
+
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "f.txt", "init")
+	testutil.GitAdd(t, tmpDir, "f.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+
+	ClearWorktreeRootCache()
+	t.Chdir(tmpDir)
+
+	root, err := MainRepoRoot(context.Background())
+	if err != nil {
+		t.Fatalf("MainRepoRoot() error: %v", err)
+	}
+	if root != tmpDir {
+		t.Errorf("MainRepoRoot() = %q, want %q", root, tmpDir)
+	}
+}
+
+func TestMainRepoRoot_LinkedWorktree(t *testing.T) {
+	// Cannot use t.Parallel: uses t.Chdir
+	tmpDir := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(tmpDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	tmpDir = resolved
+
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "f.txt", "init")
+	testutil.GitAdd(t, tmpDir, "f.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+
+	// Create linked worktree
+	worktreeDir := filepath.Join(tmpDir, ".claude", "worktrees", "test-branch")
+	if err := os.MkdirAll(filepath.Dir(worktreeDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	cmd := exec.Command("git", "worktree", "add", worktreeDir, "-b", "test-branch") //nolint:noctx // test code
+	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git worktree add: %v\n%s", err, output)
+	}
+
+	ClearWorktreeRootCache()
+	t.Chdir(worktreeDir)
+
+	root, err := MainRepoRoot(context.Background())
+	if err != nil {
+		t.Fatalf("MainRepoRoot() error: %v", err)
+	}
+	if root != tmpDir {
+		t.Errorf("MainRepoRoot() = %q, want %q (should resolve to main repo, not worktree)", root, tmpDir)
+	}
+}
+
+func TestIsLinkedWorktree(t *testing.T) {
+	t.Parallel()
+
+	t.Run("main repo", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if IsLinkedWorktree(dir) {
+			t.Error("IsLinkedWorktree() = true for main repo, want false")
+		}
+	})
+
+	t.Run("linked worktree", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /repo/.git/worktrees/wt\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !IsLinkedWorktree(dir) {
+			t.Error("IsLinkedWorktree() = false for linked worktree, want true")
+		}
+	})
+
+	t.Run("no git", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		if IsLinkedWorktree(dir) {
+			t.Error("IsLinkedWorktree() = true for dir without .git, want false")
+		}
+	})
 }
 
 func TestGetClaudeProjectDir_Default(t *testing.T) {

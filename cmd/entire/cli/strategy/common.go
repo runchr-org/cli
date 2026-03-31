@@ -835,18 +835,11 @@ func OpenRepository(ctx context.Context) (*git.Repository, error) {
 // to the main repo, while the main repo has .git as a directory.
 // This function works correctly from any subdirectory within the repository.
 func IsInsideWorktree(ctx context.Context) bool {
-	// First find the repository root
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		return false
 	}
-
-	gitPath := filepath.Join(repoRoot, gitDir)
-	gitInfo, err := os.Stat(gitPath)
-	if err != nil {
-		return false
-	}
-	return !gitInfo.IsDir()
+	return paths.IsLinkedWorktree(repoRoot)
 }
 
 // GetMainRepoRoot returns the root directory of the main repository.
@@ -854,36 +847,13 @@ func IsInsideWorktree(ctx context.Context) bool {
 // In a worktree, this parses the .git file to find the main repo.
 // This function works correctly from any subdirectory within the repository.
 //
-// Per gitrepository-layout(5), a worktree's .git file is a "gitfile" containing
-// "gitdir: <path>" pointing to $GIT_DIR/worktrees/<id> in the main repository.
-// See: https://git-scm.com/docs/gitrepository-layout
+// Delegates to paths.MainRepoRoot.
 func GetMainRepoRoot(ctx context.Context) (string, error) {
-	// First find the worktree/repo root
-	repoRoot, err := paths.WorktreeRoot(ctx)
+	root, err := paths.MainRepoRoot(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to get worktree path: %w", err)
+		return "", fmt.Errorf("failed to get main repo root: %w", err)
 	}
-
-	if !IsInsideWorktree(ctx) {
-		return repoRoot, nil
-	}
-
-	// Worktree .git file contains: "gitdir: /path/to/main/.git/worktrees/<id>"
-	gitFilePath := filepath.Join(repoRoot, gitDir)
-	content, err := os.ReadFile(gitFilePath) //nolint:gosec // G304: gitFilePath is constructed from repo root, not user input
-	if err != nil {
-		return "", fmt.Errorf("failed to read .git file: %w", err)
-	}
-
-	gitdir := strings.TrimSpace(string(content))
-	gitdir = strings.TrimPrefix(gitdir, "gitdir: ")
-
-	// Extract main repo root: everything before "/.git/"
-	idx := strings.LastIndex(gitdir, "/.git/")
-	if idx < 0 {
-		return "", fmt.Errorf("unexpected gitdir format: %s", gitdir)
-	}
-	return gitdir[:idx], nil
+	return root, nil
 }
 
 // GetGitCommonDir returns the path to the shared git directory.
