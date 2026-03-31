@@ -302,7 +302,7 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 	analysis := improve.AnalyzePatterns(sessionRowsToSummaries(rows))
 	gen := memoryloop.Generator{Runner: &llmcli.Runner{}}
 	renderMemoryLoopRefreshProgress(w, "Distilling memories...")
-	records, usage, err := gen.Generate(ctx, memoryloop.GenerateInput{
+	records, generationStats, usage, err := gen.Generate(ctx, memoryloop.GenerateInput{
 		Analysis:     analysis,
 		Sessions:     rows,
 		SourceWindow: last,
@@ -346,8 +346,17 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 	)
 	reconcile.History.Scope = string(scope.Mode)
 	reconcile.History.SourceWindow = last
+	reconcile.History.FilteredWeakCount = generationStats.FilteredWeakCount
+	reconcile.History.FilteredGenericCount = generationStats.FilteredGenericCount
+	reconcile.History.DedupedCount = generationStats.DedupedCount
 	refreshHistory := append(existingRefreshHistory(state), reconcile.History)
 	reconciledRecords := memoryloop.DeriveOutcomes(reconcile.Records, rows, now)
+	reconciledRecords, pruneResult := memoryloop.PruneRecords(reconciledRecords, now)
+	if len(refreshHistory) > 0 {
+		lastIdx := len(refreshHistory) - 1
+		refreshHistory[lastIdx].DemotedCount = pruneResult.DemotedCount
+		refreshHistory[lastIdx].PrunedCount = pruneResult.PrunedCount
+	}
 
 	state.Store = &memoryloop.Store{
 		Version:          1,
@@ -548,22 +557,42 @@ func runMemoryLoopStatus(ctx context.Context, w io.Writer, prompt string, verbos
 	if prompt != "" {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, s.SectionRule("Prompt Preview"))
-		matches := memoryloop.SelectRelevant(*snapshot, prompt, time.Now().UTC())
-		if len(matches) == 0 {
+		report := memoryloop.PreviewSelection(*snapshot, prompt, time.Now().UTC())
+		if len(report.Matches) == 0 {
 			fmt.Fprintln(w, "  No memories would inject for that prompt.")
 		} else {
-			fmt.Fprintln(w, indentBlock(memoryloop.FormatInjectionBlock(matches), "  "))
+			fmt.Fprintln(w, indentBlock(memoryloop.FormatInjectionBlock(report.Matches), "  "))
 			if verbose {
-				for _, match := range matches {
+				for _, match := range report.Matches {
 					fmt.Fprintf(
 						w,
-						"  - %s [%s] score=%d reason=%s scope=%s status=%s\n",
+						"  - %s [%s] score=%d base_score=%d adjusted_score=%d cooldown_penalty=%d outcome_bonus=%d scope_bonus=%d reason=%s scope=%s status=%s\n",
 						match.Record.ID,
 						match.Record.Kind,
 						match.Score,
+						match.Rationale.BaseScore,
+						match.Rationale.AdjustedScore,
+						match.Rationale.CooldownPenalty,
+						match.Rationale.OutcomeBonus,
+						match.Rationale.ScopeBonus,
 						match.Reason,
 						formatMemoryLoopRecordScope(match.Record),
 						displayMemoryStatus(match.Record.Status),
+					)
+				}
+				for _, skipped := range report.Skipped {
+					if skipped.Record.ID == "" {
+						fmt.Fprintf(w, "  - %s\n", skipped.Reason)
+						continue
+					}
+					fmt.Fprintf(
+						w,
+						"  - %s [%s] %s scope=%s status=%s\n",
+						skipped.Record.ID,
+						skipped.Record.Kind,
+						skipped.Reason,
+						formatMemoryLoopRecordScope(skipped.Record),
+						displayMemoryStatus(skipped.Record.Status),
 					)
 				}
 			}
@@ -798,6 +827,13 @@ func renderMemorySection(w io.Writer, s termstyle.Styles, title string, records 
 		if record.Body != "" {
 			fmt.Fprintf(w, "    %s\n", record.Body)
 		}
+		if event, ok := latestLifecycleEvent(record); ok {
+			if event.Detail != "" {
+				fmt.Fprintf(w, "    recent lifecycle: %s (%s)\n", event.Type, event.Detail)
+			} else {
+				fmt.Fprintf(w, "    recent lifecycle: %s\n", event.Type)
+			}
+		}
 	}
 	fmt.Fprintln(w)
 }
@@ -812,16 +848,31 @@ func renderRefreshHistorySection(w io.Writer, s termstyle.Styles, history []memo
 	for _, item := range recentRefreshHistory(history, 10) {
 		fmt.Fprintf(
 			w,
-			"  - %s  %s%s  generated %d, activated %d, candidate %d\n",
+			"  - %s  %s%s  generated %d, activated %d, candidate %d, filtered weak %d, filtered generic %d, deduped %d, demoted %d, pruned %d\n",
 			item.At.Format(time.RFC3339),
 			item.Scope,
 			formatOptionalScopeValue(item.ScopeValue),
 			item.GeneratedCount,
 			item.ActivatedCount,
 			item.CandidateCount,
+			item.FilteredWeakCount,
+			item.FilteredGenericCount,
+			item.DedupedCount,
+			item.DemotedCount,
+			item.PrunedCount,
 		)
 	}
 	fmt.Fprintln(w)
+}
+
+func latestLifecycleEvent(record memoryloop.MemoryRecord) (memoryloop.HistoryEvent, bool) {
+	for i := len(record.History) - 1; i >= 0; i-- {
+		switch record.History[i].Type {
+		case "pruned", "demoted", "archived", "suppressed", "unsuppressed", "activated", "promoted":
+			return record.History[i], true
+		}
+	}
+	return memoryloop.HistoryEvent{}, false
 }
 
 func renderRecentInjectionsSection(w io.Writer, s termstyle.Styles, logs []memoryloop.InjectionLog) {

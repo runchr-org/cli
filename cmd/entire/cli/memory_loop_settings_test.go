@@ -158,3 +158,12 @@ func TestLoadEntireSettings_InvalidMemoryLoopActivationPolicy(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid memory_loop.activation_policy")
 }
+
+func TestLoadEntireSettings_MemoryLoopDefaultsMaxInjectedToTwo(t *testing.T) {
+	t.Parallel()
+
+	loaded := &settings.EntireSettings{}
+
+	cfg := loaded.GetMemoryLoopConfig()
+	require.Equal(t, 2, cfg.MaxInjected)
+}

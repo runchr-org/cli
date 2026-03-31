@@ -20,22 +20,58 @@ import (
 
 const (
 	fileName             = "memory-loop.json"
-	DefaultMaxInjected   = 3
+	DefaultMaxInjected   = 2
 	DefaultRefreshWindow = 20
 	maxInjectionLogs     = 50
-	maxInjectionBytes    = 1800
+	maxInjectionBytes    = 1200
 )
 
 var stopWords = map[string]struct{}{
+	"about":  {},
+	"all":    {},
+	"also":   {},
 	"and":    {},
+	"are":    {},
+	"been":   {},
 	"before": {},
+	"but":    {},
+	"can":    {},
+	"does":   {},
+	"each":   {},
+	"for":    {},
 	"from":   {},
+	"has":    {},
+	"have":   {},
+	"how":    {},
 	"into":   {},
+	"its":    {},
+	"just":   {},
+	"like":   {},
+	"may":    {},
+	"more":   {},
+	"most":   {},
+	"need":   {},
+	"not":    {},
+	"only":   {},
+	"other":  {},
+	"our":    {},
+	"should": {},
+	"some":   {},
+	"than":   {},
 	"that":   {},
 	"the":    {},
+	"them":   {},
+	"then":   {},
 	"this":   {},
 	"use":    {},
+	"was":    {},
+	"were":   {},
+	"what":   {},
+	"when":   {},
+	"will":   {},
 	"with":   {},
+	"way":    {},
+	"your":   {},
 }
 
 type Kind string
@@ -140,13 +176,18 @@ type MemoryRecord struct {
 }
 
 type RefreshHistory struct {
-	At             time.Time `json:"at"`
-	Scope          string    `json:"scope,omitempty"`
-	ScopeValue     string    `json:"scope_value,omitempty"`
-	SourceWindow   int       `json:"source_window,omitempty"`
-	GeneratedCount int       `json:"generated_count,omitempty"`
-	ActivatedCount int       `json:"activated_count,omitempty"`
-	CandidateCount int       `json:"candidate_count,omitempty"`
+	At                   time.Time `json:"at"`
+	Scope                string    `json:"scope,omitempty"`
+	ScopeValue           string    `json:"scope_value,omitempty"`
+	SourceWindow         int       `json:"source_window,omitempty"`
+	GeneratedCount       int       `json:"generated_count,omitempty"`
+	ActivatedCount       int       `json:"activated_count,omitempty"`
+	CandidateCount       int       `json:"candidate_count,omitempty"`
+	FilteredWeakCount    int       `json:"filtered_weak_count,omitempty"`
+	FilteredGenericCount int       `json:"filtered_generic_count,omitempty"`
+	DedupedCount         int       `json:"deduped_count,omitempty"`
+	DemotedCount         int       `json:"demoted_count,omitempty"`
+	PrunedCount          int       `json:"pruned_count,omitempty"`
 }
 
 type Store struct {
@@ -180,9 +221,40 @@ type State struct {
 }
 
 type Match struct {
-	Record MemoryRecord
-	Score  int
-	Reason string
+	Record    MemoryRecord
+	Score     int
+	Reason    string
+	Rationale SelectionRationale
+}
+
+type SkippedMatch struct {
+	Record    MemoryRecord
+	Reason    string
+	Rationale SelectionRationale
+}
+
+type SelectionReport struct {
+	Matches []Match
+	Skipped []SkippedMatch
+}
+
+type SelectionRationale struct {
+	BaseScore       int
+	OutcomeBonus    int
+	ScopeBonus      int
+	CooldownPenalty int
+	AdjustedScore   int
+}
+
+type scoredCandidate struct {
+	record          MemoryRecord
+	baseScore       int
+	outcomeBonus    int
+	scopeBonus      int
+	cooldownPenalty int
+	adjustedScore   int
+	reason          string
+	rationale       SelectionRationale
 }
 
 type ReconcileResult struct {
@@ -201,6 +273,12 @@ type ManualRecordInput struct {
 
 type PruneResult struct {
 	ArchivedCount int
+	DemotedCount  int
+	PrunedCount   int
+}
+
+type recordMatchSignals struct {
+	primaryTokens map[string]struct{}
 }
 
 func StatePath(ctx context.Context) (string, error) {
@@ -279,6 +357,10 @@ func AppendInjectionLog(ctx context.Context, log InjectionLog) error {
 }
 
 func SelectRelevant(snapshot Snapshot, prompt string, now time.Time) []Match {
+	return PreviewSelection(snapshot, prompt, now).Matches
+}
+
+func PreviewSelection(snapshot Snapshot, prompt string, now time.Time) SelectionReport {
 	maxInjected := snapshot.MaxInjected
 	if maxInjected <= 0 {
 		maxInjected = DefaultMaxInjected
@@ -286,39 +368,41 @@ func SelectRelevant(snapshot Snapshot, prompt string, now time.Time) []Match {
 
 	promptTokens := tokenize(prompt)
 	if len(promptTokens) == 0 {
-		return nil
+		return SelectionReport{}
 	}
 
-	matches := make([]Match, 0, len(snapshot.Records))
+	candidates := make([]scoredCandidate, 0, len(snapshot.Records))
 	for _, record := range snapshot.Records {
-		if record.Status != "" && record.Status != StatusActive {
+		signals := buildRecordMatchSignals(record)
+		primaryOverlap := tokenOverlap(promptTokens, signals.primaryTokens)
+		if !passesInjectionGate(record, primaryOverlap) {
 			continue
 		}
-		score, reason := scoreRecord(record, promptTokens, now)
-		if score <= 0 {
+		candidate := buildScoredCandidate(record, primaryOverlap, now)
+		if candidate.adjustedScore <= 0 {
 			continue
 		}
-		matches = append(matches, Match{
-			Record: record,
-			Score:  score,
-			Reason: reason,
-		})
+		candidates = append(candidates, candidate)
 	}
 
-	sort.SliceStable(matches, func(i, j int) bool {
-		if matches[i].Score != matches[j].Score {
-			return matches[i].Score > matches[j].Score
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].adjustedScore != candidates[j].adjustedScore {
+			return candidates[i].adjustedScore > candidates[j].adjustedScore
 		}
-		if matches[i].Record.Strength != matches[j].Record.Strength {
-			return matches[i].Record.Strength > matches[j].Record.Strength
+		if candidates[i].baseScore != candidates[j].baseScore {
+			return candidates[i].baseScore > candidates[j].baseScore
 		}
-		return matches[i].Record.Title < matches[j].Record.Title
+		if candidates[i].record.Strength != candidates[j].record.Strength {
+			return candidates[i].record.Strength > candidates[j].record.Strength
+		}
+		return candidates[i].record.Title < candidates[j].record.Title
 	})
 
-	if len(matches) > maxInjected {
-		matches = matches[:maxInjected]
+	matches := packSelectedCandidates(candidates, maxInjected)
+	return SelectionReport{
+		Matches: matches,
+		Skipped: explainSkippedCandidates(candidates, matches),
 	}
-	return matches
 }
 
 func ReconcileGeneratedRecords(existing, generated []MemoryRecord, scopeKind ScopeKind, scopeValue string, policy ActivationPolicy, now time.Time) ReconcileResult {
@@ -529,29 +613,17 @@ func FormatInjectionBlock(matches []Match) string {
 	}
 
 	var buf bytes.Buffer
-	buf.WriteString("Memory For This Repo\n")
+	buf.WriteString("Memory For This Repo")
 	for _, match := range matches {
-		buf.WriteString("- ")
-		buf.WriteString(strings.TrimSpace(match.Record.Title))
-		if body := strings.TrimSpace(match.Record.Body); body != "" {
-			buf.WriteString(": ")
-			buf.WriteString(body)
-		}
-		if why := strings.TrimSpace(match.Record.Why); why != "" {
-			buf.WriteString(" Why: ")
-			buf.WriteString(why)
-		}
-		buf.WriteByte('\n')
-		if buf.Len() >= maxInjectionBytes {
+		line := formatInjectionLine(match)
+		if buf.Len()+1+len(line) > maxInjectionBytes {
 			break
 		}
+		buf.WriteByte('\n')
+		buf.WriteString(line)
 	}
 
-	out := strings.TrimSpace(buf.String())
-	if len(out) > maxInjectionBytes {
-		out = out[:maxInjectionBytes]
-	}
-	return out
+	return buf.String()
 }
 
 func TransitionRecordLifecycle(records []MemoryRecord, id string, action LifecycleAction, now time.Time) ([]MemoryRecord, MemoryRecord, error) {
@@ -595,6 +667,8 @@ func AddManualRecord(records []MemoryRecord, input ManualRecordInput, now time.T
 		ScopeKind:   input.ScopeKind,
 		ScopeValue:  strings.TrimSpace(input.ScopeValue),
 		Origin:      OriginManual,
+		Confidence:  "high",
+		Strength:    4,
 		OwnerEmail:  strings.TrimSpace(input.OwnerEmail),
 		Status:      StatusActive,
 		CreatedAt:   now,
@@ -614,6 +688,8 @@ func AddManualRecord(records []MemoryRecord, input ManualRecordInput, now time.T
 		existing.ScopeKind = record.ScopeKind
 		existing.ScopeValue = record.ScopeValue
 		existing.Origin = OriginManual
+		existing.Confidence = record.Confidence
+		existing.Strength = record.Strength
 		existing.OwnerEmail = record.OwnerEmail
 		existing.Status = StatusActive
 		existing.UpdatedAt = now
@@ -710,17 +786,34 @@ func PruneRecords(records []MemoryRecord, now time.Time) ([]MemoryRecord, PruneR
 			continue
 		}
 
-		updated[i].Status = StatusArchived
 		updated[i].UpdatedAt = now
+		if shouldDemoteRecord(updated[i], reason) {
+			updated[i].Status = StatusCandidate
+			updated[i].LastReviewedAt = now
+			updated[i].History = append(updated[i].History, HistoryEvent{
+				Type:   "demoted",
+				At:     now,
+				Detail: reason,
+			})
+			result.DemotedCount++
+			continue
+		}
+
+		updated[i].Status = StatusArchived
 		updated[i].History = append(updated[i].History, HistoryEvent{
 			Type:   "pruned",
 			At:     now,
 			Detail: reason,
 		})
 		result.ArchivedCount++
+		result.PrunedCount++
 	}
 
 	return updated, result
+}
+
+func shouldDemoteRecord(record MemoryRecord, reason string) bool {
+	return reason == "ineffective_active" && record.Status == StatusActive
 }
 
 func transitionRecord(record MemoryRecord, action LifecycleAction, now time.Time) (MemoryRecord, error) {
@@ -925,6 +1018,22 @@ func normalizeStateWithSource(state *State, loadedFromLegacySnapshot bool) {
 			record.Outcome = OutcomeNeutral
 			inferred = true
 		}
+		if record.Confidence == "" {
+			if record.Origin == OriginManual || record.Status == StatusActive || loadedFromLegacySnapshot {
+				record.Confidence = "high"
+			} else {
+				record.Confidence = "medium"
+			}
+			inferred = true
+		}
+		if record.Strength == 0 {
+			if record.Origin == OriginManual {
+				record.Strength = 4
+			} else {
+				record.Strength = 3
+			}
+			inferred = true
+		}
 		if record.Fingerprint == "" {
 			record.Fingerprint = fingerprintForRecord(record.Kind, record.Title, record.Body)
 		}
@@ -941,28 +1050,172 @@ type diskState struct {
 	InjectionLogs []InjectionLog `json:"injection_logs,omitempty"`
 }
 
-func scoreRecord(record MemoryRecord, promptTokens map[string]struct{}, now time.Time) (int, string) {
-	recordTokens := tokenize(strings.Join([]string{
-		record.Title,
-		record.Body,
-		record.Why,
-		strings.Join(record.Evidence, " "),
-	}, " "))
-	if len(recordTokens) == 0 {
-		return 0, ""
+func buildScoredCandidate(record MemoryRecord, primaryOverlap int, now time.Time) scoredCandidate {
+	baseScore := scoreRecord(record, primaryOverlap, now)
+	outcomeBonus := outcomeBonus(record.Outcome)
+	scopeBonus := scopeBonus(record)
+	cooldownPenalty := cooldownPenalty(record.LastInjectedAt, now)
+	adjustedScore := baseScore + outcomeBonus + scopeBonus - cooldownPenalty
+
+	return scoredCandidate{
+		record:          record,
+		baseScore:       baseScore,
+		outcomeBonus:    outcomeBonus,
+		scopeBonus:      scopeBonus,
+		cooldownPenalty: cooldownPenalty,
+		adjustedScore:   adjustedScore,
+		reason:          "title/body overlap",
+		rationale: SelectionRationale{
+			BaseScore:       baseScore,
+			OutcomeBonus:    outcomeBonus,
+			ScopeBonus:      scopeBonus,
+			CooldownPenalty: cooldownPenalty,
+			AdjustedScore:   adjustedScore,
+		},
+	}
+}
+
+func packSelectedCandidates(candidates []scoredCandidate, maxInjected int) []Match {
+	if maxInjected <= 0 || len(candidates) == 0 {
+		return nil
 	}
 
-	overlap := 0
-	for token := range promptTokens {
-		if _, ok := recordTokens[token]; ok {
-			overlap++
+	selected := make([]Match, 0, minInt(len(candidates), maxInjected))
+	seenFingerprints := make(map[string]struct{}, len(candidates))
+	seenTopics := make(map[string]struct{}, len(candidates))
+	selectedBytes := len("Memory For This Repo\n")
+
+	appendCandidate := func(candidate scoredCandidate) {
+		if len(selected) >= maxInjected {
+			return
+		}
+
+		fingerprint := candidate.record.Fingerprint
+		if fingerprint == "" {
+			fingerprint = fingerprintForRecord(candidate.record.Kind, candidate.record.Title, candidate.record.Body)
+		}
+		if _, ok := seenFingerprints[fingerprint]; ok {
+			return
+		}
+
+		match := Match{
+			Record: candidate.record,
+			Score:  candidate.adjustedScore,
+			Reason: candidate.reason,
+			Rationale: SelectionRationale{
+				BaseScore:       candidate.baseScore,
+				OutcomeBonus:    candidate.outcomeBonus,
+				ScopeBonus:      candidate.scopeBonus,
+				CooldownPenalty: candidate.cooldownPenalty,
+				AdjustedScore:   candidate.adjustedScore,
+			},
+		}
+		lineBytes := len(formatInjectionLine(match))
+		if selectedBytes+lineBytes > maxInjectionBytes {
+			return
+		}
+
+		selected = append(selected, match)
+		seenFingerprints[fingerprint] = struct{}{}
+		seenTopics[candidateTopicKey(candidate.record)] = struct{}{}
+		selectedBytes += lineBytes + 1
+	}
+
+	for _, candidate := range candidates {
+		if _, ok := seenTopics[candidateTopicKey(candidate.record)]; ok {
+			continue
+		}
+		appendCandidate(candidate)
+	}
+
+	for _, candidate := range candidates {
+		appendCandidate(candidate)
+	}
+
+	return selected
+}
+
+func explainSkippedCandidates(candidates []scoredCandidate, selected []Match) []SkippedMatch {
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	selectedIDs := make(map[string]struct{}, len(selected))
+	selectedTopics := make(map[string]struct{}, len(selected))
+	selectedPersonal := false
+	selectedBytes := len("Memory For This Repo\n")
+	for _, match := range selected {
+		selectedIDs[match.Record.ID] = struct{}{}
+		selectedTopics[candidateTopicKey(match.Record)] = struct{}{}
+		selectedBytes += len(formatInjectionLine(match)) + 1
+		if match.Record.ScopeKind == ScopeKindMe && (!match.Record.LegacyInferred || match.Record.ScopeValue != "") {
+			selectedPersonal = true
 		}
 	}
-	if overlap == 0 {
-		return 0, ""
+
+	skipped := make([]SkippedMatch, 0, len(candidates))
+	for _, candidate := range candidates {
+		if _, ok := selectedIDs[candidate.record.ID]; ok {
+			continue
+		}
+		reason := "skipped by byte budget"
+		switch {
+		case candidate.cooldownPenalty > 0:
+			reason = "skipped by cooldown"
+		case candidate.record.ScopeKind == ScopeKindRepo && selectedPersonal:
+			reason = "skipped by scope preference"
+		case hasSelectedTopicDuplicate(candidate.record, selectedTopics):
+			reason = "skipped by diversity quota"
+		case selectedBytes+len(formatInjectionLine(Match{Record: candidate.record})) > maxInjectionBytes:
+			reason = "skipped by byte budget"
+		}
+		skipped = append(skipped, SkippedMatch{
+			Record: candidate.record,
+			Reason: reason,
+			Rationale: SelectionRationale{
+				BaseScore:       candidate.baseScore,
+				OutcomeBonus:    candidate.outcomeBonus,
+				ScopeBonus:      candidate.scopeBonus,
+				CooldownPenalty: candidate.cooldownPenalty,
+				AdjustedScore:   candidate.adjustedScore,
+			},
+		})
 	}
 
-	score := overlap * 10
+	if len(skipped) == 0 {
+		return nil
+	}
+
+	legendReasons := []string{
+		"skipped by cooldown",
+		"skipped by scope preference",
+		"skipped by diversity quota",
+		"skipped by byte budget",
+	}
+	seen := make(map[string]struct{}, len(skipped))
+	for _, item := range skipped {
+		seen[item.Reason] = struct{}{}
+	}
+	for _, reason := range legendReasons {
+		if _, ok := seen[reason]; ok {
+			continue
+		}
+		skipped = append(skipped, SkippedMatch{Reason: reason})
+	}
+	return skipped
+}
+
+func hasSelectedTopicDuplicate(record MemoryRecord, selectedTopics map[string]struct{}) bool {
+	_, ok := selectedTopics[candidateTopicKey(record)]
+	return ok
+}
+
+func scoreRecord(record MemoryRecord, primaryOverlap int, now time.Time) int {
+	if primaryOverlap == 0 {
+		return 0
+	}
+
+	score := primaryOverlap * 7
 	switch record.Kind {
 	case KindRepoRule, KindAgentInstruction:
 		score += 15
@@ -979,7 +1232,100 @@ func scoreRecord(record MemoryRecord, promptTokens map[string]struct{}, now time
 		}
 	}
 
-	return score, "keyword overlap"
+	return score
+}
+
+func candidateTopicKey(record MemoryRecord) string {
+	return strings.Join([]string{
+		string(record.Kind),
+		strings.ToLower(strings.TrimSpace(record.Body)),
+	}, "|")
+}
+
+func formatInjectionLine(match Match) string {
+	var buf strings.Builder
+	buf.WriteString("- ")
+	buf.WriteString(strings.TrimSpace(match.Record.Title))
+	if body := strings.TrimSpace(match.Record.Body); body != "" {
+		buf.WriteString(": ")
+		buf.WriteString(body)
+	}
+	return buf.String()
+}
+
+func outcomeBonus(outcome Outcome) int {
+	switch outcome {
+	case OutcomeReinforced:
+		return 3
+	case OutcomeNeutral:
+		return 0
+	case OutcomeIneffective:
+		return -3
+	default:
+		return 0
+	}
+}
+
+func scopeBonus(record MemoryRecord) int {
+	if record.ScopeKind == ScopeKindMe && (!record.LegacyInferred || record.ScopeValue != "") {
+		return 1
+	}
+	return 0
+}
+
+func cooldownPenalty(lastInjectedAt time.Time, now time.Time) int {
+	if lastInjectedAt.IsZero() || now.Before(lastInjectedAt) {
+		return 0
+	}
+	age := now.Sub(lastInjectedAt)
+	switch {
+	case age <= 30*time.Minute:
+		return 4
+	case age <= 2*time.Hour:
+		return 3
+	case age <= 24*time.Hour:
+		return 2
+	default:
+		return 0
+	}
+}
+
+func buildRecordMatchSignals(record MemoryRecord) recordMatchSignals {
+	return recordMatchSignals{
+		primaryTokens: tokenize(strings.Join([]string{
+			record.Title,
+			record.Body,
+		}, " ")),
+	}
+}
+
+func tokenOverlap(promptTokens, recordTokens map[string]struct{}) int {
+	overlap := 0
+	for token := range promptTokens {
+		if _, ok := recordTokens[token]; ok {
+			overlap++
+		}
+	}
+	return overlap
+}
+
+func passesInjectionGate(record MemoryRecord, primaryOverlap int) bool {
+	if record.Status != "" && record.Status != StatusActive {
+		return false
+	}
+	if strings.EqualFold(record.Confidence, "low") {
+		return false
+	}
+	if record.Strength < 3 {
+		return false
+	}
+	if primaryOverlap >= 2 {
+		return true
+	}
+	return primaryOverlap == 1 &&
+		(record.Kind == KindRepoRule || record.Kind == KindAgentInstruction) &&
+		strings.EqualFold(record.Confidence, "high") &&
+		record.Strength >= 4
 }
 
 func tokenize(text string) map[string]struct{} {

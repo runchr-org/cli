@@ -151,7 +151,7 @@ func (s *EntireSettings) GetEvolveConfig() EvolveSettings {
 // GetMemoryLoopConfig returns memory-loop configuration with defaults applied.
 func (s *EntireSettings) GetMemoryLoopConfig() MemoryLoopConfig {
 	cfg := MemoryLoopConfig{
-		MaxInjected:          3,
+		MaxInjected:          2,
 		DefaultRefreshWindow: 20,
 		Mode:                 memoryLoopModeOff,
 		ActivationPolicy:     memoryLoopActivationPolicyReview,
@@ -185,7 +185,7 @@ func (s *EntireSettings) GetMemoryLoopConfig() MemoryLoopConfig {
 		cfg.DefaultRefreshWindow = s.MemoryLoopConfig.DefaultRefreshWindow
 	}
 	if cfg.MaxInjected == 0 {
-		cfg.MaxInjected = 3
+		cfg.MaxInjected = 2
 	}
 	if cfg.DefaultRefreshWindow == 0 {
 		cfg.DefaultRefreshWindow = 20

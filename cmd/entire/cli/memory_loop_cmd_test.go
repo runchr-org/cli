@@ -109,6 +109,99 @@ func TestRunMemoryLoopShow_GroupsDetailedInventory(t *testing.T) {
 	require.Contains(t, out, "Recent Injections")
 }
 
+func TestRunMemoryLoopShow_DisplaysRecentLifecycleReasons(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	now := time.Date(2026, time.March, 26, 12, 5, 0, 0, time.UTC)
+	state := &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:      1,
+			GeneratedAt:  now,
+			SourceWindow: 20,
+			Mode:         memoryloop.ModeManual,
+			Records: []memoryloop.MemoryRecord{
+				{
+					ID:        "pruned-active",
+					Title:     "Old generated rule",
+					Body:      "Prune me with a reason.",
+					Kind:      memoryloop.KindRepoRule,
+					Status:    memoryloop.StatusArchived,
+					Origin:    memoryloop.OriginGenerated,
+					History:   []memoryloop.HistoryEvent{{Type: "pruned", At: now, Detail: "stale_unmatched_active"}},
+					ScopeKind: memoryloop.ScopeKindMe,
+				},
+				{
+					ID:        "demoted-active",
+					Title:     "Ineffective generated rule",
+					Body:      "Demote me with a reason.",
+					Kind:      memoryloop.KindRepoRule,
+					Status:    memoryloop.StatusCandidate,
+					Origin:    memoryloop.OriginGenerated,
+					History:   []memoryloop.HistoryEvent{{Type: "demoted", At: now, Detail: "ineffective_active"}},
+					ScopeKind: memoryloop.ScopeKindMe,
+				},
+			},
+		},
+	}
+	require.NoError(t, memoryloop.SaveState(context.Background(), state))
+
+	var buf bytes.Buffer
+	require.NoError(t, runMemoryLoopShow(context.Background(), &buf, ""))
+
+	out := buf.String()
+	require.Contains(t, out, "stale_unmatched_active")
+	require.Contains(t, out, "ineffective_active")
+	require.Contains(t, out, "pruned")
+	require.Contains(t, out, "demoted")
+}
+
+func TestRunMemoryLoopShow_ListsExtendedRefreshHistoryCounters(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	now := time.Date(2026, time.March, 26, 12, 10, 0, 0, time.UTC)
+	state := &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:      1,
+			GeneratedAt:  now,
+			SourceWindow: 20,
+			Mode:         memoryloop.ModeManual,
+			RefreshHistory: []memoryloop.RefreshHistory{
+				{
+					At:             now,
+					Scope:          "me",
+					ScopeValue:     "test@example.com",
+					GeneratedCount: 4,
+					ActivatedCount: 2,
+					CandidateCount: 1,
+				},
+			},
+		},
+	}
+	require.NoError(t, memoryloop.SaveState(context.Background(), state))
+
+	var buf bytes.Buffer
+	require.NoError(t, runMemoryLoopShow(context.Background(), &buf, ""))
+
+	out := buf.String()
+	require.Contains(t, out, "filtered weak")
+	require.Contains(t, out, "filtered generic")
+	require.Contains(t, out, "deduped")
+	require.Contains(t, out, "demoted")
+	require.Contains(t, out, "pruned")
+}
+
 func TestRunMemoryLoopStatus_IsConciseAndSupportsVerbosePromptPreview(t *testing.T) {
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -134,6 +227,8 @@ func TestRunMemoryLoopStatus_IsConciseAndSupportsVerbosePromptPreview(t *testing
 					Title:      "Run lint before finishing",
 					Body:       "Run golangci-lint before claiming completion.",
 					Kind:       memoryloop.KindRepoRule,
+					Confidence: "high",
+					Strength:   4,
 					ScopeKind:  memoryloop.ScopeKindMe,
 					ScopeValue: "test@example.com",
 					Status:     memoryloop.StatusActive,
@@ -165,9 +260,191 @@ func TestRunMemoryLoopStatus_IsConciseAndSupportsVerbosePromptPreview(t *testing
 	require.Contains(t, out, "Prompt Preview")
 	require.Contains(t, out, "Memory For This Repo")
 	require.Contains(t, out, "lint [repo_rule] score=")
+	require.Contains(t, out, "base_score=")
+	require.Contains(t, out, "adjusted_score=")
 	require.Contains(t, out, "reason=")
 	require.Contains(t, out, "scope=me(test@example.com)")
 	require.Contains(t, out, "status=active")
+}
+
+func TestRunMemoryLoopStatus_NonVerbosePreviewOmitsSelectionRationale(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	now := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
+	state := &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:          1,
+			GeneratedAt:      now,
+			Scope:            "me",
+			ScopeValue:       "test@example.com",
+			Mode:             memoryloop.ModeAuto,
+			ActivationPolicy: memoryloop.ActivationPolicyReview,
+			MaxInjected:      3,
+			Records: []memoryloop.MemoryRecord{
+				{
+					ID:         "lint",
+					Title:      "Run lint before finishing",
+					Body:       "Run golangci-lint before claiming completion.",
+					Kind:       memoryloop.KindRepoRule,
+					Confidence: "high",
+					Strength:   4,
+					ScopeKind:  memoryloop.ScopeKindMe,
+					ScopeValue: "test@example.com",
+					Status:     memoryloop.StatusActive,
+				},
+			},
+		},
+	}
+	require.NoError(t, memoryloop.SaveState(context.Background(), state))
+
+	var buf bytes.Buffer
+	require.NoError(t, runMemoryLoopStatus(context.Background(), &buf, "fix the lint failure", false))
+
+	out := buf.String()
+	require.Contains(t, out, "Prompt Preview")
+	require.Contains(t, out, "Memory For This Repo")
+	require.NotContains(t, out, "base_score=")
+	require.NotContains(t, out, "adjusted_score=")
+	require.NotContains(t, out, "cooldown_penalty=")
+	require.NotContains(t, out, "outcome_bonus=")
+	require.NotContains(t, out, "scope_bonus=")
+}
+
+func TestRunMemoryLoopStatus_VerbosePreviewShowsSelectionRationale(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	now := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
+	state := &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:          1,
+			GeneratedAt:      now,
+			Scope:            "me",
+			ScopeValue:       "test@example.com",
+			Mode:             memoryloop.ModeAuto,
+			ActivationPolicy: memoryloop.ActivationPolicyReview,
+			MaxInjected:      3,
+			Records: []memoryloop.MemoryRecord{
+				{
+					ID:             "lint",
+					Title:          "Run lint before finishing",
+					Body:           "Run golangci-lint before claiming completion.",
+					Kind:           memoryloop.KindRepoRule,
+					Confidence:     "high",
+					Strength:       4,
+					Outcome:        memoryloop.OutcomeReinforced,
+					LastInjectedAt: now.Add(-10 * time.Minute),
+					ScopeKind:      memoryloop.ScopeKindMe,
+					ScopeValue:     "test@example.com",
+					Status:         memoryloop.StatusActive,
+				},
+			},
+		},
+	}
+	require.NoError(t, memoryloop.SaveState(context.Background(), state))
+
+	var buf bytes.Buffer
+	require.NoError(t, runMemoryLoopStatus(context.Background(), &buf, "fix the lint failure", true))
+
+	out := buf.String()
+	require.Contains(t, out, "Prompt Preview")
+	require.Contains(t, out, "base_score=")
+	require.Contains(t, out, "adjusted_score=")
+	require.Contains(t, out, "cooldown_penalty=")
+	require.Contains(t, out, "outcome_bonus=")
+	require.Contains(t, out, "scope_bonus=")
+}
+
+func TestRunMemoryLoopStatus_VerbosePreviewExplainsSkippedCandidates(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	now := time.Date(2026, time.March, 26, 12, 20, 0, 0, time.UTC)
+	state := &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:          1,
+			GeneratedAt:      now,
+			Scope:            "me",
+			ScopeValue:       "test@example.com",
+			Mode:             memoryloop.ModeAuto,
+			ActivationPolicy: memoryloop.ActivationPolicyReview,
+			MaxInjected:      1,
+			Records: []memoryloop.MemoryRecord{
+				{
+					ID:             "cooldown",
+					Title:          "Run lint before finishing",
+					Body:           "Run golangci-lint before claiming completion.",
+					Kind:           memoryloop.KindRepoRule,
+					Confidence:     "high",
+					Strength:       4,
+					Outcome:        memoryloop.OutcomeReinforced,
+					LastInjectedAt: now.Add(-5 * time.Minute),
+					ScopeKind:      memoryloop.ScopeKindMe,
+					ScopeValue:     "test@example.com",
+					Status:         memoryloop.StatusActive,
+				},
+				{
+					ID:         "scope",
+					Title:      "Keep repo rule concise",
+					Body:       "Use concise repo guidance.",
+					Kind:       memoryloop.KindRepoRule,
+					Confidence: "high",
+					Strength:   4,
+					ScopeKind:  memoryloop.ScopeKindRepo,
+					ScopeValue: "main",
+					Status:     memoryloop.StatusActive,
+				},
+				{
+					ID:         "diversity",
+					Title:      "Run lint before wrapping up",
+					Body:       "Run golangci-lint before you say the task is done.",
+					Kind:       memoryloop.KindRepoRule,
+					Confidence: "high",
+					Strength:   4,
+					ScopeKind:  memoryloop.ScopeKindMe,
+					ScopeValue: "test@example.com",
+					Status:     memoryloop.StatusActive,
+				},
+				{
+					ID:         "byte-budget",
+					Title:      "Keep commit messages short",
+					Body:       "Use concise commit subjects and avoid verbose summaries when closing tasks.",
+					Kind:       memoryloop.KindWorkflowRule,
+					Confidence: "high",
+					Strength:   4,
+					ScopeKind:  memoryloop.ScopeKindMe,
+					ScopeValue: "test@example.com",
+					Status:     memoryloop.StatusActive,
+				},
+			},
+		},
+	}
+	require.NoError(t, memoryloop.SaveState(context.Background(), state))
+
+	var buf bytes.Buffer
+	require.NoError(t, runMemoryLoopStatus(context.Background(), &buf, "fix the lint failure and keep the repo rule concise", true))
+
+	out := buf.String()
+	require.Contains(t, out, "skipped by cooldown")
+	require.Contains(t, out, "skipped by scope preference")
+	require.Contains(t, out, "skipped by diversity quota")
+	require.Contains(t, out, "skipped by byte budget")
 }
 
 func TestSetMemoryLoopMode_PersistsAuthoritativeMode(t *testing.T) {
