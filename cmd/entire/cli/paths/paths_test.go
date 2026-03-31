@@ -151,7 +151,7 @@ func TestMainRepoRoot_LinkedWorktree(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(worktreeDir), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	cmd := exec.Command("git", "worktree", "add", worktreeDir, "-b", "test-branch") //nolint:noctx // test code
+	cmd := exec.Command("git", "worktree", "add", "-b", "test-branch", worktreeDir) //nolint:noctx // test code
 	cmd.Dir = tmpDir
 	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -167,6 +167,53 @@ func TestMainRepoRoot_LinkedWorktree(t *testing.T) {
 	}
 	if root != tmpDir {
 		t.Errorf("MainRepoRoot() = %q, want %q (should resolve to main repo, not worktree)", root, tmpDir)
+	}
+}
+
+func TestMainRepoRoot_Submodule(t *testing.T) {
+	// Cannot use t.Parallel: uses t.Chdir
+	// MainRepoRoot should return the submodule root (not the superproject)
+	// when running from inside a submodule.
+	superDir := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(superDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	superDir = resolved
+
+	// Create the "library" repo that will become a submodule
+	libDir := t.TempDir()
+	testutil.InitRepo(t, libDir)
+	testutil.WriteFile(t, libDir, "lib.txt", "lib")
+	testutil.GitAdd(t, libDir, "lib.txt")
+	testutil.GitCommit(t, libDir, "lib init")
+
+	// Create the superproject
+	testutil.InitRepo(t, superDir)
+	testutil.WriteFile(t, superDir, "main.txt", "main")
+	testutil.GitAdd(t, superDir, "main.txt")
+	testutil.GitCommit(t, superDir, "super init")
+
+	// Add submodule (allow file transport for local clone)
+	cmd := exec.Command("git", "-c", "protocol.file.allow=always", "submodule", "add", libDir, "libs/mylib") //nolint:noctx // test code
+	cmd.Dir = superDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git submodule add: %v\n%s", err, output)
+	}
+
+	submoduleDir := filepath.Join(superDir, "libs", "mylib")
+
+	ClearWorktreeRootCache()
+	t.Chdir(submoduleDir)
+
+	// MainRepoRoot should return the submodule root, not the superproject
+	root, err := MainRepoRoot(context.Background())
+	if err != nil {
+		t.Fatalf("MainRepoRoot() error: %v", err)
+	}
+	if root != submoduleDir {
+		t.Errorf("MainRepoRoot() = %q, want %q (should stay in submodule, not escape to superproject)", root, submoduleDir)
 	}
 }
 
@@ -192,6 +239,29 @@ func TestIsLinkedWorktree(t *testing.T) {
 		}
 		if !IsLinkedWorktree(dir) {
 			t.Error("IsLinkedWorktree() = false for linked worktree, want true")
+		}
+	})
+
+	t.Run("bare repo worktree", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /repo/.bare/worktrees/main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !IsLinkedWorktree(dir) {
+			t.Error("IsLinkedWorktree() = false for bare repo worktree, want true")
+		}
+	})
+
+	t.Run("submodule", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		// Submodules have .git as a file pointing into .git/modules/, not .git/worktrees/
+		if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /repo/.git/modules/mylib\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if IsLinkedWorktree(dir) {
+			t.Error("IsLinkedWorktree() = true for submodule, want false")
 		}
 	})
 

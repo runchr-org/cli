@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
-	"github.com/entireio/cli/cmd/entire/cli/osroot"
 )
 
 // Directory constants
@@ -120,27 +119,23 @@ func ClearWorktreeRootCache() {
 }
 
 // IsLinkedWorktree returns true if the given path is inside a linked git worktree
-// (as opposed to the main repository). Linked worktrees have .git as a file
-// pointing to the main repo, while the main repo has .git as a directory.
-// Uses os.Root for traversal-resistant access.
+// (as opposed to the main repository or a submodule). Linked worktrees have .git
+// as a file whose gitdir points into a worktree admin dir (.git/worktrees/ or
+// .bare/worktrees/). Submodules also have .git as a file but point into
+// .git/modules/, so they are not treated as linked worktrees.
 func IsLinkedWorktree(worktreeRoot string) bool {
-	root, err := os.OpenRoot(worktreeRoot)
-	if err != nil {
+	gitdir, err := parseGitfile(worktreeRoot)
+	if err != nil || gitdir == "" {
 		return false
 	}
-	defer root.Close()
-
-	info, err := root.Stat(".git")
-	if err != nil {
-		return false
-	}
-	return !info.IsDir()
+	return hasWorktreeMarker(gitdir)
 }
 
 // MainRepoRoot returns the root directory of the main repository.
 // In the main repo, this returns the same as WorktreeRoot.
 // In a linked worktree, this parses the .git file to find the main repo root.
-// Uses os.Root for traversal-resistant reads.
+// Supports both standard (.git/worktrees/) and bare-repo (.bare/worktrees/) layouts,
+// and handles relative gitdir paths.
 //
 // Per gitrepository-layout(5), a worktree's .git file is a "gitfile" containing
 // "gitdir: <path>" pointing to $GIT_DIR/worktrees/<id> in the main repository.
@@ -151,31 +146,33 @@ func MainRepoRoot(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("failed to get worktree path: %w", err)
 	}
 
-	if !IsLinkedWorktree(worktreeRoot) {
+	gitdir, err := parseGitfile(worktreeRoot)
+	if err != nil {
+		return "", err
+	}
+
+	// Main worktree or non-worktree gitfile (e.g. submodule): return as-is.
+	if gitdir == "" || !hasWorktreeMarker(gitdir) {
 		return worktreeRoot, nil
 	}
 
-	root, err := os.OpenRoot(worktreeRoot)
-	if err != nil {
-		return "", fmt.Errorf("failed to open worktree root: %w", err)
+	// Extract main repo root: everything before the worktree marker.
+	for _, marker := range worktreeMarkers {
+		if idx := strings.LastIndex(gitdir, marker); idx >= 0 {
+			// marker includes the trailing slash of the git dir (e.g. ".git/worktrees/"),
+			// so we need to trim the leading dir separator + marker prefix.
+			// For ".git/worktrees/", the repo root is everything before "/.git/worktrees/".
+			// The marker without the admin-dir prefix is "/worktrees/", but we want
+			// the path before the git-dir itself, so find the git-dir boundary.
+			gitDirSuffix := strings.TrimSuffix(marker, "worktrees/") // ".git/" or ".bare/"
+			gitDirIdx := strings.LastIndex(gitdir, "/"+gitDirSuffix)
+			if gitDirIdx >= 0 {
+				return filepath.FromSlash(gitdir[:gitDirIdx]), nil
+			}
+		}
 	}
-	defer root.Close()
 
-	// Worktree .git file contains: "gitdir: /path/to/main/.git/worktrees/<id>"
-	content, err := osroot.ReadFile(root, ".git")
-	if err != nil {
-		return "", fmt.Errorf("failed to read .git file: %w", err)
-	}
-
-	gitdir := strings.TrimSpace(string(content))
-	gitdir = strings.TrimPrefix(gitdir, "gitdir: ")
-
-	// Extract main repo root: everything before "/.git/"
-	idx := strings.LastIndex(gitdir, "/.git/")
-	if idx < 0 {
-		return "", fmt.Errorf("unexpected gitdir format: %s", gitdir)
-	}
-	return gitdir[:idx], nil
+	return "", fmt.Errorf("unexpected gitdir format: %s", gitdir)
 }
 
 // AbsPath returns the absolute path for a relative path within the repository.
