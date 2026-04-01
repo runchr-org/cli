@@ -1020,7 +1020,7 @@ func TestReconcileGeneratedRecords_PreservesSuppressedAndCountsOutcomes(t *testi
 			Kind:        KindRepoRule,
 			Title:       "Run lint before finishing",
 			Body:        "Run golangci-lint before claiming completion.",
-			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
+			Fingerprint: FingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
 			Status:      StatusSuppressed,
 			Origin:      OriginGenerated,
 		},
@@ -1029,7 +1029,7 @@ func TestReconcileGeneratedRecords_PreservesSuppressedAndCountsOutcomes(t *testi
 			Kind:        KindWorkflowRule,
 			Title:       "Keep commit subjects concise",
 			Body:        "Use short imperative commit subjects.",
-			Fingerprint: fingerprintForRecord(KindWorkflowRule, "Keep commit subjects concise", "Use short imperative commit subjects."),
+			Fingerprint: FingerprintForRecord(KindWorkflowRule, "Keep commit subjects concise", "Use short imperative commit subjects."),
 			Status:      StatusArchived,
 			Origin:      OriginGenerated,
 		},
@@ -1040,7 +1040,7 @@ func TestReconcileGeneratedRecords_PreservesSuppressedAndCountsOutcomes(t *testi
 			Kind:        KindRepoRule,
 			Title:       "Run lint before finishing",
 			Body:        "Run golangci-lint before claiming completion.",
-			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
+			Fingerprint: FingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
 			Status:      StatusCandidate,
 			Origin:      OriginGenerated,
 		},
@@ -1049,7 +1049,7 @@ func TestReconcileGeneratedRecords_PreservesSuppressedAndCountsOutcomes(t *testi
 			Kind:        KindSkillPatch,
 			Title:       "Tighten the project skill",
 			Body:        "Update the project skill with missing retry steps.",
-			Fingerprint: fingerprintForRecord(KindSkillPatch, "Tighten the project skill", "Update the project skill with missing retry steps."),
+			Fingerprint: FingerprintForRecord(KindSkillPatch, "Tighten the project skill", "Update the project skill with missing retry steps."),
 			Status:      StatusCandidate,
 			Origin:      OriginGenerated,
 		},
@@ -1058,7 +1058,7 @@ func TestReconcileGeneratedRecords_PreservesSuppressedAndCountsOutcomes(t *testi
 			Kind:        KindRepoRule,
 			Title:       "Keep generated repo memories pending",
 			Body:        "Require explicit promotion before shared repo memories inject.",
-			Fingerprint: fingerprintForRecord(KindRepoRule, "Keep generated repo memories pending", "Require explicit promotion before shared repo memories inject."),
+			Fingerprint: FingerprintForRecord(KindRepoRule, "Keep generated repo memories pending", "Require explicit promotion before shared repo memories inject."),
 			ScopeKind:   ScopeKindRepo,
 			Status:      StatusCandidate,
 			Origin:      OriginGenerated,
@@ -1089,7 +1089,7 @@ func TestReconcileGeneratedRecords_ReconcilesIntoExistingRecord(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.March, 26, 13, 0, 0, 0, time.UTC)
-	fingerprint := fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion.")
+	fingerprint := FingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion.")
 	existing := []MemoryRecord{
 		{
 			ID:          "suppressed-lint",
@@ -1134,7 +1134,7 @@ func TestReconcileGeneratedRecords_CountsReconciledActiveRecordsInHistory(t *tes
 	t.Parallel()
 
 	now := time.Date(2026, time.March, 26, 15, 0, 0, 0, time.UTC)
-	fingerprint := fingerprintForRecord(KindSkillPatch, "Tighten the project skill", "Update the project skill with missing retry steps.")
+	fingerprint := FingerprintForRecord(KindSkillPatch, "Tighten the project skill", "Update the project skill with missing retry steps.")
 	existing := []MemoryRecord{
 		{
 			ID:          "skills",
@@ -1174,7 +1174,7 @@ func TestReconcileGeneratedRecords_AllowsSameFingerprintAcrossScopes(t *testing.
 	t.Parallel()
 
 	now := time.Date(2026, time.March, 26, 14, 0, 0, 0, time.UTC)
-	fingerprint := fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion.")
+	fingerprint := FingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion.")
 	existing := []MemoryRecord{
 		{
 			ID:          "personal-lint",
@@ -1214,7 +1214,7 @@ func TestReconcileGeneratedRecords_ReviewPolicyKeepsExistingPersonalActive(t *te
 	t.Parallel()
 
 	now := time.Date(2026, time.March, 26, 16, 0, 0, 0, time.UTC)
-	fingerprint := fingerprintForRecord(KindWorkflowRule, "Keep commit subjects concise", "Use short imperative commit subjects.")
+	fingerprint := FingerprintForRecord(KindWorkflowRule, "Keep commit subjects concise", "Use short imperative commit subjects.")
 	existing := []MemoryRecord{
 		{
 			ID:          "commit-subjects",
@@ -1261,7 +1261,7 @@ func TestReconcileGeneratedRecords_RewordedSuppressedRecordReconcilesInPlace(t *
 			Kind:        KindRepoRule,
 			Title:       "Run lint before finishing",
 			Body:        "Run golangci-lint before claiming completion.",
-			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
+			Fingerprint: FingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
 			ScopeKind:   ScopeKindMe,
 			Status:      StatusSuppressed,
 			Origin:      OriginGenerated,
@@ -1275,7 +1275,7 @@ func TestReconcileGeneratedRecords_RewordedSuppressedRecordReconcilesInPlace(t *
 			Kind:        KindRepoRule,
 			Title:       "Run lint before wrapping up",
 			Body:        "Run golangci-lint before you say the task is done.",
-			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before wrapping up", "Run golangci-lint before you say the task is done."),
+			Fingerprint: FingerprintForRecord(KindRepoRule, "Run lint before wrapping up", "Run golangci-lint before you say the task is done."),
 			ScopeKind:   ScopeKindMe,
 			Status:      StatusCandidate,
 			Origin:      OriginGenerated,
@@ -1300,7 +1300,7 @@ func TestReconcileGeneratedRecords_RewordedActivePersonalRecordReconcilesInPlace
 			Kind:        KindSkillPatch,
 			Title:       "Tighten the project skill",
 			Body:        "Update the project skill with missing retry steps.",
-			Fingerprint: fingerprintForRecord(KindSkillPatch, "Tighten the project skill", "Update the project skill with missing retry steps."),
+			Fingerprint: FingerprintForRecord(KindSkillPatch, "Tighten the project skill", "Update the project skill with missing retry steps."),
 			ScopeKind:   ScopeKindMe,
 			Status:      StatusActive,
 			Origin:      OriginGenerated,
@@ -1314,7 +1314,7 @@ func TestReconcileGeneratedRecords_RewordedActivePersonalRecordReconcilesInPlace
 			Kind:        KindSkillPatch,
 			Title:       "Strengthen the project skill",
 			Body:        "Add the missing retry step to the project skill instructions.",
-			Fingerprint: fingerprintForRecord(KindSkillPatch, "Strengthen the project skill", "Add the missing retry step to the project skill instructions."),
+			Fingerprint: FingerprintForRecord(KindSkillPatch, "Strengthen the project skill", "Add the missing retry step to the project skill instructions."),
 			ScopeKind:   ScopeKindMe,
 			Status:      StatusCandidate,
 			Origin:      OriginGenerated,
@@ -1339,7 +1339,7 @@ func TestReconcileGeneratedRecords_DuplicateGeneratedRulesInOneRefreshDoNotForkO
 			Kind:        KindRepoRule,
 			Title:       "Run lint before finishing",
 			Body:        "Run golangci-lint before claiming completion.",
-			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
+			Fingerprint: FingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
 			ScopeKind:   ScopeKindMe,
 			ScopeValue:  "me@example.com",
 			Status:      StatusCandidate,
@@ -1350,7 +1350,7 @@ func TestReconcileGeneratedRecords_DuplicateGeneratedRulesInOneRefreshDoNotForkO
 			Kind:        KindRepoRule,
 			Title:       "Run lint before wrapping up",
 			Body:        "Run golangci-lint before you say the task is done.",
-			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before wrapping up", "Run golangci-lint before you say the task is done."),
+			Fingerprint: FingerprintForRecord(KindRepoRule, "Run lint before wrapping up", "Run golangci-lint before you say the task is done."),
 			ScopeKind:   ScopeKindMe,
 			ScopeValue:  "me@example.com",
 			Status:      StatusCandidate,
@@ -1410,7 +1410,7 @@ func TestReconcileGeneratedRecords_NormalizedDuplicateRefreshReconcilesIntoExist
 			Kind:        KindRepoRule,
 			Title:       "Run lint before finishing",
 			Body:        "Run golangci-lint before claiming completion.",
-			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
+			Fingerprint: FingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
 			ScopeKind:   ScopeKindMe,
 			ScopeValue:  "me@example.com",
 			Status:      StatusActive,
@@ -1463,7 +1463,7 @@ func TestReconcileGeneratedRecords_LegacyPersonalRecordWithEmptyScopeValueStillM
 			Kind:        KindRepoRule,
 			Title:       "Run lint before finishing",
 			Body:        "Run golangci-lint before claiming completion.",
-			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
+			Fingerprint: FingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
 			ScopeKind:   ScopeKindMe,
 			ScopeValue:  "",
 			Status:      StatusActive,
@@ -1476,7 +1476,7 @@ func TestReconcileGeneratedRecords_LegacyPersonalRecordWithEmptyScopeValueStillM
 			Kind:        KindRepoRule,
 			Title:       "Run lint before wrapping up",
 			Body:        "Run golangci-lint before you say the task is done.",
-			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before wrapping up", "Run golangci-lint before you say the task is done."),
+			Fingerprint: FingerprintForRecord(KindRepoRule, "Run lint before wrapping up", "Run golangci-lint before you say the task is done."),
 			ScopeKind:   ScopeKindMe,
 			ScopeValue:  "me@example.com",
 			Status:      StatusCandidate,
@@ -1826,7 +1826,7 @@ func TestAddManualRecord_DedupesExistingScopedFingerprint(t *testing.T) {
 			Kind:        KindRepoRule,
 			Title:       "Run lint before finishing",
 			Body:        "Run golangci-lint before claiming completion.",
-			Fingerprint: fingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
+			Fingerprint: FingerprintForRecord(KindRepoRule, "Run lint before finishing", "Run golangci-lint before claiming completion."),
 			ScopeKind:   ScopeKindMe,
 			ScopeValue:  "me@example.com",
 			Status:      StatusSuppressed,

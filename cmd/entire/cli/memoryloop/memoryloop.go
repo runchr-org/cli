@@ -414,7 +414,7 @@ func ReconcileGeneratedRecords(existing, generated []MemoryRecord, scopeKind Sco
 	for i := range records {
 		fingerprint := records[i].Fingerprint
 		if fingerprint == "" {
-			fingerprint = fingerprintForRecord(records[i].Kind, records[i].Title, records[i].Body)
+			fingerprint = FingerprintForRecord(records[i].Kind, records[i].Title, records[i].Body)
 			records[i].Fingerprint = fingerprint
 		}
 		if records[i].ScopeKind == "" {
@@ -444,7 +444,7 @@ func ReconcileGeneratedRecords(existing, generated []MemoryRecord, scopeKind Sco
 			record.Origin = OriginGenerated
 		}
 		if record.Fingerprint == "" {
-			record.Fingerprint = fingerprintForRecord(record.Kind, record.Title, record.Body)
+			record.Fingerprint = FingerprintForRecord(record.Kind, record.Title, record.Body)
 		}
 		if record.ScopeKind == "" {
 			record.ScopeKind = scopeKind
@@ -662,11 +662,11 @@ func AddManualRecord(records []MemoryRecord, input ManualRecordInput, now time.T
 	}
 
 	record := MemoryRecord{
-		ID:          makeRecordID(input.Kind, input.Title),
+		ID:          MakeRecordID(input.Kind, input.Title),
 		Kind:        input.Kind,
 		Title:       strings.TrimSpace(input.Title),
 		Body:        strings.TrimSpace(input.Body),
-		Fingerprint: fingerprintForRecord(input.Kind, input.Title, input.Body),
+		Fingerprint: FingerprintForRecord(input.Kind, input.Title, input.Body),
 		ScopeKind:   input.ScopeKind,
 		ScopeValue:  strings.TrimSpace(input.ScopeValue),
 		Origin:      OriginManual,
@@ -898,7 +898,7 @@ func indexRecordScopeKeys(records []MemoryRecord) map[string]int {
 	for i := range records {
 		fingerprint := records[i].Fingerprint
 		if fingerprint == "" {
-			fingerprint = fingerprintForRecord(records[i].Kind, records[i].Title, records[i].Body)
+			fingerprint = FingerprintForRecord(records[i].Kind, records[i].Title, records[i].Body)
 			records[i].Fingerprint = fingerprint
 		}
 		byScopeKey[recordScopeKey(fingerprint, records[i].ScopeKind, records[i].ScopeValue)] = i
@@ -1038,7 +1038,7 @@ func normalizeStateWithSource(state *State, loadedFromLegacySnapshot bool) {
 			inferred = true
 		}
 		if record.Fingerprint == "" {
-			record.Fingerprint = fingerprintForRecord(record.Kind, record.Title, record.Body)
+			record.Fingerprint = FingerprintForRecord(record.Kind, record.Title, record.Body)
 		}
 		if loadedFromLegacySnapshot && inferred {
 			record.LegacyInferred = true
@@ -1095,7 +1095,7 @@ func packSelectedCandidates(candidates []scoredCandidate, maxInjected int) []Mat
 
 		fingerprint := candidate.record.Fingerprint
 		if fingerprint == "" {
-			fingerprint = fingerprintForRecord(candidate.record.Kind, candidate.record.Title, candidate.record.Body)
+			fingerprint = FingerprintForRecord(candidate.record.Kind, candidate.record.Title, candidate.record.Body)
 		}
 		if _, ok := seenFingerprints[fingerprint]; ok {
 			return
@@ -1355,7 +1355,7 @@ func minInt(a, b int) int {
 	return b
 }
 
-func fingerprintForRecord(kind Kind, title, body string) string {
+func FingerprintForRecord(kind Kind, title, body string) string {
 	base := strings.ToLower(strings.TrimSpace(strings.Join([]string{
 		string(kind),
 		strings.TrimSpace(title),

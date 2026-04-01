@@ -90,14 +90,10 @@ func checkModeGate(ctx context.Context) (*memoryloop.State, error) {
 
 	if mode == memoryloop.ModeOff || mode == "" {
 		return nil, errors.New(
-			"Memory loop is disabled. Run `entire memory-loop mode auto` or " +
-				"`entire memory-loop mode manual` to enable.",
+			"memory loop is disabled; run `entire memory-loop mode auto` or " +
+				"`entire memory-loop mode manual` to enable",
 		)
 	}
 
 	return state, nil
-}
-
-func handleSaveMemory(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return mcp.NewToolResultText("not implemented"), nil
 }

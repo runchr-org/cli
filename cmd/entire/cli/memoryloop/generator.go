@@ -160,7 +160,7 @@ func buildGeneratedRecordsDetailed(resp generateResponse, input GenerateInput, n
 		}
 
 		record := MemoryRecord{
-			ID:               makeRecordID(kind, title),
+			ID:               MakeRecordID(kind, title),
 			Kind:             kind,
 			Title:            title,
 			Body:             body,
@@ -171,7 +171,7 @@ func buildGeneratedRecordsDetailed(resp generateResponse, input GenerateInput, n
 			Strength:         strength,
 			Status:           StatusCandidate,
 			Origin:           OriginGenerated,
-			Fingerprint:      fingerprintForRecord(kind, title, body),
+			Fingerprint:      FingerprintForRecord(kind, title, body),
 			CreatedAt:        now,
 			UpdatedAt:        now,
 		}
@@ -384,7 +384,7 @@ func shouldReplaceGeneratedCandidate(existing, next generatedCandidate) bool {
 	}
 }
 
-func makeRecordID(kind Kind, title string) string {
+func MakeRecordID(kind Kind, title string) string {
 	base := strings.ToLower(strings.TrimSpace(title))
 	var b strings.Builder
 	lastDash := false
