@@ -908,11 +908,11 @@ func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(ctx contex
 
 	combined := aggregateCheckpointAttribution()
 	for i := range len(summary.Sessions) {
-		content, readErr := store.ReadSessionContent(ctx, checkpointID, i)
-		if readErr != nil || content == nil || content.Metadata.InitialAttribution == nil {
+		metadata, readErr := store.ReadSessionMetadata(ctx, checkpointID, i)
+		if readErr != nil || metadata == nil || metadata.InitialAttribution == nil {
 			continue
 		}
-		combined.add(content.Metadata.InitialAttribution)
+		combined.add(metadata.InitialAttribution)
 	}
 
 	if !combined.hasData() {

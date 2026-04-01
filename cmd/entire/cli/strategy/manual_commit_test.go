@@ -4051,3 +4051,107 @@ func TestCondenseSession_V2Disabled_NoV2Refs(t *testing.T) {
 	_, err = repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
 	require.Error(t, err, "v2 /full/current ref should not exist when v2 is disabled")
 }
+
+// TestUpdateCombinedAttribution_MultiSession verifies that combined_attribution
+// is correctly computed and persisted across multiple session condensations,
+// and survives subsequent checkpoint writes.
+func TestUpdateCombinedAttribution_MultiSession(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+
+	// Create initial commit
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644))
+	_, err = wt.Add("main.go")
+	require.NoError(t, err)
+	initialHash, err := wt.Commit("init", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "t@t.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	// Agent writes file1 (session 1)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "file1.go"), []byte("func a() {}\nfunc b() {}\nfunc c() {}\n"), 0o644))
+	_, err = wt.Add("file1.go")
+	require.NoError(t, err)
+	_, err = wt.Commit("Add file1", &git.CommitOptions{
+		Author: &object.Signature{Name: "Agent", Email: "a@t.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	t.Chdir(dir)
+
+	// Create transcript for session 1
+	transcriptDir := filepath.Join(dir, ".claude", "projects", "test")
+	require.NoError(t, os.MkdirAll(transcriptDir, 0o755))
+	transcriptFile1 := filepath.Join(transcriptDir, "session1.jsonl")
+	require.NoError(t, os.WriteFile(transcriptFile1, []byte(`{"type":"human","message":{"content":"create file1"}}
+{"type":"assistant","message":{"content":"Done"}}
+`), 0o644))
+
+	checkpointID := id.MustCheckpointID("aabbccddeeff")
+	s := &ManualCommitStrategy{}
+
+	// Condense session 1
+	state1 := &SessionState{
+		SessionID:             "session-1",
+		BaseCommit:            initialHash.String(),
+		AttributionBaseCommit: initialHash.String(),
+		FilesTouched:          []string{"file1.go"},
+		TranscriptPath:        transcriptFile1,
+		AgentType:             "Claude Code",
+	}
+	result1, err := s.CondenseSession(context.Background(), repo, checkpointID, state1, map[string]struct{}{"file1.go": {}})
+	require.NoError(t, err)
+	require.Equal(t, checkpointID, result1.CheckpointID)
+
+	// Condense session 2 (different agent, same checkpoint)
+	transcriptFile2 := filepath.Join(transcriptDir, "session2.jsonl")
+	require.NoError(t, os.WriteFile(transcriptFile2, []byte(`{"type":"human","message":{"content":"create file2"}}
+{"type":"assistant","message":{"content":"Done"}}
+`), 0o644))
+
+	// Agent writes file2 (session 2)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "file2.go"), []byte("func x() {}\nfunc y() {}\n"), 0o644))
+	_, err = wt.Add("file2.go")
+	require.NoError(t, err)
+	_, err = wt.Commit("Add file2", &git.CommitOptions{
+		Author: &object.Signature{Name: "Agent2", Email: "a2@t.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	state2 := &SessionState{
+		SessionID:             "session-2",
+		BaseCommit:            initialHash.String(),
+		AttributionBaseCommit: initialHash.String(),
+		FilesTouched:          []string{"file2.go"},
+		TranscriptPath:        transcriptFile2,
+		AgentType:             "Claude Code",
+	}
+	result2, err := s.CondenseSession(context.Background(), repo, checkpointID, state2, map[string]struct{}{"file2.go": {}})
+	require.NoError(t, err)
+	require.Equal(t, checkpointID, result2.CheckpointID)
+
+	// Now call updateCombinedAttributionForCheckpoint
+	err = s.updateCombinedAttributionForCheckpoint(context.Background(), repo, checkpointID)
+	require.NoError(t, err)
+
+	// Read root metadata and verify combined_attribution exists
+	store := checkpoint.NewGitStore(repo)
+	summary, err := store.ReadCommitted(context.Background(), checkpointID)
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	require.Len(t, summary.Sessions, 2, "should have 2 sessions")
+	require.NotNil(t, summary.CombinedAttribution, "combined_attribution should be set")
+
+	// Both sessions had agent-only work
+	combined := summary.CombinedAttribution
+	t.Logf("Combined: agent=%d, human_added=%d, total=%d, pct=%.1f%%",
+		combined.AgentLines, combined.HumanAdded, combined.TotalCommitted, combined.AgentPercentage)
+
+	require.Positive(t, combined.AgentLines, "combined should have agent lines")
+	require.Positive(t, combined.TotalCommitted, "combined should have total")
+	require.Greater(t, combined.AgentPercentage, 0.0, "combined should have percentage")
+}

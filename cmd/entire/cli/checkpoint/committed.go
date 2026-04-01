@@ -905,6 +905,49 @@ func (s *GitStore) ReadSessionContent(ctx context.Context, checkpointID id.Check
 	return result, nil
 }
 
+// ReadSessionMetadata reads only the metadata.json for a session (no transcript or prompts).
+// This is much cheaper than ReadSessionContent for cases that only need metadata fields
+// like InitialAttribution.
+func (s *GitStore) ReadSessionMetadata(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*CommittedMetadata, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err //nolint:wrapcheck // Propagating context cancellation
+	}
+
+	ft, err := s.getFetchingTree(ctx)
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	checkpointPath := checkpointID.Path()
+	checkpointTree, err := ft.Tree(checkpointPath)
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	sessionDir := strconv.Itoa(sessionIndex)
+	sessionTree, err := checkpointTree.Tree(sessionDir)
+	if err != nil {
+		return nil, fmt.Errorf("session %d not found: %w", sessionIndex, err)
+	}
+
+	metadataFile, err := sessionTree.File(paths.MetadataFileName)
+	if err != nil {
+		return nil, fmt.Errorf("session %d metadata not found: %w", sessionIndex, err)
+	}
+
+	content, err := metadataFile.Contents()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read session %d metadata: %w", sessionIndex, err)
+	}
+
+	var metadata CommittedMetadata
+	if err := json.Unmarshal([]byte(content), &metadata); err != nil {
+		return nil, fmt.Errorf("failed to parse session %d metadata: %w", sessionIndex, err)
+	}
+
+	return &metadata, nil
+}
+
 // ReadLatestSessionContent is a convenience method that reads the latest session's content.
 // This is equivalent to ReadSessionContent(ctx, checkpointID, len(summary.Sessions)-1).
 func (s *GitStore) ReadLatestSessionContent(ctx context.Context, checkpointID id.CheckpointID) (*SessionContent, error) {
