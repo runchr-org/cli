@@ -63,6 +63,21 @@ func (m settingsModel) update(msg tea.Msg) (settingsModel, tea.Cmd) {
 		}
 		changed.maxInjected = &next
 		hasChange = true
+
+	case key.Matches(keyMsg, settingsKeyMap.ScopeRepo):
+		scopes := toggleScope(m.state.Store.InjectionScopes, memoryloop.ScopeKindRepo)
+		changed.injectionScopes = &scopes
+		hasChange = true
+
+	case key.Matches(keyMsg, settingsKeyMap.ScopeMe):
+		scopes := toggleScope(m.state.Store.InjectionScopes, memoryloop.ScopeKindMe)
+		changed.injectionScopes = &scopes
+		hasChange = true
+
+	case key.Matches(keyMsg, settingsKeyMap.ScopeBranch):
+		scopes := toggleScope(m.state.Store.InjectionScopes, memoryloop.ScopeKindBranch)
+		changed.injectionScopes = &scopes
+		hasChange = true
 	}
 
 	if hasChange {
@@ -151,6 +166,27 @@ func (m settingsModel) view() string {
 		b.WriteString("\n")
 	}
 
+	// Injection Scopes card
+	{
+		var c strings.Builder
+		c.WriteString(m.styles.render(m.styles.bold, "Injection Scopes"))
+		c.WriteString("  ")
+		c.WriteString(m.styles.render(m.styles.dim, "Which memory scopes get injected into prompts"))
+		c.WriteString("\n")
+		activeScopes := effectiveInjectionScopes(store.InjectionScopes)
+		for _, scope := range []memoryloop.ScopeKind{memoryloop.ScopeKindRepo, memoryloop.ScopeKindMe, memoryloop.ScopeKindBranch} {
+			label := string(scope)
+			if hasScopeKind(activeScopes, scope) {
+				c.WriteString(selectedChip.Render(label))
+			} else {
+				c.WriteString(unselectedChip.Render(label))
+			}
+			c.WriteString(" ")
+		}
+		b.WriteString(cardStyle.Render(c.String()))
+		b.WriteString("\n")
+	}
+
 	// Injection status card
 	{
 		var c strings.Builder
@@ -192,4 +228,41 @@ func cyclePolicy(current memoryloop.ActivationPolicy) memoryloop.ActivationPolic
 		}
 	}
 	return memoryloop.ActivationPolicyReview
+}
+
+// effectiveInjectionScopes returns the active scopes, defaulting to all if empty.
+func effectiveInjectionScopes(scopes []memoryloop.ScopeKind) []memoryloop.ScopeKind {
+	if len(scopes) == 0 {
+		return memoryloop.DefaultInjectionScopes()
+	}
+	return scopes
+}
+
+func hasScopeKind(scopes []memoryloop.ScopeKind, target memoryloop.ScopeKind) bool {
+	for _, s := range scopes {
+		if s == target {
+			return true
+		}
+	}
+	return false
+}
+
+// toggleScope adds or removes a scope kind from the list.
+// Starts from DefaultInjectionScopes if the current list is empty.
+func toggleScope(current []memoryloop.ScopeKind, target memoryloop.ScopeKind) []memoryloop.ScopeKind {
+	if len(current) == 0 {
+		current = memoryloop.DefaultInjectionScopes()
+	}
+	// Check if target is already present.
+	for i, s := range current {
+		if s == target {
+			// Remove it (but don't allow removing all scopes).
+			if len(current) <= 1 {
+				return current
+			}
+			return append(current[:i], current[i+1:]...)
+		}
+	}
+	// Add it.
+	return append(current, target)
 }

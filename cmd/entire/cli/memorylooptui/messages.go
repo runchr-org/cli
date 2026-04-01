@@ -24,11 +24,12 @@ type addMemoryMsg struct {
 // pruneMsg requests pruning stale/ineffective records.
 type pruneMsg struct{}
 
-// settingsChangedMsg indicates mode, policy, or max_injected was changed.
+// settingsChangedMsg indicates mode, policy, max_injected, or injection_scopes was changed.
 type settingsChangedMsg struct {
 	mode             *memoryloop.Mode
 	activationPolicy *memoryloop.ActivationPolicy
 	maxInjected      *int
+	injectionScopes  *[]memoryloop.ScopeKind
 }
 
 // testPromptMsg requests a prompt relevance test.

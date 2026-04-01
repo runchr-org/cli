@@ -469,7 +469,9 @@ func scopeKindForRefresh(scope memoryLoopScope) memoryloop.ScopeKind {
 	switch scope.Mode {
 	case memoryLoopScopeMe:
 		return memoryloop.ScopeKindMe
-	case memoryLoopScopeRepo, memoryLoopScopeBranch:
+	case memoryLoopScopeBranch:
+		return memoryloop.ScopeKindBranch
+	case memoryLoopScopeRepo:
 		return memoryloop.ScopeKindRepo
 	default:
 		return memoryloop.ScopeKindRepo
@@ -800,7 +802,19 @@ func resolveAddScope(ctx context.Context, rawScope string) (memoryloop.ScopeKind
 	case memoryLoopScopeRepo:
 		return memoryloop.ScopeKindRepo, "", "", nil
 	case memoryLoopScopeBranch:
-		return "", "", "", fmt.Errorf("invalid memory scope: %s", rawScope)
+		repo, err := openRepository(ctx)
+		if err != nil {
+			return "", "", "", fmt.Errorf("open git repository: %w", err)
+		}
+		branch := strategy.GetCurrentBranchName(repo)
+		if branch == "" {
+			return "", "", "", errors.New("current HEAD is detached; cannot use branch scope")
+		}
+		author, err := GetGitAuthor(ctx)
+		if err != nil {
+			return "", "", "", fmt.Errorf("resolve git author: %w", err)
+		}
+		return memoryloop.ScopeKindBranch, branch, author.Email, nil
 	default:
 		return "", "", "", fmt.Errorf("invalid memory scope: %s", rawScope)
 	}

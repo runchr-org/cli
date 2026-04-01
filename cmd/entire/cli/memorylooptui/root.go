@@ -149,7 +149,11 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state == nil || m.state.Store == nil {
 			return m, nil
 		}
-		matches := memoryloop.SelectRelevant(*m.state.Store, msg.prompt, time.Now())
+		var selectOpts []memoryloop.SelectOption
+		if len(m.state.Store.InjectionScopes) > 0 {
+			selectOpts = append(selectOpts, memoryloop.WithInjectionScopes(m.state.Store.InjectionScopes))
+		}
+		matches := memoryloop.SelectRelevant(*m.state.Store, msg.prompt, time.Now(), selectOpts...)
 		return m, func() tea.Msg { return testPromptResultMsg{matches: matches} }
 
 	case refreshStartedMsg:
@@ -327,6 +331,9 @@ func (m rootModel) handleSettingsChanged(msg settingsChangedMsg) (tea.Model, tea
 	if msg.maxInjected != nil {
 		m.state.Store.MaxInjected = *msg.maxInjected
 	}
+	if msg.injectionScopes != nil {
+		m.state.Store.InjectionScopes = *msg.injectionScopes
+	}
 	if err := m.saveState(); err != nil {
 		return m, func() tea.Msg { return errorFlashMsg{text: fmt.Sprintf("save failed: %v", err)} }
 	}
@@ -340,13 +347,13 @@ func (m rootModel) handleSettingsChanged(msg settingsChangedMsg) (tea.Model, tea
 func (m rootModel) activeTabHints() string {
 	switch m.activeTab {
 	case tabMemories:
-		return "j/k navigate · enter expand · f filter · a activate · s suppress · x archive · n new · ? help"
+		return "j/k navigate · enter expand · f filter · S scope · a activate · s suppress · x archive · n new · ? help"
 	case tabInjection:
 		return "i focus input · enter test · esc unfocus · j/k navigate · ? help"
 	case tabHistory:
 		return "j/k navigate · R refresh · ? help"
 	case tabSettings:
-		return "m mode · p policy · +/- max injected · ? help"
+		return "m mode · p policy · +/- max injected · r/e/b toggle scopes · ? help"
 	default:
 		return "? help · q quit"
 	}
@@ -381,7 +388,7 @@ func (m rootModel) renderHelp() string {
 
 	b.WriteString(m.styles.render(m.styles.title, "Memories"))
 	b.WriteString("\n")
-	b.WriteString("  j/k  navigate    enter  toggle detail    f  filter    /  search\n")
+	b.WriteString("  j/k  navigate    enter  toggle detail    f  filter    S  scope    /  search\n")
 	b.WriteString("  a    activate    P      promote          s  suppress  u  unsuppress\n")
 	b.WriteString("  x    archive     D      prune            n  new memory\n")
 	b.WriteString("\n")
@@ -399,6 +406,7 @@ func (m rootModel) renderHelp() string {
 	b.WriteString(m.styles.render(m.styles.title, "Settings"))
 	b.WriteString("\n")
 	b.WriteString("  m  cycle mode    p  cycle policy    +/-  max injected\n")
+	b.WriteString("  r  toggle repo   e  toggle me       b    toggle branch\n")
 
 	return b.String()
 }

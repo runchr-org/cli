@@ -14,19 +14,20 @@ type globalKeys struct {
 }
 
 type memoriesKeys struct {
-	Up         key.Binding
-	Down       key.Binding
-	Enter      key.Binding
-	Activate   key.Binding
-	Promote    key.Binding
-	Suppress   key.Binding
-	Unsuppress key.Binding
-	Archive    key.Binding
-	Prune      key.Binding
-	Filter     key.Binding
-	Search     key.Binding
-	New        key.Binding
-	Escape     key.Binding
+	Up          key.Binding
+	Down        key.Binding
+	Enter       key.Binding
+	Activate    key.Binding
+	Promote     key.Binding
+	Suppress    key.Binding
+	Unsuppress  key.Binding
+	Archive     key.Binding
+	Prune       key.Binding
+	Filter      key.Binding
+	ScopeFilter key.Binding
+	Search      key.Binding
+	New         key.Binding
+	Escape      key.Binding
 }
 
 type injectionKeys struct {
@@ -44,10 +45,13 @@ type historyKeys struct {
 }
 
 type settingsKeys struct {
-	Mode    key.Binding
-	Policy  key.Binding
-	MaxUp   key.Binding
-	MaxDown key.Binding
+	Mode        key.Binding
+	Policy      key.Binding
+	MaxUp       key.Binding
+	MaxDown     key.Binding
+	ScopeRepo   key.Binding
+	ScopeMe     key.Binding
+	ScopeBranch key.Binding
 }
 
 var globalKeyMap = globalKeys{
@@ -62,19 +66,20 @@ var globalKeyMap = globalKeys{
 }
 
 var memoriesKeyMap = memoriesKeys{
-	Up:         key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "up")),
-	Down:       key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "down")),
-	Enter:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "toggle detail")),
-	Activate:   key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "activate")),
-	Promote:    key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "promote")),
-	Suppress:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "suppress")),
-	Unsuppress: key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "unsuppress")),
-	Archive:    key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "archive")),
-	Prune:      key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "prune")),
-	Filter:     key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "cycle filter")),
-	Search:     key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
-	New:        key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new memory")),
-	Escape:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+	Up:          key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "up")),
+	Down:        key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "down")),
+	Enter:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "toggle detail")),
+	Activate:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "activate")),
+	Promote:     key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "promote")),
+	Suppress:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "suppress")),
+	Unsuppress:  key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "unsuppress")),
+	Archive:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "archive")),
+	Prune:       key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "prune")),
+	Filter:      key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "cycle filter")),
+	ScopeFilter: key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "cycle scope")),
+	Search:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+	New:         key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new memory")),
+	Escape:      key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 }
 
 var injectionKeyMap = injectionKeys{
@@ -92,8 +97,11 @@ var historyKeyMap = historyKeys{
 }
 
 var settingsKeyMap = settingsKeys{
-	Mode:    key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "cycle mode")),
-	Policy:  key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "cycle policy")),
-	MaxUp:   key.NewBinding(key.WithKeys("+", "="), key.WithHelp("+", "increase max")),
-	MaxDown: key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "decrease max")),
+	Mode:        key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "cycle mode")),
+	Policy:      key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "cycle policy")),
+	MaxUp:       key.NewBinding(key.WithKeys("+", "="), key.WithHelp("+", "increase max")),
+	MaxDown:     key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "decrease max")),
+	ScopeRepo:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "toggle repo scope")),
+	ScopeMe:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "toggle me scope")),
+	ScopeBranch: key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "toggle branch scope")),
 }

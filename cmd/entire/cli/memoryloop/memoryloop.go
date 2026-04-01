@@ -111,9 +111,15 @@ const (
 type ScopeKind string
 
 const (
-	ScopeKindMe   ScopeKind = "me"
-	ScopeKindRepo ScopeKind = "repo"
+	ScopeKindMe     ScopeKind = "me"
+	ScopeKindRepo   ScopeKind = "repo"
+	ScopeKindBranch ScopeKind = "branch"
 )
+
+// DefaultInjectionScopes returns all scope kinds, used when InjectionScopes is empty (backward compat).
+func DefaultInjectionScopes() []ScopeKind {
+	return []ScopeKind{ScopeKindMe, ScopeKindRepo, ScopeKindBranch}
+}
 
 type Origin string
 
@@ -204,6 +210,7 @@ type Store struct {
 	ActivationPolicy ActivationPolicy `json:"activation_policy,omitempty"`
 	InjectionEnabled bool             `json:"injection_enabled"`
 	MaxInjected      int              `json:"max_injected"`
+	InjectionScopes  []ScopeKind      `json:"injection_scopes,omitempty"`
 	RefreshHistory   []RefreshHistory `json:"refresh_history,omitempty"`
 }
 
@@ -359,11 +366,52 @@ func AppendInjectionLog(ctx context.Context, log InjectionLog) error {
 	return SaveState(ctx, state)
 }
 
-func SelectRelevant(snapshot Snapshot, prompt string, now time.Time) []Match {
-	return PreviewSelection(snapshot, prompt, now).Matches
+// selectConfig holds options for SelectRelevant/PreviewSelection.
+type selectConfig struct {
+	injectionScopes []ScopeKind
+	currentBranch   string
 }
 
-func PreviewSelection(snapshot Snapshot, prompt string, now time.Time) SelectionReport {
+// SelectOption configures the behavior of SelectRelevant/PreviewSelection.
+type SelectOption func(*selectConfig)
+
+// WithInjectionScopes limits selection to records matching the given scopes.
+// When empty or nil, all scopes are allowed (backward compatible).
+func WithInjectionScopes(scopes []ScopeKind) SelectOption {
+	return func(c *selectConfig) { c.injectionScopes = scopes }
+}
+
+// WithCurrentBranch sets the current branch for branch-scope matching.
+// Branch-scoped records are only selected when their ScopeValue matches this branch.
+func WithCurrentBranch(branch string) SelectOption {
+	return func(c *selectConfig) { c.currentBranch = branch }
+}
+
+func (c *selectConfig) passesScope(record MemoryRecord) bool {
+	if len(c.injectionScopes) == 0 {
+		return true
+	}
+	for _, s := range c.injectionScopes {
+		if record.ScopeKind == s {
+			if s == ScopeKindBranch && c.currentBranch != "" {
+				return record.ScopeValue == c.currentBranch
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func SelectRelevant(snapshot Snapshot, prompt string, now time.Time, opts ...SelectOption) []Match {
+	return PreviewSelection(snapshot, prompt, now, opts...).Matches
+}
+
+func PreviewSelection(snapshot Snapshot, prompt string, now time.Time, opts ...SelectOption) SelectionReport {
+	cfg := &selectConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
 	maxInjected := snapshot.MaxInjected
 	if maxInjected <= 0 {
 		maxInjected = DefaultMaxInjected
@@ -376,6 +424,9 @@ func PreviewSelection(snapshot Snapshot, prompt string, now time.Time) Selection
 
 	candidates := make([]scoredCandidate, 0, len(snapshot.Records))
 	for _, record := range snapshot.Records {
+		if !cfg.passesScope(record) {
+			continue
+		}
 		signals := buildRecordMatchSignals(record)
 		primaryOverlap := tokenOverlap(promptTokens, signals.primaryTokens)
 		if !passesInjectionGate(record, primaryOverlap) {

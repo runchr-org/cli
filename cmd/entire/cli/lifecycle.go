@@ -288,7 +288,8 @@ func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Eve
 	}
 
 	now := time.Now().UTC()
-	matches := memoryloop.SelectRelevant(*state.Snapshot, event.Prompt, now)
+	selectOpts := buildMemoryLoopSelectOpts(ctx, state.Snapshot)
+	matches := memoryloop.SelectRelevant(*state.Snapshot, event.Prompt, now, selectOpts...)
 	if len(matches) == 0 {
 		return nil
 	}
@@ -324,6 +325,20 @@ func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Eve
 	}
 
 	return nil
+}
+
+func buildMemoryLoopSelectOpts(ctx context.Context, snapshot *memoryloop.Snapshot) []memoryloop.SelectOption {
+	var opts []memoryloop.SelectOption
+	if snapshot != nil && len(snapshot.InjectionScopes) > 0 {
+		opts = append(opts, memoryloop.WithInjectionScopes(snapshot.InjectionScopes))
+	}
+	repo, err := openRepository(ctx)
+	if err == nil {
+		if branch := strategy.GetCurrentBranchName(repo); branch != "" {
+			opts = append(opts, memoryloop.WithCurrentBranch(branch))
+		}
+	}
+	return opts
 }
 
 func effectiveMemoryLoopMode(state *memoryloop.State, settingsValue *settings.EntireSettings) memoryloop.Mode {

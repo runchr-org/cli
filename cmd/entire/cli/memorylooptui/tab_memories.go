@@ -25,6 +25,17 @@ const (
 
 var filterLabels = [5]string{"ALL", "ACTIVE", "CANDIDATE", "SUPPRESSED", "ARCHIVED"}
 
+type scopeFilter int
+
+const (
+	scopeAll scopeFilter = iota
+	scopeRepo
+	scopeMe
+	scopeBranch
+)
+
+var scopeFilterLabels = [4]string{"All", "Repo", "Me", "Branch"}
+
 //nolint:recvcheck // bubbletea pattern: pointer receivers for mutation, value for update/view
 type memoriesModel struct {
 	state      *memoryloop.State
@@ -33,6 +44,7 @@ type memoriesModel struct {
 	height     int
 	table      table.Model
 	filter     statusFilter
+	scopeFltr  scopeFilter
 	showDetail bool
 	searchMode bool
 	searchText string
@@ -162,6 +174,10 @@ func (m *memoriesModel) rebuildTable() {
 }
 
 func (m memoriesModel) matchesFilter(r memoryloop.MemoryRecord) bool {
+	return m.matchesStatusFilter(r) && m.matchesScopeFilter(r)
+}
+
+func (m memoriesModel) matchesStatusFilter(r memoryloop.MemoryRecord) bool {
 	switch m.filter {
 	case filterAll:
 		return true
@@ -173,6 +189,21 @@ func (m memoriesModel) matchesFilter(r memoryloop.MemoryRecord) bool {
 		return r.Status == memoryloop.StatusSuppressed
 	case filterArchived:
 		return r.Status == memoryloop.StatusArchived
+	default:
+		return true
+	}
+}
+
+func (m memoriesModel) matchesScopeFilter(r memoryloop.MemoryRecord) bool {
+	switch m.scopeFltr {
+	case scopeAll:
+		return true
+	case scopeRepo:
+		return r.ScopeKind == memoryloop.ScopeKindRepo
+	case scopeMe:
+		return r.ScopeKind == memoryloop.ScopeKindMe
+	case scopeBranch:
+		return r.ScopeKind == memoryloop.ScopeKindBranch
 	default:
 		return true
 	}
@@ -206,6 +237,11 @@ func (m memoriesModel) update(msg tea.Msg) (memoriesModel, tea.Cmd) {
 
 		case key.Matches(keyMsg, memoriesKeyMap.Filter):
 			m.filter = (m.filter + 1) % 5
+			m.rebuildTable()
+			return m, nil
+
+		case key.Matches(keyMsg, memoriesKeyMap.ScopeFilter):
+			m.scopeFltr = (m.scopeFltr + 1) % 4
 			m.rebuildTable()
 			return m, nil
 
@@ -348,7 +384,8 @@ func (m memoriesModel) view() string {
 		return "\n  No memories yet. Press n to add one, or switch to History tab and press R to refresh.\n"
 	}
 	if len(m.records) == 0 {
-		return fmt.Sprintf("\n  No %s memories. Press f to change filter.\n", filterLabels[m.filter])
+		return fmt.Sprintf("\n  No %s / %s memories. Press f or S to change filter.\n",
+			filterLabels[m.filter], scopeFilterLabels[m.scopeFltr])
 	}
 
 	var b strings.Builder
@@ -394,25 +431,47 @@ func (m memoriesModel) renderAddForm() string {
 }
 
 func (m memoriesModel) renderFilterBar() string {
-	counts := m.statusCounts()
-	var parts []string
+	// Status chips
+	statusCounts := m.statusCounts()
+	var statusParts []string
 	for i, label := range filterLabels {
-		text := fmt.Sprintf("%s (%d)", label, counts[i])
+		text := fmt.Sprintf("%s (%d)", label, statusCounts[i])
 		if m.styles.colorEnabled {
 			if statusFilter(i) == m.filter {
-				parts = append(parts, m.styles.filterChipActive.Render(text))
+				statusParts = append(statusParts, m.styles.filterChipActive.Render(text))
 			} else {
-				parts = append(parts, m.styles.filterChipInactive.Render(text))
+				statusParts = append(statusParts, m.styles.filterChipInactive.Render(text))
 			}
 		} else {
 			if statusFilter(i) == m.filter {
-				parts = append(parts, "["+text+"]")
+				statusParts = append(statusParts, "["+text+"]")
 			} else {
-				parts = append(parts, " "+text+" ")
+				statusParts = append(statusParts, " "+text+" ")
 			}
 		}
 	}
-	return "  " + strings.Join(parts, " ")
+
+	// Scope chips
+	scopeCounts := m.scopeCounts()
+	var scopeParts []string
+	for i, label := range scopeFilterLabels {
+		text := fmt.Sprintf("%s (%d)", label, scopeCounts[i])
+		if m.styles.colorEnabled {
+			if scopeFilter(i) == m.scopeFltr {
+				scopeParts = append(scopeParts, m.styles.filterChipActive.Render(text))
+			} else {
+				scopeParts = append(scopeParts, m.styles.filterChipInactive.Render(text))
+			}
+		} else {
+			if scopeFilter(i) == m.scopeFltr {
+				scopeParts = append(scopeParts, "["+text+"]")
+			} else {
+				scopeParts = append(scopeParts, " "+text+" ")
+			}
+		}
+	}
+
+	return "  " + strings.Join(statusParts, " ") + " │ " + strings.Join(scopeParts, " ")
 }
 
 func (m memoriesModel) statusCounts() [5]int {
@@ -421,6 +480,9 @@ func (m memoriesModel) statusCounts() [5]int {
 		return counts
 	}
 	for _, r := range m.state.Store.Records {
+		if !m.matchesScopeFilter(r) {
+			continue
+		}
 		counts[0]++ // all
 		switch r.Status {
 		case memoryloop.StatusActive:
@@ -431,6 +493,28 @@ func (m memoriesModel) statusCounts() [5]int {
 			counts[3]++
 		case memoryloop.StatusArchived:
 			counts[4]++
+		}
+	}
+	return counts
+}
+
+func (m memoriesModel) scopeCounts() [4]int {
+	var counts [4]int
+	if m.state == nil || m.state.Store == nil {
+		return counts
+	}
+	for _, r := range m.state.Store.Records {
+		if !m.matchesStatusFilter(r) {
+			continue
+		}
+		counts[0]++ // all
+		switch r.ScopeKind {
+		case memoryloop.ScopeKindRepo:
+			counts[1]++
+		case memoryloop.ScopeKindMe:
+			counts[2]++
+		case memoryloop.ScopeKindBranch:
+			counts[3]++
 		}
 	}
 	return counts

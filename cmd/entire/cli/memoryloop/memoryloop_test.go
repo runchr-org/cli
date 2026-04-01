@@ -2019,3 +2019,121 @@ func TestPruneRecords_DemotesRepeatedIneffectiveGeneratedActiveRecords(t *testin
 	require.Equal(t, "ineffective_active", updated[0].History[0].Detail)
 	require.Equal(t, 0, result.ArchivedCount)
 }
+
+func TestSelectRelevant_WithInjectionScopes_FiltersToRepoOnly(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC)
+	snapshot := Snapshot{
+		MaxInjected: 5,
+		Records: []MemoryRecord{
+			{
+				ID: "repo-rule", Kind: KindRepoRule, Title: "shared guidance rule",
+				Body: "Keep it concise", Strength: 4, Status: StatusActive,
+				UpdatedAt: now, Confidence: "high", ScopeKind: ScopeKindRepo,
+			},
+			{
+				ID: "personal-rule", Kind: KindRepoRule, Title: "personal shared guidance",
+				Body: "My personal style", Strength: 4, Status: StatusActive,
+				UpdatedAt: now, Confidence: "high", ScopeKind: ScopeKindMe, ScopeValue: "me@test.com",
+			},
+			{
+				ID: "branch-rule", Kind: KindRepoRule, Title: "branch shared guidance",
+				Body: "Branch-specific rule", Strength: 4, Status: StatusActive,
+				UpdatedAt: now, Confidence: "high", ScopeKind: ScopeKindBranch, ScopeValue: "feature-x",
+			},
+		},
+	}
+
+	matches := SelectRelevant(snapshot, "shared guidance", now, WithInjectionScopes([]ScopeKind{ScopeKindRepo}))
+	require.Len(t, matches, 1)
+	require.Equal(t, "repo-rule", matches[0].Record.ID)
+}
+
+func TestSelectRelevant_WithInjectionScopes_BranchMatchesCurrentOnly(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC)
+	snapshot := Snapshot{
+		MaxInjected: 5,
+		Records: []MemoryRecord{
+			{
+				ID: "branch-x", Kind: KindRepoRule, Title: "branch shared guidance X",
+				Body: "Rule for feature-x", Strength: 4, Status: StatusActive,
+				UpdatedAt: now, Confidence: "high", ScopeKind: ScopeKindBranch, ScopeValue: "feature-x",
+			},
+			{
+				ID: "branch-y", Kind: KindRepoRule, Title: "branch shared guidance Y",
+				Body: "Rule for feature-y", Strength: 4, Status: StatusActive,
+				UpdatedAt: now, Confidence: "high", ScopeKind: ScopeKindBranch, ScopeValue: "feature-y",
+			},
+		},
+	}
+
+	matches := SelectRelevant(snapshot, "shared guidance", now,
+		WithInjectionScopes([]ScopeKind{ScopeKindBranch}),
+		WithCurrentBranch("feature-x"),
+	)
+	require.Len(t, matches, 1)
+	require.Equal(t, "branch-x", matches[0].Record.ID)
+}
+
+func TestSelectRelevant_EmptyInjectionScopes_AllowsAll(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC)
+	snapshot := Snapshot{
+		MaxInjected: 5,
+		Records: []MemoryRecord{
+			{
+				ID: "repo-rule", Kind: KindRepoRule, Title: "shared guidance repo",
+				Body: "Repo rule content", Strength: 4, Status: StatusActive,
+				UpdatedAt: now, Confidence: "high", ScopeKind: ScopeKindRepo,
+			},
+			{
+				ID: "personal-rule", Kind: KindRepoRule, Title: "shared guidance personal",
+				Body: "Personal rule content", Strength: 4, Status: StatusActive,
+				UpdatedAt: now, Confidence: "high", ScopeKind: ScopeKindMe, ScopeValue: "me@test.com",
+			},
+		},
+	}
+
+	// No WithInjectionScopes option — backward compat, all scopes allowed
+	matches := SelectRelevant(snapshot, "shared guidance", now)
+	require.Len(t, matches, 2)
+}
+
+func TestSelectRelevant_WithInjectionScopes_MultiScope(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC)
+	snapshot := Snapshot{
+		MaxInjected: 5,
+		Records: []MemoryRecord{
+			{
+				ID: "repo-rule", Kind: KindRepoRule, Title: "shared guidance repo",
+				Body: "Repo content", Strength: 4, Status: StatusActive,
+				UpdatedAt: now, Confidence: "high", ScopeKind: ScopeKindRepo,
+			},
+			{
+				ID: "personal-rule", Kind: KindRepoRule, Title: "shared guidance personal",
+				Body: "Personal content", Strength: 4, Status: StatusActive,
+				UpdatedAt: now, Confidence: "high", ScopeKind: ScopeKindMe, ScopeValue: "me@test.com",
+			},
+			{
+				ID: "branch-rule", Kind: KindRepoRule, Title: "shared guidance branch",
+				Body: "Branch content", Strength: 4, Status: StatusActive,
+				UpdatedAt: now, Confidence: "high", ScopeKind: ScopeKindBranch, ScopeValue: "main",
+			},
+		},
+	}
+
+	// Allow repo + me but not branch
+	matches := SelectRelevant(snapshot, "shared guidance", now,
+		WithInjectionScopes([]ScopeKind{ScopeKindRepo, ScopeKindMe}),
+	)
+	require.Len(t, matches, 2)
+	ids := []string{matches[0].Record.ID, matches[1].Record.ID}
+	require.Contains(t, ids, "repo-rule")
+	require.Contains(t, ids, "personal-rule")
+}

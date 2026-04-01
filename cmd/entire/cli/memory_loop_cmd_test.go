@@ -974,3 +974,20 @@ func TestRunMemoryLoopPrune_ArchivesEligibleGeneratedMemories(t *testing.T) {
 	require.Equal(t, memoryloop.StatusArchived, loaded.Store.Records[0].Status)
 	require.Equal(t, memoryloop.StatusActive, loaded.Store.Records[1].Status)
 }
+
+func TestScopeKindForRefresh_ReturnsBranchForBranchMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		mode memoryLoopScopeMode
+		want memoryloop.ScopeKind
+	}{
+		{memoryLoopScopeRepo, memoryloop.ScopeKindRepo},
+		{memoryLoopScopeMe, memoryloop.ScopeKindMe},
+		{memoryLoopScopeBranch, memoryloop.ScopeKindBranch},
+	}
+	for _, tt := range tests {
+		got := scopeKindForRefresh(memoryLoopScope{Mode: tt.mode})
+		require.Equal(t, tt.want, got, "mode=%s", tt.mode)
+	}
+}
