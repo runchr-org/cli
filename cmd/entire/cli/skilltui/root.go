@@ -121,7 +121,8 @@ func (m rootModel) loadData() tea.Cmd {
 		}
 
 		// Refresh cache from insightsdb.
-		if _, err = m.skillDB.RefreshFromInsightsDB(m.ctx, m.insightsDB, rows); err != nil {
+		populateResult, _, err := m.skillDB.RefreshFromInsightsDB(m.ctx, m.insightsDB, rows, m.repoRoot)
+		if err != nil {
 			return dataLoadedMsg{err: fmt.Errorf("refresh skill cache: %w", err)}
 		}
 
@@ -136,7 +137,7 @@ func (m rootModel) loadData() tea.Cmd {
 			stats[skill.Name+"|"+skill.SourceAgent] = st
 		}
 
-		return dataLoadedMsg{skills: rows, stats: stats}
+		return dataLoadedMsg{skills: rows, stats: stats, populateResult: populateResult}
 	}
 }
 
@@ -238,7 +239,7 @@ func (m rootModel) handleDataMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err
 			return m, nil
 		}
-		m.picker.setData(msg.skills, msg.stats)
+		m.picker.setData(msg.skills, msg.stats, msg.populateResult)
 		return m, nil
 
 	case skillSelectedMsg:

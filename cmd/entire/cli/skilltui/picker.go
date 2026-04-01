@@ -12,11 +12,12 @@ import (
 
 //nolint:recvcheck // bubbletea pattern: pointer receivers for mutation, value for update/view
 type pickerModel struct {
-	allSkills []skilldb.SkillRow // full list before filtering
-	skills    []skilldb.SkillRow // filtered view
-	stats     map[string]*skilldb.SkillStatsResult
-	selected  int
-	scope     int // 0 = all, 1 = repo only, 2 = personal only
+	allSkills      []skilldb.SkillRow // full list before filtering
+	skills         []skilldb.SkillRow // filtered view
+	stats          map[string]*skilldb.SkillStatsResult
+	populateResult *skilldb.PopulateResult // pipeline diagnostics for empty state
+	selected       int
+	scope          int // 0 = all, 1 = repo only, 2 = personal only
 	styles         tuiStyles
 	width          int
 	height         int
@@ -29,7 +30,8 @@ func newPickerModel(styles tuiStyles) pickerModel {
 	}
 }
 
-func (m *pickerModel) setData(skills []skilldb.SkillRow, stats map[string]*skilldb.SkillStatsResult) {
+func (m *pickerModel) setData(skills []skilldb.SkillRow, stats map[string]*skilldb.SkillStatsResult, populateResult *skilldb.PopulateResult) {
+	m.populateResult = populateResult
 	// Deduplicate skills by name — the same skill may be discovered for
 	// multiple source agents (e.g. claude-code and gemini-cli).
 	// Keep one row per name and merge stats across agents.
@@ -154,9 +156,29 @@ func (m pickerModel) view() string {
 		return b.String()
 	}
 
-	// If all skills have zero sessions, show an actionable empty state.
+	// If all skills have zero sessions, show an actionable empty state with diagnostics.
 	if !m.hasAnySessionData() {
 		fmt.Fprintf(&b, "  %d skills discovered, but no session data found.\n\n", len(m.skills))
+
+		// Show pipeline diagnostics if available.
+		if pr := m.populateResult; pr != nil && (pr.Step1SignalCount > 0 || pr.Step2ToolCallCount > 0) {
+			b.WriteString(m.styles.render(m.styles.sectionHeader, "  Diagnostics:"))
+			b.WriteString("\n")
+			fmt.Fprintf(&b, "    skill_signals: %d queried, %d resolved, %d inserted\n",
+				pr.Step1SignalCount, pr.Step1Resolved, pr.Step1Inserted)
+			fmt.Fprintf(&b, "    tool_calls:    %d queried, %d transcripts read, %d inserted\n",
+				pr.Step2ToolCallCount, pr.Step2TranscriptsRead, pr.Step2Inserted)
+			if len(pr.UnresolvedNames) > 0 {
+				names := pr.UnresolvedNames
+				if len(names) > 5 {
+					names = names[:5]
+				}
+				fmt.Fprintf(&b, "    unresolved:    %s\n",
+					m.styles.render(m.styles.dim, strings.Join(names, ", ")))
+			}
+			b.WriteString("\n")
+		}
+
 		b.WriteString(m.styles.render(m.styles.dim, "  To populate skill analytics:"))
 		b.WriteString("\n")
 		b.WriteString(m.styles.render(m.styles.dim, "    1. Run sessions with your agent (creates checkpoints)"))

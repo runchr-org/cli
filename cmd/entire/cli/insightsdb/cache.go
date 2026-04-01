@@ -87,6 +87,25 @@ func (idb *InsightsDB) SetBranchTip(ctx context.Context, tip string) error {
 	return nil
 }
 
+// GetContentFingerprint returns a lightweight fingerprint of the insightsdb
+// data state, based on row counts of key tables. This changes when facets
+// are backfilled or new tool_calls are ingested, even if the branch tip
+// hasn't changed.
+func (idb *InsightsDB) GetContentFingerprint(ctx context.Context) (string, error) {
+	var fingerprint string
+	err := idb.db.QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM sessions) || ':' ||
+			(SELECT COUNT(*) FROM skill_signals) || ':' ||
+			(SELECT COUNT(*) FROM tool_calls WHERE tool_name = 'Skill') || ':' ||
+			(SELECT COUNT(*) FROM sessions WHERE has_facets = 1)
+	`).Scan(&fingerprint)
+	if err != nil {
+		return "", fmt.Errorf("get content fingerprint: %w", err)
+	}
+	return fingerprint, nil
+}
+
 // HasCheckpoint returns true if any session for the given checkpoint ID
 // is already present in the sessions table.
 func (idb *InsightsDB) HasCheckpoint(ctx context.Context, checkpointID string) (bool, error) {

@@ -97,6 +97,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newTrailCmd())
 	cmd.AddCommand(newInsightsCmd())
 	cmd.AddCommand(newImproveCmd())
+	cmd.AddCommand(newPermissionsCmd())
 	cmd.AddCommand(newMemoryLoopCmd())
 	cmd.AddCommand(newMCPServerCmd())
 	cmd.AddCommand(newSkillCmd())

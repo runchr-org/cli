@@ -7,9 +7,10 @@ import (
 
 // dataLoadedMsg is sent when the skill list and stats are loaded from the database.
 type dataLoadedMsg struct {
-	skills []skilldb.SkillRow
-	stats  map[string]*skilldb.SkillStatsResult // keyed by "name|source_agent"
-	err    error
+	skills         []skilldb.SkillRow
+	stats          map[string]*skilldb.SkillStatsResult // keyed by "name|source_agent"
+	populateResult *skilldb.PopulateResult              // pipeline metrics for diagnostics
+	err            error
 }
 
 // skillSelectedMsg is sent when the user picks a skill in the picker.
