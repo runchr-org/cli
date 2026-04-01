@@ -1,0 +1,46 @@
+name: Nightly Release
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # 06:00 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  create-nightly-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create nightly tag if new commits exist
+        run: |
+          LAST_NIGHTLY=$(git tag -l 'v*-nightly.*' --sort=-v:refname | head -1)
+          if [ -n "$LAST_NIGHTLY" ]; then
+            COMMITS=$(git rev-list "${LAST_NIGHTLY}..HEAD" --count)
+            if [ "$COMMITS" -eq 0 ]; then
+              echo "No new commits since ${LAST_NIGHTLY}, skipping."
+              exit 0
+            fi
+          fi
+
+          LATEST_STABLE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' 2>/dev/null)
+          if [ -z "$LATEST_STABLE" ]; then
+            echo "::error::No stable version tag found"
+            exit 1
+          fi
+
+          DATE=$(date -u +%Y%m%d)
+          TAG="${LATEST_STABLE}-nightly.${DATE}"
+
+          if git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists, skipping."
+            exit 0
+          fi
+
+          echo "Creating nightly tag: ${TAG}"
+          git tag "${TAG}"
+          git push origin "${TAG}"
