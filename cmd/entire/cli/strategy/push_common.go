@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -123,8 +121,7 @@ func tryPushSessionsCommon(ctx context.Context, remote, branchName string) error
 	defer cancel()
 
 	// Use --no-verify to prevent recursive hook calls
-	cmd := exec.CommandContext(ctx, "git", "push", "--no-verify", remote, branchName)
-	cmd.Stdin = nil // Disconnect stdin to prevent hanging in hook context
+	cmd := CheckpointGitCommand(ctx, remote, "push", "--no-verify", remote, branchName)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -159,8 +156,7 @@ func fetchAndMergeSessionsCommon(ctx context.Context, target, branchName string)
 	}
 
 	// Use git CLI for fetch (go-git's fetch can be tricky with auth)
-	fetchCmd := exec.CommandContext(ctx, "git", "fetch", target, refSpec)
-	fetchCmd.Stdin = nil
+	fetchCmd := CheckpointGitCommand(ctx, target, "fetch", target, refSpec)
 	if output, err := fetchCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("fetch failed: %s", output)
 	}
@@ -274,12 +270,6 @@ func startProgressDots(w io.Writer) func(suffix string) {
 // isURL returns true if the target looks like a URL rather than a git remote name.
 func isURL(target string) bool {
 	return strings.Contains(target, "://") || strings.Contains(target, "@")
-}
-
-// PushTrailsBranch pushes the entire/trails/v1 branch to the remote.
-// Trails are always pushed regardless of the push_sessions setting.
-func PushTrailsBranch(ctx context.Context, remote string) error {
-	return pushBranchIfNeeded(ctx, remote, paths.TrailsBranchName)
 }
 
 // createMergeCommitCommon creates a merge commit with multiple parents.

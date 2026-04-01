@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -122,6 +123,15 @@ Note: --session filters the list view; --commit and --checkpoint are mutually ex
 			// Check if Entire is disabled
 			if checkDisabledGuard(cmd.Context(), cmd.OutOrStdout()) {
 				return nil
+			}
+
+			// Only initialize logging when inside a git worktree to avoid
+			// creating .entire/logs/ in arbitrary directories.
+			if _, err := paths.WorktreeRoot(cmd.Context()); err == nil {
+				logging.SetLogLevelGetter(GetLogLevel)
+				if err := logging.Init(cmd.Context(), ""); err == nil {
+					defer logging.Close()
+				}
 			}
 
 			// Validate flag dependencies
@@ -1330,7 +1340,11 @@ func outputWithPager(w io.Writer, content string) {
 		if lineCount > height-2 {
 			pager := os.Getenv("PAGER")
 			if pager == "" {
-				pager = "less"
+				if runtime.GOOS == "windows" {
+					pager = "more"
+				} else {
+					pager = "less"
+				}
 			}
 
 			// Use context.Background() intentionally — pagers are interactive
