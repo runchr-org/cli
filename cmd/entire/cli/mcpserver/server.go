@@ -98,11 +98,6 @@ func checkModeGate(ctx context.Context) (*memoryloop.State, error) {
 	return state, nil
 }
 
-// Placeholder handlers — will be replaced by search_memories.go and save_memory.go
-func handleSearchMemories(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return mcp.NewToolResultText("not implemented"), nil
-}
-
 func handleSaveMemory(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return mcp.NewToolResultText("not implemented"), nil
 }
