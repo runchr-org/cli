@@ -17,9 +17,14 @@ func writeTestFile(t *testing.T, root, relPath, content string) {
 	require.NoError(t, os.WriteFile(full, []byte(content), 0o644))
 }
 
+func setIsolatedHome(t *testing.T, root string) {
+	t.Helper()
+	t.Setenv("HOME", root)
+}
+
 func TestDiscoverSkills_ClaudeSkills(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
+	setIsolatedHome(t, root)
 
 	writeTestFile(t, root, ".claude/skills/e2e/SKILL.md", "# E2E Skill\nRun e2e tests.")
 	writeTestFile(t, root, ".claude/skills/test-repo/SKILL.md", "# Test Repo\nManage test repos.")
@@ -40,8 +45,8 @@ func TestDiscoverSkills_ClaudeSkills(t *testing.T) {
 }
 
 func TestDiscoverSkills_ClaudeCommands(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
+	setIsolatedHome(t, root)
 
 	writeTestFile(t, root, ".claude/commands/dev.md", "Development command")
 	writeTestFile(t, root, ".claude/commands/reviewer.md", "Review command")
@@ -62,8 +67,8 @@ func TestDiscoverSkills_ClaudeCommands(t *testing.T) {
 }
 
 func TestDiscoverSkills_GeminiAgents(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
+	setIsolatedHome(t, root)
 
 	writeTestFile(t, root, ".gemini/agents/dev.md", "---\nname: developer\n---\nA developer agent.")
 
@@ -78,8 +83,8 @@ func TestDiscoverSkills_GeminiAgents(t *testing.T) {
 }
 
 func TestDiscoverSkills_GeminiCommands(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
+	setIsolatedHome(t, root)
 
 	writeTestFile(t, root, ".gemini/commands/test.md", "A test command without frontmatter.")
 
@@ -93,20 +98,37 @@ func TestDiscoverSkills_GeminiCommands(t *testing.T) {
 	assert.Equal(t, filepath.Join(".gemini", "commands", "test.md"), skills[0].Path)
 }
 
-func TestDiscoverSkills_AllPatterns(t *testing.T) {
-	t.Parallel()
+func TestDiscoverSkills_CodexSkills(t *testing.T) {
 	root := t.TempDir()
+	setIsolatedHome(t, root)
+
+	writeTestFile(t, root, ".codex/skills/review/SKILL.md", "---\nname: codex-review\n---\nReview carefully.")
+
+	skills, err := skilldb.DiscoverSkills(root)
+	require.NoError(t, err)
+	require.Len(t, skills, 1)
+
+	assert.Equal(t, "review", skills[0].Name)
+	assert.Equal(t, "codex", skills[0].SourceAgent)
+	assert.Equal(t, "skill", skills[0].Kind)
+	assert.Equal(t, filepath.Join(".codex", "skills", "review", "SKILL.md"), skills[0].Path)
+}
+
+func TestDiscoverSkills_AllPatterns(t *testing.T) {
+	root := t.TempDir()
+	setIsolatedHome(t, root)
 
 	writeTestFile(t, root, ".claude/skills/e2e/SKILL.md", "# E2E")
 	writeTestFile(t, root, ".claude/commands/dev.md", "Dev command")
+	writeTestFile(t, root, ".codex/skills/review/SKILL.md", "# Review")
 	writeTestFile(t, root, ".gemini/agents/coder.md", "---\nname: coder-agent\n---\nCodes things.")
 	writeTestFile(t, root, ".gemini/commands/build.md", "Build command")
 
 	skills, err := skilldb.DiscoverSkills(root)
 	require.NoError(t, err)
-	require.Len(t, skills, 4)
+	require.Len(t, skills, 5)
 
-	// Sorted by source_agent then name: claude-code first, then gemini-cli
+	// Sorted by source_agent then name: claude-code first, then codex, then gemini-cli
 	assert.Equal(t, "claude-code", skills[0].SourceAgent)
 	assert.Equal(t, "dev", skills[0].Name)
 	assert.Equal(t, "command", skills[0].Kind)
@@ -115,18 +137,22 @@ func TestDiscoverSkills_AllPatterns(t *testing.T) {
 	assert.Equal(t, "e2e", skills[1].Name)
 	assert.Equal(t, "skill", skills[1].Kind)
 
-	assert.Equal(t, "gemini-cli", skills[2].SourceAgent)
-	assert.Equal(t, "build", skills[2].Name)
-	assert.Equal(t, "command", skills[2].Kind)
+	assert.Equal(t, "codex", skills[2].SourceAgent)
+	assert.Equal(t, "review", skills[2].Name)
+	assert.Equal(t, "skill", skills[2].Kind)
 
 	assert.Equal(t, "gemini-cli", skills[3].SourceAgent)
-	assert.Equal(t, "coder-agent", skills[3].Name)
-	assert.Equal(t, "agent-def", skills[3].Kind)
+	assert.Equal(t, "build", skills[3].Name)
+	assert.Equal(t, "command", skills[3].Kind)
+
+	assert.Equal(t, "gemini-cli", skills[4].SourceAgent)
+	assert.Equal(t, "coder-agent", skills[4].Name)
+	assert.Equal(t, "agent-def", skills[4].Kind)
 }
 
 func TestDiscoverSkills_EmptyRepo(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
+	setIsolatedHome(t, root)
 
 	skills, err := skilldb.DiscoverSkills(root)
 	require.NoError(t, err)
@@ -134,8 +160,6 @@ func TestDiscoverSkills_EmptyRepo(t *testing.T) {
 }
 
 func TestDiscoverSkills_YAMLNameExtraction(t *testing.T) {
-	t.Parallel()
-
 	tests := []struct {
 		name     string
 		content  string
@@ -175,8 +199,8 @@ func TestDiscoverSkills_YAMLNameExtraction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
 			root := t.TempDir()
+			setIsolatedHome(t, root)
 
 			writeTestFile(t, root, ".gemini/agents/fallback.md", tt.content)
 

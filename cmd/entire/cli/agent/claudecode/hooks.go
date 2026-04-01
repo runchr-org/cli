@@ -57,7 +57,6 @@ func (c *ClaudeCodeAgent) InstallHooks(ctx context.Context, localDev bool, force
 	}
 
 	settingsPath := filepath.Join(repoRoot, ".claude", ClaudeSettingsFileName)
-
 	// Read existing settings if they exist
 	var rawSettings map[string]json.RawMessage
 
@@ -182,30 +181,8 @@ func (c *ClaudeCodeAgent) InstallHooks(ctx context.Context, localDev bool, force
 		permissionsChanged = true
 	}
 
-	// Add MCP server config for memory loop tools
-	mcpChanged := false
-	var rawMCPServers map[string]json.RawMessage
-	if mcpRaw, ok := rawSettings["mcpServers"]; ok {
-		if err := json.Unmarshal(mcpRaw, &rawMCPServers); err != nil {
-			rawMCPServers = make(map[string]json.RawMessage)
-		}
-	}
-	if rawMCPServers == nil {
-		rawMCPServers = make(map[string]json.RawMessage)
-	}
-	mcpConfig := buildMCPServerEntry(localDev)
-	mcpConfigJSON, err := json.Marshal(mcpConfig)
-	if err != nil {
-		return 0, fmt.Errorf("failed to marshal MCP server config: %w", err)
-	}
-	// Only write if not already present or different
-	if existing, ok := rawMCPServers["entire"]; !ok || string(existing) != string(mcpConfigJSON) {
-		rawMCPServers["entire"] = mcpConfigJSON
-		mcpChanged = true
-	}
-
-	if count == 0 && !permissionsChanged && !mcpChanged {
-		return 0, nil // All hooks, permissions, and MCP config already installed
+	if count == 0 && !permissionsChanged {
+		return 0, nil // All hooks and permissions already installed
 	}
 
 	// Marshal modified hook types back to rawHooks
@@ -230,15 +207,6 @@ func (c *ClaudeCodeAgent) InstallHooks(ctx context.Context, localDev bool, force
 	}
 	rawSettings["permissions"] = permJSON
 
-	// Marshal mcpServers and update raw settings
-	if len(rawMCPServers) > 0 {
-		mcpJSON, err := json.Marshal(rawMCPServers)
-		if err != nil {
-			return 0, fmt.Errorf("failed to marshal mcpServers: %w", err)
-		}
-		rawSettings["mcpServers"] = mcpJSON
-	}
-
 	// Write back to file
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o750); err != nil {
 		return 0, fmt.Errorf("failed to create .claude directory: %w", err)
@@ -254,24 +222,6 @@ func (c *ClaudeCodeAgent) InstallHooks(ctx context.Context, localDev bool, force
 	}
 
 	return count, nil
-}
-
-type mcpServerEntry struct {
-	Command string   `json:"command"`
-	Args    []string `json:"args"`
-}
-
-func buildMCPServerEntry(localDev bool) mcpServerEntry {
-	if localDev {
-		return mcpServerEntry{
-			Command: "go",
-			Args:    []string{"run", "${CLAUDE_PROJECT_DIR}/cmd/entire/main.go", "mcp-server"},
-		}
-	}
-	return mcpServerEntry{
-		Command: "entire",
-		Args:    []string{"mcp-server"},
-	}
 }
 
 // parseHookType parses a specific hook type from rawHooks into the target slice.
@@ -307,12 +257,16 @@ func (c *ClaudeCodeAgent) UninstallHooks(ctx context.Context) error {
 	settingsPath := filepath.Join(repoRoot, ".claude", ClaudeSettingsFileName)
 	data, err := os.ReadFile(settingsPath) //nolint:gosec // path is constructed from repo root + fixed path
 	if err != nil {
-		return nil //nolint:nilerr // No settings file means nothing to uninstall
+		data = nil
 	}
 
 	var rawSettings map[string]json.RawMessage
-	if err := json.Unmarshal(data, &rawSettings); err != nil {
-		return fmt.Errorf("failed to parse settings.json: %w", err)
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &rawSettings); err != nil {
+			return fmt.Errorf("failed to parse settings.json: %w", err)
+		}
+	} else {
+		rawSettings = make(map[string]json.RawMessage)
 	}
 
 	// rawHooks preserves unknown hook types (e.g., "Notification", "SubagentStop")
@@ -394,21 +348,6 @@ func (c *ClaudeCodeAgent) UninstallHooks(ctx context.Context) error {
 		}
 	}
 
-	// Remove MCP server entry
-	if mcpRaw, ok := rawSettings["mcpServers"]; ok {
-		var mcpServers map[string]json.RawMessage
-		if err := json.Unmarshal(mcpRaw, &mcpServers); err == nil {
-			delete(mcpServers, "entire")
-			if len(mcpServers) == 0 {
-				delete(rawSettings, "mcpServers")
-			} else {
-				if updated, err := json.Marshal(mcpServers); err == nil {
-					rawSettings["mcpServers"] = updated
-				}
-			}
-		}
-	}
-
 	// Marshal hooks back (preserving unknown hook types)
 	if len(rawHooks) > 0 {
 		hooksJSON, err := json.Marshal(rawHooks)
@@ -420,13 +359,14 @@ func (c *ClaudeCodeAgent) UninstallHooks(ctx context.Context) error {
 		delete(rawSettings, "hooks")
 	}
 
-	// Write back
-	output, err := jsonutil.MarshalIndentWithNewline(rawSettings, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal settings: %w", err)
-	}
-	if err := os.WriteFile(settingsPath, output, 0o600); err != nil {
-		return fmt.Errorf("failed to write settings.json: %w", err)
+	if len(data) > 0 {
+		output, err := jsonutil.MarshalIndentWithNewline(rawSettings, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal settings: %w", err)
+		}
+		if err := os.WriteFile(settingsPath, output, 0o600); err != nil {
+			return fmt.Errorf("failed to write settings.json: %w", err)
+		}
 	}
 	return nil
 }

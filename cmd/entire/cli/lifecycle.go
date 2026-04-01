@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -262,7 +263,7 @@ func handleLifecycleTurnStart(ctx context.Context, ag agent.Agent, event *agent.
 }
 
 func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Event) error {
-	if string(ag.Name()) != memoryLoopClaudeAgentName || event.Prompt == "" {
+	if event.Prompt == "" {
 		return nil
 	}
 
@@ -279,11 +280,8 @@ func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Eve
 	if settingsErr != nil {
 		settingsValue = nil
 	}
-	if effectiveMemoryLoopMode(state, settingsValue) != memoryloop.ModeAuto {
-		return nil
-	}
-
-	if state.Snapshot == nil || !state.Snapshot.InjectionEnabled {
+	mode := effectiveMemoryLoopMode(state, settingsValue)
+	if state.Snapshot == nil {
 		return nil
 	}
 
@@ -291,6 +289,23 @@ func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Eve
 	selectOpts := buildMemoryLoopSelectOpts(ctx, state.Snapshot)
 	matches := memoryloop.SelectRelevant(*state.Snapshot, event.Prompt, now, selectOpts...)
 	if len(matches) == 0 {
+		return nil
+	}
+
+	switch mode {
+	case memoryloop.ModeManual:
+		if !supportsManualMemoryPrompt(ag.Name()) {
+			return nil
+		}
+		if err := writer.WriteHookResponse(buildManualMemoryPrompt(matches)); err != nil {
+			return fmt.Errorf("failed to write manual memory prompt: %w", err)
+		}
+		return nil
+	case memoryloop.ModeAuto:
+		if string(ag.Name()) != memoryLoopClaudeAgentName || !state.Snapshot.InjectionEnabled {
+			return nil
+		}
+	default:
 		return nil
 	}
 
@@ -325,6 +340,25 @@ func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Eve
 	}
 
 	return nil
+}
+
+func supportsManualMemoryPrompt(agentName types.AgentName) bool {
+	switch agentName {
+	case agent.AgentNameClaudeCode, agent.AgentNameGemini, agent.AgentNameCodex:
+		return true
+	default:
+		return false
+	}
+}
+
+func buildManualMemoryPrompt(matches []memoryloop.Match) string {
+	block := memoryloop.FormatInjectionBlock(matches)
+	if block == "" {
+		return ""
+	}
+	return block + "\n\n" +
+		"A relevant memory matches this prompt. Before doing substantive work, ask the user " +
+		"whether you should use this guidance for the task, and wait for their answer before continuing."
 }
 
 func buildMemoryLoopSelectOpts(ctx context.Context, snapshot *memoryloop.Snapshot) []memoryloop.SelectOption {

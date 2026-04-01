@@ -113,6 +113,12 @@ func discoverSkillsIn(baseDir, relBase, scope string) ([]DiscoveredSkill, error)
 			nameFunc:    func(match string) string { return strings.TrimSuffix(filepath.Base(match), ".md") },
 		},
 		{
+			pattern:     filepath.Join(baseDir, ".codex", "skills", "*", "SKILL.md"),
+			sourceAgent: "codex",
+			kind:        "skill",
+			nameFunc:    func(match string) string { return filepath.Base(filepath.Dir(match)) },
+		},
+		{
 			pattern:     filepath.Join(baseDir, ".gemini", "agents", "*.md"),
 			sourceAgent: "gemini-cli",
 			kind:        "agent-def",

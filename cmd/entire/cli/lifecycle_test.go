@@ -773,6 +773,114 @@ func TestHandleLifecycleTurnStart_InjectsMemoryForClaude(t *testing.T) {
 	require.Contains(t, ag.lastMessage, "Run lint before finishing")
 }
 
+func writeMemoryLoopStateForTurnStartTest(t *testing.T, mode memoryloop.Mode) {
+	t.Helper()
+
+	require.NoError(t, memoryloop.SaveState(context.Background(), &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:          1,
+			GeneratedAt:      time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+			SourceWindow:     20,
+			Mode:             mode,
+			ActivationPolicy: memoryloop.ActivationPolicyReview,
+			MaxInjected:      3,
+			Records: []memoryloop.MemoryRecord{
+				{
+					ID:         "lint",
+					Kind:       memoryloop.KindRepoRule,
+					Title:      "Run lint before finishing",
+					Body:       "Run golangci-lint before claiming completion.",
+					Why:        "This repo frequently fails on lint after edits.",
+					Confidence: "high",
+					Strength:   5,
+					Status:     memoryloop.StatusActive,
+					ScopeKind:  memoryloop.ScopeKindMe,
+					CreatedAt:  time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+					UpdatedAt:  time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+				},
+			},
+		},
+	}))
+}
+
+func TestHandleLifecycleTurnStart_ManualModePromptsForSupportedAgents(t *testing.T) {
+	testCases := []struct {
+		name      string
+		agentName types.AgentName
+		agentType types.AgentType
+	}{
+		{
+			name:      "claude",
+			agentName: agent.AgentNameClaudeCode,
+			agentType: agent.AgentTypeClaudeCode,
+		},
+		{
+			name:      "gemini",
+			agentName: agent.AgentNameGemini,
+			agentType: agent.AgentTypeGemini,
+		},
+		{
+			name:      "codex",
+			agentName: agent.AgentNameCodex,
+			agentType: agent.AgentTypeCodex,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			testutil.InitRepo(t, tmpDir)
+			testutil.WriteFile(t, tmpDir, "init.txt", "init")
+			testutil.GitAdd(t, tmpDir, "init.txt")
+			testutil.GitCommit(t, tmpDir, "init")
+			t.Chdir(tmpDir)
+			paths.ClearWorktreeRootCache()
+
+			writeMemoryLoopStateForTurnStartTest(t, memoryloop.ModeManual)
+
+			ag := newMockHookResponseAgent()
+			ag.name = tc.agentName
+			ag.agentType = tc.agentType
+
+			event := &agent.Event{
+				Type:      agent.TurnStart,
+				SessionID: "test-manual-memory-prompt",
+				Prompt:    "fix the lint failure in capabilities.go",
+				Timestamp: time.Now(),
+			}
+
+			require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, event))
+			require.Contains(t, ag.lastMessage, "Memory For This Repo")
+			require.Contains(t, ag.lastMessage, "Run lint before finishing")
+			require.Contains(t, ag.lastMessage, "ask the user")
+			require.Contains(t, ag.lastMessage, "before continuing")
+		})
+	}
+}
+
+func TestHandleLifecycleTurnStart_ManualModeSkipsUnsupportedAgents(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	writeMemoryLoopStateForTurnStartTest(t, memoryloop.ModeManual)
+
+	ag := newMockHookResponseAgent()
+	event := &agent.Event{
+		Type:      agent.TurnStart,
+		SessionID: "test-manual-memory-unsupported",
+		Prompt:    "fix the lint failure in capabilities.go",
+		Timestamp: time.Now(),
+	}
+
+	require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, event))
+	require.Empty(t, ag.lastMessage)
+}
+
 func TestHandleLifecycleTurnStart_RecordsMemoryActivityForInjectedMatches(t *testing.T) {
 	// Cannot use t.Parallel() because we use t.Chdir()
 	tmpDir := t.TempDir()

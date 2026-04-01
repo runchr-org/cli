@@ -657,133 +657,30 @@ func TestUninstallHooks_PreservesUnknownHookTypes(t *testing.T) {
 	}
 }
 
-// --- MCP Server tests ---
+func TestInstallHooks_DoesNotWriteProjectMCPConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
 
-func readMCPServers(t *testing.T, tempDir string) map[string]json.RawMessage {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(tempDir, ".claude", "settings.json"))
+	ag := &ClaudeCodeAgent{}
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(tempDir, ".mcp.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected .mcp.json to be absent, stat err = %v", err)
+	}
+
+	settingsPath := filepath.Join(tempDir, ".claude", "settings.json")
+	data, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read settings: %v", err)
 	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
+	var rawSettings map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawSettings); err != nil {
 		t.Fatalf("parse settings: %v", err)
 	}
-	mcpRaw, ok := raw["mcpServers"]
-	if !ok {
-		return nil
-	}
-	var mcpServers map[string]json.RawMessage
-	if err := json.Unmarshal(mcpRaw, &mcpServers); err != nil {
-		t.Fatalf("parse mcpServers: %v", err)
-	}
-	return mcpServers
-}
-
-func TestInstallHooks_WritesMCPServerEntry(t *testing.T) {
-	tempDir := t.TempDir()
-	t.Chdir(tempDir)
-
-	ag := &ClaudeCodeAgent{}
-	_, err := ag.InstallHooks(context.Background(), false, false)
-	if err != nil {
-		t.Fatalf("InstallHooks() error = %v", err)
-	}
-
-	mcpServers := readMCPServers(t, tempDir)
-	if mcpServers == nil {
-		t.Fatal("mcpServers not found in settings.json")
-	}
-
-	entireRaw, ok := mcpServers["entire"]
-	if !ok {
-		t.Fatal("mcpServers.entire not found")
-	}
-
-	var config mcpServerEntry
-	if err := json.Unmarshal(entireRaw, &config); err != nil {
-		t.Fatalf("parse entire config: %v", err)
-	}
-	if config.Command != "entire" {
-		t.Errorf("command = %s, want entire", config.Command)
-	}
-	if len(config.Args) != 1 || config.Args[0] != "mcp-server" {
-		t.Errorf("args = %v, want [mcp-server]", config.Args)
-	}
-}
-
-func TestInstallHooks_MCPServerLocalDev(t *testing.T) {
-	tempDir := t.TempDir()
-	t.Chdir(tempDir)
-	t.Setenv("CLAUDE_PROJECT_DIR", "/dev/cli")
-
-	ag := &ClaudeCodeAgent{}
-	_, err := ag.InstallHooks(context.Background(), true, false)
-	if err != nil {
-		t.Fatalf("InstallHooks() error = %v", err)
-	}
-
-	mcpServers := readMCPServers(t, tempDir)
-	entireRaw := mcpServers["entire"]
-
-	var config mcpServerEntry
-	if err := json.Unmarshal(entireRaw, &config); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if config.Command != "go" {
-		t.Errorf("command = %s, want go", config.Command)
-	}
-	if len(config.Args) < 3 || config.Args[len(config.Args)-1] != "mcp-server" {
-		t.Errorf("args = %v, want [..., mcp-server]", config.Args)
-	}
-}
-
-func TestUninstallHooks_RemovesMCPServerEntry(t *testing.T) {
-	tempDir := t.TempDir()
-	t.Chdir(tempDir)
-
-	ag := &ClaudeCodeAgent{}
-	_, err := ag.InstallHooks(context.Background(), false, false)
-	if err != nil {
-		t.Fatalf("InstallHooks() error = %v", err)
-	}
-
-	if err := ag.UninstallHooks(context.Background()); err != nil {
-		t.Fatalf("UninstallHooks() error = %v", err)
-	}
-
-	mcpServers := readMCPServers(t, tempDir)
-	if mcpServers != nil {
-		if _, ok := mcpServers["entire"]; ok {
-			t.Error("mcpServers.entire should be removed after uninstall")
-		}
-	}
-}
-
-func TestInstallHooks_PreservesExistingMCPServers(t *testing.T) {
-	tempDir := t.TempDir()
-	t.Chdir(tempDir)
-
-	writeSettingsFile(t, tempDir, `{
-		"mcpServers": {
-			"other-tool": {
-				"command": "other-mcp",
-				"args": ["serve"]
-			}
-		}
-	}`)
-
-	ag := &ClaudeCodeAgent{}
-	_, err := ag.InstallHooks(context.Background(), false, false)
-	if err != nil {
-		t.Fatalf("InstallHooks() error = %v", err)
-	}
-
-	mcpServers := readMCPServers(t, tempDir)
-	if _, ok := mcpServers["entire"]; !ok {
-		t.Error("mcpServers.entire not found")
-	}
-	if _, ok := mcpServers["other-tool"]; !ok {
-		t.Error("mcpServers.other-tool was not preserved")
+	if _, ok := rawSettings["mcpServers"]; ok {
+		t.Fatal("mcpServers should not be written to .claude/settings.json")
 	}
 }

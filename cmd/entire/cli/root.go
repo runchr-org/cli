@@ -100,7 +100,6 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newImproveCmd())
 	cmd.AddCommand(newPermissionsCmd())
 	cmd.AddCommand(newMemoryLoopCmd())
-	cmd.AddCommand(newMCPServerCmd())
 	cmd.AddCommand(newSkillCmd())
 	cmd.AddCommand(newSendAnalyticsCmd())
 	cmd.AddCommand(newAttachCmd())
