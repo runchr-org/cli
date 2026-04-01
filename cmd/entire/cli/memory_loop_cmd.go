@@ -285,7 +285,7 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 		renderMemoryLoopRefreshProgress(w, "Backfilling summaries...")
 		backfillSummaries(ctx, w, idb, last)
 		renderMemoryLoopRefreshProgress(w, "Backfilling facets...")
-		backfillFacets(ctx, idb, last)
+		backfillFacets(ctx, w, idb, last)
 	}
 
 	scope, err := resolveMemoryLoopScope(ctx, scopeArg, branchArg)
@@ -356,6 +356,11 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 		lastIdx := len(refreshHistory) - 1
 		refreshHistory[lastIdx].DemotedCount = pruneResult.DemotedCount
 		refreshHistory[lastIdx].PrunedCount = pruneResult.PrunedCount
+		if usage != nil {
+			refreshHistory[lastIdx].InputTokens = usage.InputTokens
+			refreshHistory[lastIdx].OutputTokens = usage.OutputTokens
+			refreshHistory[lastIdx].TotalCostUSD = usage.TotalCostUSD
+		}
 	}
 
 	state.Store = &memoryloop.Store{

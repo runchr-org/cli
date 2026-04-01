@@ -14,6 +14,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/improve"
 	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
 	"github.com/entireio/cli/cmd/entire/cli/llmcli"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
@@ -76,7 +77,7 @@ func runImprove(ctx context.Context, w io.Writer, last int, dryRun bool, outputJ
 	// Generate summaries for recent sessions that lack them.
 	if !dryRun {
 		backfillSummaries(ctx, w, idb, last)
-		backfillFacets(ctx, idb, last)
+		backfillFacets(ctx, w, idb, last)
 	}
 
 	// Fetch the last N sessions for summary stats.
@@ -452,37 +453,80 @@ func facetSummary(analysis improve.PatternAnalysis) improve.FacetSummary {
 	}
 }
 
-func backfillFacets(ctx context.Context, idb *insightsdb.InsightsDB, lastN int) {
+func backfillFacets(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB, lastN int) {
 	rows, err := idb.QueryLastNSessions(ctx, lastN)
 	if err != nil {
+		logging.Warn(ctx, "backfillFacets: query failed", "error", err)
 		return
 	}
 
+	// Partition sessions into cached vs needing facets.
+	var needsFacets []insightsdb.SessionRow
+	cached := 0
+	for _, row := range rows {
+		if row.HasFacets {
+			cached++
+		} else {
+			needsFacets = append(needsFacets, row)
+		}
+	}
+
+	s := termstyle.New(w)
+	if len(needsFacets) == 0 {
+		fmt.Fprintf(w, "%s %d of %d sessions already have facets\n",
+			s.Render(s.Dim, "i"), cached, len(rows))
+		return
+	}
+
+	fmt.Fprintf(w, "%s Extracting facets for %d sessions (%d already cached)...\n",
+		s.Render(s.Dim, "i"), len(needsFacets), cached)
+
 	repo, err := openRepository(ctx)
 	if err != nil {
+		logging.Warn(ctx, "backfillFacets: open repository failed", "error", err)
 		return
 	}
 
 	store := checkpoint.NewGitStore(repo)
 	extractor := &facets.Extractor{Runner: &llmcli.Runner{}}
 
-	for _, row := range rows {
-		if row.HasFacets {
-			continue
-		}
+	extracted := 0
+	skipped := 0
 
+	for i, row := range needsFacets {
 		cpID, parseErr := checkpointid.NewCheckpointID(row.CheckpointID)
 		if parseErr != nil {
+			logging.Debug(ctx, "backfillFacets: invalid checkpoint ID",
+				"checkpoint_id", row.CheckpointID, "error", parseErr)
+			skipped++
 			continue
 		}
 
 		content, readErr := store.ReadSessionContent(ctx, cpID, row.SessionIndex)
-		if readErr != nil || len(content.Transcript) == 0 {
+		if readErr != nil {
+			logging.Debug(ctx, "backfillFacets: read session content failed",
+				"checkpoint_id", row.CheckpointID, "session_index", row.SessionIndex, "error", readErr)
+			skipped++
+			continue
+		}
+		if len(content.Transcript) == 0 {
+			logging.Debug(ctx, "backfillFacets: empty transcript",
+				"checkpoint_id", row.CheckpointID, "session_index", row.SessionIndex)
+			skipped++
 			continue
 		}
 
 		condensed, buildErr := summarize.BuildCondensedTranscriptFromBytes(content.Transcript, content.Metadata.Agent)
-		if buildErr != nil || len(condensed) == 0 {
+		if buildErr != nil {
+			logging.Debug(ctx, "backfillFacets: condense transcript failed",
+				"checkpoint_id", row.CheckpointID, "error", buildErr)
+			skipped++
+			continue
+		}
+		if len(condensed) == 0 {
+			logging.Debug(ctx, "backfillFacets: condensed transcript empty",
+				"checkpoint_id", row.CheckpointID)
+			skipped++
 			continue
 		}
 
@@ -491,15 +535,39 @@ func backfillFacets(ctx context.Context, idb *insightsdb.InsightsDB, lastN int) 
 			FilesTouched: row.FilesTouched,
 		})
 
-		extracted, _, extractErr := extractor.Extract(ctx, formatted)
-		if extractErr != nil || extracted == nil {
+		facetResult, _, extractErr := extractor.Extract(ctx, formatted)
+		if extractErr != nil {
+			logging.Debug(ctx, "backfillFacets: extract facets failed",
+				"checkpoint_id", row.CheckpointID, "error", extractErr)
+			skipped++
+			continue
+		}
+		if facetResult == nil {
+			logging.Debug(ctx, "backfillFacets: nil facets returned",
+				"checkpoint_id", row.CheckpointID)
+			skipped++
 			continue
 		}
 
-		row.Facets = *extracted
+		row.Facets = *facetResult
 		row.HasFacets = true
 		if updateErr := idb.UpdateSessionFacets(ctx, row); updateErr != nil {
+			logging.Debug(ctx, "backfillFacets: update session failed",
+				"checkpoint_id", row.CheckpointID, "error", updateErr)
+			skipped++
 			continue
 		}
+
+		extracted++
+		fmt.Fprintf(w, "  %s %s (%d/%d)\n",
+			s.Render(s.Green, "✓"), row.CheckpointID[:12], i+1, len(needsFacets))
+	}
+
+	if extracted > 0 || skipped > 0 {
+		parts := []string{fmt.Sprintf("Extracted %d facets", extracted)}
+		if skipped > 0 {
+			parts = append(parts, fmt.Sprintf("skipped %d (set ENTIRE_LOG_LEVEL=DEBUG for details)", skipped))
+		}
+		fmt.Fprintf(w, "  %s\n\n", strings.Join(parts, ", "))
 	}
 }

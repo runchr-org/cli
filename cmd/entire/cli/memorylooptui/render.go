@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
+	"github.com/entireio/cli/cmd/entire/cli/termstyle"
 )
 
 var tabNames = [4]string{"Memories", "Injection", "History", "Settings"}
@@ -134,4 +135,9 @@ func timeAgo(t time.Time) string {
 // lipglossWidth returns the visible width of a string, correctly handling ANSI sequences.
 func lipglossWidth(s string) int {
 	return lipgloss.Width(s)
+}
+
+// formatTokenCount formats a token count with K/M suffixes for compact display.
+func formatTokenCount(n int) string {
+	return termstyle.FormatTokenCount(n)
 }

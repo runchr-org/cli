@@ -24,11 +24,13 @@ type historyModel struct {
 func newHistoryModel(s tuiStyles) historyModel {
 	columns := []table.Column{
 		{Title: "Time", Width: 12},
-		{Title: "Scope", Width: 16},
+		{Title: "Scope", Width: 14},
 		{Title: "Generated", Width: 9},
 		{Title: "Activated", Width: 9},
 		{Title: "Candidate", Width: 9},
 		{Title: "Window", Width: 7},
+		{Title: "Tokens", Width: 8},
+		{Title: "Cost", Width: 9},
 	}
 	t := table.New(
 		table.WithColumns(columns),
@@ -73,7 +75,15 @@ func (m *historyModel) rebuildTable() {
 	for i, h := range history {
 		scope := h.Scope
 		if h.ScopeValue != "" {
-			scope += ":" + truncate(h.ScopeValue, 12)
+			scope += ":" + truncate(h.ScopeValue, 10)
+		}
+		tokens := "-"
+		if h.InputTokens > 0 || h.OutputTokens > 0 {
+			tokens = strconv.Itoa(h.InputTokens + h.OutputTokens)
+		}
+		cost := "-"
+		if h.TotalCostUSD > 0 {
+			cost = fmt.Sprintf("$%.4f", h.TotalCostUSD)
 		}
 		rows[i] = table.Row{
 			timeAgo(h.At),
@@ -82,6 +92,8 @@ func (m *historyModel) rebuildTable() {
 			strconv.Itoa(h.ActivatedCount),
 			strconv.Itoa(h.CandidateCount),
 			strconv.Itoa(h.SourceWindow),
+			tokens,
+			cost,
 		}
 	}
 	m.table.SetRows(rows)
@@ -118,6 +130,25 @@ func (m historyModel) view() string {
 	if m.state == nil || m.state.Store == nil || len(m.state.Store.RefreshHistory) == 0 {
 		b.WriteString("  No refresh history yet. Press R to run your first refresh.\n")
 		return b.String()
+	}
+
+	// Cost summary line if any refresh has cost data.
+	var totalCost float64
+	var totalTokens int
+	var costEntries int
+	for _, h := range m.state.Store.RefreshHistory {
+		if h.TotalCostUSD > 0 || h.InputTokens > 0 || h.OutputTokens > 0 {
+			totalCost += h.TotalCostUSD
+			totalTokens += h.InputTokens + h.OutputTokens
+			costEntries++
+		}
+	}
+	if costEntries > 0 {
+		b.WriteString("  ")
+		b.WriteString(m.styles.render(m.styles.dim,
+			fmt.Sprintf("Total: $%.4f across %d refreshes (%s tokens)",
+				totalCost, costEntries, formatTokenCount(totalTokens))))
+		b.WriteString("\n\n")
 	}
 
 	b.WriteString(m.table.View())

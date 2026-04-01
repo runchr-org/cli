@@ -188,6 +188,9 @@ type RefreshHistory struct {
 	DedupedCount         int       `json:"deduped_count,omitempty"`
 	DemotedCount         int       `json:"demoted_count,omitempty"`
 	PrunedCount          int       `json:"pruned_count,omitempty"`
+	InputTokens          int       `json:"input_tokens,omitempty"`
+	OutputTokens         int       `json:"output_tokens,omitempty"`
+	TotalCostUSD         float64   `json:"total_cost_usd,omitempty"`
 }
 
 type Store struct {

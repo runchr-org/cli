@@ -14,6 +14,7 @@ import (
 	checkpointid "github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/insights"
 	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/summarize"
@@ -76,7 +77,7 @@ func runInsights(ctx context.Context, w io.Writer, last int, agentFilter string,
 
 	// Generate summaries for recent sessions that lack them.
 	backfillSummaries(ctx, w, idb, last)
-	backfillFacets(ctx, idb, last)
+	backfillFacets(ctx, w, idb, last)
 
 	var rows []insightsdb.SessionRow
 	if agentFilter != "" {
@@ -185,50 +186,80 @@ func refreshCacheIfStale(ctx context.Context, idb *insightsdb.InsightsDB) error 
 
 // backfillSummaries generates summaries for the last N sessions that lack them.
 // It reads transcripts from the checkpoint store, calls Claude to summarize,
-// and updates the cache. Errors on individual sessions are skipped.
+// and updates the cache. Errors on individual sessions are logged and skipped.
 func backfillSummaries(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB, lastN int) {
 	rows, err := idb.QueryLastNSessions(ctx, lastN)
 	if err != nil {
+		logging.Warn(ctx, "backfillSummaries: query failed", "error", err)
 		return
 	}
 
-	// Filter to sessions without summaries.
+	// Partition sessions into cached vs needing summaries.
 	var unsummarized []insightsdb.SessionRow
+	cached := 0
 	for _, r := range rows {
-		if !r.HasSummary {
+		if r.HasSummary {
+			cached++
+		} else {
 			unsummarized = append(unsummarized, r)
 		}
 	}
+
+	s := termstyle.New(w)
 	if len(unsummarized) == 0 {
+		fmt.Fprintf(w, "%s %d of %d sessions already have summaries\n",
+			s.Render(s.Dim, "i"), cached, len(rows))
 		return
 	}
 
+	fmt.Fprintf(w, "%s Generating summaries for %d sessions (%d already cached)...\n",
+		s.Render(s.Dim, "i"), len(unsummarized), cached)
+
 	repo, err := openRepository(ctx)
 	if err != nil {
+		logging.Warn(ctx, "backfillSummaries: open repository failed", "error", err)
 		return
 	}
 	store := checkpoint.NewGitStore(repo)
 	gen := &summarize.ClaudeGenerator{}
 
-	s := termstyle.New(w)
-	fmt.Fprintf(w, "%s Generating summaries for %d sessions...\n",
-		s.Render(s.Dim, "i"), len(unsummarized))
-
 	generated := 0
+	skipped := 0
 
-	for _, row := range unsummarized {
+	for i, row := range unsummarized {
 		cpID, parseErr := checkpointid.NewCheckpointID(row.CheckpointID)
 		if parseErr != nil {
+			logging.Debug(ctx, "backfillSummaries: invalid checkpoint ID",
+				"checkpoint_id", row.CheckpointID, "error", parseErr)
+			skipped++
 			continue
 		}
 
 		content, readErr := store.ReadSessionContent(ctx, cpID, row.SessionIndex)
-		if readErr != nil || len(content.Transcript) == 0 {
+		if readErr != nil {
+			logging.Debug(ctx, "backfillSummaries: read session content failed",
+				"checkpoint_id", row.CheckpointID, "session_index", row.SessionIndex, "error", readErr)
+			skipped++
+			continue
+		}
+		if len(content.Transcript) == 0 {
+			logging.Debug(ctx, "backfillSummaries: empty transcript",
+				"checkpoint_id", row.CheckpointID, "session_index", row.SessionIndex)
+			skipped++
 			continue
 		}
 
 		condensed, buildErr := summarize.BuildCondensedTranscriptFromBytes(content.Transcript, content.Metadata.Agent)
-		if buildErr != nil || len(condensed) == 0 {
+		if buildErr != nil {
+			logging.Debug(ctx, "backfillSummaries: condense transcript failed",
+				"checkpoint_id", row.CheckpointID, "agent", content.Metadata.Agent, "error", buildErr)
+			skipped++
+			continue
+		}
+		if len(condensed) == 0 {
+			logging.Debug(ctx, "backfillSummaries: condensed transcript empty",
+				"checkpoint_id", row.CheckpointID, "agent", content.Metadata.Agent)
+			skipped++
 			continue
 		}
 
@@ -237,7 +268,16 @@ func backfillSummaries(ctx context.Context, w io.Writer, idb *insightsdb.Insight
 			FilesTouched: row.FilesTouched,
 		}
 		summary, genErr := gen.Generate(ctx, input)
-		if genErr != nil || summary == nil {
+		if genErr != nil {
+			logging.Debug(ctx, "backfillSummaries: generate summary failed",
+				"checkpoint_id", row.CheckpointID, "error", genErr)
+			skipped++
+			continue
+		}
+		if summary == nil {
+			logging.Debug(ctx, "backfillSummaries: nil summary returned",
+				"checkpoint_id", row.CheckpointID)
+			skipped++
 			continue
 		}
 
@@ -246,16 +286,23 @@ func backfillSummaries(ctx context.Context, w io.Writer, idb *insightsdb.Insight
 		updated := metadataToSessionRow(row.CheckpointID, row.SessionIndex, &content.Metadata)
 
 		if updateErr := idb.UpdateSessionSummary(ctx, updated); updateErr != nil {
+			logging.Debug(ctx, "backfillSummaries: update session failed",
+				"checkpoint_id", row.CheckpointID, "error", updateErr)
+			skipped++
 			continue
 		}
 
 		generated++
 		fmt.Fprintf(w, "  %s %s (%d/%d)\n",
-			s.Render(s.Green, "✓"), row.CheckpointID[:12], generated, len(unsummarized))
+			s.Render(s.Green, "✓"), row.CheckpointID[:12], i+1, len(unsummarized))
 	}
 
-	if generated > 0 {
-		fmt.Fprintf(w, "  Generated %d summaries\n\n", generated)
+	if generated > 0 || skipped > 0 {
+		parts := []string{fmt.Sprintf("Generated %d summaries", generated)}
+		if skipped > 0 {
+			parts = append(parts, fmt.Sprintf("skipped %d (set ENTIRE_LOG_LEVEL=DEBUG for details)", skipped))
+		}
+		fmt.Fprintf(w, "  %s\n\n", strings.Join(parts, ", "))
 	}
 }
 

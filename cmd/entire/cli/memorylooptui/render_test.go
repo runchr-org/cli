@@ -60,6 +60,20 @@ func sampleStateForStyleTest() *memoryloop.State {
 			ActivationPolicy: memoryloop.ActivationPolicyReview,
 			InjectionEnabled: true,
 			MaxInjected:      3,
+			RefreshHistory: []memoryloop.RefreshHistory{
+				{
+					At:             now.Add(-24 * time.Hour),
+					Scope:          "repo",
+					ScopeValue:     "entireio/cli",
+					SourceWindow:   20,
+					GeneratedCount: 5,
+					ActivatedCount: 2,
+					CandidateCount: 3,
+					InputTokens:    4200,
+					OutputTokens:   800,
+					TotalCostUSD:   0.0156,
+				},
+			},
 			Records: []memoryloop.MemoryRecord{
 				{
 					ID:             "memory-1",
