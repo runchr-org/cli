@@ -168,5 +168,70 @@ func ExtractJSONFromMarkdown(s string) string {
 		return strings.TrimSpace(s)
 	}
 
+	if extracted, ok := extractFirstJSONValue(s); ok {
+		return extracted
+	}
+
 	return s
+}
+
+func extractFirstJSONValue(s string) (string, bool) {
+	for start := range len(s) {
+		switch s[start] {
+		case '{', '[':
+			if candidate, ok := extractBalancedJSON(s[start:]); ok {
+				return candidate, true
+			}
+		}
+	}
+	return "", false
+}
+
+func extractBalancedJSON(s string) (string, bool) {
+	if s == "" {
+		return "", false
+	}
+
+	depth := 0
+	inString := false
+	escaped := false
+
+	for i := range len(s) {
+		ch := s[i]
+
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch ch {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+			if depth == 0 {
+				candidate := strings.TrimSpace(s[:i+1])
+				if json.Valid([]byte(candidate)) {
+					return candidate, true
+				}
+				return "", false
+			}
+			if depth < 0 {
+				return "", false
+			}
+		}
+	}
+
+	return "", false
 }

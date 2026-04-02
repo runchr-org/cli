@@ -93,6 +93,16 @@ func TestExtractJSONFromMarkdown(t *testing.T) {
 			input:    "```json\n{\"key\": \"value\"}",
 			expected: `{"key": "value"}`,
 		},
+		{
+			name:     "leading prose before object",
+			input:    "Here is the JSON you requested:\n\n{\"key\": \"value\"}",
+			expected: `{"key": "value"}`,
+		},
+		{
+			name:     "trailing prose after object",
+			input:    "{\"key\": \"value\"}\n\nThis captures the result.",
+			expected: `{"key": "value"}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -170,6 +180,28 @@ func TestRunner_Execute_MarkdownResult(t *testing.T) {
 	// result field contains JSON wrapped in markdown code block
 	innerJSON := "```json\\n{\\\"key\\\":\\\"value\\\"}\\n```"
 	response := `{"result":"` + innerJSON + `"}`
+
+	runner := &llmcli.Runner{
+		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+response+"'")
+		},
+	}
+
+	result, _, err := runner.Execute(context.Background(), "test prompt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result != `{"key":"value"}` {
+		t.Errorf("expected extracted JSON, got %q", result)
+	}
+}
+
+func TestRunner_Execute_ProseWrappedJSONResult(t *testing.T) {
+	t.Parallel()
+
+	inner := "Here is the JSON you requested:\\n\\n{\\\"key\\\":\\\"value\\\"}\\n\\nThanks."
+	response := `{"result":"` + inner + `"}`
 
 	runner := &llmcli.Runner{
 		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {

@@ -1,6 +1,8 @@
 package memorylooptui
 
 import (
+	"context"
+
 	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
 )
 
@@ -10,16 +12,48 @@ type stateLoadedMsg struct {
 	err   error
 }
 
-// lifecycleActionMsg requests a lifecycle transition on a memory record.
-type lifecycleActionMsg struct {
-	id     string
-	action memoryloop.LifecycleAction
-}
-
 // addMemoryMsg requests adding a new manual memory record.
 type addMemoryMsg struct {
 	input memoryloop.ManualRecordInput
 }
+
+type WizardIntent string
+
+const (
+	WizardIntentAdopt    WizardIntent = "adopt"
+	WizardIntentApply    WizardIntent = "apply"
+	WizardIntentSuppress WizardIntent = "suppress"
+	WizardIntentArchive  WizardIntent = "archive"
+)
+
+type WizardRequest struct {
+	Intent   WizardIntent
+	RecordID string
+	Scope    memoryloop.ScopeKind
+	Location memoryloop.FileLocation
+	Targets  []string
+}
+
+type WizardActionHandler func(ctx context.Context, request WizardRequest) (string, error)
+
+type RunOptions struct {
+	WizardActionHandler WizardActionHandler
+}
+
+// wizardOpenMsg opens the memory action wizard for a selected memory.
+type wizardOpenMsg struct {
+	record memoryloop.MemoryRecord
+}
+
+// wizardResultMsg is emitted when the wizard confirms an action.
+type wizardResultMsg struct {
+	success bool
+	flash   string
+	request WizardRequest
+}
+
+// wizardCloseMsg closes the wizard without submitting a request.
+type wizardCloseMsg struct{}
 
 // pruneMsg requests pruning stale/ineffective records.
 type pruneMsg struct{}
@@ -60,10 +94,11 @@ type refreshDoneMsg struct {
 	err   error
 }
 
-// errorFlashMsg shows a temporary error message in the status bar.
-type errorFlashMsg struct {
-	text string
+// flashMsg shows a temporary status message in the status bar.
+type flashMsg struct {
+	text    string
+	success bool
 }
 
-// clearErrorMsg clears the error flash after a timeout.
-type clearErrorMsg struct{}
+// clearFlashMsg clears the flash message after a timeout.
+type clearFlashMsg struct{}

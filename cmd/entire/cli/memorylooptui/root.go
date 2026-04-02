@@ -9,7 +9,9 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
 const (
@@ -22,17 +24,21 @@ const (
 
 //nolint:recvcheck // bubbletea pattern: value receivers for interface, pointer for pushState mutation
 type rootModel struct {
-	ctx          context.Context
-	activeTab    int
-	state        *memoryloop.State
-	styles       tuiStyles
-	width        int
-	height       int
-	showHelp     bool
-	isRefreshing bool
-	spinner      spinner.Model
-	err          error
-	errFlash     string
+	ctx                 context.Context
+	activeTab           int
+	state               *memoryloop.State
+	styles              tuiStyles
+	width               int
+	height              int
+	showHelp            bool
+	isRefreshing        bool
+	spinner             spinner.Model
+	err                 error
+	flashText           string
+	flashStyle          lipgloss.Style
+	detailPage          *memoryDetailModel
+	wizard              *wizardModel
+	wizardActionHandler WizardActionHandler
 
 	memoriesTab  memoriesModel
 	injectionTab injectionModel
@@ -41,19 +47,20 @@ type rootModel struct {
 }
 
 // Run launches the TUI program.
-func Run(ctx context.Context) error {
+func Run(ctx context.Context, opts RunOptions) error {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 
 	styles := newStyles()
 	m := rootModel{
-		ctx:          ctx,
-		styles:       styles,
-		width:        maxWidth, // will be updated by tea.WindowSizeMsg
-		spinner:      s,
-		memoriesTab:  newMemoriesModel(styles),
-		injectionTab: newInjectionModel(styles),
-		historyTab:   newHistoryModel(styles),
+		ctx:                 ctx,
+		styles:              styles,
+		width:               maxWidth, // will be updated by tea.WindowSizeMsg
+		spinner:             s,
+		wizardActionHandler: opts.WizardActionHandler,
+		memoriesTab:         newMemoriesModel(styles),
+		injectionTab:        newInjectionModel(styles),
+		historyTab:          newHistoryModel(styles),
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -71,6 +78,7 @@ func (m rootModel) Init() tea.Cmd {
 	}
 }
 
+//nolint:ireturn // required by bubbletea Model interface
 func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -82,12 +90,36 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.injectionTab.setSize(m.width, m.contentHeight())
 		m.historyTab.setSize(m.width, m.contentHeight())
 		m.settingsTab.setSize(m.width, m.contentHeight())
+		if m.detailPage != nil {
+			m.detailPage.setSize(m.width, m.contentHeight())
+		}
+		if m.wizard != nil && m.detailPage == nil {
+			m.wizard.setSize(m.width, m.contentHeight())
+		}
 		return m, nil
 
 	case tea.KeyMsg:
-		// Allow ctrl+c to always quit, even when a sub-model captures input.
-		if key.Matches(msg, globalKeyMap.Quit) && msg.String() == "ctrl+c" {
+		if key.Matches(msg, globalKeyMap.Quit) {
 			return m, tea.Quit
+		}
+
+		if m.detailPage != nil {
+			var cmd tea.Cmd
+			*m.detailPage, cmd = m.detailPage.update(msg)
+			m.wizard = &m.detailPage.wizard
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
+
+		if m.wizard != nil {
+			var cmd tea.Cmd
+			*m.wizard, cmd = m.wizard.update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return m, tea.Batch(cmds...)
 		}
 
 		// When a sub-model is capturing input (add form, search, text input),
@@ -98,8 +130,6 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !tabCapturesInput {
 			// Global keys -- check before delegating to tabs
 			switch {
-			case key.Matches(msg, globalKeyMap.Quit):
-				return m, tea.Quit
 			case key.Matches(msg, globalKeyMap.Help):
 				m.showHelp = !m.showHelp
 				return m, nil
@@ -133,9 +163,6 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pushState()
 		return m, nil
 
-	case lifecycleActionMsg:
-		return m.handleLifecycleAction(msg)
-
 	case addMemoryMsg:
 		return m.handleAddMemory(msg)
 
@@ -163,15 +190,30 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.isRefreshing = true
 		// Full async refresh will be added in a later task.
 		return m, func() tea.Msg {
-			return errorFlashMsg{text: "Refresh not yet implemented in TUI. Use: entire memory-loop refresh"}
+			return flashMsg{text: "Refresh not yet implemented in TUI. Use: entire memory-loop refresh", success: false}
 		}
 
-	case errorFlashMsg:
-		m.errFlash = msg.text
-		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearErrorMsg{} })
+	case wizardOpenMsg:
+		m.showHelp = false
+		m.detailPage = m.newDetailPage(msg.record)
+		m.wizard = &m.detailPage.wizard
+		return m, nil
 
-	case clearErrorMsg:
-		m.errFlash = ""
+	case wizardCloseMsg:
+		m.detailPage = nil
+		m.wizard = nil
+		return m, nil
+
+	case wizardResultMsg:
+		return m.handleWizardResult(msg)
+
+	case flashMsg:
+		m.setFlash(msg.text, msg.success)
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{} })
+
+	case clearFlashMsg:
+		m.flashText = ""
+		m.flashStyle = lipgloss.Style{}
 		return m, nil
 	}
 
@@ -215,9 +257,14 @@ func (m rootModel) View() string {
 	b.WriteString("\n")
 
 	// Content area
-	if m.showHelp {
+	switch {
+	case m.showHelp:
 		b.WriteString(m.renderHelp())
-	} else {
+	case m.detailPage != nil:
+		b.WriteString(m.detailPage.view())
+	case m.wizard != nil:
+		b.WriteString(m.wizard.view())
+	default:
 		switch m.activeTab {
 		case tabMemories:
 			b.WriteString(m.memoriesTab.view())
@@ -232,8 +279,8 @@ func (m rootModel) View() string {
 
 	// Status bar
 	b.WriteString("\n")
-	if m.errFlash != "" {
-		b.WriteString(m.styles.render(m.styles.errorFlash, m.errFlash))
+	if m.flashText != "" {
+		b.WriteString(m.styles.render(m.flashStyle, m.flashText))
 	} else {
 		hints := m.activeTabHints()
 		info := m.activeTabInfo()
@@ -263,36 +310,18 @@ func (m rootModel) saveState() error {
 	return memoryloop.SaveState(m.ctx, m.state) //nolint:wrapcheck // internal helper, callers wrap
 }
 
-func (m rootModel) handleLifecycleAction(msg lifecycleActionMsg) (tea.Model, tea.Cmd) {
-	if m.state == nil || m.state.Store == nil || m.isRefreshing {
-		return m, nil
-	}
-	updated, _, err := memoryloop.TransitionRecordLifecycle(m.state.Store.Records, msg.id, msg.action, time.Now())
-	if err != nil {
-		return m, func() tea.Msg { return errorFlashMsg{text: err.Error()} }
-	}
-	m.state.Store.Records = updated
-	if err := m.saveState(); err != nil {
-		return m, func() tea.Msg { return errorFlashMsg{text: fmt.Sprintf("save failed: %v", err)} }
-	}
-	m.memoriesTab.setState(m.state)
-	m.injectionTab.setState(m.state)
-	m.historyTab.setState(m.state)
-	m.settingsTab.setState(m.state)
-	return m, nil
-}
-
+//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
 func (m rootModel) handleAddMemory(msg addMemoryMsg) (tea.Model, tea.Cmd) {
 	if m.state == nil || m.state.Store == nil || m.isRefreshing {
 		return m, nil
 	}
 	updated, _, err := memoryloop.AddManualRecord(m.state.Store.Records, msg.input, time.Now())
 	if err != nil {
-		return m, func() tea.Msg { return errorFlashMsg{text: err.Error()} }
+		return m, func() tea.Msg { return flashMsg{text: err.Error(), success: false} }
 	}
 	m.state.Store.Records = updated
 	if err := m.saveState(); err != nil {
-		return m, func() tea.Msg { return errorFlashMsg{text: fmt.Sprintf("save failed: %v", err)} }
+		return m, func() tea.Msg { return flashMsg{text: fmt.Sprintf("save failed: %v", err), success: false} }
 	}
 	m.memoriesTab.setState(m.state)
 	m.injectionTab.setState(m.state)
@@ -301,6 +330,7 @@ func (m rootModel) handleAddMemory(msg addMemoryMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
 func (m rootModel) handlePrune() (tea.Model, tea.Cmd) {
 	if m.state == nil || m.state.Store == nil || m.isRefreshing {
 		return m, nil
@@ -308,16 +338,17 @@ func (m rootModel) handlePrune() (tea.Model, tea.Cmd) {
 	updated, result := memoryloop.PruneRecords(m.state.Store.Records, time.Now())
 	m.state.Store.Records = updated
 	if err := m.saveState(); err != nil {
-		return m, func() tea.Msg { return errorFlashMsg{text: fmt.Sprintf("save failed: %v", err)} }
+		return m, func() tea.Msg { return flashMsg{text: fmt.Sprintf("save failed: %v", err), success: false} }
 	}
 	m.memoriesTab.setState(m.state)
 	m.injectionTab.setState(m.state)
 	m.historyTab.setState(m.state)
 	m.settingsTab.setState(m.state)
 	msg := fmt.Sprintf("Pruned %d records", result.ArchivedCount)
-	return m, func() tea.Msg { return errorFlashMsg{text: msg} }
+	return m, func() tea.Msg { return flashMsg{text: msg, success: true} }
 }
 
+//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
 func (m rootModel) handleSettingsChanged(msg settingsChangedMsg) (tea.Model, tea.Cmd) {
 	if m.state == nil || m.state.Store == nil {
 		return m, nil
@@ -335,7 +366,7 @@ func (m rootModel) handleSettingsChanged(msg settingsChangedMsg) (tea.Model, tea
 		m.state.Store.InjectionScopes = *msg.injectionScopes
 	}
 	if err := m.saveState(); err != nil {
-		return m, func() tea.Msg { return errorFlashMsg{text: fmt.Sprintf("save failed: %v", err)} }
+		return m, func() tea.Msg { return flashMsg{text: fmt.Sprintf("save failed: %v", err), success: false} }
 	}
 	m.memoriesTab.setState(m.state)
 	m.injectionTab.setState(m.state)
@@ -344,10 +375,122 @@ func (m rootModel) handleSettingsChanged(msg settingsChangedMsg) (tea.Model, tea
 	return m, nil
 }
 
+func (m rootModel) newDetailPage(record memoryloop.MemoryRecord) *memoryDetailModel {
+	detail := newMemoryDetailModel(m.styles, record, m.resolveWizardTargets)
+	detail.setSize(m.width, m.contentHeight())
+	return &detail
+}
+
+func (m rootModel) resolveWizardTargets(record memoryloop.MemoryRecord, location memoryloop.FileLocation) ([]string, error) {
+	repoRoot, err := paths.WorktreeRoot(m.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("resolve repo root: %w", err)
+	}
+
+	targets, err := memoryloop.ResolveFileTargetsForRecord(repoRoot, location, record, memoryloop.SkillTargetInput{})
+	if err != nil {
+		return nil, fmt.Errorf("resolve file targets: %w", err)
+	}
+	out := make([]string, 0, len(targets))
+	for _, target := range targets {
+		out = append(out, target.Path)
+	}
+	return out, nil
+}
+
+//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
+func (m rootModel) handleWizardResult(msg wizardResultMsg) (tea.Model, tea.Cmd) {
+	if msg.success && m.wizardActionHandler != nil {
+		return m.applyWizardRequest(msg.request, msg.flash)
+	}
+
+	switch msg.request.Intent {
+	case WizardIntentSuppress:
+		return m.handleWizardLifecycle(msg.request.RecordID, memoryloop.LifecycleActionSuppress, msg.flash)
+	case WizardIntentArchive:
+		return m.handleWizardLifecycle(msg.request.RecordID, memoryloop.LifecycleActionArchive, msg.flash)
+	case WizardIntentAdopt, WizardIntentApply, "":
+		if msg.success {
+			m.detailPage = nil
+			m.wizard = nil
+		}
+		m.setFlash(msg.flash, msg.success)
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{} })
+	default:
+		m.setFlash(fmt.Sprintf("unknown wizard action: %s", msg.request.Intent), false)
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{} })
+	}
+}
+
+//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
+func (m rootModel) applyWizardRequest(request WizardRequest, successFlash string) (tea.Model, tea.Cmd) {
+	flash, err := m.wizardActionHandler(m.ctx, request)
+	if err != nil {
+		m.setFlash(err.Error(), false)
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{} })
+	}
+	if strings.TrimSpace(flash) == "" {
+		flash = successFlash
+	}
+
+	state, loadErr := memoryloop.LoadState(m.ctx)
+	if loadErr != nil {
+		m.setFlash(fmt.Sprintf("reload failed: %v", loadErr), false)
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{} })
+	}
+
+	m.state = state
+	m.pushState()
+	m.detailPage = nil
+	m.wizard = nil
+	m.setFlash(flash, true)
+	return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{} })
+}
+
+//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
+func (m rootModel) handleWizardLifecycle(recordID string, action memoryloop.LifecycleAction, successFlash string) (tea.Model, tea.Cmd) {
+	if m.state == nil || m.state.Store == nil || m.isRefreshing {
+		return m, nil
+	}
+
+	updated, _, err := memoryloop.TransitionRecordLifecycle(m.state.Store.Records, recordID, action, time.Now().UTC())
+	if err != nil {
+		m.setFlash(err.Error(), false)
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{} })
+	}
+
+	m.state.Store.Records = updated
+	if err := m.saveState(); err != nil {
+		m.setFlash(fmt.Sprintf("save failed: %v", err), false)
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{} })
+	}
+
+	m.pushState()
+	m.detailPage = nil
+	m.wizard = nil
+	m.setFlash(successFlash, true)
+	return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{} })
+}
+
+func (m *rootModel) setFlash(text string, success bool) {
+	m.flashText = text
+	if success {
+		m.flashStyle = m.styles.active
+		return
+	}
+	m.flashStyle = m.styles.errorFlash
+}
+
 func (m rootModel) activeTabHints() string {
+	if m.detailPage != nil {
+		return m.detailPage.hints()
+	}
+	if m.wizard != nil {
+		return m.wizard.hints()
+	}
 	switch m.activeTab {
 	case tabMemories:
-		return "j/k navigate · enter expand · f filter · S scope · a activate · s suppress · x archive · n new · ? help"
+		return "j/k navigate · enter open detail · f filter · S scope · n new · ? help"
 	case tabInjection:
 		return "i focus input · enter test · esc unfocus · j/k navigate · ? help"
 	case tabHistory:
@@ -388,9 +531,12 @@ func (m rootModel) renderHelp() string {
 
 	b.WriteString(m.styles.render(m.styles.title, "Memories"))
 	b.WriteString("\n")
-	b.WriteString("  j/k  navigate    enter  toggle detail    f  filter    S  scope    /  search\n")
-	b.WriteString("  a    activate    P      promote          s  suppress  u  unsuppress\n")
-	b.WriteString("  x    archive     D      prune            n  new memory\n")
+	b.WriteString("  j/k  navigate    enter  open detail      w  open detail    f  filter    S  scope\n")
+	b.WriteString("  D    prune       n      new memory      /  search\n")
+	b.WriteString("\n")
+	b.WriteString(m.styles.render(m.styles.title, "Detail Page"))
+	b.WriteString("\n")
+	b.WriteString("  up/down  choose    enter  next/confirm    esc  back/close\n")
 	b.WriteString("\n")
 
 	b.WriteString(m.styles.render(m.styles.title, "Injection"))

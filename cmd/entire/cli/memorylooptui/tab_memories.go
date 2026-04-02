@@ -251,42 +251,17 @@ func (m memoriesModel) update(msg tea.Msg) (memoriesModel, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(keyMsg, memoriesKeyMap.Enter):
-			m.showDetail = !m.showDetail
-			m.setSize(m.width, m.height)
+			if r := m.selectedRecord(); r != nil {
+				return m, func() tea.Msg {
+					return wizardOpenMsg{record: *r}
+				}
+			}
 			return m, nil
 
-		case key.Matches(keyMsg, memoriesKeyMap.Activate):
+		case key.Matches(keyMsg, memoriesKeyMap.Wizard):
 			if r := m.selectedRecord(); r != nil {
 				return m, func() tea.Msg {
-					return lifecycleActionMsg{id: r.ID, action: memoryloop.LifecycleActionActivate}
-				}
-			}
-
-		case key.Matches(keyMsg, memoriesKeyMap.Promote):
-			if r := m.selectedRecord(); r != nil {
-				return m, func() tea.Msg {
-					return lifecycleActionMsg{id: r.ID, action: memoryloop.LifecycleActionPromote}
-				}
-			}
-
-		case key.Matches(keyMsg, memoriesKeyMap.Suppress):
-			if r := m.selectedRecord(); r != nil {
-				return m, func() tea.Msg {
-					return lifecycleActionMsg{id: r.ID, action: memoryloop.LifecycleActionSuppress}
-				}
-			}
-
-		case key.Matches(keyMsg, memoriesKeyMap.Unsuppress):
-			if r := m.selectedRecord(); r != nil {
-				return m, func() tea.Msg {
-					return lifecycleActionMsg{id: r.ID, action: memoryloop.LifecycleActionUnsuppress}
-				}
-			}
-
-		case key.Matches(keyMsg, memoriesKeyMap.Archive):
-			if r := m.selectedRecord(); r != nil {
-				return m, func() tea.Msg {
-					return lifecycleActionMsg{id: r.ID, action: memoryloop.LifecycleActionArchive}
+					return wizardOpenMsg{record: *r}
 				}
 			}
 
@@ -383,10 +358,6 @@ func (m memoriesModel) view() string {
 	if len(m.state.Store.Records) == 0 {
 		return "\n  No memories yet. Press n to add one, or switch to History tab and press R to refresh.\n"
 	}
-	if len(m.records) == 0 {
-		return fmt.Sprintf("\n  No %s / %s memories. Press f or S to change filter.\n",
-			filterLabels[m.filter], scopeFilterLabels[m.scopeFltr])
-	}
 
 	var b strings.Builder
 
@@ -400,6 +371,13 @@ func (m memoriesModel) view() string {
 	// Search bar (if active)
 	if m.searchMode {
 		fmt.Fprintf(&b, "  / %s\u2588\n", m.searchText)
+	}
+
+	if len(m.records) == 0 {
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "  No %s / %s memories. Press f or S to change filter.\n",
+			filterLabels[m.filter], scopeFilterLabels[m.scopeFltr])
+		return b.String()
 	}
 
 	// Table
@@ -431,47 +409,55 @@ func (m memoriesModel) renderAddForm() string {
 }
 
 func (m memoriesModel) renderFilterBar() string {
-	// Status chips
+	statusRow := "  " + m.styles.render(m.styles.sectionHeader, "Status") + "  " +
+		strings.Join(m.renderStatusFilterChips(), " ")
+	scopeRow := "  " + m.styles.render(m.styles.sectionHeader, "Scope") + "   " +
+		strings.Join(m.renderScopeFilterChips(), " ")
+	return statusRow + "\n" + scopeRow
+}
+
+func (m memoriesModel) renderStatusFilterChips() []string {
 	statusCounts := m.statusCounts()
-	var statusParts []string
+	parts := make([]string, 0, len(filterLabels))
 	for i, label := range filterLabels {
 		text := fmt.Sprintf("%s (%d)", label, statusCounts[i])
 		if m.styles.colorEnabled {
 			if statusFilter(i) == m.filter {
-				statusParts = append(statusParts, m.styles.filterChipActive.Render(text))
+				parts = append(parts, m.styles.filterChipActive.Render(text))
 			} else {
-				statusParts = append(statusParts, m.styles.filterChipInactive.Render(text))
+				parts = append(parts, m.styles.filterChipInactive.Render(text))
 			}
+			continue
+		}
+		if statusFilter(i) == m.filter {
+			parts = append(parts, "["+text+"]")
 		} else {
-			if statusFilter(i) == m.filter {
-				statusParts = append(statusParts, "["+text+"]")
-			} else {
-				statusParts = append(statusParts, " "+text+" ")
-			}
+			parts = append(parts, text)
 		}
 	}
+	return parts
+}
 
-	// Scope chips
+func (m memoriesModel) renderScopeFilterChips() []string {
 	scopeCounts := m.scopeCounts()
-	var scopeParts []string
+	parts := make([]string, 0, len(scopeFilterLabels))
 	for i, label := range scopeFilterLabels {
 		text := fmt.Sprintf("%s (%d)", label, scopeCounts[i])
 		if m.styles.colorEnabled {
 			if scopeFilter(i) == m.scopeFltr {
-				scopeParts = append(scopeParts, m.styles.filterChipActive.Render(text))
+				parts = append(parts, m.styles.filterChipActive.Render(text))
 			} else {
-				scopeParts = append(scopeParts, m.styles.filterChipInactive.Render(text))
+				parts = append(parts, m.styles.filterChipInactive.Render(text))
 			}
+			continue
+		}
+		if scopeFilter(i) == m.scopeFltr {
+			parts = append(parts, "["+text+"]")
 		} else {
-			if scopeFilter(i) == m.scopeFltr {
-				scopeParts = append(scopeParts, "["+text+"]")
-			} else {
-				scopeParts = append(scopeParts, " "+text+" ")
-			}
+			parts = append(parts, text)
 		}
 	}
-
-	return "  " + strings.Join(statusParts, " ") + " │ " + strings.Join(scopeParts, " ")
+	return parts
 }
 
 func (m memoriesModel) statusCounts() [5]int {

@@ -3,6 +3,8 @@ package memoryloop
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -158,6 +160,8 @@ type MemoryRecord struct {
 	Kind             Kind           `json:"kind"`
 	Title            string         `json:"title"`
 	Body             string         `json:"body"`
+	SkillName        string         `json:"skill_name,omitempty"`
+	SkillPath        string         `json:"skill_path,omitempty"`
 	Why              string         `json:"why,omitempty"`
 	Evidence         []string       `json:"evidence,omitempty"`
 	SourceSessionIDs []string       `json:"source_session_ids,omitempty"`
@@ -207,6 +211,7 @@ type Store struct {
 	ScopeValue       string           `json:"scope_value,omitempty"`
 	Records          []MemoryRecord   `json:"records,omitempty"`
 	Mode             Mode             `json:"mode,omitempty"`
+	Debug            bool             `json:"debug,omitempty"`
 	ActivationPolicy ActivationPolicy `json:"activation_policy,omitempty"`
 	InjectionEnabled bool             `json:"injection_enabled"`
 	MaxInjected      int              `json:"max_injected"`
@@ -276,6 +281,13 @@ type ManualRecordInput struct {
 	Kind       Kind
 	Title      string
 	Body       string
+	ScopeKind  ScopeKind
+	ScopeValue string
+	OwnerEmail string
+}
+
+type AdoptionInput struct {
+	ID         string
 	ScopeKind  ScopeKind
 	ScopeValue string
 	OwnerEmail string
@@ -370,6 +382,7 @@ func AppendInjectionLog(ctx context.Context, log InjectionLog) error {
 type selectConfig struct {
 	injectionScopes []ScopeKind
 	currentBranch   string
+	currentOwnerID  string
 }
 
 // SelectOption configures the behavior of SelectRelevant/PreviewSelection.
@@ -387,19 +400,43 @@ func WithCurrentBranch(branch string) SelectOption {
 	return func(c *selectConfig) { c.currentBranch = branch }
 }
 
+// WithCurrentOwnerID sets the current owner ID for personal-scope matching.
+func WithCurrentOwnerID(ownerID string) SelectOption {
+	return func(c *selectConfig) { c.currentOwnerID = strings.TrimSpace(ownerID) }
+}
+
 func (c *selectConfig) passesScope(record MemoryRecord) bool {
 	if len(c.injectionScopes) == 0 {
-		return true
+		return c.matchesScope(record)
 	}
 	for _, s := range c.injectionScopes {
 		if record.ScopeKind == s {
-			if s == ScopeKindBranch && c.currentBranch != "" {
-				return record.ScopeValue == c.currentBranch
-			}
-			return true
+			return c.matchesScope(record)
 		}
 	}
 	return false
+}
+
+func (c *selectConfig) matchesScope(record MemoryRecord) bool {
+	switch record.ScopeKind {
+	case ScopeKindBranch:
+		if c.currentBranch == "" {
+			return true
+		}
+		return record.ScopeValue == c.currentBranch
+	case ScopeKindMe:
+		if c.currentOwnerID == "" {
+			return true
+		}
+		if record.ScopeValue == "" {
+			return record.LegacyInferred
+		}
+		return strings.EqualFold(record.ScopeValue, c.currentOwnerID)
+	case ScopeKindRepo:
+		return true
+	default:
+		return true
+	}
 }
 
 func SelectRelevant(snapshot Snapshot, prompt string, now time.Time, opts ...SelectOption) []Match {
@@ -423,17 +460,34 @@ func PreviewSelection(snapshot Snapshot, prompt string, now time.Time, opts ...S
 	}
 
 	candidates := make([]scoredCandidate, 0, len(snapshot.Records))
+	skipped := make([]SkippedMatch, 0, len(snapshot.Records))
 	for _, record := range snapshot.Records {
-		if !cfg.passesScope(record) {
-			continue
-		}
 		signals := buildRecordMatchSignals(record)
 		primaryOverlap := tokenOverlap(promptTokens, signals.primaryTokens)
-		if !passesInjectionGate(record, primaryOverlap) {
+		if !cfg.passesScope(record) {
+			if primaryOverlap > 0 {
+				skipped = append(skipped, SkippedMatch{
+					Record: record,
+					Reason: "scope mismatch",
+				})
+			}
+			continue
+		}
+		if reason, rejected := injectionRejectionReason(record, primaryOverlap); rejected {
+			if primaryOverlap > 0 {
+				skipped = append(skipped, SkippedMatch{
+					Record: record,
+					Reason: reason,
+				})
+			}
 			continue
 		}
 		candidate := buildScoredCandidate(record, primaryOverlap, now)
 		if candidate.adjustedScore <= 0 {
+			skipped = append(skipped, SkippedMatch{
+				Record: record,
+				Reason: "score adjusted below zero",
+			})
 			continue
 		}
 		candidates = append(candidates, candidate)
@@ -453,9 +507,10 @@ func PreviewSelection(snapshot Snapshot, prompt string, now time.Time, opts ...S
 	})
 
 	matches := packSelectedCandidates(candidates, maxInjected)
+	skipped = append(skipped, explainSkippedCandidates(candidates, matches)...)
 	return SelectionReport{
 		Matches: matches,
-		Skipped: explainSkippedCandidates(candidates, matches),
+		Skipped: skipped,
 	}
 }
 
@@ -757,6 +812,107 @@ func AddManualRecord(records []MemoryRecord, input ManualRecordInput, now time.T
 	return updated, record, nil
 }
 
+func AdoptRecord(records []MemoryRecord, input AdoptionInput, now time.Time) ([]MemoryRecord, MemoryRecord, error) {
+	id := strings.TrimSpace(input.ID)
+	if id == "" {
+		return records, MemoryRecord{}, errors.New("memory id is required")
+	}
+
+	sourceIdx := -1
+	for i := range records {
+		if records[i].ID == id {
+			sourceIdx = i
+			break
+		}
+	}
+	if sourceIdx < 0 {
+		return records, MemoryRecord{}, fmt.Errorf("memory not found: %s", id)
+	}
+
+	source := records[sourceIdx]
+	if source.Status == StatusSuppressed {
+		return records, MemoryRecord{}, fmt.Errorf("memory %q is suppressed", source.ID)
+	}
+	if source.Status == StatusArchived {
+		return records, MemoryRecord{}, fmt.Errorf("memory %q is archived", source.ID)
+	}
+
+	targetScopeKind := input.ScopeKind
+	targetScopeValue := strings.TrimSpace(input.ScopeValue)
+	targetOwnerEmail := strings.TrimSpace(input.OwnerEmail)
+
+	switch targetScopeKind {
+	case ScopeKindRepo:
+		if targetScopeValue != "" {
+			return records, MemoryRecord{}, errors.New("repo-scoped adoption must not set a scope value")
+		}
+	case ScopeKindMe, ScopeKindBranch:
+		if targetScopeValue == "" {
+			return records, MemoryRecord{}, fmt.Errorf("%s-scoped adoption requires a scope value", targetScopeKind)
+		}
+	default:
+		return records, MemoryRecord{}, fmt.Errorf("invalid adoption scope: %s", targetScopeKind)
+	}
+
+	if source.ScopeKind == targetScopeKind && strings.TrimSpace(source.ScopeValue) == targetScopeValue {
+		return records, MemoryRecord{}, fmt.Errorf("memory %q already has scope %s", source.ID, targetScopeKind)
+	}
+
+	if targetOwnerEmail == "" {
+		targetOwnerEmail = strings.TrimSpace(source.OwnerEmail)
+	}
+
+	adopted := source
+	adopted.ID = adoptedRecordID(source, targetScopeKind, targetScopeValue)
+	adopted.ScopeKind = targetScopeKind
+	adopted.ScopeValue = targetScopeValue
+	adopted.OwnerEmail = targetOwnerEmail
+	adopted.Status = StatusActive
+	adopted.Origin = source.Origin
+	adopted.CreatedAt = now
+	adopted.UpdatedAt = now
+	adopted.LastReviewedAt = now
+	adopted.LastInjectedAt = time.Time{}
+	adopted.LastMatchedAt = time.Time{}
+	adopted.InjectCount = 0
+	adopted.MatchCount = 0
+	adopted.Outcome = OutcomeNeutral
+	adopted.History = []HistoryEvent{
+		{
+			Type:   "adopted",
+			At:     now,
+			Detail: "from " + source.ID,
+		},
+	}
+
+	updated := append([]MemoryRecord(nil), records...)
+	if idx, exists := findExactRecordScopeIndex(updated, adopted); exists {
+		existing := updated[idx]
+		existing.Kind = adopted.Kind
+		existing.Title = adopted.Title
+		existing.Body = adopted.Body
+		existing.Why = adopted.Why
+		existing.Evidence = adopted.Evidence
+		existing.SourceSessionIDs = adopted.SourceSessionIDs
+		existing.Confidence = adopted.Confidence
+		existing.Strength = adopted.Strength
+		existing.Fingerprint = adopted.Fingerprint
+		existing.ScopeKind = adopted.ScopeKind
+		existing.ScopeValue = adopted.ScopeValue
+		existing.Origin = adopted.Origin
+		existing.OwnerEmail = adopted.OwnerEmail
+		existing.UpdatedAt = adopted.UpdatedAt
+		existing.LastReviewedAt = adopted.LastReviewedAt
+		existing.Status = adopted.Status
+		existing.History = append(existing.History, adopted.History[0])
+		updated[idx] = existing
+		return updated, existing, nil
+	}
+
+	updated = append(updated, adopted)
+	return updated, adopted, nil
+}
+
 func RecordInjectionActivity(state *State, matches []Match, log InjectionLog, now time.Time) {
 	if state == nil || state.Store == nil {
 		return
@@ -957,6 +1113,30 @@ func indexRecordScopeKeys(records []MemoryRecord) map[string]int {
 	return byScopeKey
 }
 
+func findExactRecordScopeIndex(records []MemoryRecord, record MemoryRecord) (int, bool) {
+	scopeKeys := indexRecordScopeKeys(records)
+	idx, exists := scopeKeys[recordScopeKey(record.Fingerprint, record.ScopeKind, record.ScopeValue)]
+	return idx, exists
+}
+
+func adoptedRecordID(source MemoryRecord, scopeKind ScopeKind, scopeValue string) string {
+	fingerprint := source.Fingerprint
+	if fingerprint == "" {
+		fingerprint = FingerprintForRecord(source.Kind, source.Title, source.Body)
+	}
+	scope := scopeToken(scopeValue)
+	return fmt.Sprintf("%s--%s-%s", fingerprint, scopeKind, scope)
+}
+
+func scopeToken(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "default"
+	}
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:8])
+}
+
 func buildOutcomeSignalText(sessions []insightsdb.SessionRow) string {
 	parts := make([]string, 0, len(sessions)*4)
 	for _, session := range sessions {
@@ -1022,6 +1202,7 @@ func normalizeStateWithSource(state *State, loadedFromLegacySnapshot bool) {
 	if state == nil {
 		return
 	}
+	loadedFromStoreOnly := state.Store != nil && state.Snapshot == nil
 	loadedFromLegacySnapshot = loadedFromLegacySnapshot || (state.Store == nil && state.Snapshot != nil)
 	switch {
 	case state.Store == nil && state.Snapshot != nil:
@@ -1091,7 +1272,7 @@ func normalizeStateWithSource(state *State, loadedFromLegacySnapshot bool) {
 		if record.Fingerprint == "" {
 			record.Fingerprint = FingerprintForRecord(record.Kind, record.Title, record.Body)
 		}
-		if loadedFromLegacySnapshot && inferred {
+		if (loadedFromLegacySnapshot || loadedFromStoreOnly) && inferred {
 			record.LegacyInferred = true
 		}
 	}
@@ -1363,23 +1544,29 @@ func tokenOverlap(promptTokens, recordTokens map[string]struct{}) int {
 	return overlap
 }
 
-func passesInjectionGate(record MemoryRecord, primaryOverlap int) bool {
+func injectionRejectionReason(record MemoryRecord, primaryOverlap int) (string, bool) {
 	if record.Status != "" && record.Status != StatusActive {
-		return false
+		return "not active", true
 	}
 	if strings.EqualFold(record.Confidence, "low") {
-		return false
+		return "low confidence", true
 	}
 	if record.Strength < 3 {
-		return false
+		return "strength below injection threshold", true
 	}
 	if primaryOverlap >= 2 {
-		return true
+		return "", false
 	}
-	return primaryOverlap == 1 &&
+	if primaryOverlap == 1 &&
 		(record.Kind == KindRepoRule || record.Kind == KindAgentInstruction) &&
 		strings.EqualFold(record.Confidence, "high") &&
-		record.Strength >= 4
+		record.Strength >= 5 {
+		return "", false
+	}
+	if primaryOverlap == 1 {
+		return "single-token overlap below injection threshold", true
+	}
+	return "", true
 }
 
 func tokenize(text string) map[string]struct{} {

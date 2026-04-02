@@ -17,17 +17,23 @@ type memoriesKeys struct {
 	Up          key.Binding
 	Down        key.Binding
 	Enter       key.Binding
-	Activate    key.Binding
-	Promote     key.Binding
-	Suppress    key.Binding
-	Unsuppress  key.Binding
-	Archive     key.Binding
+	Wizard      key.Binding
 	Prune       key.Binding
 	Filter      key.Binding
 	ScopeFilter key.Binding
 	Search      key.Binding
 	New         key.Binding
 	Escape      key.Binding
+}
+
+type wizardKeys struct {
+	Open   key.Binding
+	Up     key.Binding
+	Down   key.Binding
+	Left   key.Binding
+	Right  key.Binding
+	Enter  key.Binding
+	Escape key.Binding
 }
 
 type injectionKeys struct {
@@ -68,18 +74,24 @@ var globalKeyMap = globalKeys{
 var memoriesKeyMap = memoriesKeys{
 	Up:          key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "up")),
 	Down:        key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "down")),
-	Enter:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "toggle detail")),
-	Activate:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "activate")),
-	Promote:     key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "promote")),
-	Suppress:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "suppress")),
-	Unsuppress:  key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "unsuppress")),
-	Archive:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "archive")),
+	Enter:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open detail")),
+	Wizard:      key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "open detail")),
 	Prune:       key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "prune")),
 	Filter:      key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "cycle filter")),
 	ScopeFilter: key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "cycle scope")),
 	Search:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
 	New:         key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new memory")),
 	Escape:      key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+}
+
+var wizardKeyMap = wizardKeys{
+	Open:   key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "wizard")),
+	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "up")),
+	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "down")),
+	Left:   key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("left/h", "back")),
+	Right:  key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("right/l", "forward")),
+	Enter:  key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "confirm")),
+	Escape: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 }
 
 var injectionKeyMap = injectionKeys{

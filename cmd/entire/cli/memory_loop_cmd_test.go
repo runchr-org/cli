@@ -10,6 +10,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
 	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
+	"github.com/entireio/cli/cmd/entire/cli/memorylooptui"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
@@ -21,14 +22,14 @@ func TestFilterMemoryLoopRows_ScopeMe(t *testing.T) {
 
 	now := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
 	rows := []insightsdb.SessionRow{
-		{SessionID: "mine-newer", OwnerEmail: "me@example.com", Branch: "main", CreatedAt: now.Add(-time.Hour)},
-		{SessionID: "coworker", OwnerEmail: "teammate@example.com", Branch: "main", CreatedAt: now.Add(-2 * time.Hour)},
-		{SessionID: "mine-older", OwnerEmail: "me@example.com", Branch: "feature", CreatedAt: now.Add(-3 * time.Hour)},
+		{SessionID: "mine-newer", OwnerID: "alishakawaguchi", Branch: "main", CreatedAt: now.Add(-time.Hour)},
+		{SessionID: "coworker", OwnerID: "teammate", Branch: "main", CreatedAt: now.Add(-2 * time.Hour)},
+		{SessionID: "mine-older", OwnerID: "alishakawaguchi", Branch: "feature", CreatedAt: now.Add(-3 * time.Hour)},
 	}
 
 	filtered, err := filterMemoryLoopRows(rows, memoryLoopScope{
-		Mode:       memoryLoopScopeMe,
-		OwnerEmail: "me@example.com",
+		Mode:    memoryLoopScopeMe,
+		OwnerID: "alishakawaguchi",
 	}, 10)
 	require.NoError(t, err)
 	require.Len(t, filtered, 2)
@@ -72,7 +73,7 @@ func TestRunMemoryLoopShow_GroupsDetailedInventory(t *testing.T) {
 			GeneratedAt:      now,
 			SourceWindow:     20,
 			Scope:            "me",
-			ScopeValue:       "test@example.com",
+			ScopeValue:       "alishakawaguchi",
 			Mode:             memoryloop.ModeManual,
 			ActivationPolicy: memoryloop.ActivationPolicyAuto,
 			Records: []memoryloop.MemoryRecord{
@@ -84,7 +85,7 @@ func TestRunMemoryLoopShow_GroupsDetailedInventory(t *testing.T) {
 			InjectionEnabled: true,
 			MaxInjected:      3,
 			RefreshHistory: []memoryloop.RefreshHistory{
-				{At: now, Scope: "me", ScopeValue: "test@example.com", GeneratedCount: 2, ActivatedCount: 1, CandidateCount: 1},
+				{At: now, Scope: "me", ScopeValue: "alishakawaguchi", GeneratedCount: 2, ActivatedCount: 1, CandidateCount: 1},
 			},
 		},
 	}
@@ -202,7 +203,7 @@ func TestRunMemoryLoopShow_ListsExtendedRefreshHistoryCounters(t *testing.T) {
 	require.Contains(t, out, "pruned")
 }
 
-func TestRunMemoryLoopStatus_IsConciseAndSupportsVerbosePromptPreview(t *testing.T) {
+func TestRunMemoryLoopShow_PrunesDeletedBranchScopedMemories(t *testing.T) {
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
 	testutil.WriteFile(t, tmpDir, "init.txt", "init")
@@ -210,6 +211,92 @@ func TestRunMemoryLoopStatus_IsConciseAndSupportsVerbosePromptPreview(t *testing
 	testutil.GitCommit(t, tmpDir, "init")
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+
+	now := time.Date(2026, time.April, 2, 12, 0, 0, 0, time.UTC)
+	state := &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:      1,
+			GeneratedAt:  now,
+			SourceWindow: 20,
+			Records: []memoryloop.MemoryRecord{
+				{
+					ID:         "branch-stale",
+					Title:      "Only for feature-x",
+					Body:       "Branch-scoped memory",
+					Kind:       memoryloop.KindRepoRule,
+					Status:     memoryloop.StatusActive,
+					ScopeKind:  memoryloop.ScopeKindBranch,
+					ScopeValue: "feature-x",
+				},
+				{
+					ID:        "repo-keep",
+					Title:     "Keep repo memory",
+					Body:      "Repo-scoped memory",
+					Kind:      memoryloop.KindRepoRule,
+					Status:    memoryloop.StatusActive,
+					ScopeKind: memoryloop.ScopeKindRepo,
+				},
+			},
+		},
+	}
+	require.NoError(t, memoryloop.SaveState(context.Background(), state))
+
+	var buf bytes.Buffer
+	require.NoError(t, runMemoryLoopShow(context.Background(), &buf, ""))
+
+	loaded, err := memoryloop.LoadState(context.Background())
+	require.NoError(t, err)
+	require.Len(t, loaded.Store.Records, 1)
+	require.Equal(t, "repo-keep", loaded.Store.Records[0].ID)
+	require.NotContains(t, buf.String(), "Only for feature-x")
+}
+
+func TestPruneDeletedBranchScopedMemories_KeepsExistingBranchRecords(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	testutil.GitCheckoutNewBranch(t, tmpDir, "feature-x")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+
+	state := &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version: 1,
+			Records: []memoryloop.MemoryRecord{
+				{
+					ID:         "branch-keep",
+					Title:      "Only for feature-x",
+					Body:       "Branch-scoped memory",
+					Kind:       memoryloop.KindRepoRule,
+					Status:     memoryloop.StatusActive,
+					ScopeKind:  memoryloop.ScopeKindBranch,
+					ScopeValue: "feature-x",
+				},
+			},
+		},
+	}
+
+	changed, err := pruneDeletedBranchScopedMemories(context.Background(), state)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Len(t, state.Store.Records, 1)
+	require.Equal(t, "branch-keep", state.Store.Records[0].ID)
+}
+
+func TestRunMemoryLoopStatus_IsConciseAndSupportsVerbosePromptPreview(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	installFakeGitHubCLI(t, "#!/bin/sh\ncat <<'EOF'\ngithub.com\n  ✓ Logged in to github.com account alishakawaguchi (/tmp/hosts.yml)\n  - Active account: true\nEOF\n")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
 
 	now := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
 	state := &memoryloop.State{
@@ -217,7 +304,7 @@ func TestRunMemoryLoopStatus_IsConciseAndSupportsVerbosePromptPreview(t *testing
 			Version:          1,
 			GeneratedAt:      now,
 			Scope:            "me",
-			ScopeValue:       "test@example.com",
+			ScopeValue:       "alishakawaguchi",
 			Mode:             memoryloop.ModeAuto,
 			ActivationPolicy: memoryloop.ActivationPolicyReview,
 			MaxInjected:      3,
@@ -228,9 +315,9 @@ func TestRunMemoryLoopStatus_IsConciseAndSupportsVerbosePromptPreview(t *testing
 					Body:       "Run golangci-lint before claiming completion.",
 					Kind:       memoryloop.KindRepoRule,
 					Confidence: "high",
-					Strength:   4,
+					Strength:   5,
 					ScopeKind:  memoryloop.ScopeKindMe,
-					ScopeValue: "test@example.com",
+					ScopeValue: "alishakawaguchi",
 					Status:     memoryloop.StatusActive,
 				},
 				{
@@ -263,7 +350,7 @@ func TestRunMemoryLoopStatus_IsConciseAndSupportsVerbosePromptPreview(t *testing
 	require.Contains(t, out, "base_score=")
 	require.Contains(t, out, "adjusted_score=")
 	require.Contains(t, out, "reason=")
-	require.Contains(t, out, "scope=me(test@example.com)")
+	require.Contains(t, out, "scope=me(alishakawaguchi)")
 	require.Contains(t, out, "status=active")
 }
 
@@ -273,6 +360,7 @@ func TestRunMemoryLoopStatus_NonVerbosePreviewOmitsSelectionRationale(t *testing
 	testutil.WriteFile(t, tmpDir, "init.txt", "init")
 	testutil.GitAdd(t, tmpDir, "init.txt")
 	testutil.GitCommit(t, tmpDir, "init")
+	installFakeGitHubCLI(t, "#!/bin/sh\ncat <<'EOF'\ngithub.com\n  ✓ Logged in to github.com account alishakawaguchi (/tmp/hosts.yml)\n  - Active account: true\nEOF\n")
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
 
@@ -282,7 +370,7 @@ func TestRunMemoryLoopStatus_NonVerbosePreviewOmitsSelectionRationale(t *testing
 			Version:          1,
 			GeneratedAt:      now,
 			Scope:            "me",
-			ScopeValue:       "test@example.com",
+			ScopeValue:       "alishakawaguchi",
 			Mode:             memoryloop.ModeAuto,
 			ActivationPolicy: memoryloop.ActivationPolicyReview,
 			MaxInjected:      3,
@@ -293,9 +381,9 @@ func TestRunMemoryLoopStatus_NonVerbosePreviewOmitsSelectionRationale(t *testing
 					Body:       "Run golangci-lint before claiming completion.",
 					Kind:       memoryloop.KindRepoRule,
 					Confidence: "high",
-					Strength:   4,
+					Strength:   5,
 					ScopeKind:  memoryloop.ScopeKindMe,
-					ScopeValue: "test@example.com",
+					ScopeValue: "alishakawaguchi",
 					Status:     memoryloop.StatusActive,
 				},
 			},
@@ -322,6 +410,7 @@ func TestRunMemoryLoopStatus_VerbosePreviewShowsSelectionRationale(t *testing.T)
 	testutil.WriteFile(t, tmpDir, "init.txt", "init")
 	testutil.GitAdd(t, tmpDir, "init.txt")
 	testutil.GitCommit(t, tmpDir, "init")
+	installFakeGitHubCLI(t, "#!/bin/sh\ncat <<'EOF'\ngithub.com\n  ✓ Logged in to github.com account alishakawaguchi (/tmp/hosts.yml)\n  - Active account: true\nEOF\n")
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
 
@@ -331,7 +420,7 @@ func TestRunMemoryLoopStatus_VerbosePreviewShowsSelectionRationale(t *testing.T)
 			Version:          1,
 			GeneratedAt:      now,
 			Scope:            "me",
-			ScopeValue:       "test@example.com",
+			ScopeValue:       "alishakawaguchi",
 			Mode:             memoryloop.ModeAuto,
 			ActivationPolicy: memoryloop.ActivationPolicyReview,
 			MaxInjected:      3,
@@ -342,11 +431,11 @@ func TestRunMemoryLoopStatus_VerbosePreviewShowsSelectionRationale(t *testing.T)
 					Body:           "Run golangci-lint before claiming completion.",
 					Kind:           memoryloop.KindRepoRule,
 					Confidence:     "high",
-					Strength:       4,
+					Strength:       5,
 					Outcome:        memoryloop.OutcomeReinforced,
 					LastInjectedAt: now.Add(-10 * time.Minute),
 					ScopeKind:      memoryloop.ScopeKindMe,
-					ScopeValue:     "test@example.com",
+					ScopeValue:     "alishakawaguchi",
 					Status:         memoryloop.StatusActive,
 				},
 			},
@@ -372,6 +461,7 @@ func TestRunMemoryLoopStatus_VerbosePreviewExplainsSkippedCandidates(t *testing.
 	testutil.WriteFile(t, tmpDir, "init.txt", "init")
 	testutil.GitAdd(t, tmpDir, "init.txt")
 	testutil.GitCommit(t, tmpDir, "init")
+	installFakeGitHubCLI(t, "#!/bin/sh\ncat <<'EOF'\ngithub.com\n  ✓ Logged in to github.com account alishakawaguchi (/tmp/hosts.yml)\n  - Active account: true\nEOF\n")
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
 
@@ -381,7 +471,7 @@ func TestRunMemoryLoopStatus_VerbosePreviewExplainsSkippedCandidates(t *testing.
 			Version:          1,
 			GeneratedAt:      now,
 			Scope:            "me",
-			ScopeValue:       "test@example.com",
+			ScopeValue:       "alishakawaguchi",
 			Mode:             memoryloop.ModeAuto,
 			ActivationPolicy: memoryloop.ActivationPolicyReview,
 			MaxInjected:      1,
@@ -396,7 +486,7 @@ func TestRunMemoryLoopStatus_VerbosePreviewExplainsSkippedCandidates(t *testing.
 					Outcome:        memoryloop.OutcomeReinforced,
 					LastInjectedAt: now.Add(-5 * time.Minute),
 					ScopeKind:      memoryloop.ScopeKindMe,
-					ScopeValue:     "test@example.com",
+					ScopeValue:     "alishakawaguchi",
 					Status:         memoryloop.StatusActive,
 				},
 				{
@@ -418,7 +508,7 @@ func TestRunMemoryLoopStatus_VerbosePreviewExplainsSkippedCandidates(t *testing.
 					Confidence: "high",
 					Strength:   4,
 					ScopeKind:  memoryloop.ScopeKindMe,
-					ScopeValue: "test@example.com",
+					ScopeValue: "alishakawaguchi",
 					Status:     memoryloop.StatusActive,
 				},
 				{
@@ -429,7 +519,7 @@ func TestRunMemoryLoopStatus_VerbosePreviewExplainsSkippedCandidates(t *testing.
 					Confidence: "high",
 					Strength:   4,
 					ScopeKind:  memoryloop.ScopeKindMe,
-					ScopeValue: "test@example.com",
+					ScopeValue: "alishakawaguchi",
 					Status:     memoryloop.StatusActive,
 				},
 			},
@@ -551,6 +641,56 @@ func TestSetMemoryLoopPolicy_CreatesStoreBeforeRefresh(t *testing.T) {
 	require.Contains(t, buf.String(), "Memory loop activation policy: auto")
 }
 
+func TestSetMemoryLoopDebug_PersistsToExistingStore(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	state := &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:          1,
+			GeneratedAt:      time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC),
+			SourceWindow:     20,
+			Mode:             memoryloop.ModeManual,
+			ActivationPolicy: memoryloop.ActivationPolicyReview,
+			MaxInjected:      3,
+		},
+	}
+	require.NoError(t, memoryloop.SaveState(context.Background(), state))
+
+	var buf bytes.Buffer
+	require.NoError(t, setMemoryLoopDebug(context.Background(), &buf, true))
+
+	loaded, err := memoryloop.LoadState(context.Background())
+	require.NoError(t, err)
+	require.True(t, loaded.Store.Debug)
+	require.Contains(t, buf.String(), "Memory loop debug: on")
+}
+
+func TestSetMemoryLoopDebug_CreatesStoreBeforeRefresh(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	var buf bytes.Buffer
+	require.NoError(t, setMemoryLoopDebug(context.Background(), &buf, true))
+
+	loaded, err := memoryloop.LoadState(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, loaded.Store)
+	require.Equal(t, memoryloop.ModeOff, loaded.Store.Mode)
+	require.True(t, loaded.Store.Debug)
+	require.Contains(t, buf.String(), "Memory loop debug: on")
+}
+
 func TestSetMemoryLoopMode_InvalidSettingsReturnsError(t *testing.T) {
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -620,6 +760,101 @@ func TestRunMemoryLoopRefresh_InvalidSettingsReturnsError(t *testing.T) {
 	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "repo", "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid memory_loop.activation_policy")
+}
+
+func TestRunMemoryLoopRefresh_ScopeMeUsesGitHubUsername(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, settings.EntireSettingsFile), []byte(`{
+  "memory_loop": {
+    "mode": "manual"
+  }
+}`), 0o644))
+	installFakeGitHubCLI(t, "#!/bin/sh\ncat <<'EOF'\ngithub.com\n  X Failed to log in to github.com account alishakawaguchi (default)\n  - Active account: true\nEOF\nexit 1\n")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	var buf bytes.Buffer
+	require.NoError(t, runMemoryLoopRefresh(context.Background(), &buf, 10, "me", ""))
+	require.Contains(t, buf.String(), `No personal sessions found for owner_id "alishakawaguchi" because the insights cache has no owner_id data yet.`)
+}
+
+func TestRunMemoryLoopRefresh_ScopeMeFailsWhenGitHubUsernameUnavailable(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, settings.EntireSettingsFile), []byte(`{
+  "memory_loop": {
+    "mode": "manual"
+  }
+}`), 0o644))
+	installFakeGitHubCLI(t, "#!/bin/sh\nprintf 'github.com\\n' >&2\nexit 1\n")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	var buf bytes.Buffer
+	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "me", "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "GitHub username")
+}
+
+func TestRunMemoryLoopRefresh_ScopeMeWithoutMatchingSessionsLeavesSnapshotUntouched(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, settings.EntireSettingsFile), []byte(`{
+  "memory_loop": {
+    "mode": "manual"
+  }
+}`), 0o644))
+	installFakeGitHubCLI(t, "#!/bin/sh\ncat <<'EOF'\ngithub.com\n  ✓ Logged in to github.com account alishakawaguchi (/tmp/hosts.yml)\n  - Active account: true\nEOF\n")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	original := time.Date(2026, time.April, 1, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, memoryloop.SaveState(context.Background(), &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:          1,
+			GeneratedAt:      original,
+			Scope:            "repo",
+			Mode:             memoryloop.ModeManual,
+			ActivationPolicy: memoryloop.ActivationPolicyReview,
+			MaxInjected:      2,
+			Records: []memoryloop.MemoryRecord{
+				{ID: "keep", Title: "Keep me", Body: "body", Kind: memoryloop.KindRepoRule, Status: memoryloop.StatusActive},
+			},
+		},
+	}))
+
+	var buf bytes.Buffer
+	require.NoError(t, runMemoryLoopRefresh(context.Background(), &buf, 10, "me", ""))
+	require.Contains(t, buf.String(), "No personal sessions found for owner_id \"alishakawaguchi\" because the insights cache has no owner_id data yet.")
+
+	loaded, err := memoryloop.LoadState(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, loaded.Store)
+	require.Equal(t, original, loaded.Store.GeneratedAt)
+	require.Len(t, loaded.Store.Records, 1)
+	require.Equal(t, "keep", loaded.Store.Records[0].ID)
+}
+
+func installFakeGitHubCLI(t *testing.T, script string) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	binPath := filepath.Join(binDir, "gh")
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func TestRenderMemoryLoopRefreshProgress(t *testing.T) {
@@ -872,12 +1107,149 @@ func TestRunMemoryLoopArchive_UpdatesRecord(t *testing.T) {
 	require.Equal(t, memoryloop.StatusArchived, loaded.Store.Records[0].Status)
 }
 
+func TestHandleMemoryLoopWizardAction_AdoptPersistsScopedRecord(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	installFakeGitHubCLI(t, "#!/bin/sh\ncat <<'EOF'\ngithub.com\n  ✓ Logged in to github.com account alishakawaguchi (/tmp/hosts.yml)\n  - Active account: true\nEOF\n")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	require.NoError(t, memoryloop.SaveState(context.Background(), &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:          1,
+			Mode:             memoryloop.ModeManual,
+			ActivationPolicy: memoryloop.ActivationPolicyReview,
+			MaxInjected:      3,
+			Records: []memoryloop.MemoryRecord{
+				{
+					ID:         "repo-candidate",
+					Title:      "Keep generated repo memories pending",
+					Body:       "Repo candidates stay candidate until a user adopts them.",
+					Kind:       memoryloop.KindRepoRule,
+					ScopeKind:  memoryloop.ScopeKindRepo,
+					ScopeValue: "entireio/cli",
+					Status:     memoryloop.StatusCandidate,
+				},
+			},
+		},
+	}))
+
+	flash, err := handleMemoryLoopWizardAction(context.Background(), memorylooptui.WizardRequest{
+		Intent:   memorylooptui.WizardIntentAdopt,
+		RecordID: "repo-candidate",
+		Scope:    memoryloop.ScopeKindMe,
+	})
+	require.NoError(t, err)
+	require.Contains(t, flash, "Adopted memory")
+
+	loaded, err := memoryloop.LoadState(context.Background())
+	require.NoError(t, err)
+	require.Len(t, loaded.Store.Records, 2)
+	require.Equal(t, memoryloop.ScopeKindRepo, loaded.Store.Records[0].ScopeKind)
+	require.Equal(t, memoryloop.ScopeKindMe, loaded.Store.Records[1].ScopeKind)
+	require.Equal(t, "alishakawaguchi", loaded.Store.Records[1].ScopeValue)
+	require.Equal(t, memoryloop.StatusActive, loaded.Store.Records[1].Status)
+}
+
+func TestHandleMemoryLoopWizardAction_ApplyPersistsArchiveAndWritesFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	testutil.WriteFile(t, tmpDir, "AGENTS.md", "# Agents\n")
+	testutil.WriteFile(t, tmpDir, "CLAUDE.md", "# Claude\n")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+
+	require.NoError(t, memoryloop.SaveState(context.Background(), &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:          1,
+			Mode:             memoryloop.ModeManual,
+			ActivationPolicy: memoryloop.ActivationPolicyReview,
+			MaxInjected:      3,
+			Records: []memoryloop.MemoryRecord{
+				{
+					ID:        "lint",
+					Title:     "Run lint before finishing",
+					Body:      "Run golangci-lint before claiming completion.",
+					Kind:      memoryloop.KindRepoRule,
+					ScopeKind: memoryloop.ScopeKindMe,
+					Status:    memoryloop.StatusActive,
+				},
+			},
+		},
+	}))
+
+	flash, err := handleMemoryLoopWizardAction(context.Background(), memorylooptui.WizardRequest{
+		Intent:   memorylooptui.WizardIntentApply,
+		RecordID: "lint",
+		Location: memoryloop.FileLocationProject,
+	})
+	require.NoError(t, err)
+	require.Contains(t, flash, "Applied memory to 2 file(s)")
+
+	loaded, err := memoryloop.LoadState(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, memoryloop.StatusArchived, loaded.Store.Records[0].Status)
+	require.Contains(t, testutil.ReadFile(t, tmpDir, "AGENTS.md"), "Run golangci-lint before claiming completion.")
+	require.Contains(t, testutil.ReadFile(t, tmpDir, "CLAUDE.md"), "Run golangci-lint before claiming completion.")
+}
+
+func TestHandleMemoryLoopWizardAction_ApplyRejectsInvalidSelection(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+
+	require.NoError(t, memoryloop.SaveState(context.Background(), &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:          1,
+			Mode:             memoryloop.ModeManual,
+			ActivationPolicy: memoryloop.ActivationPolicyReview,
+			MaxInjected:      3,
+			Records: []memoryloop.MemoryRecord{
+				{
+					ID:        "lint",
+					Title:     "Run lint before finishing",
+					Body:      "Run golangci-lint before claiming completion.",
+					Kind:      memoryloop.KindRepoRule,
+					ScopeKind: memoryloop.ScopeKindMe,
+					Status:    memoryloop.StatusActive,
+				},
+			},
+		},
+	}))
+
+	_, err := handleMemoryLoopWizardAction(context.Background(), memorylooptui.WizardRequest{
+		Intent:   memorylooptui.WizardIntentApply,
+		RecordID: "lint",
+		Location: memoryloop.FileLocationProject,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no project instruction files found")
+
+	loaded, loadErr := memoryloop.LoadState(context.Background())
+	require.NoError(t, loadErr)
+	require.Equal(t, memoryloop.StatusActive, loaded.Store.Records[0].Status)
+}
+
 func TestRunMemoryLoopAdd_AddsPersonalManualMemory(t *testing.T) {
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
 	testutil.WriteFile(t, tmpDir, "init.txt", "init")
 	testutil.GitAdd(t, tmpDir, "init.txt")
 	testutil.GitCommit(t, tmpDir, "init")
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
+	installFakeGitHubCLI(t, "#!/bin/sh\ncat <<'EOF'\ngithub.com\n  ✓ Logged in to github.com account alishakawaguchi (/tmp/hosts.yml)\n  - Active account: true\nEOF\n")
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
 
@@ -896,6 +1268,7 @@ func TestRunMemoryLoopAdd_AddsPersonalManualMemory(t *testing.T) {
 	require.Equal(t, memoryloop.OriginManual, loaded.Store.Records[0].Origin)
 	require.Equal(t, memoryloop.StatusActive, loaded.Store.Records[0].Status)
 	require.Equal(t, memoryloop.ScopeKindMe, loaded.Store.Records[0].ScopeKind)
+	require.Equal(t, "alishakawaguchi", loaded.Store.Records[0].ScopeValue)
 	require.Equal(t, "test@example.com", loaded.Store.Records[0].OwnerEmail)
 }
 

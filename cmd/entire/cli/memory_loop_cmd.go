@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/githubidentity"
 	"github.com/entireio/cli/cmd/entire/cli/improve"
 	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
 	"github.com/entireio/cli/cmd/entire/cli/llmcli"
@@ -20,6 +20,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/termstyle"
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/spf13/cobra"
 )
 
@@ -32,15 +33,16 @@ const (
 )
 
 type memoryLoopScope struct {
-	Mode       memoryLoopScopeMode
-	Branch     string
-	OwnerEmail string
+	Mode    memoryLoopScopeMode
+	Branch  string
+	OwnerID string
 }
 
 const (
 	memoryLoopAddScopeFlagKind  = "kind"
 	memoryLoopAddScopeFlagTitle = "title"
 	memoryLoopAddScopeFlagBody  = "body"
+	debugModeOff                = "off"
 )
 
 type memoryLoopRefreshSummary struct {
@@ -73,6 +75,7 @@ func newMemoryLoopCmd() *cobra.Command {
 	cmd.AddCommand(newMemoryLoopShowCmd())
 	cmd.AddCommand(newMemoryLoopStatusCmd())
 	cmd.AddCommand(newMemoryLoopModeCmd())
+	cmd.AddCommand(newMemoryLoopDebugCmd())
 	cmd.AddCommand(newMemoryLoopPolicyCmd())
 	cmd.AddCommand(newMemoryLoopAddCmd())
 	cmd.AddCommand(newMemoryLoopActivateCmd())
@@ -94,7 +97,12 @@ func newMemoryLoopTuiCmd() *cobra.Command {
 			if IsAccessibleMode() {
 				return runMemoryLoopShow(cmd.Context(), cmd.OutOrStdout(), "")
 			}
-			return memorylooptui.Run(cmd.Context())
+			if _, err := loadMemoryLoopState(cmd.Context()); err != nil {
+				return fmt.Errorf("load memory-loop state: %w", err)
+			}
+			return memorylooptui.Run(cmd.Context(), memorylooptui.RunOptions{
+				WizardActionHandler: handleMemoryLoopWizardAction,
+			})
 		},
 	}
 }
@@ -192,6 +200,24 @@ func newMemoryLoopPolicyCmd() *cobra.Command {
 				return setMemoryLoopPolicy(cmd.Context(), cmd.OutOrStdout(), policy)
 			default:
 				return fmt.Errorf("invalid activation policy: %s", args[0])
+			}
+		},
+	}
+}
+
+func newMemoryLoopDebugCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "debug [on|off]",
+		Short: "Set memory loop debug messaging",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch strings.ToLower(strings.TrimSpace(args[0])) {
+			case "on":
+				return setMemoryLoopDebug(cmd.Context(), cmd.OutOrStdout(), true)
+			case debugModeOff:
+				return setMemoryLoopDebug(cmd.Context(), cmd.OutOrStdout(), false)
+			default:
+				return fmt.Errorf("invalid debug mode: %s", args[0])
 			}
 		},
 	}
@@ -298,6 +324,12 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 	if err != nil {
 		return fmt.Errorf("query sessions: %w", err)
 	}
+	if len(rows) == 0 {
+		if err := renderEmptyMemoryLoopScopeMessage(ctx, w, idb, scope); err != nil {
+			return err
+		}
+		return nil
+	}
 
 	analysis := improve.AnalyzePatterns(sessionRowsToSummaries(rows))
 	gen := memoryloop.Generator{Runner: &llmcli.Runner{}}
@@ -312,7 +344,7 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 		return fmt.Errorf("generate memory snapshot: %w", err)
 	}
 
-	state, err := memoryloop.LoadState(ctx)
+	state, err := loadMemoryLoopState(ctx)
 	if err != nil {
 		return fmt.Errorf("load memory-loop state: %w", err)
 	}
@@ -320,11 +352,13 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 	memoryCfg := cfg.GetMemoryLoopConfig()
 	maxInjected := memoryCfg.MaxInjected
 	mode := memoryloop.Mode(memoryCfg.Mode)
+	debug := memoryCfg.Debug
 	activationPolicy := memoryloop.ActivationPolicy(memoryCfg.ActivationPolicy)
 	if state.Store != nil {
 		if state.Store.Mode != "" {
 			mode = state.Store.Mode
 		}
+		debug = state.Store.Debug
 		if state.Store.MaxInjected > 0 {
 			maxInjected = state.Store.MaxInjected
 		}
@@ -371,6 +405,7 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 		ScopeValue:       scopeValue,
 		Records:          reconciledRecords,
 		Mode:             mode,
+		Debug:            debug,
 		ActivationPolicy: activationPolicy,
 		MaxInjected:      maxInjected,
 		RefreshHistory:   refreshHistory,
@@ -479,7 +514,7 @@ func scopeKindForRefresh(scope memoryLoopScope) memoryloop.ScopeKind {
 }
 
 func runMemoryLoopShow(ctx context.Context, w io.Writer, _ string) error {
-	state, err := memoryloop.LoadState(ctx)
+	state, err := loadMemoryLoopState(ctx)
 	if err != nil {
 		return fmt.Errorf("load memory-loop state: %w", err)
 	}
@@ -509,6 +544,7 @@ func runMemoryLoopShow(ctx context.Context, w io.Writer, _ string) error {
 	fmt.Fprintf(w, "Suppressed memories: %d\n", suppressedCount)
 	fmt.Fprintf(w, "Archived memories: %d\n", archivedCount)
 	fmt.Fprintf(w, "Mode: %s\n", displayMemoryMode(snapshot.Mode))
+	fmt.Fprintf(w, "Debug: %s\n", displayToggle(snapshot.Debug))
 	fmt.Fprintf(w, "Activation policy: %s\n", displayActivationPolicy(snapshot.ActivationPolicy))
 	fmt.Fprintf(w, "Max injected: %d\n\n", snapshot.MaxInjected)
 	renderDetailedMemorySections(w, s, snapshot.Records)
@@ -528,7 +564,7 @@ func runMemoryLoopShow(ctx context.Context, w io.Writer, _ string) error {
 }
 
 func runMemoryLoopStatus(ctx context.Context, w io.Writer, prompt string, verbose bool) error {
-	state, err := memoryloop.LoadState(ctx)
+	state, err := loadMemoryLoopState(ctx)
 	if err != nil {
 		return fmt.Errorf("load memory-loop state: %w", err)
 	}
@@ -554,6 +590,7 @@ func runMemoryLoopStatus(ctx context.Context, w io.Writer, prompt string, verbos
 		fmt.Fprintln(w)
 	}
 	fmt.Fprintf(w, "Mode: %s\n", displayMemoryMode(snapshot.Mode))
+	fmt.Fprintf(w, "Debug: %s\n", displayToggle(snapshot.Debug))
 	fmt.Fprintf(w, "Activation policy: %s\n", displayActivationPolicy(snapshot.ActivationPolicy))
 	fmt.Fprintf(w, "Max injected: %d\n", snapshot.MaxInjected)
 	fmt.Fprintf(w, "Active memories: %d\n", activeCount)
@@ -564,7 +601,7 @@ func runMemoryLoopStatus(ctx context.Context, w io.Writer, prompt string, verbos
 	if prompt != "" {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, s.SectionRule("Prompt Preview"))
-		report := memoryloop.PreviewSelection(*snapshot, prompt, time.Now().UTC())
+		report := memoryloop.PreviewSelection(*snapshot, prompt, time.Now().UTC(), buildMemoryLoopSelectOpts(ctx, snapshot)...)
 		if len(report.Matches) == 0 {
 			fmt.Fprintln(w, "  No memories would inject for that prompt.")
 		} else {
@@ -610,7 +647,7 @@ func runMemoryLoopStatus(ctx context.Context, w io.Writer, prompt string, verbos
 }
 
 func setMemoryLoopMode(ctx context.Context, w io.Writer, mode memoryloop.Mode) error {
-	state, err := memoryloop.LoadState(ctx)
+	state, err := loadMemoryLoopState(ctx)
 	if err != nil {
 		return fmt.Errorf("load memory-loop state: %w", err)
 	}
@@ -626,7 +663,7 @@ func setMemoryLoopMode(ctx context.Context, w io.Writer, mode memoryloop.Mode) e
 }
 
 func setMemoryLoopPolicy(ctx context.Context, w io.Writer, policy memoryloop.ActivationPolicy) error {
-	state, err := memoryloop.LoadState(ctx)
+	state, err := loadMemoryLoopState(ctx)
 	if err != nil {
 		return fmt.Errorf("load memory-loop state: %w", err)
 	}
@@ -638,6 +675,26 @@ func setMemoryLoopPolicy(ctx context.Context, w io.Writer, policy memoryloop.Act
 		return fmt.Errorf("save memory-loop state: %w", err)
 	}
 	fmt.Fprintf(w, "Memory loop activation policy: %s\n", policy)
+	return nil
+}
+
+func setMemoryLoopDebug(ctx context.Context, w io.Writer, enabled bool) error {
+	state, err := loadMemoryLoopState(ctx)
+	if err != nil {
+		return fmt.Errorf("load memory-loop state: %w", err)
+	}
+	if err := ensureMemoryLoopStore(ctx, state); err != nil {
+		return err
+	}
+	state.Store.Debug = enabled
+	if err := memoryloop.SaveState(ctx, state); err != nil {
+		return fmt.Errorf("save memory-loop state: %w", err)
+	}
+	status := "off"
+	if enabled {
+		status = "on"
+	}
+	fmt.Fprintf(w, "Memory loop debug: %s\n", status)
 	return nil
 }
 
@@ -661,8 +718,91 @@ func runMemoryLoopArchive(ctx context.Context, w io.Writer, id string) error {
 	return runMemoryLoopLifecycleAction(ctx, w, id, memoryloop.LifecycleActionArchive)
 }
 
+func handleMemoryLoopWizardAction(ctx context.Context, request memorylooptui.WizardRequest) (string, error) {
+	switch request.Intent {
+	case memorylooptui.WizardIntentAdopt:
+		return adoptMemoryLoopWizardRequest(ctx, request)
+	case memorylooptui.WizardIntentApply:
+		return applyMemoryLoopWizardRequest(ctx, request)
+	case memorylooptui.WizardIntentSuppress:
+		if err := persistMemoryLoopLifecycleAction(ctx, request.RecordID, memoryloop.LifecycleActionSuppress); err != nil {
+			return "", err
+		}
+		return "Suppressed memory: " + request.RecordID, nil
+	case memorylooptui.WizardIntentArchive:
+		if err := persistMemoryLoopLifecycleAction(ctx, request.RecordID, memoryloop.LifecycleActionArchive); err != nil {
+			return "", err
+		}
+		return "Archived memory: " + request.RecordID, nil
+	default:
+		return "", fmt.Errorf("invalid wizard intent: %s", request.Intent)
+	}
+}
+
+func adoptMemoryLoopWizardRequest(ctx context.Context, request memorylooptui.WizardRequest) (string, error) {
+	state, err := loadMemoryLoopStoreState(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	scopeKind, scopeValue, ownerEmail, err := resolveAddScope(ctx, string(request.Scope))
+	if err != nil {
+		return "", err
+	}
+
+	records, _, err := memoryloop.AdoptRecord(state.Store.Records, memoryloop.AdoptionInput{
+		ID:         request.RecordID,
+		ScopeKind:  scopeKind,
+		ScopeValue: scopeValue,
+		OwnerEmail: ownerEmail,
+	}, time.Now().UTC())
+	if err != nil {
+		return "", fmt.Errorf("adopt memory: %w", err)
+	}
+
+	state.Store.Records = records
+	if err := memoryloop.SaveState(ctx, state); err != nil {
+		return "", fmt.Errorf("save memory-loop state: %w", err)
+	}
+
+	return fmt.Sprintf("Adopted memory: %s (%s)", request.RecordID, scopeKind), nil
+}
+
+func applyMemoryLoopWizardRequest(ctx context.Context, request memorylooptui.WizardRequest) (string, error) {
+	state, err := loadMemoryLoopStoreState(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	repoRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		return "", fmt.Errorf("resolve repo root: %w", err)
+	}
+
+	targets := make([]memoryloop.FileTarget, 0, len(request.Targets))
+	for _, target := range request.Targets {
+		targets = append(targets, memoryloop.FileTarget{Path: target})
+	}
+
+	records, _, appliedTargets, err := memoryloop.ApplyRecordToFiles(state.Store.Records, repoRoot, memoryloop.FileApplicationInput{
+		ID:       request.RecordID,
+		Location: request.Location,
+		Targets:  targets,
+	}, time.Now().UTC())
+	if err != nil {
+		return "", fmt.Errorf("apply memory to files: %w", err)
+	}
+
+	state.Store.Records = records
+	if err := memoryloop.SaveState(ctx, state); err != nil {
+		return "", fmt.Errorf("save memory-loop state: %w", err)
+	}
+
+	return fmt.Sprintf("Applied memory to %d file(s): %s", len(appliedTargets), request.RecordID), nil
+}
+
 func runMemoryLoopPrune(ctx context.Context, w io.Writer, now time.Time) error {
-	state, err := memoryloop.LoadState(ctx)
+	state, err := loadMemoryLoopState(ctx)
 	if err != nil {
 		return fmt.Errorf("load memory-loop state: %w", err)
 	}
@@ -681,7 +821,7 @@ func runMemoryLoopPrune(ctx context.Context, w io.Writer, now time.Time) error {
 }
 
 func runMemoryLoopAdd(ctx context.Context, w io.Writer, opts memoryLoopAddOptions) error {
-	state, err := memoryloop.LoadState(ctx)
+	state, err := loadMemoryLoopState(ctx)
 	if err != nil {
 		return fmt.Errorf("load memory-loop state: %w", err)
 	}
@@ -720,7 +860,16 @@ func runMemoryLoopAdd(ctx context.Context, w io.Writer, opts memoryLoopAddOption
 }
 
 func runMemoryLoopLifecycleAction(ctx context.Context, w io.Writer, id string, action memoryloop.LifecycleAction) error {
-	state, err := memoryloop.LoadState(ctx)
+	if err := persistMemoryLoopLifecycleAction(ctx, id, action); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(w, "%s memory: %s\n", lifecycleActionLabel(action), id)
+	return nil
+}
+
+func persistMemoryLoopLifecycleAction(ctx context.Context, id string, action memoryloop.LifecycleAction) error {
+	state, err := loadMemoryLoopState(ctx)
 	if err != nil {
 		return fmt.Errorf("load memory-loop state: %w", err)
 	}
@@ -736,9 +885,97 @@ func runMemoryLoopLifecycleAction(ctx context.Context, w io.Writer, id string, a
 	if err := memoryloop.SaveState(ctx, state); err != nil {
 		return fmt.Errorf("save memory-loop state: %w", err)
 	}
-
-	fmt.Fprintf(w, "%s memory: %s\n", lifecycleActionLabel(action), id)
 	return nil
+}
+
+func loadMemoryLoopStoreState(ctx context.Context) (*memoryloop.State, error) {
+	state, err := loadMemoryLoopState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load memory-loop state: %w", err)
+	}
+	if state.Store == nil {
+		return nil, errors.New("no memory store found; run `entire memory-loop refresh` first")
+	}
+	return state, nil
+}
+
+func loadMemoryLoopState(ctx context.Context) (*memoryloop.State, error) {
+	state, err := memoryloop.LoadState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load memory-loop state: %w", err)
+	}
+	if _, err := pruneDeletedBranchScopedMemoriesAndSave(ctx, state); err != nil {
+		return nil, fmt.Errorf("prune deleted branch memories: %w", err)
+	}
+	return state, nil
+}
+
+func pruneDeletedBranchScopedMemoriesAndSave(ctx context.Context, state *memoryloop.State) (bool, error) {
+	changed, err := pruneDeletedBranchScopedMemories(ctx, state)
+	if err != nil {
+		return false, err
+	}
+	if !changed {
+		return false, nil
+	}
+	if err := memoryloop.SaveState(ctx, state); err != nil {
+		return false, fmt.Errorf("save memory-loop state: %w", err)
+	}
+	return true, nil
+}
+
+func pruneDeletedBranchScopedMemories(ctx context.Context, state *memoryloop.State) (bool, error) {
+	if state == nil || state.Store == nil || len(state.Store.Records) == 0 {
+		return false, nil
+	}
+
+	branches, err := localBranchNames(ctx)
+	if err != nil {
+		return false, fmt.Errorf("list local branches: %w", err)
+	}
+
+	records := state.Store.Records[:0]
+	changed := false
+	for _, record := range state.Store.Records {
+		if record.ScopeKind == memoryloop.ScopeKindBranch && strings.TrimSpace(record.ScopeValue) != "" {
+			if _, exists := branches[strings.TrimSpace(record.ScopeValue)]; !exists {
+				changed = true
+				continue
+			}
+		}
+		records = append(records, record)
+	}
+	if !changed {
+		return false, nil
+	}
+	state.Store.Records = records
+	if state.Snapshot != nil {
+		state.Snapshot.Records = records
+	}
+	return true, nil
+}
+
+func localBranchNames(ctx context.Context) (map[string]struct{}, error) {
+	repo, err := openRepository(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("open git repository: %w", err)
+	}
+
+	refs, err := repo.References()
+	if err != nil {
+		return nil, fmt.Errorf("iterate refs: %w", err)
+	}
+
+	branches := map[string]struct{}{}
+	if err := refs.ForEach(func(ref *plumbing.Reference) error {
+		if ref.Name().IsBranch() {
+			branches[ref.Name().Short()] = struct{}{}
+		}
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("collect branch refs: %w", err)
+	}
+	return branches, nil
 }
 
 func ensureMemoryLoopStore(ctx context.Context, state *memoryloop.State) error {
@@ -752,6 +989,7 @@ func ensureMemoryLoopStore(ctx context.Context, state *memoryloop.State) error {
 		state.Store = &memoryloop.Store{
 			Version:          1,
 			Mode:             memoryloop.Mode(memoryCfg.Mode),
+			Debug:            memoryCfg.Debug,
 			ActivationPolicy: memoryloop.ActivationPolicy(memoryCfg.ActivationPolicy),
 			MaxInjected:      memoryCfg.MaxInjected,
 		}
@@ -777,6 +1015,13 @@ func lifecycleActionLabel(action memoryloop.LifecycleAction) string {
 	}
 }
 
+func displayToggle(enabled bool) string {
+	if enabled {
+		return "on"
+	}
+	return "off"
+}
+
 func parseMemoryLoopKind(raw string) (memoryloop.Kind, error) {
 	kind := memoryloop.Kind(strings.ToLower(strings.TrimSpace(raw)))
 	switch kind {
@@ -794,11 +1039,15 @@ func parseMemoryLoopKind(raw string) (memoryloop.Kind, error) {
 func resolveAddScope(ctx context.Context, rawScope string) (memoryloop.ScopeKind, string, string, error) {
 	switch memoryLoopScopeMode(strings.ToLower(strings.TrimSpace(rawScope))) {
 	case "", memoryLoopScopeMe:
+		ownerID, err := configuredMemoryLoopOwnerID(ctx)
+		if err != nil {
+			return "", "", "", err
+		}
 		author, err := GetGitAuthor(ctx)
 		if err != nil {
 			return "", "", "", fmt.Errorf("resolve git author: %w", err)
 		}
-		return memoryloop.ScopeKindMe, author.Email, author.Email, nil
+		return memoryloop.ScopeKindMe, ownerID, author.Email, nil
 	case memoryLoopScopeRepo:
 		return memoryloop.ScopeKindRepo, "", "", nil
 	case memoryLoopScopeBranch:
@@ -1065,15 +1314,11 @@ func resolveMemoryLoopScope(ctx context.Context, scopeArg, branchArg string) (me
 		scope.Branch = branch
 		return scope, nil
 	case memoryLoopScopeMe:
-		repo, err := openRepository(ctx)
+		ownerID, err := configuredMemoryLoopOwnerID(ctx)
 		if err != nil {
-			return memoryLoopScope{}, fmt.Errorf("open git repository: %w", err)
+			return memoryLoopScope{}, err
 		}
-		_, email := checkpoint.GetGitAuthorFromRepo(repo)
-		if email == "" {
-			return memoryLoopScope{}, errors.New("could not determine git user.email for --scope me")
-		}
-		scope.OwnerEmail = email
+		scope.OwnerID = ownerID
 		return scope, nil
 	default:
 		return memoryLoopScope{}, fmt.Errorf("invalid scope %q: must be repo, branch, or me", scopeArg)
@@ -1095,7 +1340,7 @@ func queryMemoryLoopRows(ctx context.Context, idb *insightsdb.InsightsDB, scope 
 		}
 		return rows, nil
 	case memoryLoopScopeMe:
-		rows, err := idb.QueryByOwnerEmail(ctx, scope.OwnerEmail, last)
+		rows, err := idb.QueryByOwnerID(ctx, scope.OwnerID, last)
 		if err != nil {
 			return nil, fmt.Errorf("query owner-scoped sessions: %w", err)
 		}
@@ -1116,7 +1361,7 @@ func filterMemoryLoopRows(rows []insightsdb.SessionRow, scope memoryLoopScope, l
 				filtered = append(filtered, row)
 			}
 		case memoryLoopScopeMe:
-			if strings.EqualFold(row.OwnerEmail, scope.OwnerEmail) {
+			if strings.EqualFold(row.OwnerID, scope.OwnerID) {
 				filtered = append(filtered, row)
 			}
 		default:
@@ -1140,8 +1385,40 @@ func scopeValue(scope memoryLoopScope) string {
 	case memoryLoopScopeBranch:
 		return scope.Branch
 	case memoryLoopScopeMe:
-		return scope.OwnerEmail
+		return scope.OwnerID
 	default:
 		return ""
 	}
+}
+
+func configuredMemoryLoopOwnerID(ctx context.Context) (string, error) {
+	ownerID, err := githubidentity.ResolveUsername(ctx)
+	if err != nil {
+		return "", fmt.Errorf("resolve GitHub username: %w", err)
+	}
+	return ownerID, nil
+}
+
+func renderEmptyMemoryLoopScopeMessage(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB, scope memoryLoopScope) error {
+	if scope.Mode != memoryLoopScopeMe {
+		fmt.Fprintf(w, "No sessions found for scope %s.\n", formatMemoryLoopScopeLabel(scope))
+		return nil
+	}
+
+	hasOwnerIDData, err := idb.HasOwnerIDData(ctx)
+	if err != nil {
+		return fmt.Errorf("check owner ID coverage: %w", err)
+	}
+	if !hasOwnerIDData {
+		fmt.Fprintf(
+			w,
+			"No personal sessions found for owner_id %q because the insights cache has no owner_id data yet.\n",
+			scope.OwnerID,
+		)
+		fmt.Fprintln(w, "Commit a session under this GitHub account, then run `entire memory-loop refresh --scope me` again.")
+		return nil
+	}
+
+	fmt.Fprintf(w, "No sessions found for personal scope %q.\n", scope.OwnerID)
+	return nil
 }

@@ -2,9 +2,11 @@ package memorylooptui
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
 	"github.com/stretchr/testify/require"
 )
@@ -25,6 +27,116 @@ func TestMemoriesView_RendersDetailsPanelLabel(t *testing.T) {
 	out := newRootModelForStyleTest().View()
 
 	require.Contains(t, out, "DETAILS")
+}
+
+func TestMemoriesView_RendersFilterBarAsTwoSections(t *testing.T) {
+	t.Parallel()
+
+	root := newRootModelForStyleTest()
+
+	out := root.memoriesTab.view()
+
+	require.Contains(t, out, "Status")
+	require.Contains(t, out, "Scope")
+	require.Contains(t, out, "ACTIVE (1)")
+	require.Contains(t, out, "Me (1)")
+}
+
+func TestMemoriesView_EmptyFilteredStateStillShowsFilterBar(t *testing.T) {
+	t.Parallel()
+
+	root := newRootModelForStyleTest()
+	root.memoriesTab.filter = filterSuppressed
+	root.memoriesTab.rebuildTable()
+
+	out := root.memoriesTab.view()
+
+	require.Contains(t, out, "Status")
+	require.Contains(t, out, "Scope")
+	require.Contains(t, out, "No SUPPRESSED / All memories")
+}
+
+func TestRootView_RendersMemoryDetailPageWhenActive(t *testing.T) {
+	t.Parallel()
+
+	m := newRootModelForStyleTest()
+	detail := m.newDetailPage(
+		sampleStateForStyleTest().Store.Records[0],
+	)
+	detail.wizard = newWizardModel(
+		m.styles,
+		sampleStateForStyleTest().Store.Records[0],
+		func(_ memoryloop.MemoryRecord, _ memoryloop.FileLocation) ([]string, error) {
+			return []string{"/repo/AGENTS.md"}, nil
+		},
+	)
+	detail.wizard.stage = wizardStagePreview
+	detail.wizard.request.Intent = WizardIntentApply
+	detail.wizard.request.Location = memoryloop.FileLocationProject
+	detail.wizard.previewTargets = []string{"/repo/AGENTS.md"}
+	m.detailPage = detail
+
+	out := m.View()
+
+	require.Contains(t, out, "MEMORY DETAIL")
+	require.Contains(t, out, "Preview")
+	require.Contains(t, out, "/repo/AGENTS.md")
+	require.Contains(t, out, "Run tests before merging")
+}
+
+func TestRootView_MemoryDetailPageFitsWithinWidth(t *testing.T) {
+	t.Parallel()
+
+	m := newRootModelForStyleTest()
+	m.width = 80
+	record := sampleStateForStyleTest().Store.Records[0]
+	record.Title = "test-driven-development: Apply RED to all changed code paths"
+	record.Body = "Apply the RED-GREEN cycle to every changed function including result structs, cache key logic, and helper functions."
+	record.Why = "TDD was applied to ResolveSkillName but not to PopulateResult or cache key changes; the missed paths later produced bugs."
+	record.Kind = memoryloop.KindSkillPatch
+	record.SkillName = "test-driven-development"
+	record.SkillPath = "superpowers/test-driven-development"
+
+	detail := m.newDetailPage(record)
+	m.detailPage = detail
+
+	out := m.View()
+	for _, line := range strings.Split(out, "\n") {
+		require.LessOrEqual(t, lipgloss.Width(line), m.width, "line exceeds width: %q", line)
+	}
+}
+
+func TestRootView_MemoryDetailPageCardsStayIndented(t *testing.T) {
+	t.Parallel()
+
+	m := newRootModelForStyleTest()
+	detail := m.newDetailPage(sampleStateForStyleTest().Store.Records[0])
+	m.detailPage = detail
+
+	out := m.View()
+	lines := strings.Split(out, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "╭") || strings.Contains(line, "│") || strings.Contains(line, "╰") {
+			require.True(t, strings.HasPrefix(line, "  "), "card line lost indentation: %q", line)
+		}
+	}
+}
+
+func TestRootView_ExternalSkillPatchUsesAgentFileLabel(t *testing.T) {
+	t.Parallel()
+
+	m := newRootModelForStyleTest()
+	record := sampleStateForStyleTest().Store.Records[0]
+	record.Kind = memoryloop.KindSkillPatch
+	record.SkillName = "test-driven-development"
+	record.SkillPath = "superpowers/test-driven-development"
+
+	detail := m.newDetailPage(record)
+	m.detailPage = detail
+
+	out := m.View()
+	require.Contains(t, out, "Apply to agent files")
+	require.NotContains(t, out, "Apply to skill files")
 }
 
 func newRootModelForStyleTest() rootModel {
