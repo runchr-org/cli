@@ -144,7 +144,7 @@ func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb
 	if opts.Me {
 		ownerID, err = githubidentity.ResolveUsername(ctx)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("resolve github username: %w", err)
 		}
 	}
 
@@ -168,6 +168,7 @@ func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb
 	return filtered, nil
 }
 
+//nolint:musttag // nested external structs are part of the intended JSON payload
 func renderSummaryJSON(w io.Writer, rows []insightsdb.SessionRow) error {
 	views := make([]summarySessionView, 0, len(rows))
 	for _, row := range rows {

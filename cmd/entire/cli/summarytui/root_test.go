@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/paginator"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/entireio/cli/cmd/entire/cli/facets"
 	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
 	"github.com/stretchr/testify/require"
@@ -45,13 +45,13 @@ func TestRootUpdate_CycleFilterRebuildsVisibleRows(t *testing.T) {
 	root := newRootModel(sampleRowsForTest(), "feature/summary-browser")
 
 	next, _ := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
-	root = next.(rootModel)
+	root = requireRootModel(t, next)
 	require.Equal(t, filterMainBranch, root.filter)
 	require.Len(t, root.filteredRows, 1)
 	require.Equal(t, "sess-2", root.filteredRows[0].SessionID)
 
 	next, _ = root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
-	root = next.(rootModel)
+	root = requireRootModel(t, next)
 	require.Equal(t, filterAllBranches, root.filter)
 	require.Len(t, root.filteredRows, 2)
 }
@@ -66,7 +66,7 @@ func TestRootUpdate_FilterChangeResetsPaginatorPage(t *testing.T) {
 	root.rebuildTable()
 
 	next, _ := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
-	root = next.(rootModel)
+	root = requireRootModel(t, next)
 
 	require.Equal(t, 0, root.paginator.Page)
 	require.Equal(t, filterMainBranch, root.filter)
@@ -86,7 +86,7 @@ func TestRootUpdate_PageNavigationMovesBetweenFilteredPages(t *testing.T) {
 	require.Equal(t, "sess-1", root.selectedRow().SessionID)
 
 	next, _ := root.Update(tea.KeyMsg{Type: tea.KeyRight})
-	root = next.(rootModel)
+	root = requireRootModel(t, next)
 
 	require.Equal(t, 1, root.paginator.Page)
 	require.Equal(t, "sess-3", root.selectedRow().SessionID)
@@ -98,12 +98,12 @@ func TestRootUpdate_WindowSizeSetsTableDimensions(t *testing.T) {
 	root := newRootModel(sampleRowsForTest(), "feature/summary-browser")
 
 	next, _ := root.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
-	root = next.(rootModel)
+	root = requireRootModel(t, next)
 
 	require.Equal(t, 120, root.width)
 	require.Equal(t, 32, root.height)
 	require.Equal(t, 120, root.table.Width())
-	require.Greater(t, root.table.Height(), 0)
+	require.Positive(t, root.table.Height())
 }
 
 func TestRootUpdate_WindowSizeExpandsPageSizeBeyondDefault(t *testing.T) {
@@ -113,7 +113,7 @@ func TestRootUpdate_WindowSizeExpandsPageSizeBeyondDefault(t *testing.T) {
 	require.Equal(t, defaultPageSize, root.pageSize)
 
 	next, _ := root.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	root = next.(rootModel)
+	root = requireRootModel(t, next)
 
 	require.Greater(t, root.pageSize, defaultPageSize)
 	require.Equal(t, 1, root.paginator.TotalPages)
@@ -133,7 +133,7 @@ func TestRootUpdate_WindowSizePreservesSelectedSessionWhenPossible(t *testing.T)
 	require.Equal(t, "sess-5", selected.SessionID)
 
 	next, _ := root.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
-	root = next.(rootModel)
+	root = requireRootModel(t, next)
 
 	selected = root.selectedRow()
 	require.NotNil(t, selected)
@@ -148,8 +148,9 @@ func TestRootUpdate_EnterOpensSessionDetailPage(t *testing.T) {
 	next, cmd := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	require.NotNil(t, cmd)
 
-	next, _ = next.(rootModel).Update(cmd())
-	updated := next.(rootModel)
+	nextRoot := requireRootModel(t, next)
+	next, _ = nextRoot.Update(cmd())
+	updated := requireRootModel(t, next)
 
 	require.NotNil(t, updated.detailPage)
 	require.Equal(t, "sess-1", updated.detailPage.row.SessionID)
@@ -164,8 +165,9 @@ func TestRootUpdate_EscapeClosesSessionDetailPage(t *testing.T) {
 	next, cmd := root.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	require.NotNil(t, cmd)
 
-	next, _ = next.(rootModel).Update(cmd())
-	updated := next.(rootModel)
+	nextRoot := requireRootModel(t, next)
+	next, _ = nextRoot.Update(cmd())
+	updated := requireRootModel(t, next)
 
 	require.Nil(t, updated.detailPage)
 	require.Equal(t, 0, updated.table.Cursor())
@@ -221,6 +223,14 @@ func newRootModelForTest() rootModel {
 	m.table.SetWidth(100)
 	m.table.SetHeight(12)
 	return m
+}
+
+func requireRootModel(t *testing.T, model tea.Model) rootModel {
+	t.Helper()
+
+	root, ok := model.(rootModel)
+	require.True(t, ok)
+	return root
 }
 
 func sampleRowsForTest() []insightsdb.SessionRow {

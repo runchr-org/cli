@@ -1,3 +1,4 @@
+//nolint:ireturn // bubbletea model methods in this file must return framework interfaces
 package summarytui
 
 import (
@@ -24,6 +25,7 @@ const (
 	filterAllBranches
 )
 
+//nolint:recvcheck // bubbletea pattern: value receiver for interface, pointer receivers for mutation helpers
 type rootModel struct {
 	ctx           context.Context
 	rows          []insightsdb.SessionRow
@@ -49,7 +51,7 @@ func Run(ctx context.Context, rows []insightsdb.SessionRow) error {
 	return RunWithCurrentBranch(ctx, rows, "")
 }
 
-func RunWithCurrentBranch(ctx context.Context, rows []insightsdb.SessionRow, currentBranch string) error {
+func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, currentBranch string) error {
 	p := tea.NewProgram(newRootModel(rows, currentBranch), tea.WithAltScreen())
 	_, err := p.Run()
 	if err != nil {
@@ -94,6 +96,7 @@ func (m rootModel) Init() tea.Cmd {
 	return nil
 }
 
+//nolint:ireturn // required by bubbletea Model interface
 func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -105,11 +108,13 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if m.detailPage != nil {
+			//nolint:exhaustive // only quit/back keys are handled here; all others delegate to the viewport
 			switch msg.Type {
 			case tea.KeyEsc:
 				return m, func() tea.Msg { return closeDetailMsg{} }
 			case tea.KeyCtrlC:
 				return m, tea.Quit
+			default:
 			}
 			var cmd tea.Cmd
 			*m.detailPage, cmd = m.detailPage.update(msg)
@@ -128,6 +133,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		//nolint:exhaustive // only command-specific keys are handled here; all others fall through to the table widget
 		switch msg.Type {
 		case tea.KeyEnter:
 			if row := m.selectedRow(); row != nil {
@@ -136,6 +142,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case tea.KeyCtrlC:
 			return m, tea.Quit
+		default:
 		}
 
 	case openDetailMsg:
@@ -276,17 +283,6 @@ func (m *rootModel) prevPage() {
 	m.paginator.PrevPage()
 	m.table.SetCursor(0)
 	m.rebuildTable()
-}
-
-func filterLabel(filter branchFilter) string {
-	switch filter {
-	case filterMainBranch:
-		return "Main"
-	case filterAllBranches:
-		return "All"
-	default:
-		return "Current Branch"
-	}
 }
 
 func pageLabel(p paginator.Model) string {

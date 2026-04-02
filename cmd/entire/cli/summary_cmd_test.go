@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,6 +42,7 @@ func TestSummaryCmd_HasExpectedMetadata(t *testing.T) {
 	require.NotNil(t, cmd.RunE)
 }
 
+//nolint:musttag // nested external structs are part of the intended JSON payload
 func TestRenderSummaryJSON_EncodesSessionSummaryAndFacets(t *testing.T) {
 	t.Parallel()
 
@@ -171,6 +173,33 @@ func TestLoadSummarySessions_FilterByBranch(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "sess-main", rows[0].SessionID)
+}
+
+func TestLoadSummarySessions_CapsToMostRecent200(t *testing.T) {
+	tmpDir := t.TempDir()
+	setupSummaryTestRepo(t, tmpDir)
+
+	now := time.Date(2026, time.April, 2, 12, 0, 0, 0, time.UTC)
+	for i := range 205 {
+		insertSummaryTestSession(t, tmpDir, insightsdb.SessionRow{
+			CheckpointID: fmt.Sprintf("chk-%03d", i),
+			SessionID:    fmt.Sprintf("sess-%03d", i),
+			SessionIndex: 0,
+			Agent:        "Claude Code",
+			Branch:       "feature/summary-browser",
+			CreatedAt:    now.Add(-time.Duration(i) * time.Minute),
+			HasSummary:   true,
+			Intent:       fmt.Sprintf("task-%03d", i),
+		})
+	}
+
+	rows, err := loadSummarySessions(context.Background(), summaryOptions{
+		Last: 500,
+	})
+	require.NoError(t, err)
+	require.Len(t, rows, 200)
+	require.Equal(t, "sess-000", rows[0].SessionID)
+	require.Equal(t, "sess-199", rows[len(rows)-1].SessionID)
 }
 
 func sampleSummarySessionRow() insightsdb.SessionRow {

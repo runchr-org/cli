@@ -9,6 +9,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
 )
 
+//nolint:recvcheck // bubbletea-style model mixes pointer sizing with value update/view methods
 type detailModel struct {
 	styles   styles
 	row      insightsdb.SessionRow
