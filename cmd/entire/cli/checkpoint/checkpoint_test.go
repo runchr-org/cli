@@ -673,8 +673,11 @@ func TestUpdateSummary(t *testing.T) {
 			Code:     []CodeLearning{{Path: "file1.go", Line: 10, Finding: "Code finding"}},
 			Workflow: []string{"Workflow learning"},
 		},
-		Friction:  []string{"Some friction"},
-		OpenItems: []string{"Open item 1"},
+		Friction:                []string{"Some friction"},
+		OpenItems:               []string{"Open item 1"},
+		ImplementationRationale: []string{"Reuse the shared checkpoint summary model"},
+		Tradeoffs:               []string{"Keep the schema additive to avoid breaking old metadata"},
+		CodebasePatterns:        []string{"Checkpoint metadata should remain backward-compatible"},
 	}
 
 	err = store.UpdateSummary(context.Background(), checkpointID, summary)
@@ -698,6 +701,15 @@ func TestUpdateSummary(t *testing.T) {
 	}
 	if len(updatedMetadata.Summary.Friction) != 1 {
 		t.Errorf("summary.Friction length = %d, want 1", len(updatedMetadata.Summary.Friction))
+	}
+	if len(updatedMetadata.Summary.ImplementationRationale) != 1 {
+		t.Errorf("summary.ImplementationRationale length = %d, want 1", len(updatedMetadata.Summary.ImplementationRationale))
+	}
+	if len(updatedMetadata.Summary.Tradeoffs) != 1 {
+		t.Errorf("summary.Tradeoffs length = %d, want 1", len(updatedMetadata.Summary.Tradeoffs))
+	}
+	if len(updatedMetadata.Summary.CodebasePatterns) != 1 {
+		t.Errorf("summary.CodebasePatterns length = %d, want 1", len(updatedMetadata.Summary.CodebasePatterns))
 	}
 
 	// Verify other metadata fields are preserved
@@ -2948,6 +2960,15 @@ func TestRedactSummary_WithSecrets(t *testing.T) {
 		OpenItems: []string{
 			"Rotate " + highEntropySecret,
 		},
+		ImplementationRationale: []string{
+			"Keep " + highEntropySecret + " out of logs",
+		},
+		Tradeoffs: []string{
+			"Trade off " + highEntropySecret + " for safety",
+		},
+		CodebasePatterns: []string{
+			"Store " + highEntropySecret + " in memory only",
+		},
 		Learnings: LearningsSummary{
 			Repo: []string{
 				"Found secret " + highEntropySecret + " in config",
@@ -2990,6 +3011,15 @@ func TestRedactSummary_WithSecrets(t *testing.T) {
 	if strings.Contains(result.OpenItems[0], highEntropySecret) {
 		t.Error("OpenItems[0] should not contain the secret")
 	}
+	if strings.Contains(result.ImplementationRationale[0], highEntropySecret) {
+		t.Error("ImplementationRationale[0] should not contain the secret")
+	}
+	if strings.Contains(result.Tradeoffs[0], highEntropySecret) {
+		t.Error("Tradeoffs[0] should not contain the secret")
+	}
+	if strings.Contains(result.CodebasePatterns[0], highEntropySecret) {
+		t.Error("CodebasePatterns[0] should not contain the secret")
+	}
 
 	if strings.Contains(result.Learnings.Repo[0], highEntropySecret) {
 		t.Error("Learnings.Repo[0] should not contain the secret")
@@ -3026,10 +3056,13 @@ func TestRedactSummary_WithSecrets(t *testing.T) {
 func TestRedactSummary_NoSecrets(t *testing.T) {
 	t.Parallel()
 	summary := &Summary{
-		Intent:    "Fix a bug",
-		Outcome:   "Bug fixed",
-		Friction:  []string{"None"},
-		OpenItems: []string{},
+		Intent:                  "Fix a bug",
+		Outcome:                 "Bug fixed",
+		Friction:                []string{"None"},
+		OpenItems:               []string{},
+		ImplementationRationale: []string{"Keep it simple"},
+		Tradeoffs:               []string{"No tradeoffs"},
+		CodebasePatterns:        []string{"Use existing helpers"},
 		Learnings: LearningsSummary{
 			Repo:     []string{"Found the pattern"},
 			Workflow: []string{"Use TDD"},
@@ -3049,6 +3082,89 @@ func TestRedactSummary_NoSecrets(t *testing.T) {
 	}
 	if result.Learnings.Code[0].Finding != "Good code" {
 		t.Errorf("Finding should be unchanged, got %q", result.Learnings.Code[0].Finding)
+	}
+	if result.ImplementationRationale[0] != "Keep it simple" {
+		t.Errorf("ImplementationRationale should be unchanged, got %q", result.ImplementationRationale[0])
+	}
+	if result.Tradeoffs[0] != "No tradeoffs" {
+		t.Errorf("Tradeoffs should be unchanged, got %q", result.Tradeoffs[0])
+	}
+	if result.CodebasePatterns[0] != "Use existing helpers" {
+		t.Errorf("CodebasePatterns should be unchanged, got %q", result.CodebasePatterns[0])
+	}
+}
+
+func TestSummaryJSONRoundTrip_WithExplanatoryInsights(t *testing.T) {
+	t.Parallel()
+	original := &Summary{
+		Intent:  "Explain the new fields",
+		Outcome: "Stored the fields in summary metadata",
+		Learnings: LearningsSummary{
+			Repo:     []string{"Keep summaries additive"},
+			Workflow: []string{"Preserve backward compatibility"},
+			Code:     []CodeLearning{{Path: "cmd/entire/cli/checkpoint/checkpoint.go", Line: 480, Finding: "Summary schema lives here"}},
+		},
+		Friction:                []string{"Had to update multiple renderers"},
+		OpenItems:               []string{"Backfill old rows"},
+		ImplementationRationale: []string{"Use the existing summary type"},
+		Tradeoffs:               []string{"Add fields instead of a separate type"},
+		CodebasePatterns:        []string{"Keep metadata decoding backward-compatible"},
+	}
+
+	blob, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	var decoded Summary
+	if err := json.Unmarshal(blob, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if got := decoded.ImplementationRationale; len(got) != 1 || got[0] != original.ImplementationRationale[0] {
+		t.Fatalf("ImplementationRationale = %v, want %v", got, original.ImplementationRationale)
+	}
+	if got := decoded.Tradeoffs; len(got) != 1 || got[0] != original.Tradeoffs[0] {
+		t.Fatalf("Tradeoffs = %v, want %v", got, original.Tradeoffs)
+	}
+	if got := decoded.CodebasePatterns; len(got) != 1 || got[0] != original.CodebasePatterns[0] {
+		t.Fatalf("CodebasePatterns = %v, want %v", got, original.CodebasePatterns)
+	}
+}
+
+func TestSummaryDecode_BackwardCompatibleMissingExplanatoryInsights(t *testing.T) {
+	t.Parallel()
+	const oldJSON = `{
+		"intent": "Fix a bug",
+		"outcome": "Bug fixed",
+		"learnings": {
+			"repo": ["Found the pattern"],
+			"code": [{"path": "main.go", "line": 10, "finding": "Useful"}],
+			"workflow": ["Use TDD"]
+		},
+		"friction": ["None"],
+		"open_items": ["None"]
+	}`
+
+	var decoded Summary
+	if err := json.Unmarshal([]byte(oldJSON), &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if decoded.Intent != "Fix a bug" {
+		t.Fatalf("Intent = %q, want %q", decoded.Intent, "Fix a bug")
+	}
+	if decoded.Outcome != "Bug fixed" {
+		t.Fatalf("Outcome = %q, want %q", decoded.Outcome, "Bug fixed")
+	}
+	if decoded.ImplementationRationale != nil {
+		t.Fatalf("ImplementationRationale = %v, want nil", decoded.ImplementationRationale)
+	}
+	if decoded.Tradeoffs != nil {
+		t.Fatalf("Tradeoffs = %v, want nil", decoded.Tradeoffs)
+	}
+	if decoded.CodebasePatterns != nil {
+		t.Fatalf("CodebasePatterns = %v, want nil", decoded.CodebasePatterns)
 	}
 }
 

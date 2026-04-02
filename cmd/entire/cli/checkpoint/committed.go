@@ -635,10 +635,13 @@ func redactSummary(s *Summary) *Summary {
 		return nil
 	}
 	return &Summary{
-		Intent:    redact.String(s.Intent),
-		Outcome:   redact.String(s.Outcome),
-		Friction:  redactStringSlice(s.Friction),
-		OpenItems: redactStringSlice(s.OpenItems),
+		Intent:                  redact.String(s.Intent),
+		Outcome:                 redact.String(s.Outcome),
+		Friction:                redactStringSlice(s.Friction),
+		OpenItems:               redactStringSlice(s.OpenItems),
+		ImplementationRationale: redactStringSlice(s.ImplementationRationale),
+		Tradeoffs:               redactStringSlice(s.Tradeoffs),
+		CodebasePatterns:        redactStringSlice(s.CodebasePatterns),
 		Learnings: LearningsSummary{
 			Repo:     redactStringSlice(s.Learnings.Repo),
 			Workflow: redactStringSlice(s.Learnings.Workflow),

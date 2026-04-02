@@ -479,11 +479,14 @@ type SessionMetrics struct {
 
 // Summary contains AI-generated summary of a checkpoint.
 type Summary struct {
-	Intent    string           `json:"intent"`     // What user wanted to accomplish
-	Outcome   string           `json:"outcome"`    // What was achieved
-	Learnings LearningsSummary `json:"learnings"`  // Categorized learnings
-	Friction  []string         `json:"friction"`   // Problems/annoyances encountered
-	OpenItems []string         `json:"open_items"` // Tech debt, unfinished work
+	Intent                  string           `json:"intent"`     // What user wanted to accomplish
+	Outcome                 string           `json:"outcome"`    // What was achieved
+	Learnings               LearningsSummary `json:"learnings"`  // Categorized learnings
+	Friction                []string         `json:"friction"`   // Problems/annoyances encountered
+	OpenItems               []string         `json:"open_items"` // Tech debt, unfinished work
+	ImplementationRationale []string         `json:"implementation_rationale,omitempty"`
+	Tradeoffs               []string         `json:"tradeoffs,omitempty"`
+	CodebasePatterns        []string         `json:"codebase_patterns,omitempty"`
 }
 
 // LearningsSummary contains learnings grouped by scope.
