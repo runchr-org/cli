@@ -194,7 +194,7 @@ func scanSession(rows *sql.Rows) (SessionRow, error) {
 	return row, nil
 }
 
-// populateDenormalized loads files_touched, friction, and learnings for the session.
+// populateDenormalized loads denormalized fields for the session.
 func (idb *InsightsDB) populateDenormalized(ctx context.Context, row *SessionRow) error {
 	var err error
 	row.FilesTouched, err = idb.loadFilesTouched(ctx, row.CheckpointID, row.SessionIndex)
@@ -206,6 +206,23 @@ func (idb *InsightsDB) populateDenormalized(ctx context.Context, row *SessionRow
 		return err
 	}
 	row.Learnings, err = idb.loadLearnings(ctx, row.CheckpointID, row.SessionIndex)
+	if err != nil {
+		return err
+	}
+	row.ImplementationRationale, err = idb.loadStringSlice(
+		ctx,
+		"implementation_rationale",
+		row.CheckpointID,
+		row.SessionIndex,
+	)
+	if err != nil {
+		return err
+	}
+	row.Tradeoffs, err = idb.loadStringSlice(ctx, "tradeoffs", row.CheckpointID, row.SessionIndex)
+	if err != nil {
+		return err
+	}
+	row.CodebasePatterns, err = idb.loadStringSlice(ctx, "codebase_patterns", row.CheckpointID, row.SessionIndex)
 	if err != nil {
 		return err
 	}
@@ -289,6 +306,30 @@ func (idb *InsightsDB) loadLearnings(ctx context.Context, checkpointID string, s
 		return nil, fmt.Errorf("iterate learnings: %w", err)
 	}
 	return learnings, nil
+}
+
+func (idb *InsightsDB) loadStringSlice(ctx context.Context, table, checkpointID string, sessionIndex int) ([]string, error) {
+	rows, err := idb.db.QueryContext(ctx,
+		"SELECT text FROM "+table+" WHERE checkpoint_id = ? AND session_index = ?", //nolint:gosec // table name is hardcoded
+		checkpointID, sessionIndex,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	var values []string
+	for rows.Next() {
+		var value string
+		if err = rows.Scan(&value); err != nil {
+			return nil, fmt.Errorf("scan %s: %w", table, err)
+		}
+		values = append(values, value)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate %s: %w", table, err)
+	}
+	return values, nil
 }
 
 func (idb *InsightsDB) loadToolCalls(ctx context.Context, checkpointID string, sessionIndex int) (map[string]int, error) {

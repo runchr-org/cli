@@ -121,6 +121,21 @@ func (idb *InsightsDB) migrate() error {
 			finding       TEXT NOT NULL,
 			path          TEXT
 		)`,
+		`CREATE TABLE IF NOT EXISTS implementation_rationale (
+			checkpoint_id TEXT NOT NULL,
+			session_index INTEGER NOT NULL,
+			text          TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS tradeoffs (
+			checkpoint_id TEXT NOT NULL,
+			session_index INTEGER NOT NULL,
+			text          TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS codebase_patterns (
+			checkpoint_id TEXT NOT NULL,
+			session_index INTEGER NOT NULL,
+			text          TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS tool_calls (
 			checkpoint_id TEXT NOT NULL,
 			session_index INTEGER NOT NULL,

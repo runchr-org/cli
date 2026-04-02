@@ -43,11 +43,14 @@ type SessionRow struct {
 	HasSummary     bool
 	HasFacets      bool
 	// Denormalized arrays
-	FilesTouched []string
-	Friction     []string
-	Learnings    []LearningRow
-	ToolCounts   map[string]int // tool name → invocation count
-	Facets       facets.SessionFacets
+	FilesTouched             []string
+	Friction                 []string
+	Learnings                []LearningRow
+	ImplementationRationale  []string
+	Tradeoffs                []string
+	CodebasePatterns         []string
+	ToolCounts               map[string]int // tool name → invocation count
+	Facets                   facets.SessionFacets
 }
 
 // LearningRow represents a single learning entry within a session.
@@ -148,6 +151,9 @@ func (idb *InsightsDB) InsertSession(ctx context.Context, row SessionRow) error 
 	if err = insertLearnings(ctx, tx, row); err != nil {
 		return err
 	}
+	if err = insertSummarySignals(ctx, tx, row); err != nil {
+		return err
+	}
 	if err = insertToolCalls(ctx, tx, row); err != nil {
 		return err
 	}
@@ -241,6 +247,34 @@ func insertLearnings(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 	return nil
 }
 
+func insertSummarySignals(ctx context.Context, tx *sql.Tx, row SessionRow) error {
+	for _, value := range row.ImplementationRationale {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT INTO implementation_rationale (checkpoint_id, session_index, text) VALUES (?, ?, ?)",
+			row.CheckpointID, row.SessionIndex, value,
+		); err != nil {
+			return fmt.Errorf("insert implementation_rationale: %w", err)
+		}
+	}
+	for _, value := range row.Tradeoffs {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT INTO tradeoffs (checkpoint_id, session_index, text) VALUES (?, ?, ?)",
+			row.CheckpointID, row.SessionIndex, value,
+		); err != nil {
+			return fmt.Errorf("insert tradeoffs: %w", err)
+		}
+	}
+	for _, value := range row.CodebasePatterns {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT INTO codebase_patterns (checkpoint_id, session_index, text) VALUES (?, ?, ?)",
+			row.CheckpointID, row.SessionIndex, value,
+		); err != nil {
+			return fmt.Errorf("insert codebase_patterns: %w", err)
+		}
+	}
+	return nil
+}
+
 func insertToolCalls(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 	for tool, count := range row.ToolCounts {
 		if _, err := tx.ExecContext(ctx,
@@ -305,7 +339,8 @@ func insertFacets(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 }
 
 // UpdateSessionSummary updates an existing session row with summary-derived data
-// (intent, outcome, scores, friction, learnings) and sets has_summary = 1.
+// (intent, outcome, scores, friction, learnings, explanatory insight arrays)
+// and sets has_summary = 1.
 func (idb *InsightsDB) UpdateSessionSummary(ctx context.Context, row SessionRow) error {
 	tx, err := idb.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -332,8 +367,14 @@ func (idb *InsightsDB) UpdateSessionSummary(ctx context.Context, row SessionRow)
 		return fmt.Errorf("update session summary: %w", err)
 	}
 
-	// Delete old friction/learnings and re-insert.
-	for _, table := range []string{"friction", "learnings"} {
+	// Delete old summary-derived rows and re-insert.
+	for _, table := range []string{
+		"friction",
+		"learnings",
+		"implementation_rationale",
+		"tradeoffs",
+		"codebase_patterns",
+	} {
 		if _, err = tx.ExecContext(ctx,
 			"DELETE FROM "+table+" WHERE checkpoint_id = ? AND session_index = ?", //nolint:gosec // table name is hardcoded
 			row.CheckpointID, row.SessionIndex,
@@ -346,6 +387,9 @@ func (idb *InsightsDB) UpdateSessionSummary(ctx context.Context, row SessionRow)
 		return err
 	}
 	if err = insertLearnings(ctx, tx, row); err != nil {
+		return err
+	}
+	if err = insertSummarySignals(ctx, tx, row); err != nil {
 		return err
 	}
 

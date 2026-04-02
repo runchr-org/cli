@@ -183,8 +183,11 @@ func TestInsertSession_WithDenormalizedFields(t *testing.T) {
 		SessionID:    "sess-denorm",
 		SessionIndex: 0,
 		CreatedAt:    time.Now(),
-		FilesTouched: []string{"main.go", "util.go", "README.md"},
-		Friction:     []string{"had to retry", "tool failed twice"},
+		FilesTouched:            []string{"main.go", "util.go", "README.md"},
+		Friction:                []string{"had to retry", "tool failed twice"},
+		ImplementationRationale: []string{"Reuse the summary pipeline"},
+		Tradeoffs:               []string{"Keep the schema additive"},
+		CodebasePatterns:        []string{"Store summary arrays in normalized tables"},
 		Learnings: []insightsdb.LearningRow{
 			{Scope: "repo", Finding: "uses conventional commits"},
 			{Scope: "code", Finding: "helpers in util.go", Path: "util.go"},
@@ -201,7 +204,45 @@ func TestInsertSession_WithDenormalizedFields(t *testing.T) {
 	got := sessions[0]
 	assert.ElementsMatch(t, []string{"main.go", "util.go", "README.md"}, got.FilesTouched)
 	assert.ElementsMatch(t, []string{"had to retry", "tool failed twice"}, got.Friction)
+	assert.ElementsMatch(t, []string{"Reuse the summary pipeline"}, got.ImplementationRationale)
+	assert.ElementsMatch(t, []string{"Keep the schema additive"}, got.Tradeoffs)
+	assert.ElementsMatch(t, []string{"Store summary arrays in normalized tables"}, got.CodebasePatterns)
 	require.Len(t, got.Learnings, 2)
+}
+
+func TestUpdateSessionSummary_ReplacesExplanatoryInsightRows(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	initial := minimalSessionRow("chk-summary-update", "sess-summary-update", 0)
+	require.NoError(t, db.InsertSession(ctx, initial))
+
+	updated := minimalSessionRow("chk-summary-update", "sess-summary-update", 0)
+	updated.Intent = "Explain the implementation"
+	updated.Outcome = "Stored the new explanatory summary arrays"
+	updated.HasSummary = true
+	updated.Friction = []string{"Had to update multiple cache paths"}
+	updated.Learnings = []insightsdb.LearningRow{
+		{Scope: "repo", Finding: "Insights cache uses normalized helper tables"},
+	}
+	updated.ImplementationRationale = []string{"Reuse the existing summary cache update flow"}
+	updated.Tradeoffs = []string{"Add small tables instead of overloading sessions columns"}
+	updated.CodebasePatterns = []string{"Summary-derived arrays live in normalized tables"}
+
+	require.NoError(t, db.UpdateSessionSummary(ctx, updated))
+
+	rows, err := db.QueryLastNSessions(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	got := rows[0]
+	assert.True(t, got.HasSummary)
+	assert.Equal(t, "Explain the implementation", got.Intent)
+	assert.ElementsMatch(t, []string{"Reuse the existing summary cache update flow"}, got.ImplementationRationale)
+	assert.ElementsMatch(t, []string{"Add small tables instead of overloading sessions columns"}, got.Tradeoffs)
+	assert.ElementsMatch(t, []string{"Summary-derived arrays live in normalized tables"}, got.CodebasePatterns)
 }
 
 func TestInsertSession_WithStructuredFacets(t *testing.T) {

@@ -48,6 +48,9 @@ func TestOpen_CreatesAllTables(t *testing.T) {
 		"files_touched",
 		"friction",
 		"learnings",
+		"implementation_rationale",
+		"tradeoffs",
+		"codebase_patterns",
 		"review_rule_signals",
 		"suggestions",
 	}

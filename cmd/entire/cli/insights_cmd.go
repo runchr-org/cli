@@ -358,6 +358,9 @@ func metadataToSessionRow(cpID string, sessionIndex int, meta *checkpoint.Commit
 		row.Intent = meta.Summary.Intent
 		row.Outcome = meta.Summary.Outcome
 		row.Friction = meta.Summary.Friction
+		row.ImplementationRationale = meta.Summary.ImplementationRationale
+		row.Tradeoffs = meta.Summary.Tradeoffs
+		row.CodebasePatterns = meta.Summary.CodebasePatterns
 
 		for _, l := range meta.Summary.Learnings.Repo {
 			row.Learnings = append(row.Learnings, insightsdb.LearningRow{Scope: "repo", Finding: l})
