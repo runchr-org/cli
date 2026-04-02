@@ -171,9 +171,11 @@ func TestRootUpdate_EscapeClosesSessionDetailPage(t *testing.T) {
 func TestDetailView_RendersSummaryAndFacets(t *testing.T) {
 	t.Parallel()
 
-	view := newDetailModel(newStyles(), sampleRowsForTest()[0]).view()
+	detail := newDetailModel(newStyles(), sampleRowsForTest()[0])
+	require.Contains(t, detail.view(), "SESSION DETAIL")
 
-	require.Contains(t, view, "SESSION DETAIL")
+	view := detail.renderContent()
+
 	require.Contains(t, view, "Fix flaky tests")
 	require.Contains(t, view, "Repeated Instructions")
 	require.Contains(t, view, "Run tests before committing")
@@ -192,7 +194,7 @@ func TestDetailView_EmptyStatesAreExplicit(t *testing.T) {
 	row.Learnings = nil
 	row.Facets = facets.SessionFacets{}
 
-	view := newDetailModel(newStyles(), row).view()
+	view := newDetailModel(newStyles(), row).renderContent()
 
 	require.Contains(t, view, "No summary cached")
 	require.Contains(t, view, "No facets cached")
@@ -225,7 +227,11 @@ func sampleRowsForTest() []insightsdb.SessionRow {
 			CheckpointID: "chk-1",
 			SessionID:    "sess-1",
 			Agent:        "Claude Code",
+			Model:        "sonnet",
 			Branch:       "feature/summary-browser",
+			OwnerName:    "Alisha Kawaguchi",
+			OwnerID:      "alishakawaguchi",
+			OwnerEmail:   "alisha@example.com",
 			CreatedAt:    now,
 			TotalTokens:  3200,
 			TurnCount:    7,
@@ -238,8 +244,23 @@ func sampleRowsForTest() []insightsdb.SessionRow {
 				RepeatedUserInstructions: []facets.RepeatedInstruction{
 					{Instruction: "Run tests before committing"},
 				},
+				MissingContext: []facets.MissingContextSignal{
+					{Item: "Run canary after prompt wording changes"},
+				},
+				FailureLoops: []facets.FailureLoop{
+					{Description: "Repeated test reruns without changing setup", Count: 2},
+				},
+				SkillSignals: []facets.SkillSignal{
+					{SkillName: "test-driven-development"},
+				},
 				ReviewDerivedRules: []facets.ReviewDerivedRule{
 					{Rule: "Keep helper functions package-private unless reuse is proven"},
+				},
+				RepoGotchas: []string{
+					"Always use repo root for git-relative paths",
+				},
+				WorkflowGaps: []string{
+					"Run focused tests before broad verification",
 				},
 			},
 		},
@@ -327,4 +348,24 @@ func manyCurrentBranchRowsForTest(count int) []insightsdb.SessionRow {
 		})
 	}
 	return rows
+}
+
+func manyFacetRowForTest() insightsdb.SessionRow {
+	row := sampleRowsForTest()[0]
+	row.Friction = make([]string, 0, 40)
+	row.Learnings = make([]insightsdb.LearningRow, 0, 40)
+	row.Facets.RepoGotchas = make([]string, 0, 40)
+	row.Facets.WorkflowGaps = make([]string, 0, 40)
+
+	for i := range 40 {
+		row.Friction = append(row.Friction, "Friction item "+strconv.Itoa(i+1))
+		row.Learnings = append(row.Learnings, insightsdb.LearningRow{
+			Scope:   "repo",
+			Finding: "Learning item " + strconv.Itoa(i+1),
+		})
+		row.Facets.RepoGotchas = append(row.Facets.RepoGotchas, "Repo gotcha "+strconv.Itoa(i+1))
+		row.Facets.WorkflowGaps = append(row.Facets.WorkflowGaps, "Workflow gap "+strconv.Itoa(i+1))
+	}
+
+	return row
 }

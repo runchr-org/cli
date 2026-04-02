@@ -92,6 +92,9 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
+		if m.detailPage != nil {
+			m.detailPage.setSize(m.width, m.height)
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -102,7 +105,9 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.KeyCtrlC:
 				return m, tea.Quit
 			}
-			return m, nil
+			var cmd tea.Cmd
+			*m.detailPage, cmd = m.detailPage.update(msg)
+			return m, cmd
 		}
 
 		switch {
@@ -129,6 +134,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case openDetailMsg:
 		m.detailPage = newDetailModel(m.styles, msg.row)
+		m.detailPage.setSize(m.width, m.height)
 		return m, nil
 
 	case closeDetailMsg:
