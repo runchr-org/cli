@@ -58,7 +58,7 @@ func TestReconcileDisconnected_NoRemote(t *testing.T) {
 	}
 
 	// Should be a no-op (no remote)
-	if err := ReconcileDisconnectedMetadataBranch(context.Background(), repo, io.Discard); err != nil {
+	if err := ReconcileDisconnectedMetadataBranch(context.Background(), repo, originMetadataRef(), io.Discard); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -76,7 +76,7 @@ func TestReconcileDisconnected_NoLocal(t *testing.T) {
 	}
 
 	// No local branch → no-op
-	if err := ReconcileDisconnectedMetadataBranch(context.Background(), repo, io.Discard); err != nil {
+	if err := ReconcileDisconnectedMetadataBranch(context.Background(), repo, originMetadataRef(), io.Discard); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -98,7 +98,7 @@ func TestReconcileDisconnected_SameHash(t *testing.T) {
 	}
 
 	// Same hash → no-op
-	if err := ReconcileDisconnectedMetadataBranch(context.Background(), repo, io.Discard); err != nil {
+	if err := ReconcileDisconnectedMetadataBranch(context.Background(), repo, originMetadataRef(), io.Discard); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -139,7 +139,7 @@ func TestReconcileDisconnected_SharedAncestry(t *testing.T) {
 	}
 
 	// Shared ancestry → no-op
-	if err := ReconcileDisconnectedMetadataBranch(context.Background(), repo, io.Discard); err != nil {
+	if err := ReconcileDisconnectedMetadataBranch(context.Background(), repo, originMetadataRef(), io.Discard); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -186,7 +186,7 @@ func TestReconcileDisconnected_Disconnected(t *testing.T) {
 	}
 
 	// Run reconciliation
-	if err := ReconcileDisconnectedMetadataBranch(context.Background(), repo, io.Discard); err != nil {
+	if err := ReconcileDisconnectedMetadataBranch(context.Background(), repo, originMetadataRef(), io.Discard); err != nil {
 		t.Fatalf("ReconcileDisconnectedMetadataBranch() failed: %v", err)
 	}
 
@@ -297,7 +297,7 @@ func TestReconcileDisconnected_MultipleLocalCheckpoints(t *testing.T) {
 	}
 
 	// Run reconciliation
-	if err := ReconcileDisconnectedMetadataBranch(context.Background(), repo, io.Discard); err != nil {
+	if err := ReconcileDisconnectedMetadataBranch(context.Background(), repo, originMetadataRef(), io.Discard); err != nil {
 		t.Fatalf("ReconcileDisconnectedMetadataBranch() failed: %v", err)
 	}
 
@@ -416,7 +416,7 @@ func TestIsMetadataDisconnected_NoRemote(t *testing.T) {
 		t.Fatalf("failed to open repo: %v", err)
 	}
 
-	disconnected, err := IsMetadataDisconnected(context.Background(), repo)
+	disconnected, err := IsMetadataDisconnected(context.Background(), repo, originMetadataRef())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -437,7 +437,7 @@ func TestIsMetadataDisconnected_NoLocal(t *testing.T) {
 	}
 
 	// No local branch → false
-	disconnected, err := IsMetadataDisconnected(context.Background(), repo)
+	disconnected, err := IsMetadataDisconnected(context.Background(), repo, originMetadataRef())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestIsMetadataDisconnected_SameHash(t *testing.T) {
 		t.Fatalf("EnsureMetadataBranch failed: %v", err)
 	}
 
-	disconnected, err := IsMetadataDisconnected(context.Background(), repo)
+	disconnected, err := IsMetadataDisconnected(context.Background(), repo, originMetadataRef())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -503,7 +503,7 @@ func TestIsMetadataDisconnected_SharedAncestry(t *testing.T) {
 		t.Fatalf("failed to re-open repo: %v", err)
 	}
 
-	disconnected, err := IsMetadataDisconnected(context.Background(), repo)
+	disconnected, err := IsMetadataDisconnected(context.Background(), repo, originMetadataRef())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -538,7 +538,7 @@ func TestIsMetadataDisconnected_Disconnected(t *testing.T) {
 		t.Fatalf("failed to open repo: %v", err)
 	}
 
-	disconnected, err := IsMetadataDisconnected(context.Background(), repo)
+	disconnected, err := IsMetadataDisconnected(context.Background(), repo, originMetadataRef())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -593,7 +593,7 @@ func TestReconcileDisconnected_ModifiedEntries(t *testing.T) {
 		t.Fatalf("failed to open repo: %v", err)
 	}
 
-	if err := ReconcileDisconnectedMetadataBranch(context.Background(), repo, io.Discard); err != nil {
+	if err := ReconcileDisconnectedMetadataBranch(context.Background(), repo, originMetadataRef(), io.Discard); err != nil {
 		t.Fatalf("ReconcileDisconnectedMetadataBranch() failed: %v", err)
 	}
 
@@ -693,7 +693,7 @@ func TestReconcileDisconnected_AllEmptyOrphans(t *testing.T) {
 	remoteRef, err := repo.Reference(remoteRefName, true)
 	require.NoError(t, err)
 
-	err = ReconcileDisconnectedMetadataBranch(context.Background(), repo, io.Discard)
+	err = ReconcileDisconnectedMetadataBranch(context.Background(), repo, originMetadataRef(), io.Discard)
 	require.NoError(t, err)
 
 	// Local branch should now point to the remote tip (reset, not cherry-picked)
@@ -743,7 +743,7 @@ func TestReconcileDisconnected_CherryPickDeletion(t *testing.T) {
 	repo, err := git.PlainOpen(cloneDir)
 	require.NoError(t, err)
 
-	err = ReconcileDisconnectedMetadataBranch(context.Background(), repo, io.Discard)
+	err = ReconcileDisconnectedMetadataBranch(context.Background(), repo, originMetadataRef(), io.Discard)
 	require.NoError(t, err)
 
 	// Verify merged tree: should have remote data + first local checkpoint,
@@ -765,4 +765,66 @@ func TestReconcileDisconnected_CherryPickDeletion(t *testing.T) {
 	assert.Contains(t, entries, "ab/cdef012345/metadata.json", "kept checkpoint should be present")
 	// Second local checkpoint should be deleted
 	assert.NotContains(t, entries, "cd/ef01234567/metadata.json", "deleted checkpoint should not be present")
+}
+
+// TestReconcileDisconnected_TempRef verifies that reconciliation works when the
+// remote data is stored under a temp ref (refs/entire-fetch-tmp/) instead of the
+// standard remote-tracking ref (refs/remotes/origin/). This is the code path used
+// when pushing to a checkpoint URL with ENTIRE_CHECKPOINT_TOKEN.
+func TestReconcileDisconnected_TempRef(t *testing.T) {
+	t.Parallel()
+
+	bareDir := initBareWithMetadataBranch(t)
+	cloneDir, run := cloneWithConfig(t, bareDir)
+
+	// Create a disconnected local metadata branch (simulating the empty-orphan bug)
+	run("checkout", "--orphan", "temp-orphan")
+	run("rm", "-rf", ".")
+	localDir := filepath.Join(cloneDir, "ab", "cdef012345")
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "metadata.json"), []byte(`{"checkpoint_id":"abcdef012345"}`), 0o644))
+	run("add", ".")
+	run("commit", "-m", "Checkpoint: abcdef012345")
+	run("branch", "-f", paths.MetadataBranchName, "temp-orphan")
+	run("checkout", "main")
+
+	repo, err := git.PlainOpen(cloneDir)
+	require.NoError(t, err)
+
+	// Copy the remote-tracking ref to a temp ref (simulating what fetchAndMergeSessionsCommon
+	// does for URL targets). The temp ref holds the same commit as origin's remote-tracking ref.
+	remoteRefName := plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
+	remoteRef, err := repo.Reference(remoteRefName, true)
+	require.NoError(t, err)
+
+	tmpRefName := plumbing.ReferenceName("refs/entire-fetch-tmp/" + paths.MetadataBranchName)
+	tmpRef := plumbing.NewHashReference(tmpRefName, remoteRef.Hash())
+	require.NoError(t, repo.Storer.SetReference(tmpRef))
+
+	// Reconcile against the temp ref — this should fix the disconnection
+	err = ReconcileDisconnectedMetadataBranch(context.Background(), repo, tmpRefName, io.Discard)
+	require.NoError(t, err)
+
+	// Verify result: local branch should now be parented off the remote (temp ref) tip
+	newRef, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
+	require.NoError(t, err)
+	tipCommit, err := repo.CommitObject(newRef.Hash())
+	require.NoError(t, err)
+
+	require.Len(t, tipCommit.ParentHashes, 1, "expected linear history")
+	assert.Equal(t, remoteRef.Hash(), tipCommit.ParentHashes[0],
+		"cherry-picked commit should be parented off temp ref (remote) tip")
+
+	// Verify merged tree contains both local and remote data
+	tree, err := tipCommit.Tree()
+	require.NoError(t, err)
+	entries := make(map[string]object.TreeEntry)
+	require.NoError(t, checkpoint.FlattenTree(repo, tree, "", entries))
+	assert.Contains(t, entries, "metadata.json", "remote data should be preserved")
+	assert.Contains(t, entries, "ab/cdef012345/metadata.json", "local data should be preserved")
+}
+
+// originMetadataRef returns the standard remote-tracking ref for the metadata branch.
+func originMetadataRef() plumbing.ReferenceName {
+	return plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
 }

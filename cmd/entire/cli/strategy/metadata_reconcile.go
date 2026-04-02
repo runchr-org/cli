@@ -28,7 +28,10 @@ var disconnectedOnce sync.Once //nolint:gochecknoglobals // intentional per-proc
 // Returns (false, nil) if either branch is missing, they point to the same hash,
 // or they share a common ancestor (normal divergence handled by push merge).
 // Returns (true, nil) only when both exist and are truly disconnected.
-func IsMetadataDisconnected(ctx context.Context, repo *git.Repository) (bool, error) {
+//
+// remoteRefName is the reference to compare against (e.g., refs/remotes/origin/<branch>
+// or refs/entire-fetch-tmp/<branch> when fetching from a checkpoint URL).
+func IsMetadataDisconnected(ctx context.Context, repo *git.Repository, remoteRefName plumbing.ReferenceName) (bool, error) {
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 	localRef, err := repo.Reference(refName, true)
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
@@ -38,7 +41,6 @@ func IsMetadataDisconnected(ctx context.Context, repo *git.Repository) (bool, er
 		return false, fmt.Errorf("failed to check local metadata branch: %w", err)
 	}
 
-	remoteRefName := plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
 	remoteRef, err := repo.Reference(remoteRefName, true)
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return false, nil
@@ -75,7 +77,7 @@ func WarnIfMetadataDisconnected() {
 				slog.String("error", err.Error()))
 			return
 		}
-		disconnected, err := IsMetadataDisconnected(ctx, repo)
+		disconnected, err := IsMetadataDisconnected(ctx, repo, plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName))
 		if err != nil {
 			logging.Debug(ctx, "metadata disconnection check failed",
 				slog.String("error", err.Error()))
@@ -94,13 +96,16 @@ func WarnIfMetadataDisconnected() {
 // only happens due to the empty-orphan bug. Diverged (shared ancestor) is normal
 // and handled by the push path's tree merge.
 //
+// remoteRefName is the reference to compare against (e.g., refs/remotes/origin/<branch>
+// or refs/entire-fetch-tmp/<branch> when fetching from a checkpoint URL).
+//
 // Repair strategy: cherry-pick local commits onto remote tip, preserving all data.
 // Checkpoint shards use unique paths (<id[:2]>/<id[2:]>/), so cherry-picks always
 // apply cleanly.
 //
 // Progress messages are written to w (typically os.Stderr for hooks or
 // cmd.ErrOrStderr() for commands).
-func ReconcileDisconnectedMetadataBranch(ctx context.Context, repo *git.Repository, w io.Writer) error {
+func ReconcileDisconnectedMetadataBranch(ctx context.Context, repo *git.Repository, remoteRefName plumbing.ReferenceName, w io.Writer) error {
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 
 	// Check local branch
@@ -112,8 +117,7 @@ func ReconcileDisconnectedMetadataBranch(ctx context.Context, repo *git.Reposito
 		return fmt.Errorf("failed to check local metadata branch: %w", err)
 	}
 
-	// Check remote-tracking branch
-	remoteRefName := plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
+	// Check remote/fetched branch
 	remoteRef, err := repo.Reference(remoteRefName, true)
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return nil // No remote branch — nothing to reconcile
