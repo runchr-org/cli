@@ -179,10 +179,10 @@ func TestInsertSession_WithDenormalizedFields(t *testing.T) {
 	ctx := context.Background()
 
 	row := insightsdb.SessionRow{
-		CheckpointID: "chk-denorm",
-		SessionID:    "sess-denorm",
-		SessionIndex: 0,
-		CreatedAt:    time.Now(),
+		CheckpointID:            "chk-denorm",
+		SessionID:               "sess-denorm",
+		SessionIndex:            0,
+		CreatedAt:               time.Now(),
 		FilesTouched:            []string{"main.go", "util.go", "README.md"},
 		Friction:                []string{"had to retry", "tool failed twice"},
 		ImplementationRationale: []string{"Reuse the summary pipeline"},

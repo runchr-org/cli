@@ -1143,8 +1143,11 @@ func TestFormatSummaryDetails(t *testing.T) {
 			Code:     []checkpoint.CodeLearning{{Path: "test.go", Line: 10, EndLine: 20, Finding: "Code finding"}},
 			Workflow: []string{"Workflow learning"},
 		},
-		Friction:  []string{"Friction item"},
-		OpenItems: []string{"Open item 1", "Open item 2"},
+		Friction:                []string{"Friction item"},
+		OpenItems:               []string{"Open item 1", "Open item 2"},
+		ImplementationRationale: []string{"Used the existing summary formatter to keep output consistent"},
+		Tradeoffs:               []string{"Added three sections instead of collapsing into learnings"},
+		CodebasePatterns:        []string{"Explain output uses explicit section headings"},
 	}
 
 	var sb strings.Builder
@@ -1177,6 +1180,16 @@ func TestFormatSummaryDetails(t *testing.T) {
 	if !strings.Contains(output, "Open item 1") {
 		t.Error("should include open items")
 	}
+
+	if !strings.Contains(output, "Implementation Rationale:") {
+		t.Error("should have Implementation Rationale section")
+	}
+	if !strings.Contains(output, "Tradeoffs:") {
+		t.Error("should have Tradeoffs section")
+	}
+	if !strings.Contains(output, "Codebase Patterns:") {
+		t.Error("should have Codebase Patterns section")
+	}
 }
 
 func TestFormatSummaryDetails_EmptyCategories(t *testing.T) {
@@ -1202,6 +1215,15 @@ func TestFormatSummaryDetails_EmptyCategories(t *testing.T) {
 	}
 	if strings.Contains(output, "Open Items:") {
 		t.Error("empty open items should not show Open Items section")
+	}
+	if strings.Contains(output, "Implementation Rationale:") {
+		t.Error("empty implementation rationale should not show section")
+	}
+	if strings.Contains(output, "Tradeoffs:") {
+		t.Error("empty tradeoffs should not show section")
+	}
+	if strings.Contains(output, "Codebase Patterns:") {
+		t.Error("empty codebase patterns should not show section")
 	}
 }
 

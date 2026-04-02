@@ -43,14 +43,14 @@ type SessionRow struct {
 	HasSummary     bool
 	HasFacets      bool
 	// Denormalized arrays
-	FilesTouched             []string
-	Friction                 []string
-	Learnings                []LearningRow
-	ImplementationRationale  []string
-	Tradeoffs                []string
-	CodebasePatterns         []string
-	ToolCounts               map[string]int // tool name → invocation count
-	Facets                   facets.SessionFacets
+	FilesTouched            []string
+	Friction                []string
+	Learnings               []LearningRow
+	ImplementationRationale []string
+	Tradeoffs               []string
+	CodebasePatterns        []string
+	ToolCounts              map[string]int // tool name → invocation count
+	Facets                  facets.SessionFacets
 }
 
 // LearningRow represents a single learning entry within a session.

@@ -800,6 +800,27 @@ func formatSummaryDetails(sb *strings.Builder, summary *checkpoint.Summary) {
 			fmt.Fprintf(sb, "  - %s\n", item)
 		}
 	}
+
+	if len(summary.ImplementationRationale) > 0 {
+		sb.WriteString("\nImplementation Rationale:\n")
+		for _, item := range summary.ImplementationRationale {
+			fmt.Fprintf(sb, "  - %s\n", item)
+		}
+	}
+
+	if len(summary.Tradeoffs) > 0 {
+		sb.WriteString("\nTradeoffs:\n")
+		for _, item := range summary.Tradeoffs {
+			fmt.Fprintf(sb, "  - %s\n", item)
+		}
+	}
+
+	if len(summary.CodebasePatterns) > 0 {
+		sb.WriteString("\nCodebase Patterns:\n")
+		for _, item := range summary.CodebasePatterns {
+			fmt.Fprintf(sb, "  - %s\n", item)
+		}
+	}
 }
 
 // runExplainDefault shows all checkpoints on the current branch.
