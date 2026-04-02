@@ -21,6 +21,7 @@ var (
 	_ agent.TokenCalculator        = (*ClaudeCodeAgent)(nil)
 	_ agent.SubagentAwareExtractor = (*ClaudeCodeAgent)(nil)
 	_ agent.HookResponseWriter     = (*ClaudeCodeAgent)(nil)
+	_ agent.HookBlockingWriter     = (*ClaudeCodeAgent)(nil)
 )
 
 // WriteHookResponse outputs a JSON hook response to stdout.
@@ -31,6 +32,21 @@ func (c *ClaudeCodeAgent) WriteHookResponse(message string) error {
 	}{SystemMessage: message}
 	if err := json.NewEncoder(os.Stdout).Encode(resp); err != nil {
 		return fmt.Errorf("failed to encode hook response: %w", err)
+	}
+	return nil
+}
+
+// WriteBlockingHookResponse outputs a JSON hook response that halts the current turn.
+func (c *ClaudeCodeAgent) WriteBlockingHookResponse(message string) error {
+	resp := struct {
+		Continue   bool   `json:"continue"`
+		StopReason string `json:"stopReason,omitempty"`
+	}{
+		Continue:   false,
+		StopReason: message,
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(resp); err != nil {
+		return fmt.Errorf("failed to encode blocking hook response: %w", err)
 	}
 	return nil
 }

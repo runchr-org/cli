@@ -199,6 +199,17 @@ type HookResponseWriter interface {
 	WriteHookResponse(message string) error
 }
 
+// HookBlockingWriter is implemented by agents whose hook response protocol can
+// halt the current turn and surface a message to the user. This is used when
+// Entire must require explicit confirmation before the agent continues.
+type HookBlockingWriter interface {
+	Agent
+
+	// WriteBlockingHookResponse outputs a blocking hook response to the user via
+	// the agent's hook response protocol.
+	WriteBlockingHookResponse(message string) error
+}
+
 // HookContextWriter is implemented by agents whose hook response protocol can
 // inject additional context directly into the model, separate from any
 // user-visible message. This is used for memory-loop auto injection so session

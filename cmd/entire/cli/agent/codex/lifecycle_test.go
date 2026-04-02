@@ -173,6 +173,8 @@ func TestWriteHookResponseWithContext_EncodesAdditionalContext(t *testing.T) {
 }
 
 func TestWriteHookResponse_OmitsHookSpecificOutputWhenEmpty(t *testing.T) {
+	t.Parallel()
+
 	ag := &CodexAgent{}
 
 	data := captureStdout(t, func() {
@@ -184,4 +186,22 @@ func TestWriteHookResponse_OmitsHookSpecificOutputWhenEmpty(t *testing.T) {
 	require.Equal(t, "display message", resp["systemMessage"])
 	_, ok := resp["hookSpecificOutput"]
 	require.False(t, ok, "hookSpecificOutput should be omitted when empty")
+}
+
+func TestWriteBlockingHookResponse_EncodesBlockingFields(t *testing.T) {
+	t.Parallel()
+
+	ag := &CodexAgent{}
+
+	data := captureStdout(t, func() {
+		require.NoError(t, ag.WriteBlockingHookResponse("wait for confirmation"))
+	})
+
+	var resp struct {
+		Continue   bool   `json:"continue"`
+		StopReason string `json:"stopReason"`
+	}
+	require.NoError(t, json.Unmarshal(data, &resp))
+	require.False(t, resp.Continue)
+	require.Equal(t, "wait for confirmation", resp.StopReason)
 }

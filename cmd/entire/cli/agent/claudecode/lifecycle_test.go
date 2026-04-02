@@ -3,6 +3,7 @@ package claudecode
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,28 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/stretchr/testify/require"
 )
+
+func captureStdout(t *testing.T, fn func()) []byte {
+	t.Helper()
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+	})
+
+	fn()
+
+	require.NoError(t, w.Close())
+	data, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.NoError(t, r.Close())
+	os.Stdout = oldStdout
+
+	return data
+}
 
 func TestParseHookEvent_SessionStart(t *testing.T) {
 	t.Parallel()
@@ -37,6 +60,24 @@ func TestParseHookEvent_SessionStart(t *testing.T) {
 	if event.Timestamp.IsZero() {
 		t.Error("expected non-zero timestamp")
 	}
+}
+
+func TestWriteBlockingHookResponse_EncodesBlockingFields(t *testing.T) {
+	t.Parallel()
+
+	ag := &ClaudeCodeAgent{}
+
+	data := captureStdout(t, func() {
+		require.NoError(t, ag.WriteBlockingHookResponse("wait for confirmation"))
+	})
+
+	var resp struct {
+		Continue   bool   `json:"continue"`
+		StopReason string `json:"stopReason"`
+	}
+	require.NoError(t, json.Unmarshal(data, &resp))
+	require.False(t, resp.Continue)
+	require.Equal(t, "wait for confirmation", resp.StopReason)
 }
 
 func TestParseHookEvent_SessionStart_IncludesModel(t *testing.T) {

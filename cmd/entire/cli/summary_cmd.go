@@ -118,8 +118,9 @@ func runSummary(ctx context.Context, w io.Writer, opts summaryOptions) error {
 	if branch, err := GetCurrentBranch(ctx); err == nil {
 		currentBranch = branch
 	}
+	defaultBranch := GetDefaultBranch(ctx)
 
-	return runSummaryTUI(ctx, rows, currentBranch, generateForSession)
+	return runSummaryTUI(ctx, rows, currentBranch, defaultBranch, generateForSession)
 }
 
 func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb.SessionRow, error) {
@@ -167,6 +168,8 @@ func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb
 		}
 	}
 
+	hasCLIFilters := opts.Agent != "" || opts.Branch != "" || ownerID != ""
+
 	filtered := make([]insightsdb.SessionRow, 0, len(rows))
 	for _, row := range rows {
 		if opts.Agent != "" && !strings.EqualFold(strings.TrimSpace(row.Agent), strings.TrimSpace(opts.Agent)) {
@@ -179,7 +182,9 @@ func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb
 			continue
 		}
 		filtered = append(filtered, row)
-		if len(filtered) == outputLimit {
+		// Only cap results when CLI filters or JSON output are in use.
+		// The TUI has its own branch filter, so it needs the full result set.
+		if hasCLIFilters && len(filtered) == outputLimit {
 			break
 		}
 	}

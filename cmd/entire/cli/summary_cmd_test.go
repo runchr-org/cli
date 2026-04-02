@@ -108,7 +108,7 @@ func TestRunSummary_AccessibleDoesNotStartTUI(t *testing.T) {
 	t.Cleanup(func() { runSummaryTUI = originalRun })
 
 	var called bool
-	runSummaryTUI = func(_ context.Context, _ []insightsdb.SessionRow, _ string, _ summarytui.GenerateFunc) error {
+	runSummaryTUI = func(_ context.Context, _ []insightsdb.SessionRow, _, _ string, _ summarytui.GenerateFunc) error {
 		called = true
 		return nil
 	}
@@ -133,7 +133,7 @@ func TestRunSummary_PassesCurrentBranchToTUI(t *testing.T) {
 		called        bool
 		currentBranch string
 	)
-	runSummaryTUI = func(_ context.Context, _ []insightsdb.SessionRow, branch string, _ summarytui.GenerateFunc) error {
+	runSummaryTUI = func(_ context.Context, _ []insightsdb.SessionRow, branch, _ string, _ summarytui.GenerateFunc) error {
 		called = true
 		currentBranch = branch
 		return nil

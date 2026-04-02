@@ -78,7 +78,6 @@ func (m rootModel) Init() tea.Cmd {
 	}
 }
 
-//nolint:ireturn // required by bubbletea Model interface
 func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -310,7 +309,6 @@ func (m rootModel) saveState() error {
 	return memoryloop.SaveState(m.ctx, m.state) //nolint:wrapcheck // internal helper, callers wrap
 }
 
-//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
 func (m rootModel) handleAddMemory(msg addMemoryMsg) (tea.Model, tea.Cmd) {
 	if m.state == nil || m.state.Store == nil || m.isRefreshing {
 		return m, nil
@@ -330,7 +328,6 @@ func (m rootModel) handleAddMemory(msg addMemoryMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
 func (m rootModel) handlePrune() (tea.Model, tea.Cmd) {
 	if m.state == nil || m.state.Store == nil || m.isRefreshing {
 		return m, nil
@@ -348,7 +345,6 @@ func (m rootModel) handlePrune() (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg { return flashMsg{text: msg, success: true} }
 }
 
-//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
 func (m rootModel) handleSettingsChanged(msg settingsChangedMsg) (tea.Model, tea.Cmd) {
 	if m.state == nil || m.state.Store == nil {
 		return m, nil
@@ -398,7 +394,6 @@ func (m rootModel) resolveWizardTargets(record memoryloop.MemoryRecord, location
 	return out, nil
 }
 
-//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
 func (m rootModel) handleWizardResult(msg wizardResultMsg) (tea.Model, tea.Cmd) {
 	if msg.success && m.wizardActionHandler != nil {
 		return m.applyWizardRequest(msg.request, msg.flash)
@@ -422,7 +417,6 @@ func (m rootModel) handleWizardResult(msg wizardResultMsg) (tea.Model, tea.Cmd) 
 	}
 }
 
-//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
 func (m rootModel) applyWizardRequest(request WizardRequest, successFlash string) (tea.Model, tea.Cmd) {
 	flash, err := m.wizardActionHandler(m.ctx, request)
 	if err != nil {
@@ -447,7 +441,6 @@ func (m rootModel) applyWizardRequest(request WizardRequest, successFlash string
 	return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{} })
 }
 
-//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
 func (m rootModel) handleWizardLifecycle(recordID string, action memoryloop.LifecycleAction, successFlash string) (tea.Model, tea.Cmd) {
 	if m.state == nil || m.state.Store == nil || m.isRefreshing {
 		return m, nil

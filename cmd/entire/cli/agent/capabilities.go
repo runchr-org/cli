@@ -22,6 +22,7 @@ type DeclaredCaps struct {
 	TokenCalculator        bool `json:"token_calculator"`
 	TextGenerator          bool `json:"text_generator"`
 	HookResponseWriter     bool `json:"hook_response_writer"`
+	HookBlockingWriter     bool `json:"hook_blocking_writer"`
 	HookContextWriter      bool `json:"hook_context_writer"`
 	SubagentAwareExtractor bool `json:"subagent_aware_extractor"`
 }
@@ -120,6 +121,22 @@ func AsHookResponseWriter(ag Agent) (HookResponseWriter, bool) { //nolint:iretur
 		return hrw, cd.DeclaredCapabilities().HookResponseWriter
 	}
 	return hrw, true
+}
+
+// AsHookBlockingWriter returns the agent as HookBlockingWriter if it both
+// implements the interface and (for CapabilityDeclarer agents) has declared the capability.
+func AsHookBlockingWriter(ag Agent) (HookBlockingWriter, bool) { //nolint:ireturn // type-assertion helper
+	if ag == nil {
+		return nil, false
+	}
+	hbw, ok := ag.(HookBlockingWriter)
+	if !ok {
+		return nil, false
+	}
+	if cd, ok := ag.(CapabilityDeclarer); ok {
+		return hbw, cd.DeclaredCapabilities().HookBlockingWriter
+	}
+	return hbw, true
 }
 
 // AsHookContextWriter returns the agent as HookContextWriter if it both

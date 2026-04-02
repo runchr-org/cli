@@ -140,6 +140,17 @@ func getDefaultBranchFromRemote(repo *git.Repository) string {
 	return ""
 }
 
+// GetDefaultBranch returns the name of the repository's default branch (e.g. "main", "master", "develop").
+// It checks origin/HEAD first, then falls back to checking for origin/main and origin/master.
+// Returns empty string if the default branch cannot be determined.
+func GetDefaultBranch(ctx context.Context) string {
+	repo, err := openRepository(ctx)
+	if err != nil {
+		return ""
+	}
+	return getDefaultBranchFromRemote(repo)
+}
+
 // ShouldSkipOnDefaultBranch checks if we're on the default branch.
 // Returns (shouldSkip, branchName). If shouldSkip is true, the caller should
 // skip the operation to avoid polluting main/master history.

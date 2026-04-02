@@ -86,6 +86,9 @@ func (m *mockFullAgent) GenerateText(context.Context, string, string) (string, e
 // HookResponseWriter
 func (m *mockFullAgent) WriteHookResponse(string) error { return nil }
 
+// HookBlockingWriter
+func (m *mockFullAgent) WriteBlockingHookResponse(string) error { return nil }
+
 // HookContextWriter
 func (m *mockFullAgent) WriteHookResponseWithContext(string, string) error { return nil }
 
@@ -331,6 +334,36 @@ func TestAsHookContextWriter(t *testing.T) {
 		t.Parallel()
 		ag := &mockFullAgent{caps: DeclaredCaps{HookContextWriter: false}}
 		_, ok := AsHookContextWriter(ag)
+		if ok {
+			t.Error("expected false")
+		}
+	})
+}
+
+func TestAsHookBlockingWriter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("not implemented", func(t *testing.T) {
+		t.Parallel()
+		_, ok := AsHookBlockingWriter(&mockBaseAgent{})
+		if ok {
+			t.Error("expected false")
+		}
+	})
+
+	t.Run("declared true", func(t *testing.T) {
+		t.Parallel()
+		ag := &mockFullAgent{caps: DeclaredCaps{HookBlockingWriter: true}}
+		hbw, ok := AsHookBlockingWriter(ag)
+		if !ok || hbw == nil {
+			t.Error("expected true")
+		}
+	})
+
+	t.Run("declared false", func(t *testing.T) {
+		t.Parallel()
+		ag := &mockFullAgent{caps: DeclaredCaps{HookBlockingWriter: false}}
+		_, ok := AsHookBlockingWriter(ag)
 		if ok {
 			t.Error("expected false")
 		}

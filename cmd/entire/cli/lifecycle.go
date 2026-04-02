@@ -361,7 +361,14 @@ func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Eve
 		if !supportsManualMemoryPrompt(ag.Name()) {
 			return nil
 		}
-		if err := writer.WriteHookResponse(buildManualMemoryPrompt(matches)); err != nil {
+		prompt := buildManualMemoryPrompt(matches)
+		if blockingWriter, ok := agent.AsHookBlockingWriter(ag); ok {
+			if err := blockingWriter.WriteBlockingHookResponse(prompt); err != nil {
+				return fmt.Errorf("failed to write blocking manual memory prompt: %w", err)
+			}
+			return nil
+		}
+		if err := writer.WriteHookResponse(prompt); err != nil {
 			return fmt.Errorf("failed to write manual memory prompt: %w", err)
 		}
 		return nil

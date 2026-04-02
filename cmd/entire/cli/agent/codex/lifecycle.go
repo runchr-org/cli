@@ -15,6 +15,7 @@ import (
 var (
 	_ agent.HookSupport        = (*CodexAgent)(nil)
 	_ agent.HookResponseWriter = (*CodexAgent)(nil)
+	_ agent.HookBlockingWriter = (*CodexAgent)(nil)
 	_ agent.HookContextWriter  = (*CodexAgent)(nil)
 )
 
@@ -22,6 +23,21 @@ var (
 // Codex reads the systemMessage field and displays it to the user.
 func (c *CodexAgent) WriteHookResponse(message string) error {
 	return c.writeHookResponse(message, "")
+}
+
+// WriteBlockingHookResponse outputs a JSON hook response that halts the current turn.
+func (c *CodexAgent) WriteBlockingHookResponse(message string) error {
+	resp := struct {
+		Continue   bool   `json:"continue"`
+		StopReason string `json:"stopReason,omitempty"`
+	}{
+		Continue:   false,
+		StopReason: message,
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(resp); err != nil {
+		return fmt.Errorf("failed to encode blocking hook response: %w", err)
+	}
+	return nil
 }
 
 // WriteHookResponseWithContext outputs a JSON hook response that both displays a

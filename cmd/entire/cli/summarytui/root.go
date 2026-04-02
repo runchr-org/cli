@@ -4,21 +4,24 @@ package summarytui
 import (
 	"context"
 	"fmt"
-	"strconv"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/paginator"
-	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
 )
 
 const defaultPageSize = 10
-const rootVerticalChrome = 6
+
+// Chrome: filter bar (1) + separator (1) + list header (1) + separator (1) + status bar (1) + padding (1) = 6
+const verticalChrome = 6
 
 // GenerateFunc generates summary and facets for a single session on demand.
-// Returns the updated session row with populated summary/facet data.
 type GenerateFunc func(ctx context.Context, row insightsdb.SessionRow) (insightsdb.SessionRow, error)
 
 type branchFilter int
@@ -29,29 +32,36 @@ const (
 	filterAllBranches                       // all branches
 )
 
+type timeFilter int
+
+const (
+	timeFilter24h timeFilter = iota
+	timeFilter7d
+	timeFilter30d
+	timeFilterAll
+)
+
 //nolint:recvcheck // bubbletea pattern: value receiver for interface, pointer receivers for mutation helpers
 type rootModel struct {
 	ctx           context.Context
 	rows          []insightsdb.SessionRow
 	filteredRows  []insightsdb.SessionRow
 	currentBranch string
-	filter        branchFilter
-	table         table.Model
+	defaultBranch string
+	branchFilter  branchFilter
+	timeFilter    timeFilter
+	cursor        int
 	paginator     paginator.Model
 	pageSize      int
+	detailVP      viewport.Model
 	width         int
 	height        int
 	styles        styles
-	detailPage    *detailModel
 	generateFn    GenerateFunc
 	generating    bool
+	genStatus     string // status message for generate operation
+	accessible    bool   // accessible mode fallback
 }
-
-type openDetailMsg struct {
-	row insightsdb.SessionRow
-}
-
-type closeDetailMsg struct{}
 
 type generateDoneMsg struct {
 	row insightsdb.SessionRow
@@ -62,11 +72,11 @@ type generateErrMsg struct {
 }
 
 func Run(ctx context.Context, rows []insightsdb.SessionRow) error {
-	return RunWithCurrentBranch(ctx, rows, "", nil)
+	return RunWithCurrentBranch(ctx, rows, "", "", nil)
 }
 
-func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, currentBranch string, generateFn GenerateFunc) error {
-	p := tea.NewProgram(newRootModel(rows, currentBranch, generateFn), tea.WithAltScreen())
+func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, currentBranch, defaultBranch string, generateFn GenerateFunc) error {
+	p := tea.NewProgram(newRootModel(rows, currentBranch, defaultBranch, generateFn), tea.WithAltScreen())
 	_, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("run summary TUI: %w", err)
@@ -74,33 +84,30 @@ func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, curre
 	return nil
 }
 
-func newRootModel(rows []insightsdb.SessionRow, currentBranch string, generateFn GenerateFunc) rootModel {
-	columns := []table.Column{
-		{Title: "TIME", Width: 19},
-		{Title: "AGENT", Width: 16},
-		{Title: "BRANCH", Width: 26},
-		{Title: "CHECKPOINT", Width: 15},
-		{Title: "TOKENS", Width: 10},
-	}
-	styles := newStyles()
-	t := table.New(table.WithColumns(columns), table.WithFocused(true))
-	t.SetStyles(styles.tableStyles())
+func newRootModel(rows []insightsdb.SessionRow, currentBranch, defaultBranch string, generateFn GenerateFunc) rootModel {
+	s := newStyles()
 	p := paginator.New()
 	p.PerPage = defaultPageSize
+
+	accessible := os.Getenv("ACCESSIBLE") != ""
+
 	m := rootModel{
 		ctx:           context.Background(),
 		rows:          append([]insightsdb.SessionRow(nil), rows...),
 		currentBranch: currentBranch,
-		filter:        filterRepo,
-		table:         t,
+		defaultBranch: defaultBranch,
+		branchFilter:  filterRepo,
+		timeFilter:    timeFilterAll,
 		paginator:     p,
 		pageSize:      defaultPageSize,
-		styles:        styles,
+		styles:        s,
 		width:         100,
 		height:        30,
 		generateFn:    generateFn,
+		accessible:    accessible,
 	}
 	m.rebuildFilteredRows()
+	m.updateDetailViewport()
 	return m
 }
 
@@ -113,90 +120,43 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
-		if m.detailPage != nil {
-			m.detailPage.setSize(m.width, m.height)
-		}
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.detailPage != nil {
-			return m.updateDetailKeys(msg)
-		}
-		return m.updateTableKeys(msg)
-
-	case openDetailMsg:
-		m.detailPage = newDetailModel(m.styles, msg.row, m.generateFn != nil)
-		m.detailPage.setSize(m.width, m.height)
-		return m, nil
-
-	case closeDetailMsg:
-		m.detailPage = nil
-		m.generating = false
-		return m, nil
+		return m.updateKeys(msg)
 
 	case generateDoneMsg:
 		m.generating = false
+		m.genStatus = "Generated"
 		m.updateRowData(msg.row)
-		if m.detailPage != nil {
-			m.detailPage.row = msg.row
-			m.detailPage.status = "Generated"
-			m.detailPage.setSize(m.width, m.height) // re-render content
-		}
+		m.updateDetailViewport()
 		return m, nil
 
 	case generateErrMsg:
 		m.generating = false
-		if m.detailPage != nil {
-			m.detailPage.status = "Error: " + msg.err.Error()
-		}
+		m.genStatus = "Error: " + msg.err.Error()
 		return m, nil
 	}
 
-	var cmd tea.Cmd
-	m.table, cmd = m.table.Update(msg)
-	return m, cmd
+	return m, nil
 }
 
-//nolint:ireturn // required by bubbletea pattern
-func (m rootModel) updateDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	//nolint:exhaustive // only quit/back/generate keys handled; rest delegates to viewport
-	switch msg.Type {
-	case tea.KeyEsc:
-		return m, func() tea.Msg { return closeDetailMsg{} }
-	case tea.KeyCtrlC:
-		return m, tea.Quit
-	case tea.KeyRunes:
-		switch string(msg.Runes) {
-		case "q":
-			return m, tea.Quit
-		case "g":
-			if m.generateFn != nil && !m.generating && m.detailPage != nil {
-				m.generating = true
-				m.detailPage.status = "Generating summary and facets..."
-				row := m.detailPage.row
-				ctx := m.ctx
-				fn := m.generateFn
-				return m, func() tea.Msg {
-					updated, err := fn(ctx, row)
-					if err != nil {
-						return generateErrMsg{err: err}
-					}
-					return generateDoneMsg{row: updated}
-				}
-			}
-		}
-	default:
-	}
-	var cmd tea.Cmd
-	*m.detailPage, cmd = m.detailPage.update(msg)
-	return m, cmd
-}
-
-//nolint:ireturn // required by bubbletea pattern
-func (m rootModel) updateTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+//nolint:cyclop,ireturn // required by bubbletea pattern
+func (m rootModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, keys.cycleFilter):
-		m.cycleFilter()
+	case key.Matches(msg, keys.quit):
+		return m, tea.Quit
+	case key.Matches(msg, keys.cycleTimeFilter):
+		m.cycleTime()
+		return m, nil
+	case key.Matches(msg, keys.cycleBranchFilter):
+		m.cycleBranch()
+		return m, nil
+	case key.Matches(msg, keys.cursorDown):
+		m.moveCursor(1)
+		return m, nil
+	case key.Matches(msg, keys.cursorUp):
+		m.moveCursor(-1)
 		return m, nil
 	case key.Matches(msg, keys.nextPage):
 		m.nextPage()
@@ -204,44 +164,246 @@ func (m rootModel) updateTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.prevPage):
 		m.prevPage()
 		return m, nil
-	case key.Matches(msg, keys.quit):
-		return m, tea.Quit
+	case key.Matches(msg, keys.generate):
+		return m.handleGenerate()
 	}
 
-	//nolint:exhaustive // only command-specific keys are handled here; all others fall through to the table widget
+	//nolint:exhaustive // only Ctrl+C needs special handling here
 	switch msg.Type {
-	case tea.KeyEnter:
-		if row := m.selectedRow(); row != nil {
-			selected := *row
-			return m, func() tea.Msg { return openDetailMsg{row: selected} }
-		}
 	case tea.KeyCtrlC:
 		return m, tea.Quit
 	default:
 	}
 
+	// Scroll detail viewport
 	var cmd tea.Cmd
-	m.table, cmd = m.table.Update(msg)
+	m.detailVP, cmd = m.detailVP.Update(msg)
 	return m, cmd
 }
 
-func (m rootModel) View() string {
-	if m.detailPage != nil {
-		return m.detailPage.view()
+//nolint:ireturn // required by bubbletea pattern
+func (m rootModel) handleGenerate() (tea.Model, tea.Cmd) {
+	if m.generateFn == nil || m.generating {
+		return m, nil
 	}
+	row := m.selectedRow()
+	if row == nil {
+		return m, nil
+	}
+	m.generating = true
+	m.genStatus = "Generating..."
+	selected := *row
+	ctx := m.ctx
+	fn := m.generateFn
+	return m, func() tea.Msg {
+		updated, err := fn(ctx, selected)
+		if err != nil {
+			return generateErrMsg{err: err}
+		}
+		return generateDoneMsg{row: updated}
+	}
+}
 
+func (m rootModel) View() string {
 	var b strings.Builder
-	b.WriteString(m.styles.render(m.styles.appTitle, "SESSION SUMMARY"))
-	b.WriteString("\n\n")
-	b.WriteString(renderFilterChips(m.styles, m.filter))
-	b.WriteString("  ")
-	b.WriteString(m.styles.render(m.styles.dim, pageLabel(m.paginator)))
-	b.WriteString("\n\n")
-	b.WriteString(m.table.View())
-	b.WriteString("\n\n")
-	b.WriteString(m.styles.render(m.styles.statusBar, "j/k navigate  f filter  ←/→ page  enter detail  q quit"))
+
+	// Filter bar
+	b.WriteString(m.renderFilterBar())
+	b.WriteString("\n")
+
+	listWidth := m.listWidth()
+	detailWidth := m.detailWidth()
+	contentHeight := m.contentHeight()
+
+	// List pane
+	listPane := m.renderListPane(listWidth, contentHeight)
+
+	// Detail pane
+	detailPane := m.renderDetailPane(detailWidth, contentHeight)
+
+	// Join horizontally
+	split := lipgloss.JoinHorizontal(lipgloss.Top, listPane, detailPane)
+	b.WriteString(split)
+	b.WriteString("\n")
+
+	// Status bar
+	b.WriteString(m.renderStatusBar())
+
 	return b.String()
 }
+
+// --- Filter bar ---
+
+func (m rootModel) renderFilterBar() string {
+	sep := m.styles.render(m.styles.filterSeparator, " │ ")
+
+	// TIME filter
+	timeLabels := []struct {
+		filter timeFilter
+		label  string
+	}{
+		{timeFilter24h, "24h"},
+		{timeFilter7d, "7d"},
+		{timeFilter30d, "30d"},
+		{timeFilterAll, "all"},
+	}
+	var timeParts []string
+	for _, item := range timeLabels {
+		if item.filter == m.timeFilter {
+			timeParts = append(timeParts, m.styles.render(m.styles.filterActive, item.label))
+		} else {
+			timeParts = append(timeParts, m.styles.render(m.styles.filterInactive, item.label))
+		}
+	}
+	timeStr := m.styles.render(m.styles.filterLabel, "TIME: ") + strings.Join(timeParts, sep)
+
+	// BRANCH filter
+	branchLabels := []struct {
+		filter branchFilter
+		label  string
+	}{
+		{filterRepo, "repo"},
+		{filterCurrentBranch, "current"},
+		{filterAllBranches, "all"},
+	}
+	var branchParts []string
+	for _, item := range branchLabels {
+		if item.filter == m.branchFilter {
+			branchParts = append(branchParts, m.styles.render(m.styles.filterActive, item.label))
+		} else {
+			branchParts = append(branchParts, m.styles.render(m.styles.filterInactive, item.label))
+		}
+	}
+	branchStr := m.styles.render(m.styles.filterLabel, "BRANCH: ") + strings.Join(branchParts, sep)
+
+	count := m.styles.render(m.styles.sessionCount, fmt.Sprintf("%d sessions", len(m.filteredRows)))
+
+	return timeStr + "    " + branchStr + "    " + count
+}
+
+// --- List pane ---
+
+func (m rootModel) renderListPane(width, height int) string {
+	var b strings.Builder
+
+	// Column header
+	header := m.formatListRow("TIME", "CKPT", "AGENT", width)
+	b.WriteString(m.styles.render(m.styles.listHeader, header))
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", width))
+	b.WriteString("\n")
+
+	pageRows := m.currentPageRows()
+	listHeight := height - 2 // header + separator
+
+	for i, row := range pageRows {
+		if i >= listHeight {
+			break
+		}
+		timeStr := row.CreatedAt.Format("01-02 15:04")
+		checkpoint := row.CheckpointID
+		if len(checkpoint) > 6 {
+			checkpoint = checkpoint[:6]
+		}
+		agent := truncate(row.Agent, 8)
+		line := m.formatListRow(timeStr, checkpoint, agent, width)
+
+		if i == m.cursor {
+			// Selected: amber text + dark background + left accent
+			accent := m.styles.render(m.styles.listAccent, "▸ ")
+			styled := m.styles.render(m.styles.listSelected, line)
+			if m.styles.colorEnabled {
+				styled = m.styles.listSelectedBg.Render(styled)
+			}
+			b.WriteString(accent + styled)
+		} else {
+			b.WriteString("  " + m.styles.render(m.styles.listNormal, line))
+		}
+		b.WriteString("\n")
+	}
+
+	// Fill remaining lines
+	for i := len(pageRows); i < listHeight; i++ {
+		b.WriteString("\n")
+	}
+
+	// Page indicator
+	pageInfo := m.styles.render(m.styles.dim, fmt.Sprintf("%d/%d", m.paginator.Page+1, max(1, m.paginator.TotalPages)))
+	b.WriteString(m.styles.render(m.styles.dim, "←→ ") + pageInfo)
+
+	return b.String()
+}
+
+func (m rootModel) formatListRow(time, ckpt, agent string, _ int) string {
+	return fmt.Sprintf("%-11s %-6s %-8s", time, ckpt, agent)
+}
+
+// --- Detail pane ---
+
+func (m rootModel) renderDetailPane(width, height int) string {
+	var b strings.Builder
+
+	row := m.selectedRow()
+	if row == nil {
+		b.WriteString(m.styles.render(m.styles.emptyState, "  No sessions to display"))
+		return b.String()
+	}
+
+	// Fixed metadata header
+	header := renderMetadataHeader(m.styles, *row, width)
+	b.WriteString(header)
+	b.WriteString("\n")
+
+	// Scrollable viewport fills remaining space
+	headerLines := strings.Count(header, "\n") + 1
+	vpHeight := max(3, height-headerLines-1)
+	if m.detailVP.Height != vpHeight || m.detailVP.Width != width {
+		m.detailVP.Width = width
+		m.detailVP.Height = vpHeight
+	}
+	b.WriteString(m.detailVP.View())
+
+	return b.String()
+}
+
+func (m rootModel) renderStatusBar() string {
+	var parts []string
+	parts = append(parts, "j/k navigate")
+	parts = append(parts, "1 time")
+	parts = append(parts, "2 branch")
+	parts = append(parts, "←→ page")
+	if m.generateFn != nil {
+		parts = append(parts, "g generate")
+	}
+	parts = append(parts, "q quit")
+	status := strings.Join(parts, "  ")
+
+	if m.genStatus != "" {
+		style := m.styles.filterActive
+		if strings.HasPrefix(m.genStatus, "Error:") {
+			style = m.styles.errorText
+		}
+		status = m.styles.render(style, m.genStatus) + "  " + status
+	}
+
+	return m.styles.render(m.styles.statusBar, status)
+}
+
+// --- Layout helpers ---
+
+func (m rootModel) listWidth() int {
+	return max(30, m.width*30/100)
+}
+
+func (m rootModel) detailWidth() int {
+	return max(30, m.width-m.listWidth()-1)
+}
+
+func (m rootModel) contentHeight() int {
+	return max(5, m.height-verticalChrome)
+}
+
+// --- Data management ---
 
 func (m *rootModel) updateRowData(updated insightsdb.SessionRow) {
 	for i, row := range m.rows {
@@ -256,7 +418,6 @@ func (m *rootModel) updateRowData(updated insightsdb.SessionRow) {
 			break
 		}
 	}
-	m.rebuildTable()
 }
 
 func (m *rootModel) rebuildFilteredRows() {
@@ -272,51 +433,38 @@ func (m *rootModel) rebuildFilteredRows() {
 	if m.paginator.Page < 0 {
 		m.paginator.Page = 0
 	}
-	m.rebuildTable()
-}
-
-func (m *rootModel) rebuildTable() {
-	pageRows := m.currentPageRows()
-	rows := make([]table.Row, 0, len(pageRows))
-	for _, row := range pageRows {
-		checkpoint := row.CheckpointID
-		if len(checkpoint) > 12 {
-			checkpoint = checkpoint[:12]
-		}
-		rows = append(rows, table.Row{
-			row.CreatedAt.Format("2006-01-02 15:04"),
-			row.Agent,
-			truncate(row.Branch, 24),
-			checkpoint,
-			strconv.Itoa(row.TotalTokens),
-		})
+	if m.cursor >= len(m.currentPageRows()) {
+		m.cursor = max(0, len(m.currentPageRows())-1)
 	}
-	m.table.SetRows(rows)
-	if len(rows) == 0 {
-		m.table.SetCursor(0)
-		return
-	}
-	if m.table.Cursor() >= len(rows) {
-		m.table.SetCursor(len(rows) - 1)
-	}
-}
-
-func (m rootModel) selectedRow() *insightsdb.SessionRow {
-	rows := m.currentPageRows()
-	idx := m.table.Cursor()
-	if idx < 0 || idx >= len(rows) {
-		return nil
-	}
-	return &rows[idx]
 }
 
 func (m rootModel) applyFilter() []insightsdb.SessionRow {
 	filtered := make([]insightsdb.SessionRow, 0, len(m.rows))
+	now := time.Now()
 	for _, row := range m.rows {
-		if m.filter == filterRepo && row.Branch != "main" && row.Branch != "master" {
+		// Time filter
+		switch m.timeFilter {
+		case timeFilter24h:
+			if now.Sub(row.CreatedAt) > 24*time.Hour {
+				continue
+			}
+		case timeFilter7d:
+			if now.Sub(row.CreatedAt) > 7*24*time.Hour {
+				continue
+			}
+		case timeFilter30d:
+			if now.Sub(row.CreatedAt) > 30*24*time.Hour {
+				continue
+			}
+		case timeFilterAll:
+			// no time filtering
+		}
+
+		// Branch filter
+		if m.branchFilter == filterRepo && m.defaultBranch != "" && row.Branch != m.defaultBranch {
 			continue
 		}
-		if m.filter == filterCurrentBranch && m.currentBranch != "" && row.Branch != m.currentBranch {
+		if m.branchFilter == filterCurrentBranch && m.currentBranch != "" && row.Branch != m.currentBranch {
 			continue
 		}
 		filtered = append(filtered, row)
@@ -338,11 +486,48 @@ func (m rootModel) currentPageRows() []insightsdb.SessionRow {
 	return m.filteredRows[start:end]
 }
 
-func (m *rootModel) cycleFilter() {
-	m.filter = (m.filter + 1) % 3
+func (m rootModel) selectedRow() *insightsdb.SessionRow {
+	rows := m.currentPageRows()
+	if m.cursor < 0 || m.cursor >= len(rows) {
+		return nil
+	}
+	return &rows[m.cursor]
+}
+
+// --- Navigation ---
+
+func (m *rootModel) moveCursor(delta int) {
+	pageRows := m.currentPageRows()
+	if len(pageRows) == 0 {
+		return
+	}
+	m.cursor += delta
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if m.cursor >= len(pageRows) {
+		m.cursor = len(pageRows) - 1
+	}
+	m.genStatus = "" // clear status on navigation
+	m.updateDetailViewport()
+}
+
+func (m *rootModel) cycleTime() {
+	m.timeFilter = (m.timeFilter + 1) % 4
 	m.paginator.Page = 0
-	m.table.SetCursor(0)
+	m.cursor = 0
+	m.genStatus = ""
 	m.rebuildFilteredRows()
+	m.updateDetailViewport()
+}
+
+func (m *rootModel) cycleBranch() {
+	m.branchFilter = (m.branchFilter + 1) % 3
+	m.paginator.Page = 0
+	m.cursor = 0
+	m.genStatus = ""
+	m.rebuildFilteredRows()
+	m.updateDetailViewport()
 }
 
 func (m *rootModel) nextPage() {
@@ -350,8 +535,9 @@ func (m *rootModel) nextPage() {
 		return
 	}
 	m.paginator.NextPage()
-	m.table.SetCursor(0)
-	m.rebuildTable()
+	m.cursor = 0
+	m.genStatus = ""
+	m.updateDetailViewport()
 }
 
 func (m *rootModel) prevPage() {
@@ -359,35 +545,19 @@ func (m *rootModel) prevPage() {
 		return
 	}
 	m.paginator.PrevPage()
-	m.table.SetCursor(0)
-	m.rebuildTable()
+	m.cursor = 0
+	m.genStatus = ""
+	m.updateDetailViewport()
 }
 
-func pageLabel(p paginator.Model) string {
-	return fmt.Sprintf("Page %d/%d", p.Page+1, max(1, p.TotalPages))
-}
-
-func renderFilterChips(styles styles, active branchFilter) string {
-	labels := []struct {
-		filter branchFilter
-		label  string
-	}{
-		{filterRepo, "Repo"},
-		{filterCurrentBranch, "Current Branch"},
-		{filterAllBranches, "All"},
+func (m *rootModel) updateDetailViewport() {
+	row := m.selectedRow()
+	if row == nil {
+		m.detailVP.SetContent("")
+		return
 	}
-
-	parts := make([]string, 0, len(labels))
-	for _, item := range labels {
-		text := item.label
-		if item.filter == active {
-			text = "[" + text + "]"
-			parts = append(parts, styles.render(styles.chipActive, text))
-			continue
-		}
-		parts = append(parts, styles.render(styles.chipInactive, text))
-	}
-	return strings.Join(parts, " ")
+	content := renderDetailContent(m.styles, *row, m.detailWidth())
+	m.detailVP.SetContent(content)
 }
 
 func (m *rootModel) resize(width, height int) {
@@ -398,14 +568,16 @@ func (m *rootModel) resize(width, height int) {
 
 	m.width = width
 	m.height = height
-	m.table.SetWidth(width)
 
-	tableHeight := max(3, height-rootVerticalChrome)
-	m.table.SetHeight(tableHeight)
-	m.pageSize = max(1, tableHeight-1)
+	contentHeight := m.contentHeight()
+	listHeight := contentHeight - 2 // header + separator
+	m.pageSize = max(1, listHeight)
+
+	m.detailVP = viewport.New(m.detailWidth(), max(3, contentHeight-4))
 
 	m.rebuildFilteredRows()
 	m.restoreSelection(selectedSessionID)
+	m.updateDetailViewport()
 }
 
 func (m *rootModel) restoreSelection(sessionID string) {
@@ -419,13 +591,12 @@ func (m *rootModel) restoreSelection(sessionID string) {
 		}
 
 		m.paginator.Page = idx / m.pageSize
-		m.rebuildTable()
-
 		cursor := idx % m.pageSize
-		if pageRows := m.currentPageRows(); len(pageRows) > 0 && cursor >= len(pageRows) {
+		pageRows := m.currentPageRows()
+		if len(pageRows) > 0 && cursor >= len(pageRows) {
 			cursor = len(pageRows) - 1
 		}
-		m.table.SetCursor(cursor)
+		m.cursor = cursor
 		return
 	}
 }

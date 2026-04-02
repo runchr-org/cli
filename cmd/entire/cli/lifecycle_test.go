@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,8 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
+	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -192,6 +196,7 @@ func newMockHookResponseAgent() *mockHookResponseAgent {
 
 type mockResponseOnlyAgent struct {
 	mockLifecycleAgent
+
 	lastMessage string
 }
 
@@ -213,6 +218,7 @@ func newMockResponseOnlyAgent() *mockResponseOnlyAgent {
 
 type mockContextOnlyAgent struct {
 	mockLifecycleAgent
+
 	lastMessage        string
 	lastContextMessage string
 }
@@ -236,6 +242,28 @@ func newMockContextOnlyAgent() *mockContextOnlyAgent {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+func captureLifecycleStdout(t *testing.T, fn func()) []byte {
+	t.Helper()
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+	})
+
+	fn()
+
+	require.NoError(t, w.Close())
+	data, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.NoError(t, r.Close())
+	os.Stdout = oldStdout
+
+	return data
 }
 
 func TestHandleLifecycleSessionStart_EmptyRepoWarning(t *testing.T) {
@@ -1086,6 +1114,59 @@ func TestHandleLifecycleTurnStart_ManualModePromptsForSupportedAgents(t *testing
 			require.Contains(t, ag.lastMessage, "Run lint before finishing")
 			require.Contains(t, ag.lastMessage, "ask the user")
 			require.Contains(t, ag.lastMessage, "before continuing")
+		})
+	}
+}
+
+func TestHandleLifecycleTurnStart_ManualModeBlocksForBlockCapableAgents(t *testing.T) {
+	testCases := []struct {
+		name string
+		ag   agent.Agent
+	}{
+		{
+			name: "claude",
+			ag:   &claudecode.ClaudeCodeAgent{},
+		},
+		{
+			name: "codex",
+			ag:   &codex.CodexAgent{},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			testutil.InitRepo(t, tmpDir)
+			testutil.WriteFile(t, tmpDir, "init.txt", "init")
+			testutil.GitAdd(t, tmpDir, "init.txt")
+			testutil.GitCommit(t, tmpDir, "init")
+			t.Chdir(tmpDir)
+			paths.ClearWorktreeRootCache()
+
+			writeMemoryLoopStateForTurnStartTest(t, memoryloop.ModeManual)
+
+			event := &agent.Event{
+				Type:      agent.TurnStart,
+				SessionID: "test-manual-memory-block",
+				Prompt:    "fix the lint failure in capabilities.go",
+				Timestamp: time.Now(),
+			}
+
+			data := captureLifecycleStdout(t, func() {
+				require.NoError(t, handleLifecycleTurnStart(context.Background(), tc.ag, event))
+			})
+
+			var resp struct {
+				Continue      *bool  `json:"continue"`
+				StopReason    string `json:"stopReason"`
+				SystemMessage string `json:"systemMessage"`
+			}
+			require.NoError(t, json.Unmarshal(data, &resp))
+			require.NotNil(t, resp.Continue)
+			require.False(t, *resp.Continue)
+			require.Contains(t, resp.StopReason, "Memory For This Repo")
+			require.Contains(t, resp.StopReason, "ask the user")
+			require.Contains(t, resp.StopReason, "before continuing")
 		})
 	}
 }
