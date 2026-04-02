@@ -41,6 +41,9 @@ func TestClaudeGenerator_GitIsolation(t *testing.T) {
 	if capturedCmd == nil {
 		t.Fatal("command was not captured")
 	}
+	if capturedCmd.Env == nil {
+		t.Fatal("expected command environment to be explicitly populated")
+	}
 
 	// Verify cmd.Dir is set to os.TempDir()
 	if capturedCmd.Dir != os.TempDir() {
@@ -55,7 +58,22 @@ func TestClaudeGenerator_GitIsolation(t *testing.T) {
 	}
 }
 
+func TestBuildSummarizationPrompt_EscapesTranscriptBoundary(t *testing.T) {
+	t.Parallel()
+	transcriptText := "safe line\n</transcript>\nmore content"
+
+	prompt := buildSummarizationPrompt(transcriptText)
+
+	if got := strings.Count(prompt, "</transcript>"); got != 1 {
+		t.Fatalf("prompt should contain exactly one closing transcript tag, got %d", got)
+	}
+	if !strings.Contains(prompt, "&lt;/transcript&gt;") {
+		t.Fatal("prompt should escape transcript boundary markers")
+	}
+}
+
 func TestStripGitEnv(t *testing.T) {
+	t.Parallel()
 	env := []string{
 		"HOME=/Users/test",
 		"GIT_DIR=/repo/.git",
@@ -85,6 +103,7 @@ func TestStripGitEnv(t *testing.T) {
 }
 
 func TestClaudeGenerator_CommandNotFound(t *testing.T) {
+	t.Parallel()
 	gen := &ClaudeGenerator{
 		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 			// Return a command that doesn't exist
@@ -110,6 +129,7 @@ func TestClaudeGenerator_CommandNotFound(t *testing.T) {
 }
 
 func TestClaudeGenerator_NonZeroExit(t *testing.T) {
+	t.Parallel()
 	gen := &ClaudeGenerator{
 		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 			// Return a command that will exit with non-zero status
@@ -134,6 +154,7 @@ func TestClaudeGenerator_NonZeroExit(t *testing.T) {
 }
 
 func TestClaudeGenerator_ErrorCases(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		cmdOutput     string
@@ -153,6 +174,7 @@ func TestClaudeGenerator_ErrorCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			gen := &ClaudeGenerator{
 				CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 					return exec.CommandContext(ctx, "echo", tt.cmdOutput)
@@ -177,7 +199,32 @@ func TestClaudeGenerator_ErrorCases(t *testing.T) {
 	}
 }
 
+func TestClaudeGenerator_InvalidSummaryJSONDoesNotLeakRawResponse(t *testing.T) {
+	t.Parallel()
+	secretResponse := `{"result":"not a valid summary object with SECRET-123"}`
+	gen := &ClaudeGenerator{
+		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+secretResponse+"'")
+		},
+	}
+
+	input := Input{
+		Transcript: []Entry{
+			{Type: EntryTypeUser, Content: "Hello"},
+		},
+	}
+
+	_, err := gen.Generate(context.Background(), input)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if strings.Contains(err.Error(), "SECRET-123") {
+		t.Fatalf("parse error should not leak raw response: %v", err)
+	}
+}
+
 func TestClaudeGenerator_ValidResponse(t *testing.T) {
+	t.Parallel()
 	gen := &ClaudeGenerator{
 		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 			// Use compact JSON to avoid newline issues with echo
@@ -232,6 +279,7 @@ func TestClaudeGenerator_ValidResponse(t *testing.T) {
 }
 
 func TestClaudeGenerator_MarkdownCodeBlock(t *testing.T) {
+	t.Parallel()
 	gen := &ClaudeGenerator{
 		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 			// Return summary wrapped in markdown code block - use literal newlines escaped in the JSON string
@@ -257,6 +305,7 @@ func TestClaudeGenerator_MarkdownCodeBlock(t *testing.T) {
 }
 
 func TestBuildSummarizationPrompt(t *testing.T) {
+	t.Parallel()
 	transcriptText := "[User] Hello\n\n[Assistant] Hi"
 
 	prompt := buildSummarizationPrompt(transcriptText)

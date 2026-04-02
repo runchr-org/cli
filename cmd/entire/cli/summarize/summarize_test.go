@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/llmcli"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 	"github.com/stretchr/testify/require"
 )
@@ -651,6 +652,7 @@ func TestFormatCondensedTranscript_EmptyInput(t *testing.T) {
 }
 
 func TestGenerateFromTranscript(t *testing.T) {
+	t.Parallel()
 	// Test with mock generator
 	mockGenerator := &ClaudeGenerator{
 		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
@@ -682,10 +684,13 @@ func TestGenerateFromTranscript(t *testing.T) {
 }
 
 func TestGenerateFromTranscript_WithExplicitInsightContent(t *testing.T) {
+	t.Parallel()
+	explained := "I am using the existing summary pipeline because it is already backward compatible."
 	mockGenerator := &ClaudeGenerator{
 		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 			response := `{"result":"{\"intent\":\"Explain the rationale\",\"outcome\":\"Captured explicit insight content\",\"learnings\":{\"repo\":[],\"code\":[],\"workflow\":[]},\"friction\":[],\"open_items\":[],\"implementation_rationale\":[\"The transcript already explained why the approach was chosen\"],\"tradeoffs\":[\"The transcript already named the tradeoff\"],\"codebase_patterns\":[\"The transcript already named the pattern\"]}"}`
-			return exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+response+"'")
+			script := "prompt=$(cat); case \"$prompt\" in *\"preserve explicit explanatory content\"*) : ;; *) echo 'missing explanatory guidance' >&2; exit 1 ;; esac; case \"$prompt\" in *\"" + explained + "\"*) : ;; *) echo 'missing explicit insight transcript content' >&2; exit 1 ;; esac; printf '%s' '" + response + "'"
+			return exec.CommandContext(ctx, "sh", "-c", script)
 		},
 	}
 
@@ -697,16 +702,25 @@ func TestGenerateFromTranscript_WithExplicitInsightContent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	require.NotNil(t, summary, "expected non-nil summary")
-	if len(summary.ImplementationRationale) == 0 {
-		t.Fatal("expected implementation rationale for explicit insight content")
+	if len(summary.ImplementationRationale) != 1 || summary.ImplementationRationale[0] != "The transcript already explained why the approach was chosen" {
+		t.Fatalf("unexpected implementation rationale: %v", summary.ImplementationRationale)
+	}
+	if len(summary.Tradeoffs) != 1 || summary.Tradeoffs[0] != "The transcript already named the tradeoff" {
+		t.Fatalf("unexpected tradeoffs: %v", summary.Tradeoffs)
+	}
+	if len(summary.CodebasePatterns) != 1 || summary.CodebasePatterns[0] != "The transcript already named the pattern" {
+		t.Fatalf("unexpected codebase patterns: %v", summary.CodebasePatterns)
 	}
 }
 
 func TestGenerateFromTranscript_WithoutExplicitInsightMarkers(t *testing.T) {
+	t.Parallel()
+	promptText := "Make the change."
 	mockGenerator := &ClaudeGenerator{
 		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 			response := `{"result":"{\"intent\":\"Explain the rationale\",\"outcome\":\"Synthesized conservative explanatory insights\",\"learnings\":{\"repo\":[],\"code\":[],\"workflow\":[]},\"friction\":[],\"open_items\":[],\"implementation_rationale\":[\"Inferred from the available transcript\"],\"tradeoffs\":[\"Inferred conservatively from the implementation path\"],\"codebase_patterns\":[\"Inferred repo pattern from repeated summary usage\"]}"}`
-			return exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+response+"'")
+			script := "prompt=$(cat); case \"$prompt\" in *\"infer conservatively\"*) : ;; *) echo 'missing conservative inference guidance' >&2; exit 1 ;; esac; case \"$prompt\" in *\"" + promptText + "\"*) : ;; *) echo 'missing transcript content' >&2; exit 1 ;; esac; case \"$prompt\" in *\"I am using the existing summary pipeline because it is already backward compatible.\"*) echo 'unexpected explicit insight content' >&2; exit 1 ;; esac; printf '%s' '" + response + "'"
+			return exec.CommandContext(ctx, "sh", "-c", script)
 		},
 	}
 
@@ -718,12 +732,19 @@ func TestGenerateFromTranscript_WithoutExplicitInsightMarkers(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	require.NotNil(t, summary, "expected non-nil summary")
-	if len(summary.Tradeoffs) == 0 {
-		t.Fatal("expected tradeoffs to be synthesized even without explicit insight markers")
+	if len(summary.ImplementationRationale) != 1 || summary.ImplementationRationale[0] != "Inferred from the available transcript" {
+		t.Fatalf("unexpected implementation rationale: %v", summary.ImplementationRationale)
+	}
+	if len(summary.Tradeoffs) != 1 || summary.Tradeoffs[0] != "Inferred conservatively from the implementation path" {
+		t.Fatalf("unexpected tradeoffs: %v", summary.Tradeoffs)
+	}
+	if len(summary.CodebasePatterns) != 1 || summary.CodebasePatterns[0] != "Inferred repo pattern from repeated summary usage" {
+		t.Fatalf("unexpected codebase patterns: %v", summary.CodebasePatterns)
 	}
 }
 
 func TestGenerateFromTranscript_EmptyTranscript(t *testing.T) {
+	t.Parallel()
 	mockGenerator := &ClaudeGenerator{}
 
 	summary, err := GenerateFromTranscript(context.Background(), []byte{}, []string{}, "", mockGenerator)
@@ -735,15 +756,44 @@ func TestGenerateFromTranscript_EmptyTranscript(t *testing.T) {
 	}
 }
 
-func TestGenerateFromTranscript_NilGenerator(t *testing.T) {
+func TestGenerateFromTranscript_NilGenerator_UsesDefaultSeam(t *testing.T) {
+	original := executeClaudeSummarization
+	t.Cleanup(func() {
+		executeClaudeSummarization = original
+	})
+
+	called := false
+	executeClaudeSummarization = func(ctx context.Context, runner *llmcli.Runner, prompt string) (string, *llmcli.UsageInfo, error) {
+		called = true
+		if runner == nil {
+			t.Fatal("expected runner to be constructed")
+		}
+		if !strings.Contains(prompt, "Hello") {
+			t.Fatalf("prompt missing transcript content: %s", prompt)
+		}
+		return `{"intent":"Nil generator intent","outcome":"Nil generator outcome","learnings":{"repo":[],"code":[],"workflow":[]},"friction":[],"open_items":[],"implementation_rationale":["Nil generator rationale"],"tradeoffs":["Nil generator tradeoff"],"codebase_patterns":["Nil generator pattern"]}`, &llmcli.UsageInfo{}, nil
+	}
+
 	transcript := []byte(`{"type":"user","message":{"content":"Hello"}}`)
 
-	// With nil generator, should use default ClaudeGenerator
-	// This will fail because claude CLI isn't available in test, but tests the nil handling
-	_, err := GenerateFromTranscript(context.Background(), transcript, []string{}, "", nil)
-	// Error is expected (claude CLI not available), but function should not panic
-	if err == nil {
-		t.Log("Unexpectedly succeeded - claude CLI must be available")
+	summary, err := GenerateFromTranscript(context.Background(), transcript, []string{}, "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected default generator seam to be used")
+	}
+	if summary.Intent != "Nil generator intent" {
+		t.Fatalf("unexpected intent: %s", summary.Intent)
+	}
+	if len(summary.ImplementationRationale) != 1 || summary.ImplementationRationale[0] != "Nil generator rationale" {
+		t.Fatalf("unexpected implementation rationale: %v", summary.ImplementationRationale)
+	}
+	if len(summary.Tradeoffs) != 1 || summary.Tradeoffs[0] != "Nil generator tradeoff" {
+		t.Fatalf("unexpected tradeoffs: %v", summary.Tradeoffs)
+	}
+	if len(summary.CodebasePatterns) != 1 || summary.CodebasePatterns[0] != "Nil generator pattern" {
+		t.Fatalf("unexpected codebase patterns: %v", summary.CodebasePatterns)
 	}
 }
 

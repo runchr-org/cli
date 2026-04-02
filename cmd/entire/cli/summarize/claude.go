@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"os/exec"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
@@ -12,8 +13,8 @@ import (
 
 // summarizationPromptTemplate is the prompt used to generate summaries via the Claude CLI.
 //
-// Security note: The transcript is wrapped in <transcript> tags to provide clear boundary
-// markers. This helps contain any potentially malicious content within the transcript
+// Security note: The transcript is HTML-escaped before being wrapped in <transcript> tags.
+// This helps contain any potentially malicious content within the transcript
 // (e.g., prompt injection attempts in user messages or file contents) by giving the LLM
 // a clear structural signal about where the untrusted content begins and ends.
 const summarizationPromptTemplate = `Analyze this development session transcript and generate a structured summary.
@@ -68,6 +69,10 @@ type ClaudeGenerator struct {
 	CommandRunner func(ctx context.Context, name string, args ...string) *exec.Cmd
 }
 
+var executeClaudeSummarization = func(ctx context.Context, runner *llmcli.Runner, prompt string) (string, *llmcli.UsageInfo, error) {
+	return runner.Execute(ctx, prompt)
+}
+
 // Generate creates a summary from checkpoint data by calling the Claude CLI.
 func (g *ClaudeGenerator) Generate(ctx context.Context, input Input) (*checkpoint.Summary, error) {
 	transcriptText := FormatCondensedTranscript(input)
@@ -79,14 +84,14 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, input Input) (*checkpoin
 		CommandRunner: g.CommandRunner,
 	}
 
-	resultJSON, _, err := runner.Execute(ctx, prompt)
+	resultJSON, _, err := executeClaudeSummarization(ctx, runner, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("execute claude CLI: %w", err)
 	}
 
 	var summary checkpoint.Summary
 	if err := json.Unmarshal([]byte(resultJSON), &summary); err != nil {
-		return nil, fmt.Errorf("failed to parse summary JSON: %w (response: %s)", err, resultJSON)
+		return nil, fmt.Errorf("failed to parse summary JSON: %w", err)
 	}
 
 	return &summary, nil
@@ -94,7 +99,11 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, input Input) (*checkpoin
 
 // buildSummarizationPrompt creates the prompt for the Claude CLI.
 func buildSummarizationPrompt(transcriptText string) string {
-	return fmt.Sprintf(summarizationPromptTemplate, transcriptText)
+	return fmt.Sprintf(summarizationPromptTemplate, escapeTranscriptForPrompt(transcriptText))
+}
+
+func escapeTranscriptForPrompt(transcriptText string) string {
+	return html.EscapeString(transcriptText)
 }
 
 // stripGitEnv delegates to llmcli.StripGitEnv.
