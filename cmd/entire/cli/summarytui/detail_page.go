@@ -14,17 +14,41 @@ func renderMetadataHeader(s styles, row insightsdb.SessionRow, width int) string
 	tokensWidth := 14
 	sessionWidth := max(0, width-tokensWidth-3) // gap between boxes
 
-	// SESSION box content
-	var parts []string
+	// SESSION box content — two lines for readability
+	sep := s.render(s.dim, " · ")
+
+	var line1 []string
+	if row.CheckpointID != "" {
+		line1 = append(line1, s.render(s.detailLabel, "checkpoint:")+s.render(s.detailValue, " "+row.CheckpointID))
+	}
+	if row.Agent != "" {
+		line1 = append(line1, s.render(s.detailLabel, "agent:")+s.render(s.detailValue, " "+row.Agent))
+	}
+	author := row.OwnerName
+	if author == "" {
+		author = row.OwnerID
+	}
+	if author != "" {
+		line1 = append(line1, s.render(s.detailLabel, "author:")+s.render(s.detailValue, " "+author))
+	}
+
+	var line2 []string
 	if row.Branch != "" {
-		parts = append(parts, s.render(s.detailLabel, "branch:")+s.render(s.detailValue, " "+row.Branch))
+		line2 = append(line2, s.render(s.detailLabel, "branch:")+s.render(s.detailValue, " "+row.Branch))
 	}
 	if row.Model != "" {
-		parts = append(parts, s.render(s.detailLabel, "model:")+s.render(s.detailValue, " "+row.Model))
+		line2 = append(line2, s.render(s.detailLabel, "model:")+s.render(s.detailValue, " "+row.Model))
 	}
-	parts = append(parts, s.render(s.detailLabel, "turns:")+s.render(s.detailValue, " "+strconv.Itoa(row.TurnCount)))
+	line2 = append(line2, s.render(s.detailLabel, "turns:")+s.render(s.detailValue, " "+strconv.Itoa(row.TurnCount)))
 
-	sessionContent := strings.Join(parts, s.render(s.dim, " · "))
+	var lines []string
+	if len(line1) > 0 {
+		lines = append(lines, strings.Join(line1, sep))
+	}
+	if len(line2) > 0 {
+		lines = append(lines, strings.Join(line2, sep))
+	}
+	sessionContent := strings.Join(lines, "\n")
 	sessionBox := s.renderBox("SESSION", sessionContent, sessionWidth)
 
 	// TOKENS box content

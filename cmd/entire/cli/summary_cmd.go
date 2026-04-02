@@ -24,11 +24,12 @@ import (
 )
 
 type summaryOptions struct {
-	Last       int
-	Agent      string
-	Branch     string
-	Me         bool
-	OutputJSON bool
+	Last             int
+	Agent            string
+	Branch           string
+	Me               bool
+	OutputJSON       bool
+	CheckpointPrefix string
 }
 
 const (
@@ -71,9 +72,10 @@ func newSummaryCmd() *cobra.Command {
 	opts := summaryOptions{Last: defaultSummarySessionLimit}
 
 	cmd := &cobra.Command{
-		Use:   "summary",
+		Use:   "summary [checkpoint-id]",
 		Short: "Browse source sessions with summaries and facets",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := cmd.OutOrStdout()
 
@@ -85,6 +87,10 @@ func newSummaryCmd() *cobra.Command {
 				fmt.Fprintln(w, "Summarization is required for summary browsing. Enable it in .entire/settings.json:")
 				fmt.Fprintln(w, `  { "strategy_options": { "summarize": { "enabled": true } } }`)
 				return nil
+			}
+
+			if len(args) > 0 {
+				opts.CheckpointPrefix = args[0]
 			}
 
 			return runSummary(ctx, w, opts)
@@ -118,7 +124,12 @@ func runSummary(ctx context.Context, w io.Writer, opts summaryOptions) error {
 	if branch, err := GetCurrentBranch(ctx); err == nil {
 		currentBranch = branch
 	}
-	defaultBranch := GetDefaultBranch(ctx)
+	defaultBranch := ""
+	if opts.CheckpointPrefix == "" {
+		// Only apply default branch filter when browsing all sessions.
+		// When viewing a specific checkpoint, show all branches.
+		defaultBranch = GetDefaultBranch(ctx)
+	}
 
 	return runSummaryTUI(ctx, rows, currentBranch, defaultBranch, generateForSession)
 }
@@ -137,6 +148,35 @@ func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb
 
 	outputLimit := normalizedSummarySessionLimit(opts.Last)
 
+	// Checkpoint prefix lookup: skip normal loading, query directly by prefix.
+	if opts.CheckpointPrefix != "" {
+		rows, err := idb.QueryByCheckpointPrefix(ctx, opts.CheckpointPrefix)
+		if err != nil {
+			return nil, fmt.Errorf("query by checkpoint: %w", err)
+		}
+		if len(rows) == 0 {
+			// Try refreshing cache in case the checkpoint hasn't been indexed yet.
+			if err := summaryRefreshCacheIfStale(ctx, idb); err != nil {
+				return nil, fmt.Errorf("refresh insights cache: %w", err)
+			}
+			rows, err = idb.QueryByCheckpointPrefix(ctx, opts.CheckpointPrefix)
+			if err != nil {
+				return nil, fmt.Errorf("query by checkpoint after refresh: %w", err)
+			}
+		}
+		if len(rows) == 0 {
+			return nil, fmt.Errorf("checkpoint not found: %s", opts.CheckpointPrefix)
+		}
+		summaryBackfillSummaries(ctx, io.Discard, idb, len(rows), false, "")
+		summaryBackfillFacets(ctx, io.Discard, idb, len(rows), false, "")
+		// Re-query to pick up backfilled data.
+		rows, err = idb.QueryByCheckpointPrefix(ctx, opts.CheckpointPrefix)
+		if err != nil {
+			return nil, fmt.Errorf("query by checkpoint after backfill: %w", err)
+		}
+		return rows, nil
+	}
+
 	rows, err := idb.QueryLastNSessions(ctx, maxSummaryRecentSessions)
 	if err != nil {
 		return nil, fmt.Errorf("query sessions: %w", err)
@@ -152,8 +192,8 @@ func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb
 		}
 	}
 
-	summaryBackfillSummaries(ctx, io.Discard, idb, outputLimit)
-	summaryBackfillFacets(ctx, io.Discard, idb, outputLimit)
+	summaryBackfillSummaries(ctx, io.Discard, idb, outputLimit, false, "")
+	summaryBackfillFacets(ctx, io.Discard, idb, outputLimit, false, "")
 
 	rows, err = idb.QueryLastNSessions(ctx, maxSummaryRecentSessions)
 	if err != nil {

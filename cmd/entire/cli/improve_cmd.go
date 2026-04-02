@@ -76,8 +76,8 @@ func runImprove(ctx context.Context, w io.Writer, last int, dryRun bool, outputJ
 
 	// Generate summaries for recent sessions that lack them.
 	if !dryRun {
-		backfillSummaries(ctx, w, idb, last)
-		backfillFacets(ctx, w, idb, last)
+		backfillSummaries(ctx, w, idb, last, false, "")
+		backfillFacets(ctx, w, idb, last, false, "")
 	}
 
 	// Fetch the last N sessions for summary stats.
@@ -453,7 +453,7 @@ func facetSummary(analysis improve.PatternAnalysis) improve.FacetSummary {
 	}
 }
 
-func backfillFacets(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB, lastN int) {
+func backfillFacets(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB, lastN int, debug bool, debugHint string) {
 	rows, err := idb.QueryLastNSessions(ctx, lastN)
 	if err != nil {
 		logging.Warn(ctx, "backfillFacets: query failed", "error", err)
@@ -496,6 +496,9 @@ func backfillFacets(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB
 	for i, row := range needsFacets {
 		cpID, parseErr := checkpointid.NewCheckpointID(row.CheckpointID)
 		if parseErr != nil {
+			if debug {
+				fmt.Fprintf(w, "    debug: invalid checkpoint ID %q: %v\n", row.CheckpointID, parseErr)
+			}
 			logging.Debug(ctx, "backfillFacets: invalid checkpoint ID",
 				"checkpoint_id", row.CheckpointID, "error", parseErr)
 			skipped++
@@ -504,12 +507,18 @@ func backfillFacets(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB
 
 		content, readErr := store.ReadSessionContent(ctx, cpID, row.SessionIndex)
 		if readErr != nil {
+			if debug {
+				fmt.Fprintf(w, "    debug: read session content failed for %s[%d]: %v\n", row.CheckpointID, row.SessionIndex, readErr)
+			}
 			logging.Debug(ctx, "backfillFacets: read session content failed",
 				"checkpoint_id", row.CheckpointID, "session_index", row.SessionIndex, "error", readErr)
 			skipped++
 			continue
 		}
 		if len(content.Transcript) == 0 {
+			if debug {
+				fmt.Fprintf(w, "    debug: empty transcript for %s[%d]\n", row.CheckpointID, row.SessionIndex)
+			}
 			logging.Debug(ctx, "backfillFacets: empty transcript",
 				"checkpoint_id", row.CheckpointID, "session_index", row.SessionIndex)
 			skipped++
@@ -518,12 +527,18 @@ func backfillFacets(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB
 
 		condensed, buildErr := summarize.BuildCondensedTranscriptFromBytes(content.Transcript, content.Metadata.Agent)
 		if buildErr != nil {
+			if debug {
+				fmt.Fprintf(w, "    debug: condense transcript failed for %s: %v\n", row.CheckpointID, buildErr)
+			}
 			logging.Debug(ctx, "backfillFacets: condense transcript failed",
 				"checkpoint_id", row.CheckpointID, "error", buildErr)
 			skipped++
 			continue
 		}
 		if len(condensed) == 0 {
+			if debug {
+				fmt.Fprintf(w, "    debug: condensed transcript empty for %s\n", row.CheckpointID)
+			}
 			logging.Debug(ctx, "backfillFacets: condensed transcript empty",
 				"checkpoint_id", row.CheckpointID)
 			skipped++
@@ -537,12 +552,18 @@ func backfillFacets(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB
 
 		facetResult, _, extractErr := extractor.Extract(ctx, formatted)
 		if extractErr != nil {
+			if debug {
+				fmt.Fprintf(w, "    debug: extract facets failed for %s: %v\n", row.CheckpointID, extractErr)
+			}
 			logging.Debug(ctx, "backfillFacets: extract facets failed",
 				"checkpoint_id", row.CheckpointID, "error", extractErr)
 			skipped++
 			continue
 		}
 		if facetResult == nil {
+			if debug {
+				fmt.Fprintf(w, "    debug: nil facets returned for %s\n", row.CheckpointID)
+			}
 			logging.Debug(ctx, "backfillFacets: nil facets returned",
 				"checkpoint_id", row.CheckpointID)
 			skipped++
@@ -552,6 +573,9 @@ func backfillFacets(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB
 		row.Facets = *facetResult
 		row.HasFacets = true
 		if updateErr := idb.UpdateSessionFacets(ctx, row); updateErr != nil {
+			if debug {
+				fmt.Fprintf(w, "    debug: update session facets failed for %s: %v\n", row.CheckpointID, updateErr)
+			}
 			logging.Debug(ctx, "backfillFacets: update session failed",
 				"checkpoint_id", row.CheckpointID, "error", updateErr)
 			skipped++
@@ -566,7 +590,13 @@ func backfillFacets(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB
 	if extracted > 0 || skipped > 0 {
 		parts := []string{fmt.Sprintf("Extracted %d facets", extracted)}
 		if skipped > 0 {
-			parts = append(parts, fmt.Sprintf("skipped %d (set ENTIRE_LOG_LEVEL=DEBUG for details)", skipped))
+			if debug {
+				parts = append(parts, fmt.Sprintf("skipped %d", skipped))
+			} else if debugHint != "" {
+				parts = append(parts, debugHint)
+			} else {
+				parts = append(parts, fmt.Sprintf("skipped %d", skipped))
+			}
 		}
 		fmt.Fprintf(w, "  %s\n\n", strings.Join(parts, ", "))
 	}

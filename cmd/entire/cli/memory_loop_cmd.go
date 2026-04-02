@@ -134,17 +134,19 @@ func newMemoryLoopRefreshCmd() *cobra.Command {
 	var last int
 	var scope string
 	var branch string
+	var debug bool
 
 	cmd := &cobra.Command{
 		Use:   "refresh",
 		Short: "Rebuild the memory snapshot from recent sessions",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runMemoryLoopRefresh(cmd.Context(), cmd.OutOrStdout(), last, scope, branch)
+			return runMemoryLoopRefresh(cmd.Context(), cmd.OutOrStdout(), last, scope, branch, debug)
 		},
 	}
 	cmd.Flags().IntVar(&last, "last", memoryloop.DefaultRefreshWindow, "number of recent sessions to distill into memory")
 	cmd.Flags().StringVar(&scope, "scope", string(memoryLoopScopeRepo), "session scope to use: repo, branch, or me")
 	cmd.Flags().StringVar(&branch, "branch", "", "branch name to use when --scope branch (defaults to current branch)")
+	cmd.Flags().BoolVar(&debug, "debug", false, "print skipped backfill details inline")
 	return cmd
 }
 
@@ -291,7 +293,7 @@ func newMemoryLoopPruneCmd() *cobra.Command {
 	}
 }
 
-func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, branchArg string) error {
+func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, branchArg string, debug bool) error {
 	worktreeRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		return fmt.Errorf("not in a git repository: %w", err)
@@ -312,9 +314,9 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 	refreshCacheIfStale(ctx, idb) //nolint:errcheck,gosec // non-fatal
 	if settings.IsSummarizeEnabled(ctx) {
 		renderMemoryLoopRefreshProgress(w, "Backfilling summaries...")
-		backfillSummaries(ctx, w, idb, last)
+		backfillSummaries(ctx, w, idb, last, debug, "use --debug for skipped details")
 		renderMemoryLoopRefreshProgress(w, "Backfilling facets...")
-		backfillFacets(ctx, w, idb, last)
+		backfillFacets(ctx, w, idb, last, debug, "use --debug for skipped details")
 	}
 
 	scope, err := resolveMemoryLoopScope(ctx, scopeArg, branchArg)
@@ -355,13 +357,13 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 	memoryCfg := cfg.GetMemoryLoopConfig()
 	maxInjected := memoryCfg.MaxInjected
 	mode := memoryloop.Mode(memoryCfg.Mode)
-	debug := memoryCfg.Debug
+	storeDebug := memoryCfg.Debug
 	activationPolicy := memoryloop.ActivationPolicy(memoryCfg.ActivationPolicy)
 	if state.Store != nil {
 		if state.Store.Mode != "" {
 			mode = state.Store.Mode
 		}
-		debug = state.Store.Debug
+		storeDebug = state.Store.Debug
 		if state.Store.MaxInjected > 0 {
 			maxInjected = state.Store.MaxInjected
 		}
@@ -408,7 +410,7 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 		ScopeValue:       scopeValue,
 		Records:          reconciledRecords,
 		Mode:             mode,
-		Debug:            debug,
+		Debug:            storeDebug,
 		ActivationPolicy: activationPolicy,
 		MaxInjected:      maxInjected,
 		RefreshHistory:   refreshHistory,

@@ -50,6 +50,14 @@ func (idb *InsightsDB) QueryByOwnerID(ctx context.Context, ownerID string, limit
 	)
 }
 
+// QueryByCheckpointPrefix returns sessions whose checkpoint ID starts with the given prefix, most recent first.
+func (idb *InsightsDB) QueryByCheckpointPrefix(ctx context.Context, prefix string) ([]SessionRow, error) {
+	return idb.querySessions(ctx,
+		"SELECT "+sessionColumns+" FROM sessions WHERE checkpoint_id LIKE ? ORDER BY created_at DESC",
+		prefix+"%",
+	)
+}
+
 // SessionCount returns the total number of cached sessions.
 func (idb *InsightsDB) SessionCount(ctx context.Context) (int, error) {
 	var count int

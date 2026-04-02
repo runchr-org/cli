@@ -123,6 +123,35 @@ func TestQueryByAgent_EmptyWhenAgentNotFound(t *testing.T) {
 	assert.Empty(t, sessions)
 }
 
+func TestQueryByCheckpointPrefix_MatchesPrefix(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	// Insert sessions with different checkpoint IDs
+	for i, cpID := range []string{"a1b2c3d4e5f6", "a1b2c3ffffff", "eeeeeeeeeeee"} {
+		row := minimalSessionRow(cpID, "sess", i)
+		require.NoError(t, db.InsertSession(ctx, row))
+	}
+
+	// Exact match
+	sessions, err := db.QueryByCheckpointPrefix(ctx, "eeeeeeeeeeee")
+	require.NoError(t, err)
+	assert.Len(t, sessions, 1)
+	assert.Equal(t, "eeeeeeeeeeee", sessions[0].CheckpointID)
+
+	// Prefix match
+	sessions, err = db.QueryByCheckpointPrefix(ctx, "a1b2c3")
+	require.NoError(t, err)
+	assert.Len(t, sessions, 2)
+
+	// No match
+	sessions, err = db.QueryByCheckpointPrefix(ctx, "ffffff")
+	require.NoError(t, err)
+	assert.Empty(t, sessions)
+}
+
 func TestQueryRecurringFriction_ReturnsThemesAboveMinCount(t *testing.T) {
 	t.Parallel()
 

@@ -39,9 +39,77 @@ func TestSummaryCmd_HasExpectedMetadata(t *testing.T) {
 	t.Parallel()
 
 	cmd := newSummaryCmd()
-	require.Equal(t, "summary", cmd.Use)
+	require.Equal(t, "summary [checkpoint-id]", cmd.Use)
 	require.NotEmpty(t, cmd.Short)
 	require.NotNil(t, cmd.RunE)
+}
+
+func TestSummaryCmd_AcceptsCheckpointArg(t *testing.T) {
+	t.Parallel()
+
+	cmd := newSummaryCmd()
+	// Should accept 0 or 1 args
+	require.NoError(t, cmd.Args(cmd, []string{}))
+	require.NoError(t, cmd.Args(cmd, []string{"a1b2c3"}))
+	require.Error(t, cmd.Args(cmd, []string{"a1b2c3", "extra"}))
+}
+
+func TestLoadSummarySessions_CheckpointPrefix(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "f.txt", "init")
+	testutil.GitAdd(t, tmpDir, "f.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+
+	entireDir := filepath.Join(tmpDir, paths.EntireDir)
+	require.NoError(t, os.MkdirAll(entireDir, 0o755))
+
+	idb, err := insightsdb.Open(filepath.Join(entireDir, "insights.db"))
+	require.NoError(t, err)
+	defer func() { _ = idb.Close() }()
+
+	now := time.Now()
+	for i, cpID := range []string{"aabb11223344", "aabb55667788", "ccdd11223344"} {
+		row := insightsdb.SessionRow{
+			CheckpointID: cpID,
+			SessionID:    fmt.Sprintf("sess-%d", i),
+			SessionIndex: 0,
+			Agent:        "Claude Code",
+			CreatedAt:    now.Add(-time.Duration(i) * time.Hour),
+		}
+		require.NoError(t, idb.InsertSession(context.Background(), row))
+	}
+	_ = idb.Close()
+
+	// Stub out backfill and TUI to avoid LLM calls
+	origBackfillSummaries := summaryBackfillSummaries
+	origBackfillFacets := summaryBackfillFacets
+	origRefresh := summaryRefreshCacheIfStale
+	summaryBackfillSummaries = func(_ context.Context, _ io.Writer, _ *insightsdb.InsightsDB, _ int, _ bool, _ string) {}
+	summaryBackfillFacets = func(_ context.Context, _ io.Writer, _ *insightsdb.InsightsDB, _ int, _ bool, _ string) {}
+	summaryRefreshCacheIfStale = func(_ context.Context, _ *insightsdb.InsightsDB) error { return nil }
+	t.Cleanup(func() {
+		summaryBackfillSummaries = origBackfillSummaries
+		summaryBackfillFacets = origBackfillFacets
+		summaryRefreshCacheIfStale = origRefresh
+	})
+
+	// Prefix matching two sessions
+	rows, err := loadSummarySessions(context.Background(), summaryOptions{CheckpointPrefix: "aabb"})
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+
+	// Exact match
+	rows, err = loadSummarySessions(context.Background(), summaryOptions{CheckpointPrefix: "ccdd11223344"})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "ccdd11223344", rows[0].CheckpointID)
+
+	// No match
+	_, err = loadSummarySessions(context.Background(), summaryOptions{CheckpointPrefix: "ffffff"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "checkpoint not found")
 }
 
 //nolint:musttag // nested external structs are part of the intended JSON payload
@@ -230,10 +298,10 @@ func TestLoadSummarySessions_PopulatedCacheSkipsRefreshAndUsesVisibleBackfillLim
 		refreshCalled = true
 		return nil
 	}
-	summaryBackfillSummaries = func(_ context.Context, _ io.Writer, _ *insightsdb.InsightsDB, lastN int) {
+	summaryBackfillSummaries = func(_ context.Context, _ io.Writer, _ *insightsdb.InsightsDB, lastN int, _ bool, _ string) {
 		summaryLimit = lastN
 	}
-	summaryBackfillFacets = func(_ context.Context, _ io.Writer, _ *insightsdb.InsightsDB, lastN int) {
+	summaryBackfillFacets = func(_ context.Context, _ io.Writer, _ *insightsdb.InsightsDB, lastN int, _ bool, _ string) {
 		facetLimit = lastN
 	}
 

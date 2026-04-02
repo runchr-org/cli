@@ -821,7 +821,7 @@ func TestRunMemoryLoopRefresh_InvalidSettingsReturnsError(t *testing.T) {
 	paths.ClearWorktreeRootCache()
 
 	var buf bytes.Buffer
-	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "repo", "")
+	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "repo", "", false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid memory_loop.activation_policy")
 }
@@ -843,7 +843,7 @@ func TestRunMemoryLoopRefresh_ScopeMeUsesGitHubUsername(t *testing.T) {
 	paths.ClearWorktreeRootCache()
 
 	var buf bytes.Buffer
-	require.NoError(t, runMemoryLoopRefresh(context.Background(), &buf, 10, "me", ""))
+	require.NoError(t, runMemoryLoopRefresh(context.Background(), &buf, 10, "me", "", false))
 	require.Contains(t, buf.String(), `No personal sessions found for owner_id "alishakawaguchi" because the insights cache has no owner_id data yet.`)
 }
 
@@ -860,7 +860,7 @@ func TestRunMemoryLoopRefresh_ScopeRepoFailsWhenDefaultBranchUnavailable(t *test
 	t.Cleanup(paths.ClearWorktreeRootCache)
 
 	var buf bytes.Buffer
-	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "repo", "")
+	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "repo", "", false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "default branch")
 }
@@ -882,7 +882,7 @@ func TestRunMemoryLoopRefresh_ScopeMeFailsWhenGitHubUsernameUnavailable(t *testi
 	paths.ClearWorktreeRootCache()
 
 	var buf bytes.Buffer
-	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "me", "")
+	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "me", "", false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "GitHub username")
 }
@@ -919,7 +919,7 @@ func TestRunMemoryLoopRefresh_ScopeMeWithoutMatchingSessionsLeavesSnapshotUntouc
 	}))
 
 	var buf bytes.Buffer
-	require.NoError(t, runMemoryLoopRefresh(context.Background(), &buf, 10, "me", ""))
+	require.NoError(t, runMemoryLoopRefresh(context.Background(), &buf, 10, "me", "", false))
 	require.Contains(t, buf.String(), "No personal sessions found for owner_id \"alishakawaguchi\" because the insights cache has no owner_id data yet.")
 
 	loaded, err := memoryloop.LoadState(context.Background())
@@ -928,6 +928,41 @@ func TestRunMemoryLoopRefresh_ScopeMeWithoutMatchingSessionsLeavesSnapshotUntouc
 	require.Equal(t, original, loaded.Store.GeneratedAt)
 	require.Len(t, loaded.Store.Records, 1)
 	require.Equal(t, "keep", loaded.Store.Records[0].ID)
+}
+
+func TestRunMemoryLoopRefresh_DebugPrintsBackfillSkipDetailsToTerminal(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, paths.EntireDir), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, settings.EntireSettingsFile), []byte(`{
+  "strategy_options": {
+    "summarize": {
+      "enabled": true
+    }
+  }
+}`), 0o644))
+	installFakeGitHubCLI(t, "#!/bin/sh\ncat <<'EOF'\ngithub.com\n  ✓ Logged in to github.com account alishakawaguchi (/tmp/hosts.yml)\n  - Active account: true\nEOF\n")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	idb, err := insightsdb.Open(filepath.Join(tmpDir, paths.EntireDir, "insights.db"))
+	require.NoError(t, err)
+	require.NoError(t, idb.InsertSession(context.Background(), insightsdb.SessionRow{
+		CheckpointID: "invalid-checkpoint-id",
+		SessionID:    "session-debug-skip",
+		SessionIndex: 0,
+		CreatedAt:    time.Date(2026, time.April, 2, 12, 0, 0, 0, time.UTC),
+	}))
+	require.NoError(t, idb.Close())
+
+	var buf bytes.Buffer
+	require.NoError(t, runMemoryLoopRefresh(context.Background(), &buf, 10, "me", "", true))
+	require.Contains(t, buf.String(), "skipped 1")
+	require.Contains(t, buf.String(), "debug: invalid checkpoint ID")
+	require.Contains(t, buf.String(), "invalid-checkpoint-id")
 }
 
 func installFakeGitHubCLI(t *testing.T, script string) {

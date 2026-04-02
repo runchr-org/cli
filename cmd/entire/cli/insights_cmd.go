@@ -76,8 +76,8 @@ func runInsights(ctx context.Context, w io.Writer, last int, agentFilter string,
 	refreshCacheIfStale(ctx, idb) //nolint:errcheck,gosec // Non-fatal; continue with stale cache
 
 	// Generate summaries for recent sessions that lack them.
-	backfillSummaries(ctx, w, idb, last)
-	backfillFacets(ctx, w, idb, last)
+	backfillSummaries(ctx, w, idb, last, false, "")
+	backfillFacets(ctx, w, idb, last, false, "")
 
 	var rows []insightsdb.SessionRow
 	if agentFilter != "" {
@@ -187,7 +187,7 @@ func refreshCacheIfStale(ctx context.Context, idb *insightsdb.InsightsDB) error 
 // backfillSummaries generates summaries for the last N sessions that lack them.
 // It reads transcripts from the checkpoint store, calls Claude to summarize,
 // and updates the cache. Errors on individual sessions are logged and skipped.
-func backfillSummaries(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB, lastN int) {
+func backfillSummaries(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB, lastN int, debug bool, debugHint string) {
 	rows, err := idb.QueryLastNSessions(ctx, lastN)
 	if err != nil {
 		logging.Warn(ctx, "backfillSummaries: query failed", "error", err)
@@ -229,6 +229,9 @@ func backfillSummaries(ctx context.Context, w io.Writer, idb *insightsdb.Insight
 	for i, row := range unsummarized {
 		cpID, parseErr := checkpointid.NewCheckpointID(row.CheckpointID)
 		if parseErr != nil {
+			if debug {
+				fmt.Fprintf(w, "    debug: invalid checkpoint ID %q: %v\n", row.CheckpointID, parseErr)
+			}
 			logging.Debug(ctx, "backfillSummaries: invalid checkpoint ID",
 				"checkpoint_id", row.CheckpointID, "error", parseErr)
 			skipped++
@@ -237,12 +240,18 @@ func backfillSummaries(ctx context.Context, w io.Writer, idb *insightsdb.Insight
 
 		content, readErr := store.ReadSessionContent(ctx, cpID, row.SessionIndex)
 		if readErr != nil {
+			if debug {
+				fmt.Fprintf(w, "    debug: read session content failed for %s[%d]: %v\n", row.CheckpointID, row.SessionIndex, readErr)
+			}
 			logging.Debug(ctx, "backfillSummaries: read session content failed",
 				"checkpoint_id", row.CheckpointID, "session_index", row.SessionIndex, "error", readErr)
 			skipped++
 			continue
 		}
 		if len(content.Transcript) == 0 {
+			if debug {
+				fmt.Fprintf(w, "    debug: empty transcript for %s[%d]\n", row.CheckpointID, row.SessionIndex)
+			}
 			logging.Debug(ctx, "backfillSummaries: empty transcript",
 				"checkpoint_id", row.CheckpointID, "session_index", row.SessionIndex)
 			skipped++
@@ -251,12 +260,18 @@ func backfillSummaries(ctx context.Context, w io.Writer, idb *insightsdb.Insight
 
 		condensed, buildErr := summarize.BuildCondensedTranscriptFromBytes(content.Transcript, content.Metadata.Agent)
 		if buildErr != nil {
+			if debug {
+				fmt.Fprintf(w, "    debug: condense transcript failed for %s (%s): %v\n", row.CheckpointID, content.Metadata.Agent, buildErr)
+			}
 			logging.Debug(ctx, "backfillSummaries: condense transcript failed",
 				"checkpoint_id", row.CheckpointID, "agent", content.Metadata.Agent, "error", buildErr)
 			skipped++
 			continue
 		}
 		if len(condensed) == 0 {
+			if debug {
+				fmt.Fprintf(w, "    debug: condensed transcript empty for %s (%s)\n", row.CheckpointID, content.Metadata.Agent)
+			}
 			logging.Debug(ctx, "backfillSummaries: condensed transcript empty",
 				"checkpoint_id", row.CheckpointID, "agent", content.Metadata.Agent)
 			skipped++
@@ -269,12 +284,18 @@ func backfillSummaries(ctx context.Context, w io.Writer, idb *insightsdb.Insight
 		}
 		summary, genErr := gen.Generate(ctx, input)
 		if genErr != nil {
+			if debug {
+				fmt.Fprintf(w, "    debug: generate summary failed for %s: %v\n", row.CheckpointID, genErr)
+			}
 			logging.Debug(ctx, "backfillSummaries: generate summary failed",
 				"checkpoint_id", row.CheckpointID, "error", genErr)
 			skipped++
 			continue
 		}
 		if summary == nil {
+			if debug {
+				fmt.Fprintf(w, "    debug: nil summary returned for %s\n", row.CheckpointID)
+			}
 			logging.Debug(ctx, "backfillSummaries: nil summary returned",
 				"checkpoint_id", row.CheckpointID)
 			skipped++
@@ -286,6 +307,9 @@ func backfillSummaries(ctx context.Context, w io.Writer, idb *insightsdb.Insight
 		updated := metadataToSessionRow(row.CheckpointID, row.SessionIndex, &content.Metadata)
 
 		if updateErr := idb.UpdateSessionSummary(ctx, updated); updateErr != nil {
+			if debug {
+				fmt.Fprintf(w, "    debug: update session summary failed for %s: %v\n", row.CheckpointID, updateErr)
+			}
 			logging.Debug(ctx, "backfillSummaries: update session failed",
 				"checkpoint_id", row.CheckpointID, "error", updateErr)
 			skipped++
@@ -300,7 +324,13 @@ func backfillSummaries(ctx context.Context, w io.Writer, idb *insightsdb.Insight
 	if generated > 0 || skipped > 0 {
 		parts := []string{fmt.Sprintf("Generated %d summaries", generated)}
 		if skipped > 0 {
-			parts = append(parts, fmt.Sprintf("skipped %d (set ENTIRE_LOG_LEVEL=DEBUG for details)", skipped))
+			if debug {
+				parts = append(parts, fmt.Sprintf("skipped %d", skipped))
+			} else if debugHint != "" {
+				parts = append(parts, debugHint)
+			} else {
+				parts = append(parts, fmt.Sprintf("skipped %d", skipped))
+			}
 		}
 		fmt.Fprintf(w, "  %s\n\n", strings.Join(parts, ", "))
 	}

@@ -350,7 +350,7 @@ func (m rootModel) formatListRow(time, ckpt, agent string, _ int) string {
 
 // --- Detail pane ---
 
-func (m rootModel) renderDetailPane(width, height int) string {
+func (m rootModel) renderDetailPane(width, _ int) string {
 	var b strings.Builder
 
 	// Column header aligned with list pane header
