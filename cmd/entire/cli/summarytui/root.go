@@ -18,8 +18,8 @@ import (
 
 const defaultPageSize = 10
 
-// Chrome: filter bar (1) + separator (1) + list header (1) + separator (1) + status bar (1) + padding (1) = 6
-const verticalChrome = 6
+// Chrome: filter bar (1) + gap (1) + separator (1) + list header (1) + separator (1) + status bar (1) + padding (1) = 7
+const verticalChrome = 7
 
 // GenerateFunc generates summary and facets for a single session on demand.
 type GenerateFunc func(ctx context.Context, row insightsdb.SessionRow) (insightsdb.SessionRow, error)
@@ -76,7 +76,7 @@ func Run(ctx context.Context, rows []insightsdb.SessionRow) error {
 }
 
 func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, currentBranch, defaultBranch string, generateFn GenerateFunc) error {
-	p := tea.NewProgram(newRootModel(rows, currentBranch, defaultBranch, generateFn), tea.WithAltScreen())
+	p := tea.NewProgram(newRootModel(rows, currentBranch, defaultBranch, generateFn), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("run summary TUI: %w", err)
@@ -91,6 +91,9 @@ func newRootModel(rows []insightsdb.SessionRow, currentBranch, defaultBranch str
 
 	accessible := os.Getenv("ACCESSIBLE") != ""
 
+	vp := viewport.New(60, 20)
+	vp.MouseWheelEnabled = true
+
 	m := rootModel{
 		ctx:           context.Background(),
 		rows:          append([]insightsdb.SessionRow(nil), rows...),
@@ -103,6 +106,7 @@ func newRootModel(rows []insightsdb.SessionRow, currentBranch, defaultBranch str
 		styles:        s,
 		width:         100,
 		height:        30,
+		detailVP:      vp,
 		generateFn:    generateFn,
 		accessible:    accessible,
 	}
@@ -136,6 +140,12 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.generating = false
 		m.genStatus = "Error: " + msg.err.Error()
 		return m, nil
+
+	case tea.MouseMsg:
+		// Route mouse events (scroll wheel) to detail viewport
+		var cmd tea.Cmd
+		m.detailVP, cmd = m.detailVP.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -209,7 +219,7 @@ func (m rootModel) View() string {
 
 	// Filter bar
 	b.WriteString(m.renderFilterBar())
-	b.WriteString("\n")
+	b.WriteString("\n\n")
 
 	listWidth := m.listWidth()
 	detailWidth := m.detailWidth()
@@ -305,7 +315,7 @@ func (m rootModel) renderListPane(width, height int) string {
 		if len(checkpoint) > 6 {
 			checkpoint = checkpoint[:6]
 		}
-		agent := truncate(row.Agent, 8)
+		agent := truncate(row.Agent, 14)
 		line := m.formatListRow(timeStr, checkpoint, agent, width)
 
 		if i == m.cursor {
@@ -335,13 +345,19 @@ func (m rootModel) renderListPane(width, height int) string {
 }
 
 func (m rootModel) formatListRow(time, ckpt, agent string, _ int) string {
-	return fmt.Sprintf("%-11s %-6s %-8s", time, ckpt, agent)
+	return fmt.Sprintf("%-11s %-6s %-14s", time, ckpt, agent)
 }
 
 // --- Detail pane ---
 
 func (m rootModel) renderDetailPane(width, height int) string {
 	var b strings.Builder
+
+	// Column header aligned with list pane header
+	b.WriteString(m.styles.render(m.styles.listHeader, "Details"))
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", width))
+	b.WriteString("\n")
 
 	row := m.selectedRow()
 	if row == nil {
@@ -352,15 +368,9 @@ func (m rootModel) renderDetailPane(width, height int) string {
 	// Fixed metadata header
 	header := renderMetadataHeader(m.styles, *row, width)
 	b.WriteString(header)
-	b.WriteString("\n")
+	b.WriteString("\n\n")
 
-	// Scrollable viewport fills remaining space
-	headerLines := strings.Count(header, "\n") + 1
-	vpHeight := max(3, height-headerLines-1)
-	if m.detailVP.Height != vpHeight || m.detailVP.Width != width {
-		m.detailVP.Width = width
-		m.detailVP.Height = vpHeight
-	}
+	// Scrollable viewport (sized in resize())
 	b.WriteString(m.detailVP.View())
 
 	return b.String()
@@ -369,6 +379,7 @@ func (m rootModel) renderDetailPane(width, height int) string {
 func (m rootModel) renderStatusBar() string {
 	var parts []string
 	parts = append(parts, "j/k navigate")
+	parts = append(parts, "scroll detail")
 	parts = append(parts, "1 time")
 	parts = append(parts, "2 branch")
 	parts = append(parts, "←→ page")
@@ -573,7 +584,10 @@ func (m *rootModel) resize(width, height int) {
 	listHeight := contentHeight - 2 // header + separator
 	m.pageSize = max(1, listHeight)
 
-	m.detailVP = viewport.New(m.detailWidth(), max(3, contentHeight-4))
+	// Detail viewport: subtract detail header (1) + separator (1) + metadata header (~3) + blank line (1) = 6
+	vp := viewport.New(m.detailWidth(), max(3, contentHeight-6))
+	vp.MouseWheelEnabled = true
+	m.detailVP = vp
 
 	m.rebuildFilteredRows()
 	m.restoreSelection(selectedSessionID)

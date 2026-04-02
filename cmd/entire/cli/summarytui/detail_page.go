@@ -64,7 +64,7 @@ func renderDetailContent(s styles, row insightsdb.SessionRow, width int) string 
 		return s.render(s.emptyState, "  No summary or insights cached. Press g to generate.")
 	}
 
-	return strings.Join(sections, "\n")
+	return strings.Join(sections, "\n\n")
 }
 
 func renderSummaryBox(s styles, row insightsdb.SessionRow, width int) string {
