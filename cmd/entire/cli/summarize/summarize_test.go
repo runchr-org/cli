@@ -654,7 +654,7 @@ func TestGenerateFromTranscript(t *testing.T) {
 	// Test with mock generator
 	mockGenerator := &ClaudeGenerator{
 		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-			response := `{"result":"{\"intent\":\"Test intent\",\"outcome\":\"Test outcome\",\"learnings\":{\"repo\":[],\"code\":[],\"workflow\":[]},\"friction\":[],\"open_items\":[]}"}`
+			response := `{"result":"{\"intent\":\"Test intent\",\"outcome\":\"Test outcome\",\"learnings\":{\"repo\":[],\"code\":[],\"workflow\":[]},\"friction\":[],\"open_items\":[],\"implementation_rationale\":[\"Use the shared summary pipeline\"],\"tradeoffs\":[\"Keep the schema additive\"],\"codebase_patterns\":[\"Summaries remain backward-compatible\"]}"}`
 			return exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+response+"'")
 		},
 	}
@@ -669,6 +669,57 @@ func TestGenerateFromTranscript(t *testing.T) {
 	require.NotNil(t, summary, "expected non-nil summary")
 	if summary.Intent != "Test intent" {
 		t.Errorf("unexpected intent: %s", summary.Intent)
+	}
+	if len(summary.ImplementationRationale) != 1 || summary.ImplementationRationale[0] != "Use the shared summary pipeline" {
+		t.Fatalf("unexpected implementation rationale: %v", summary.ImplementationRationale)
+	}
+	if len(summary.Tradeoffs) != 1 || summary.Tradeoffs[0] != "Keep the schema additive" {
+		t.Fatalf("unexpected tradeoffs: %v", summary.Tradeoffs)
+	}
+	if len(summary.CodebasePatterns) != 1 || summary.CodebasePatterns[0] != "Summaries remain backward-compatible" {
+		t.Fatalf("unexpected codebase patterns: %v", summary.CodebasePatterns)
+	}
+}
+
+func TestGenerateFromTranscript_WithExplicitInsightContent(t *testing.T) {
+	mockGenerator := &ClaudeGenerator{
+		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			response := `{"result":"{\"intent\":\"Explain the rationale\",\"outcome\":\"Captured explicit insight content\",\"learnings\":{\"repo\":[],\"code\":[],\"workflow\":[]},\"friction\":[],\"open_items\":[],\"implementation_rationale\":[\"The transcript already explained why the approach was chosen\"],\"tradeoffs\":[\"The transcript already named the tradeoff\"],\"codebase_patterns\":[\"The transcript already named the pattern\"]}"}`
+			return exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+response+"'")
+		},
+	}
+
+	transcript := []byte(`{"type":"user","message":{"content":"Please explain the rationale before changing the parser."}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"I am using the existing summary pipeline because it is already backward compatible."}]}}`)
+
+	summary, err := GenerateFromTranscript(context.Background(), transcript, []string{"file.go"}, "", mockGenerator)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	require.NotNil(t, summary, "expected non-nil summary")
+	if len(summary.ImplementationRationale) == 0 {
+		t.Fatal("expected implementation rationale for explicit insight content")
+	}
+}
+
+func TestGenerateFromTranscript_WithoutExplicitInsightMarkers(t *testing.T) {
+	mockGenerator := &ClaudeGenerator{
+		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			response := `{"result":"{\"intent\":\"Explain the rationale\",\"outcome\":\"Synthesized conservative explanatory insights\",\"learnings\":{\"repo\":[],\"code\":[],\"workflow\":[]},\"friction\":[],\"open_items\":[],\"implementation_rationale\":[\"Inferred from the available transcript\"],\"tradeoffs\":[\"Inferred conservatively from the implementation path\"],\"codebase_patterns\":[\"Inferred repo pattern from repeated summary usage\"]}"}`
+			return exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+response+"'")
+		},
+	}
+
+	transcript := []byte(`{"type":"user","message":{"content":"Make the change."}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Done."}]}}`)
+
+	summary, err := GenerateFromTranscript(context.Background(), transcript, []string{"file.go"}, "", mockGenerator)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	require.NotNil(t, summary, "expected non-nil summary")
+	if len(summary.Tradeoffs) == 0 {
+		t.Fatal("expected tradeoffs to be synthesized even without explicit insight markers")
 	}
 }
 
