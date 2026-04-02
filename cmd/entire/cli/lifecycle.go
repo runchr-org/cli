@@ -355,6 +355,8 @@ func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Eve
 	matches := report.Matches
 
 	switch mode {
+	case memoryloop.ModeOff:
+		return nil
 	case memoryloop.ModeManual:
 		if !supportsManualMemoryPrompt(ag.Name()) {
 			return nil

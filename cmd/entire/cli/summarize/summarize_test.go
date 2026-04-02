@@ -763,7 +763,7 @@ func TestGenerateFromTranscript_NilGenerator_UsesDefaultSeam(t *testing.T) {
 	})
 
 	called := false
-	executeClaudeSummarization = func(ctx context.Context, runner *llmcli.Runner, prompt string) (string, *llmcli.UsageInfo, error) {
+	executeClaudeSummarization = func(_ context.Context, runner *llmcli.Runner, prompt string) (string, *llmcli.UsageInfo, error) {
 		called = true
 		if runner == nil {
 			t.Fatal("expected runner to be constructed")
