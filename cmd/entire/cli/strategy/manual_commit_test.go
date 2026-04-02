@@ -15,10 +15,12 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -861,6 +863,97 @@ func TestShadowStrategy_PrepareCommitMsg_SkipsSessionWhenContentCheckFails(t *te
 	_, found := trailers.ParseCheckpoint(string(content))
 	require.False(t, found, "corrupt session state should not add a dangling checkpoint trailer")
 	require.Equal(t, originalMsg, string(content))
+}
+
+// TestShadowStrategy_PrepareCommitMsg_AgentRevertGetsTrailer verifies that when an
+// agent runs git revert (REVERT_HEAD exists) and the session is ACTIVE, the commit
+// gets a checkpoint trailer. The agent's work should be checkpointed.
+func TestShadowStrategy_PrepareCommitMsg_AgentRevertGetsTrailer(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+
+	s := &ManualCommitStrategy{}
+
+	// Create an ACTIVE session (agent is running)
+	err := s.InitializeSession(context.Background(), "agent-revert-session", agent.AgentTypeClaudeCode, "", "revert the change", "")
+	require.NoError(t, err)
+
+	// Save a checkpoint so there's content
+	metaDir := filepath.Join(".entire", "metadata", "agent-revert-session")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, metaDir), 0o755))
+	transcript := `{"type":"human","message":{"content":"revert the change"}}` + "\n" +
+		`{"type":"assistant","message":{"content":"I'll revert that"}}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, metaDir, "full.jsonl"), []byte(transcript), 0o644))
+
+	err = s.SaveStep(context.Background(), StepContext{
+		SessionID:     "agent-revert-session",
+		MetadataDir:   metaDir,
+		ModifiedFiles: []string{"test.txt"},
+		NewFiles:      []string{},
+		AgentType:     agent.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+
+	// Simulate REVERT_HEAD existing (git revert in progress)
+	gitDir, err := GetGitDir(context.Background())
+	require.NoError(t, err)
+	revertHeadPath := filepath.Join(gitDir, "REVERT_HEAD")
+	require.NoError(t, os.WriteFile(revertHeadPath, []byte("fake-revert-head"), 0o644))
+	defer os.Remove(revertHeadPath)
+
+	// PrepareCommitMsg should add a trailer (active session = agent doing the revert)
+	commitMsgFile := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+	require.NoError(t, os.WriteFile(commitMsgFile, []byte("Revert \"add feature\"\n"), 0o644))
+
+	err = s.PrepareCommitMsg(context.Background(), commitMsgFile, "")
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(commitMsgFile)
+	require.NoError(t, err)
+
+	_, found := trailers.ParseCheckpoint(string(content))
+	assert.True(t, found, "agent-initiated revert should get a checkpoint trailer")
+}
+
+// TestShadowStrategy_PrepareCommitMsg_UserRevertSkipped verifies that when a user
+// runs git revert manually (no ACTIVE session), the commit does NOT get a trailer.
+func TestShadowStrategy_PrepareCommitMsg_UserRevertSkipped(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+
+	s := &ManualCommitStrategy{}
+
+	// Create an IDLE session (agent finished, user is now doing manual work)
+	err := s.InitializeSession(context.Background(), "idle-session-revert", agent.AgentTypeClaudeCode, "", "done", "")
+	require.NoError(t, err)
+
+	state, err := s.loadSessionState(context.Background(), "idle-session-revert")
+	require.NoError(t, err)
+	require.NoError(t, TransitionAndLog(context.Background(), state, session.EventTurnEnd, session.TransitionContext{}, session.NoOpActionHandler{}))
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	// Simulate REVERT_HEAD existing
+	gitDir, err := GetGitDir(context.Background())
+	require.NoError(t, err)
+	revertHeadPath := filepath.Join(gitDir, "REVERT_HEAD")
+	require.NoError(t, os.WriteFile(revertHeadPath, []byte("fake-revert-head"), 0o644))
+	defer os.Remove(revertHeadPath)
+
+	// PrepareCommitMsg should skip (no ACTIVE session = user doing the revert)
+	commitMsgFile := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+	originalMsg := "Revert \"add feature\"\n"
+	require.NoError(t, os.WriteFile(commitMsgFile, []byte(originalMsg), 0o644))
+
+	err = s.PrepareCommitMsg(context.Background(), commitMsgFile, "")
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(commitMsgFile)
+	require.NoError(t, err)
+
+	_, found := trailers.ParseCheckpoint(string(content))
+	assert.False(t, found, "user-initiated revert (no active session) should not get a trailer")
 }
 
 func TestAddCheckpointTrailer_NoComment(t *testing.T) {

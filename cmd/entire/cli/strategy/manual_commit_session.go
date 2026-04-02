@@ -148,6 +148,27 @@ func (s *ManualCommitStrategy) findSessionsForWorktree(ctx context.Context, work
 	return matching, nil
 }
 
+// hasActiveSessionInWorktree returns true if any session in the current worktree
+// is in ACTIVE phase. Used to distinguish agent-initiated git operations (revert,
+// cherry-pick) from user-initiated ones. Agent-initiated operations should be
+// checkpointed; user-initiated ones should be skipped.
+func (s *ManualCommitStrategy) hasActiveSessionInWorktree(ctx context.Context) bool {
+	worktreePath, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		return false
+	}
+	sessions, err := s.findSessionsForWorktree(ctx, worktreePath)
+	if err != nil {
+		return false
+	}
+	for _, state := range sessions {
+		if state.Phase.IsActive() {
+			return true
+		}
+	}
+	return false
+}
+
 // findSessionsForCommit finds all sessions where base_commit matches the given SHA.
 func (s *ManualCommitStrategy) findSessionsForCommit(ctx context.Context, baseCommitSHA string) ([]*SessionState, error) {
 	allStates, err := s.listAllSessionStates(ctx)

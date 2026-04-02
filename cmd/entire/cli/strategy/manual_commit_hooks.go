@@ -309,14 +309,22 @@ func isGitSequenceOperation(ctx context.Context) bool {
 func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFile string, source string) error {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 
-	// Skip during rebase, cherry-pick, or revert operations
-	// These are replaying existing commits and should not be linked to agent sessions
+	// Skip during rebase, cherry-pick, or revert operations — UNLESS an agent
+	// session is ACTIVE. When an agent runs git revert/cherry-pick as part of
+	// its work, the commit should be checkpointed. When the user does it
+	// manually (no active session), skip as before.
 	if isGitSequenceOperation(ctx) {
-		logging.Debug(logCtx, "prepare-commit-msg: skipped during git sequence operation",
+		if !s.hasActiveSessionInWorktree(ctx) {
+			logging.Debug(logCtx, "prepare-commit-msg: skipped during git sequence operation (no active session)",
+				slog.String("strategy", "manual-commit"),
+				slog.String("source", source),
+			)
+			return nil
+		}
+		logging.Debug(logCtx, "prepare-commit-msg: sequence operation with active session, proceeding",
 			slog.String("strategy", "manual-commit"),
 			slog.String("source", source),
 		)
-		return nil
 	}
 
 	// Skip for merge and squash sources
