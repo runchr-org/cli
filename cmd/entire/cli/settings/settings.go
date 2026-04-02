@@ -659,6 +659,38 @@ func (s *EntireSettings) IsSummarizeEnabled() bool {
 	return enabled
 }
 
+// IsExplanatoryInsightsLiveInjectionEnabled checks if explanatory insight
+// live injection is enabled in settings.
+// Returns false by default if settings cannot be loaded or the key is missing.
+func IsExplanatoryInsightsLiveInjectionEnabled(ctx context.Context) bool {
+	settings, err := Load(ctx)
+	if err != nil {
+		return false
+	}
+	return settings.IsExplanatoryInsightsLiveInjectionEnabled()
+}
+
+// IsExplanatoryInsightsLiveInjectionEnabled checks if explanatory insight
+// live injection is enabled in this settings instance.
+func (s *EntireSettings) IsExplanatoryInsightsLiveInjectionEnabled() bool {
+	if s == nil || s.StrategyOptions == nil {
+		return false
+	}
+	summarizeOpts, ok := s.StrategyOptions["summarize"].(map[string]any)
+	if !ok {
+		return false
+	}
+	explanatoryOpts, ok := summarizeOpts["explanatory_insights"].(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, ok := explanatoryOpts["live_injection"].(bool)
+	if !ok {
+		return false
+	}
+	return enabled
+}
+
 // CheckpointRemoteConfig holds the structured checkpoint remote configuration.
 // Stored in strategy_options.checkpoint_remote as {"provider": "github", "repo": "org/repo"}.
 type CheckpointRemoteConfig struct {

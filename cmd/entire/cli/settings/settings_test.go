@@ -559,6 +559,102 @@ func TestIsCheckpointsV2Enabled_LocalOverride(t *testing.T) {
 	}
 }
 
+func TestIsExplanatoryInsightsLiveInjection_DefaultsFalse(t *testing.T) {
+	t.Parallel()
+	s := &EntireSettings{}
+	if s.IsExplanatoryInsightsLiveInjectionEnabled() {
+		t.Error("expected explanatory insights live injection to default to false")
+	}
+}
+
+func TestIsExplanatoryInsightsLiveInjection_LoadsTrue(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	entireDir := filepath.Join(tmpDir, ".entire")
+	if err := os.MkdirAll(entireDir, 0o755); err != nil {
+		t.Fatalf("failed to create .entire directory: %v", err)
+	}
+
+	settingsFile := filepath.Join(entireDir, "settings.json")
+	content := `{
+		"enabled": true,
+		"strategy_options": {
+			"summarize": {
+				"explanatory_insights": {
+					"live_injection": true
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(settingsFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write settings file: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
+		t.Fatalf("failed to create .git directory: %v", err)
+	}
+
+	t.Chdir(tmpDir)
+
+	s, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !s.IsExplanatoryInsightsLiveInjectionEnabled() {
+		t.Error("expected explanatory insights live injection to load as true")
+	}
+}
+
+func TestIsExplanatoryInsightsLiveInjection_MalformedNestedConfig(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		s    *EntireSettings
+	}{
+		{
+			name: "summarize wrong type",
+			s: &EntireSettings{
+				StrategyOptions: map[string]any{
+					"summarize": "yes",
+				},
+			},
+		},
+		{
+			name: "explanatory insights wrong type",
+			s: &EntireSettings{
+				StrategyOptions: map[string]any{
+					"summarize": map[string]any{
+						"explanatory_insights": "yes",
+					},
+				},
+			},
+		},
+		{
+			name: "live injection wrong type",
+			s: &EntireSettings{
+				StrategyOptions: map[string]any{
+					"summarize": map[string]any{
+						"explanatory_insights": map[string]any{
+							"live_injection": "yes",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if tc.s.IsExplanatoryInsightsLiveInjectionEnabled() {
+				t.Errorf("expected %s to fail closed to false", tc.name)
+			}
+		})
+	}
+}
+
 // containsUnknownField checks if the error message indicates an unknown field
 func containsUnknownField(msg string) bool {
 	// Go's json package reports unknown fields with this message format
