@@ -58,6 +58,7 @@ func TestRenderSummaryJSON_EncodesSessionSummaryAndFacets(t *testing.T) {
 	require.Len(t, decoded, 1)
 	require.Equal(t, "chk-summary", decoded[0].CheckpointID)
 	require.Equal(t, "Fix flaky tests", decoded[0].Summary.Intent)
+	require.Equal(t, "Reuse the existing summary pipeline", decoded[0].Summary.ImplementationRationale[0])
 	require.Len(t, decoded[0].Facets.MissingContext, 1)
 	require.Equal(t, "Run canary after prompt wording changes", decoded[0].Facets.MissingContext[0].Item)
 }
@@ -75,6 +76,9 @@ func TestRenderSummaryText_ShowsSummaryAndFacetSections(t *testing.T) {
 	require.Contains(t, out, "Run tests before committing")
 	require.Contains(t, out, "Review-Derived Rules")
 	require.Contains(t, out, "Keep helper functions package-private unless reuse is proven")
+	require.Contains(t, out, "Implementation Rationale")
+	require.Contains(t, out, "Tradeoffs")
+	require.Contains(t, out, "Codebase Patterns")
 }
 
 func TestRenderSummaryText_ShowsAuthorAndAllFacetSections(t *testing.T) {
@@ -262,6 +266,15 @@ func sampleSummarySessionRow() insightsdb.SessionRow {
 		Outcome:      "Stabilized the failing integration test",
 		Friction: []string{
 			"Fixture setup was duplicated across tests",
+		},
+		ImplementationRationale: []string{
+			"Reuse the existing summary pipeline",
+		},
+		Tradeoffs: []string{
+			"Keep the schema additive instead of introducing a second summary type",
+		},
+		CodebasePatterns: []string{
+			"Summary arrays are stored in normalized cache tables",
 		},
 		Learnings: []insightsdb.LearningRow{
 			{Scope: "repo", Finding: "Canary tests must run after prompt wording changes"},

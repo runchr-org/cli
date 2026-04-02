@@ -53,10 +53,13 @@ type summarySessionView struct {
 }
 
 type summaryDetailView struct {
-	Intent    string                   `json:"intent,omitempty"`
-	Outcome   string                   `json:"outcome,omitempty"`
-	Friction  []string                 `json:"friction,omitempty"`
-	Learnings []insightsdb.LearningRow `json:"learnings,omitempty"`
+	Intent                  string                   `json:"intent,omitempty"`
+	Outcome                 string                   `json:"outcome,omitempty"`
+	Friction                []string                 `json:"friction,omitempty"`
+	Learnings               []insightsdb.LearningRow `json:"learnings,omitempty"`
+	ImplementationRationale []string                 `json:"implementation_rationale,omitempty"`
+	Tradeoffs               []string                 `json:"tradeoffs,omitempty"`
+	CodebasePatterns        []string                 `json:"codebase_patterns,omitempty"`
 }
 
 var runSummaryTUI = summarytui.RunWithCurrentBranch //nolint:gochecknoglobals // injectable for testing
@@ -238,6 +241,9 @@ func renderSummaryText(w io.Writer, rows []insightsdb.SessionRow) {
 			fmt.Fprintf(w, "  %s\n", fallbackText(row.Outcome, "No summary cached"))
 			renderStringListSection(w, "Friction", row.Friction, "No friction recorded")
 			renderLearningSection(w, row.Learnings)
+			renderStringListSection(w, "Implementation Rationale", row.ImplementationRationale, "No implementation rationale recorded")
+			renderStringListSection(w, "Tradeoffs", row.Tradeoffs, "No tradeoffs recorded")
+			renderStringListSection(w, "Codebase Patterns", row.CodebasePatterns, "No codebase patterns recorded")
 		} else {
 			fmt.Fprintln(w, "No summary cached")
 		}
@@ -358,10 +364,13 @@ func summarySessionToView(row insightsdb.SessionRow) summarySessionView {
 		HasSummary:   row.HasSummary,
 		HasFacets:    row.HasFacets,
 		Summary: summaryDetailView{
-			Intent:    row.Intent,
-			Outcome:   row.Outcome,
-			Friction:  row.Friction,
-			Learnings: row.Learnings,
+			Intent:                  row.Intent,
+			Outcome:                 row.Outcome,
+			Friction:                row.Friction,
+			Learnings:               row.Learnings,
+			ImplementationRationale: row.ImplementationRationale,
+			Tradeoffs:               row.Tradeoffs,
+			CodebasePatterns:        row.CodebasePatterns,
 		},
 		Facets: row.Facets,
 	}
