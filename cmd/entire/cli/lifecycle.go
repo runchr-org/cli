@@ -33,12 +33,6 @@ import (
 
 const memoryLoopClaudeAgentName = "claude-code"
 
-const explanatoryInsightsSessionStartPrompt = `Explanatory insights mode:
-- Briefly explain why you chose an implementation approach when it is not obvious.
-- Call out meaningful tradeoffs or constraints that shaped the change.
-- Mention repo-specific patterns or conventions that influenced the implementation.
-- Keep explanations concise and grounded in the current codebase.`
-
 // DispatchLifecycleEvent routes a normalized lifecycle event to the appropriate handler.
 // Returns nil if the event was handled successfully.
 func DispatchLifecycleEvent(ctx context.Context, ag agent.Agent, event *agent.Event) error {
@@ -111,7 +105,7 @@ func handleLifecycleSessionStart(ctx context.Context, ag agent.Agent, event *age
 	if event.ResponseMessage != "" {
 		message = event.ResponseMessage
 	}
-	if err := writeSessionStartHookResponse(ctx, ag, message); err != nil {
+	if err := writeSessionStartHookResponse(ag, message); err != nil {
 		hookResponseSpan.RecordError(err)
 		hookResponseSpan.End()
 		return err
@@ -145,54 +139,15 @@ func handleLifecycleSessionStart(ctx context.Context, ag agent.Agent, event *age
 	return nil
 }
 
-func writeSessionStartHookResponse(ctx context.Context, ag agent.Agent, message string) error {
-	if !settings.IsExplanatoryInsightsLiveInjectionEnabled(ctx) {
-		writer, ok := agent.AsHookResponseWriter(ag)
-		if !ok {
-			return nil
-		}
-		if err := writer.WriteHookResponse(message); err != nil {
-			return fmt.Errorf("failed to write hook response: %w", err)
-		}
-		return nil
-	}
-
-	prompt := buildExplanatoryInsightsPrompt()
-	if prompt == "" {
-		writer, ok := agent.AsHookResponseWriter(ag)
-		if !ok {
-			return nil
-		}
-		if err := writer.WriteHookResponse(message); err != nil {
-			return fmt.Errorf("failed to write hook response: %w", err)
-		}
-		return nil
-	}
-
-	if contextWriter, ok := agent.AsHookContextWriter(ag); ok {
-		if err := contextWriter.WriteHookResponseWithContext(message, prompt); err != nil {
-			return fmt.Errorf("failed to write hook response with explanatory insights: %w", err)
-		}
-		return nil
-	}
-
+func writeSessionStartHookResponse(ag agent.Agent, message string) error {
 	writer, ok := agent.AsHookResponseWriter(ag)
 	if !ok {
 		return nil
 	}
-
-	combined := prompt
-	if strings.TrimSpace(message) != "" {
-		combined = strings.TrimSpace(message) + "\n\n" + prompt
-	}
-	if err := writer.WriteHookResponse(combined); err != nil {
+	if err := writer.WriteHookResponse(message); err != nil {
 		return fmt.Errorf("failed to write hook response: %w", err)
 	}
 	return nil
-}
-
-func buildExplanatoryInsightsPrompt() string {
-	return explanatoryInsightsSessionStartPrompt
 }
 
 // handleLifecycleModelUpdate persists the model name for the current session.

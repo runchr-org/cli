@@ -81,6 +81,8 @@ func getHookType(hookName string) string {
 		return "subagent"
 	case geminicli.HookNameBeforeTool, geminicli.HookNameAfterTool:
 		return "tool"
+	case claudecode.HookNameExplanatoryInsights:
+		return "context-injection"
 	default:
 		return "agent"
 	}
@@ -157,6 +159,10 @@ func executeAgentHook(cmd *cobra.Command, agentName types.AgentName, hookName st
 	} else if agentName == agent.AgentNameClaudeCode && hookName == claudecode.HookNamePostTodo {
 		// PostTodo is Claude-specific: creates incremental checkpoints during subagent execution
 		hookErr = handleClaudeCodePostTodo(ctx)
+	} else if hookName == claudecode.HookNameExplanatoryInsights {
+		// Explanatory insights is a standalone SessionStart hook that injects
+		// context into the model, similar to the Claude Code explanatory-output-style plugin.
+		hookErr = handleExplanatoryInsightsHook(ag)
 	}
 	// Other pass-through hooks (nil event, no special handling) are no-ops
 

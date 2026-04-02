@@ -22,14 +22,33 @@ var (
 	_ agent.SubagentAwareExtractor = (*ClaudeCodeAgent)(nil)
 	_ agent.HookResponseWriter     = (*ClaudeCodeAgent)(nil)
 	_ agent.HookBlockingWriter     = (*ClaudeCodeAgent)(nil)
+	_ agent.HookContextWriter      = (*ClaudeCodeAgent)(nil)
 )
 
 // WriteHookResponse outputs a JSON hook response to stdout.
 // Claude Code reads this JSON and displays the systemMessage to the user.
 func (c *ClaudeCodeAgent) WriteHookResponse(message string) error {
+	return c.writeHookResponse(message, "")
+}
+
+// WriteHookResponseWithContext outputs a JSON hook response that both displays a
+// system message and injects additional context into the model.
+func (c *ClaudeCodeAgent) WriteHookResponseWithContext(message, additionalContext string) error {
+	return c.writeHookResponse(message, additionalContext)
+}
+
+func (c *ClaudeCodeAgent) writeHookResponse(message, additionalContext string) error {
+	type hookSpecificOutput struct {
+		AdditionalContext string `json:"additionalContext,omitempty"`
+	}
+
 	resp := struct {
-		SystemMessage string `json:"systemMessage,omitempty"`
+		SystemMessage      string              `json:"systemMessage,omitempty"`
+		HookSpecificOutput *hookSpecificOutput `json:"hookSpecificOutput,omitempty"`
 	}{SystemMessage: message}
+	if additionalContext != "" {
+		resp.HookSpecificOutput = &hookSpecificOutput{AdditionalContext: additionalContext}
+	}
 	if err := json.NewEncoder(os.Stdout).Encode(resp); err != nil {
 		return fmt.Errorf("failed to encode hook response: %w", err)
 	}
@@ -62,6 +81,7 @@ func (c *ClaudeCodeAgent) HookNames() []string {
 		HookNamePreTask,
 		HookNamePostTask,
 		HookNamePostTodo,
+		HookNameExplanatoryInsights,
 	}
 }
 
@@ -83,6 +103,9 @@ func (c *ClaudeCodeAgent) ParseHookEvent(_ context.Context, hookName string, std
 		return c.parseSubagentEnd(stdin)
 	case HookNamePostTodo:
 		// PostTodo is Claude-specific; handled outside the generic dispatcher.
+		return nil, nil //nolint:nilnil // nil event = no lifecycle action
+	case HookNameExplanatoryInsights:
+		// Handled directly in hook_registry; not a lifecycle event.
 		return nil, nil //nolint:nilnil // nil event = no lifecycle action
 	default:
 		return nil, nil //nolint:nilnil // Unknown hooks have no lifecycle action

@@ -12,6 +12,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
 
 // Ensure ClaudeCodeAgent implements HookSupport
@@ -19,13 +20,14 @@ var _ agent.HookSupport = (*ClaudeCodeAgent)(nil)
 
 // Claude Code hook names - these become subcommands under `entire hooks claude-code`
 const (
-	HookNameSessionStart     = "session-start"
-	HookNameSessionEnd       = "session-end"
-	HookNameStop             = "stop"
-	HookNameUserPromptSubmit = "user-prompt-submit"
-	HookNamePreTask          = "pre-task"
-	HookNamePostTask         = "post-task"
-	HookNamePostTodo         = "post-todo"
+	HookNameSessionStart        = "session-start"
+	HookNameSessionEnd          = "session-end"
+	HookNameStop                = "stop"
+	HookNameUserPromptSubmit    = "user-prompt-submit"
+	HookNamePreTask             = "pre-task"
+	HookNamePostTask            = "post-task"
+	HookNamePostTodo            = "post-todo"
+	HookNameExplanatoryInsights = "explanatory-insights"
 )
 
 // ClaudeSettingsFileName is the settings file used by Claude Code.
@@ -112,7 +114,7 @@ func (c *ClaudeCodeAgent) InstallHooks(ctx context.Context, localDev bool, force
 	}
 
 	// Define hook commands
-	var sessionStartCmd, sessionEndCmd, stopCmd, userPromptSubmitCmd, preTaskCmd, postTaskCmd, postTodoCmd string
+	var sessionStartCmd, sessionEndCmd, stopCmd, userPromptSubmitCmd, preTaskCmd, postTaskCmd, postTodoCmd, explanatoryInsightsCmd string
 	if localDev {
 		sessionStartCmd = "go run ${CLAUDE_PROJECT_DIR}/cmd/entire/main.go hooks claude-code session-start"
 		sessionEndCmd = "go run ${CLAUDE_PROJECT_DIR}/cmd/entire/main.go hooks claude-code session-end"
@@ -121,6 +123,7 @@ func (c *ClaudeCodeAgent) InstallHooks(ctx context.Context, localDev bool, force
 		preTaskCmd = "go run ${CLAUDE_PROJECT_DIR}/cmd/entire/main.go hooks claude-code pre-task"
 		postTaskCmd = "go run ${CLAUDE_PROJECT_DIR}/cmd/entire/main.go hooks claude-code post-task"
 		postTodoCmd = "go run ${CLAUDE_PROJECT_DIR}/cmd/entire/main.go hooks claude-code post-todo"
+		explanatoryInsightsCmd = "go run ${CLAUDE_PROJECT_DIR}/cmd/entire/main.go hooks claude-code explanatory-insights"
 	} else {
 		sessionStartCmd = "entire hooks claude-code session-start"
 		sessionEndCmd = "entire hooks claude-code session-end"
@@ -129,6 +132,7 @@ func (c *ClaudeCodeAgent) InstallHooks(ctx context.Context, localDev bool, force
 		preTaskCmd = "entire hooks claude-code pre-task"
 		postTaskCmd = "entire hooks claude-code post-task"
 		postTodoCmd = "entire hooks claude-code post-todo"
+		explanatoryInsightsCmd = "entire hooks claude-code explanatory-insights"
 	}
 
 	count := 0
@@ -161,6 +165,18 @@ func (c *ClaudeCodeAgent) InstallHooks(ctx context.Context, localDev bool, force
 	if !hookCommandExistsWithMatcher(postToolUse, "TodoWrite", postTodoCmd) {
 		postToolUse = addHookToMatcher(postToolUse, "TodoWrite", postTodoCmd)
 		count++
+	}
+
+	// Install or remove the explanatory insights hook based on the setting.
+	// This is a separate SessionStart hook that injects context into the model.
+	if settings.IsExplanatoryInsightsLiveInjectionEnabled(ctx) {
+		if !hookCommandExists(sessionStart, explanatoryInsightsCmd) {
+			sessionStart = addHookToMatcher(sessionStart, "", explanatoryInsightsCmd)
+			count++
+		}
+	} else {
+		// Remove the hook if the setting is disabled
+		sessionStart = removeSpecificHookCommand(sessionStart, explanatoryInsightsCmd)
 	}
 
 	// Add permissions.deny rule if not present
@@ -493,4 +509,22 @@ func removeEntireHooks(matchers []ClaudeHookMatcher) []ClaudeHookMatcher {
 func removeEntireHooksFromMatchers(matchers []ClaudeHookMatcher) []ClaudeHookMatcher {
 	// Same logic as removeEntireHooks - both work on the same structure
 	return removeEntireHooks(matchers)
+}
+
+// removeSpecificHookCommand removes a specific hook command from all matchers.
+func removeSpecificHookCommand(matchers []ClaudeHookMatcher, command string) []ClaudeHookMatcher {
+	result := make([]ClaudeHookMatcher, 0, len(matchers))
+	for _, matcher := range matchers {
+		filteredHooks := make([]ClaudeHookEntry, 0, len(matcher.Hooks))
+		for _, hook := range matcher.Hooks {
+			if hook.Command != command {
+				filteredHooks = append(filteredHooks, hook)
+			}
+		}
+		if len(filteredHooks) > 0 {
+			matcher.Hooks = filteredHooks
+			result = append(result, matcher)
+		}
+	}
+	return result
 }

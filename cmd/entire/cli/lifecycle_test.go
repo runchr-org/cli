@@ -317,7 +317,7 @@ func TestHandleLifecycleSessionStart_DefaultMessageWithCommits(t *testing.T) {
 	}
 }
 
-func TestHandleLifecycleSessionStart_LiveInjectionUsesHookContextWriter(t *testing.T) {
+func TestHandleLifecycleSessionStart_NeverInjectsExplanatoryInsights(t *testing.T) {
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
 	testutil.WriteFile(t, tmpDir, "init.txt", "init")
@@ -326,6 +326,8 @@ func TestHandleLifecycleSessionStart_LiveInjectionUsesHookContextWriter(t *testi
 	installFakeGitHubCLIForLifecycleTest(t)
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
+	// Even with live_injection enabled, the lifecycle handler should NOT inject
+	// explanatory insights — that's handled by the standalone hook now.
 	writeLifecycleSettingsFile(t, tmpDir, `{
   "enabled": true,
   "strategy_options": {
@@ -340,95 +342,7 @@ func TestHandleLifecycleSessionStart_LiveInjectionUsesHookContextWriter(t *testi
 	ag := newMockHookResponseAgent()
 	event := &agent.Event{
 		Type:      agent.SessionStart,
-		SessionID: "test-explanatory-session-start",
-		Timestamp: time.Now(),
-	}
-
-	require.NoError(t, handleLifecycleSessionStart(context.Background(), ag, event))
-	require.Contains(t, ag.lastMessage, "linked to your next commit")
-	require.Contains(t, ag.lastContextMessage, "Explanatory insights mode")
-	require.Contains(t, ag.lastContextMessage, "tradeoffs")
-}
-
-func TestHandleLifecycleSessionStart_LiveInjectionUsesContextWithoutHookResponseWriter(t *testing.T) {
-	tmpDir := t.TempDir()
-	testutil.InitRepo(t, tmpDir)
-	testutil.WriteFile(t, tmpDir, "init.txt", "init")
-	testutil.GitAdd(t, tmpDir, "init.txt")
-	testutil.GitCommit(t, tmpDir, "init")
-	installFakeGitHubCLIForLifecycleTest(t)
-	t.Chdir(tmpDir)
-	paths.ClearWorktreeRootCache()
-	writeLifecycleSettingsFile(t, tmpDir, `{
-  "enabled": true,
-  "strategy_options": {
-    "summarize": {
-      "explanatory_insights": {
-        "live_injection": true
-      }
-    }
-  }
-}`)
-
-	ag := newMockContextOnlyAgent()
-	event := &agent.Event{
-		Type:      agent.SessionStart,
-		SessionID: "test-explanatory-context-only",
-		Timestamp: time.Now(),
-	}
-
-	require.NoError(t, handleLifecycleSessionStart(context.Background(), ag, event))
-	require.Contains(t, ag.lastMessage, "linked to your next commit")
-	require.Contains(t, ag.lastContextMessage, "Explanatory insights mode")
-}
-
-func TestHandleLifecycleSessionStart_LiveInjectionFallsBackToVisibleMessage(t *testing.T) {
-	tmpDir := t.TempDir()
-	testutil.InitRepo(t, tmpDir)
-	testutil.WriteFile(t, tmpDir, "init.txt", "init")
-	testutil.GitAdd(t, tmpDir, "init.txt")
-	testutil.GitCommit(t, tmpDir, "init")
-	installFakeGitHubCLIForLifecycleTest(t)
-	t.Chdir(tmpDir)
-	paths.ClearWorktreeRootCache()
-	writeLifecycleSettingsFile(t, tmpDir, `{
-  "enabled": true,
-  "strategy_options": {
-    "summarize": {
-      "explanatory_insights": {
-        "live_injection": true
-      }
-    }
-  }
-}`)
-
-	ag := newMockResponseOnlyAgent()
-	event := &agent.Event{
-		Type:      agent.SessionStart,
-		SessionID: "test-explanatory-visible-fallback",
-		Timestamp: time.Now(),
-	}
-
-	require.NoError(t, handleLifecycleSessionStart(context.Background(), ag, event))
-	require.Contains(t, ag.lastMessage, "linked to your next commit")
-	require.Contains(t, ag.lastMessage, "Explanatory insights mode")
-}
-
-func TestHandleLifecycleSessionStart_LiveInjectionDisabledKeepsBannerOnly(t *testing.T) {
-	tmpDir := t.TempDir()
-	testutil.InitRepo(t, tmpDir)
-	testutil.WriteFile(t, tmpDir, "init.txt", "init")
-	testutil.GitAdd(t, tmpDir, "init.txt")
-	testutil.GitCommit(t, tmpDir, "init")
-	installFakeGitHubCLIForLifecycleTest(t)
-	t.Chdir(tmpDir)
-	paths.ClearWorktreeRootCache()
-	writeLifecycleSettingsFile(t, tmpDir, `{"enabled": true}`)
-
-	ag := newMockHookResponseAgent()
-	event := &agent.Event{
-		Type:      agent.SessionStart,
-		SessionID: "test-explanatory-disabled",
+		SessionID: "test-no-explanatory-in-lifecycle",
 		Timestamp: time.Now(),
 	}
 
@@ -436,6 +350,33 @@ func TestHandleLifecycleSessionStart_LiveInjectionDisabledKeepsBannerOnly(t *tes
 	require.Contains(t, ag.lastMessage, "linked to your next commit")
 	require.Empty(t, ag.lastContextMessage)
 	require.NotContains(t, ag.lastMessage, "Explanatory insights mode")
+}
+
+// --- handleExplanatoryInsightsHook tests ---
+
+func TestHandleExplanatoryInsightsHook_UsesHookContextWriter(t *testing.T) {
+	t.Parallel()
+
+	ag := newMockHookResponseAgent()
+	require.NoError(t, handleExplanatoryInsightsHook(ag))
+	require.Contains(t, ag.lastContextMessage, "Explanatory insights mode")
+	require.Contains(t, ag.lastContextMessage, "tradeoffs")
+	require.Empty(t, ag.lastMessage) // No visible message
+}
+
+func TestHandleExplanatoryInsightsHook_FallsBackToVisibleMessage(t *testing.T) {
+	t.Parallel()
+
+	ag := newMockResponseOnlyAgent()
+	require.NoError(t, handleExplanatoryInsightsHook(ag))
+	require.Contains(t, ag.lastMessage, "Explanatory insights mode")
+}
+
+func TestHandleExplanatoryInsightsHook_NoWriterIsNoop(t *testing.T) {
+	t.Parallel()
+
+	ag := newMockAgent()
+	require.NoError(t, handleExplanatoryInsightsHook(ag))
 }
 
 // --- handleLifecycleTurnStart tests ---
