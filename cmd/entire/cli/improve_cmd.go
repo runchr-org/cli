@@ -459,7 +459,10 @@ func backfillFacets(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB
 		logging.Warn(ctx, "backfillFacets: query failed", "error", err)
 		return
 	}
+	backfillFacetsForRows(ctx, w, idb, rows, debug, debugHint)
+}
 
+func backfillFacetsForRows(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB, rows []insightsdb.SessionRow, debug bool, debugHint string) {
 	// Partition sessions into cached vs needing facets.
 	var needsFacets []insightsdb.SessionRow
 	cached := 0

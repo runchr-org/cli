@@ -954,6 +954,7 @@ func TestRunMemoryLoopRefresh_DebugPrintsBackfillSkipDetailsToTerminal(t *testin
 		CheckpointID: "invalid-checkpoint-id",
 		SessionID:    "session-debug-skip",
 		SessionIndex: 0,
+		OwnerID:      "alishakawaguchi",
 		CreatedAt:    time.Date(2026, time.April, 2, 12, 0, 0, 0, time.UTC),
 	}))
 	require.NoError(t, idb.Close())

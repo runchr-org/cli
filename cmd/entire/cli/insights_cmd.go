@@ -193,7 +193,10 @@ func backfillSummaries(ctx context.Context, w io.Writer, idb *insightsdb.Insight
 		logging.Warn(ctx, "backfillSummaries: query failed", "error", err)
 		return
 	}
+	backfillSummariesForRows(ctx, w, idb, rows, debug, debugHint)
+}
 
+func backfillSummariesForRows(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB, rows []insightsdb.SessionRow, debug bool, debugHint string) {
 	// Partition sessions into cached vs needing summaries.
 	var unsummarized []insightsdb.SessionRow
 	cached := 0

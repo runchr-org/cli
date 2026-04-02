@@ -312,12 +312,6 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 
 	renderMemoryLoopRefreshProgress(w, "Refreshing cache...")
 	refreshCacheIfStale(ctx, idb) //nolint:errcheck,gosec // non-fatal
-	if settings.IsSummarizeEnabled(ctx) {
-		renderMemoryLoopRefreshProgress(w, "Backfilling summaries...")
-		backfillSummaries(ctx, w, idb, last, debug, "use --debug for skipped details")
-		renderMemoryLoopRefreshProgress(w, "Backfilling facets...")
-		backfillFacets(ctx, w, idb, last, debug, "use --debug for skipped details")
-	}
 
 	scope, err := resolveMemoryLoopScope(ctx, scopeArg, branchArg)
 	if err != nil {
@@ -333,6 +327,17 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 
 	renderMemoryLoopRefreshProgress(w, "Loading scoped sessions...")
 	rows, err := queryMemoryLoopRows(ctx, idb, scope, last)
+	if err != nil {
+		return fmt.Errorf("query sessions: %w", err)
+	}
+
+	if settings.IsSummarizeEnabled(ctx) && len(rows) > 0 {
+		renderMemoryLoopRefreshProgress(w, "Backfilling summaries for scoped sessions...")
+		backfillSessionRows(ctx, w, idb, rows, debug)
+	}
+
+	// Re-query to pick up backfilled data.
+	rows, err = queryMemoryLoopRows(ctx, idb, scope, last)
 	if err != nil {
 		return fmt.Errorf("query sessions: %w", err)
 	}
@@ -466,6 +471,12 @@ func existingRefreshHistory(state *memoryloop.State) []memoryloop.RefreshHistory
 		return nil
 	}
 	return append([]memoryloop.RefreshHistory(nil), state.Store.RefreshHistory...)
+}
+
+func backfillSessionRows(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB, rows []insightsdb.SessionRow, debug bool) {
+	hint := "use --debug for skipped details"
+	backfillSummariesForRows(ctx, w, idb, rows, debug, hint)
+	backfillFacetsForRows(ctx, w, idb, rows, debug, hint)
 }
 
 func renderMemoryLoopRefreshProgress(w io.Writer, line string) {
