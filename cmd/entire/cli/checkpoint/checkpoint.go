@@ -233,9 +233,11 @@ type WriteCommittedOptions struct {
 	AuthorEmail string
 
 	// OwnerName and OwnerEmail identify who owned the session when it started.
+	// OwnerID is the canonical personal identifier used for memory-loop personal scope.
 	// Unlike AuthorName/AuthorEmail, these are durable session-attribution fields,
 	// not metadata-branch commit authorship.
 	OwnerName  string
+	OwnerID    string
 	OwnerEmail string
 
 	// MetadataDir is a directory containing additional metadata files to copy
@@ -381,7 +383,9 @@ type CommittedMetadata struct {
 	Model string `json:"model,omitempty"`
 
 	// OwnerName and OwnerEmail identify who owned the session when it started.
+	// OwnerID is the canonical personal identifier used for memory-loop personal scope.
 	OwnerName  string `json:"owner_name,omitempty"`
+	OwnerID    string `json:"owner_id,omitempty"`
 	OwnerEmail string `json:"owner_email,omitempty"`
 
 	// TurnID correlates checkpoints from the same agent turn.

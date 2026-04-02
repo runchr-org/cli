@@ -2,12 +2,37 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/stretchr/testify/require"
 )
+
+func captureStdout(t *testing.T, fn func()) []byte {
+	t.Helper()
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+	})
+
+	fn()
+
+	require.NoError(t, w.Close())
+	data, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.NoError(t, r.Close())
+	os.Stdout = oldStdout
+
+	return data
+}
 
 func TestParseHookEvent_SessionStart(t *testing.T) {
 	t.Parallel()
@@ -127,4 +152,36 @@ func TestParseHookEvent_MalformedJSON_ReturnsError(t *testing.T) {
 	ag := &CodexAgent{}
 	_, err := ag.ParseHookEvent(context.Background(), HookNameSessionStart, strings.NewReader("{invalid json"))
 	require.Error(t, err)
+}
+
+func TestWriteHookResponseWithContext_EncodesAdditionalContext(t *testing.T) {
+	ag := &CodexAgent{}
+
+	data := captureStdout(t, func() {
+		require.NoError(t, ag.WriteHookResponseWithContext("display message", "memory context"))
+	})
+
+	var resp struct {
+		SystemMessage      string `json:"systemMessage"`
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	require.NoError(t, json.Unmarshal(data, &resp))
+	require.Equal(t, "display message", resp.SystemMessage)
+	require.Equal(t, "memory context", resp.HookSpecificOutput.AdditionalContext)
+}
+
+func TestWriteHookResponse_OmitsHookSpecificOutputWhenEmpty(t *testing.T) {
+	ag := &CodexAgent{}
+
+	data := captureStdout(t, func() {
+		require.NoError(t, ag.WriteHookResponse("display message"))
+	})
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(data, &resp))
+	require.Equal(t, "display message", resp["systemMessage"])
+	_, ok := resp["hookSpecificOutput"]
+	require.False(t, ok, "hookSpecificOutput should be omitted when empty")
 }

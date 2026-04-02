@@ -8,6 +8,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/githubidentity"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
@@ -255,6 +256,10 @@ func (s *ManualCommitStrategy) initializeSession(ctx context.Context, repo *git.
 	}
 
 	ownerName, ownerEmail := GetGitAuthorFromRepo(repo)
+	ownerID := ""
+	if resolvedOwnerID, err := githubidentity.ResolveUsername(ctx); err == nil {
+		ownerID = resolvedOwnerID
+	}
 
 	now := time.Now()
 	headHash := head.Hash().String()
@@ -273,6 +278,7 @@ func (s *ManualCommitStrategy) initializeSession(ctx context.Context, repo *git.
 		AgentType:             agentType,
 		ModelName:             model,
 		OwnerName:             ownerName,
+		OwnerID:               ownerID,
 		OwnerEmail:            ownerEmail,
 		TranscriptPath:        transcriptPath,
 		LastPrompt:            truncatePromptForStorage(userPrompt),

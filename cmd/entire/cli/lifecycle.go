@@ -19,6 +19,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/githubidentity"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -281,16 +282,23 @@ func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Eve
 		settingsValue = nil
 	}
 	mode := effectiveMemoryLoopMode(state, settingsValue)
+	debug := effectiveMemoryLoopDebug(state, settingsValue)
 	if state.Snapshot == nil {
 		return nil
 	}
 
 	now := time.Now().UTC()
 	selectOpts := buildMemoryLoopSelectOpts(ctx, state.Snapshot)
-	matches := memoryloop.SelectRelevant(*state.Snapshot, event.Prompt, now, selectOpts...)
-	if len(matches) == 0 {
+	report := memoryloop.PreviewSelection(*state.Snapshot, event.Prompt, now, selectOpts...)
+	if len(report.Matches) == 0 {
+		if debug {
+			if err := writer.WriteHookResponse(buildMemoryLoopDebugPrompt(event.Prompt, report)); err != nil {
+				return fmt.Errorf("failed to write memory-loop debug prompt: %w", err)
+			}
+		}
 		return nil
 	}
+	matches := report.Matches
 
 	switch mode {
 	case memoryloop.ModeManual:
@@ -302,7 +310,7 @@ func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Eve
 		}
 		return nil
 	case memoryloop.ModeAuto:
-		if string(ag.Name()) != memoryLoopClaudeAgentName || !state.Snapshot.InjectionEnabled {
+		if !supportsAutoMemoryInjection(ag.Name()) || !state.Snapshot.InjectionEnabled {
 			return nil
 		}
 	default:
@@ -313,8 +321,14 @@ func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Eve
 	if strings.TrimSpace(event.ResponseMessage) != "" {
 		message = strings.TrimSpace(event.ResponseMessage) + "\n\n" + message
 	}
-	if err := writer.WriteHookResponse(message); err != nil {
-		return fmt.Errorf("failed to write memory-loop hook response: %w", err)
+	if contextWriter, ok := agent.AsHookContextWriter(ag); ok {
+		if err := contextWriter.WriteHookResponseWithContext(message, message); err != nil {
+			return fmt.Errorf("failed to write memory-loop hook response with context: %w", err)
+		}
+	} else {
+		if err := writer.WriteHookResponse(message); err != nil {
+			return fmt.Errorf("failed to write memory-loop hook response: %w", err)
+		}
 	}
 
 	ids := make([]string, 0, len(matches))
@@ -351,6 +365,15 @@ func supportsManualMemoryPrompt(agentName types.AgentName) bool {
 	}
 }
 
+func supportsAutoMemoryInjection(agentName types.AgentName) bool {
+	switch agentName {
+	case agent.AgentNameClaudeCode, agent.AgentNameGemini, agent.AgentNameCodex:
+		return true
+	default:
+		return false
+	}
+}
+
 func buildManualMemoryPrompt(matches []memoryloop.Match) string {
 	block := memoryloop.FormatInjectionBlock(matches)
 	if block == "" {
@@ -361,10 +384,54 @@ func buildManualMemoryPrompt(matches []memoryloop.Match) string {
 		"whether you should use this guidance for the task, and wait for their answer before continuing."
 }
 
+func buildMemoryLoopDebugPrompt(prompt string, report memoryloop.SelectionReport) string {
+	var b strings.Builder
+	b.WriteString("Memory Loop Debug\n")
+	b.WriteString("No matching memories for this prompt.")
+	if trimmed := strings.TrimSpace(prompt); trimmed != "" {
+		b.WriteString("\nPrompt: ")
+		b.WriteString(trimmed)
+	}
+
+	written := 0
+	for _, skipped := range report.Skipped {
+		if skipped.Record.ID == "" {
+			continue
+		}
+		if written == 0 {
+			b.WriteString("\nSkipped memories:")
+		}
+		b.WriteString("\n- ")
+		b.WriteString(skipped.Record.ID)
+		if skipped.Record.Title != "" {
+			b.WriteString(" (")
+			b.WriteString(skipped.Record.Title)
+			b.WriteString(")")
+		}
+		if skipped.Reason != "" {
+			b.WriteString(": ")
+			b.WriteString(skipped.Reason)
+		}
+		written++
+		if written == 3 {
+			break
+		}
+	}
+	if written == 0 {
+		b.WriteString("\nNo active memories overlapped this prompt.")
+	}
+	return b.String()
+}
+
 func buildMemoryLoopSelectOpts(ctx context.Context, snapshot *memoryloop.Snapshot) []memoryloop.SelectOption {
 	var opts []memoryloop.SelectOption
 	if snapshot != nil && len(snapshot.InjectionScopes) > 0 {
 		opts = append(opts, memoryloop.WithInjectionScopes(snapshot.InjectionScopes))
+	}
+	if ownerID, err := githubidentity.ResolveUsername(ctx); err == nil && ownerID != "" {
+		opts = append(opts, memoryloop.WithCurrentOwnerID(ownerID))
+	} else if snapshot != nil && snapshot.Scope == string(memoryloop.ScopeKindMe) && strings.TrimSpace(snapshot.ScopeValue) != "" {
+		opts = append(opts, memoryloop.WithCurrentOwnerID(snapshot.ScopeValue))
 	}
 	repo, err := openRepository(ctx)
 	if err == nil {
@@ -387,6 +454,16 @@ func effectiveMemoryLoopMode(state *memoryloop.State, settingsValue *settings.En
 		return memoryloop.ModeOff
 	}
 	return memoryloop.Mode(cfg.Mode)
+}
+
+func effectiveMemoryLoopDebug(state *memoryloop.State, settingsValue *settings.EntireSettings) bool {
+	if state != nil && state.Store != nil {
+		return state.Store.Debug
+	}
+	if settingsValue == nil || settingsValue.MemoryLoopConfig == nil {
+		return false
+	}
+	return settingsValue.GetMemoryLoopConfig().Debug
 }
 
 func truncatePromptPreview(prompt string, maxLen int) string {

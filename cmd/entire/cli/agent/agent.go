@@ -199,6 +199,18 @@ type HookResponseWriter interface {
 	WriteHookResponse(message string) error
 }
 
+// HookContextWriter is implemented by agents whose hook response protocol can
+// inject additional context directly into the model, separate from any
+// user-visible message. This is used for memory-loop auto injection so session
+// banners and other UI-only messages do not become model context.
+type HookContextWriter interface {
+	Agent
+
+	// WriteHookResponseWithContext outputs an optional user-visible message and
+	// model-targeted additional context via the agent's hook response protocol.
+	WriteHookResponseWithContext(message, additionalContext string) error
+}
+
 // TestOnly is implemented by agents that exist solely for testing (e.g., the Vogon canary agent).
 // These agents are excluded from the user-facing agent selection in `entire enable`.
 type TestOnly interface {

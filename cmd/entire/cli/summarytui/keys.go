@@ -6,6 +6,7 @@ type keyMap struct {
 	cycleFilter key.Binding
 	nextPage    key.Binding
 	prevPage    key.Binding
+	quit        key.Binding
 }
 
 var keys = keyMap{
@@ -20,5 +21,9 @@ var keys = keyMap{
 	prevPage: key.NewBinding(
 		key.WithKeys("left", "h"),
 		key.WithHelp("←/h", "prev page"),
+	),
+	quit: key.NewBinding(
+		key.WithKeys("q"),
+		key.WithHelp("q", "quit"),
 	),
 }

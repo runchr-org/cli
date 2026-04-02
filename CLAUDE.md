@@ -253,6 +253,10 @@ if settings.IsSummarizeEnabled() {
 - Duplicate settings parsing logic in other packages
 - Create new settings helpers without adding them to the `settings` package
 
+**Memory loop personal scope:** The canonical personal identifier for `entire memory-loop ... --scope me` is the active local GitHub username from `gh auth status --hostname github.com`. Persist it as `owner_id`; do not key personal scope off `owner_email` or `git user.name`.
+
+**Memory loop personal scope:** The canonical personal identifier for `entire memory-loop ... --scope me` is the active local GitHub username from `gh auth status --hostname github.com`. Persist it as `owner_id`; do not key personal scope off `owner_email` or `git user.name`.
+
 **Key files:**
 
 - `settings/settings.go` - `EntireSettings` struct, `Load()`, and helper methods
@@ -473,6 +477,10 @@ When multiple sessions are condensed to the same checkpoint (same base commit):
 ```
 <session-id>.json            # Active session state (base_commit, checkpoint_count, etc.)
 ```
+
+Session state and committed checkpoint metadata carry `owner_id` alongside `owner_name`/`owner_email`. `owner_id` is the durable identifier used for personal memory-loop scoping and should be propagated into the insights cache.
+
+Session state and committed checkpoint metadata carry `owner_id` alongside `owner_name`/`owner_email`. `owner_id` is the durable identifier used for personal memory-loop scoping and should be propagated into the insights cache.
 
 #### Checkpoint ID Linking
 

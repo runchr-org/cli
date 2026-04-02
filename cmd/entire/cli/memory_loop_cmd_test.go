@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -55,6 +56,69 @@ func TestFilterMemoryLoopRows_ScopeBranch(t *testing.T) {
 	require.Len(t, filtered, 2)
 	require.Equal(t, "main-newer", filtered[0].SessionID)
 	require.Equal(t, "main-older", filtered[1].SessionID)
+}
+
+func TestQueryMemoryLoopRows_RepoScopeFiltersByDefaultBranchReachabilityBeforeLimiting(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	gitRunMemoryLoop(t, tmpDir, "branch", "-m", "main")
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, paths.EntireDir), 0o755))
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+
+	idb, err := insightsdb.Open(filepath.Join(tmpDir, paths.EntireDir, "insights.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, idb.Close()) }()
+
+	testutil.WriteFile(t, tmpDir, "main.txt", "main")
+	testutil.GitAdd(t, tmpDir, "main.txt")
+	testutil.GitCommit(t, tmpDir, "main checkpoint\n\nEntire-Checkpoint: aaaabbbbcccc\n")
+
+	testutil.GitCheckoutNewBranch(t, tmpDir, "feature/merged")
+	testutil.WriteFile(t, tmpDir, "merged.txt", "merged")
+	testutil.GitAdd(t, tmpDir, "merged.txt")
+	testutil.GitCommit(t, tmpDir, "merged checkpoint\n\nEntire-Checkpoint: dddd1111eeee\n")
+
+	gitCheckout(t, tmpDir, "main")
+	gitRunMemoryLoop(t, tmpDir, "merge", "--no-ff", "--no-edit", "feature/merged")
+
+	testutil.GitCheckoutNewBranch(t, tmpDir, "feature/unmerged")
+	testutil.WriteFile(t, tmpDir, "unmerged.txt", "unmerged")
+	testutil.GitAdd(t, tmpDir, "unmerged.txt")
+	testutil.GitCommit(t, tmpDir, "unmerged checkpoint\n\nEntire-Checkpoint: ffff2222aaaa\n")
+
+	now := time.Date(2026, time.April, 2, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, idb.InsertSession(context.Background(), insightsdb.SessionRow{
+		CheckpointID: "aaaabbbbcccc",
+		SessionID:    "session-main",
+		SessionIndex: 0,
+		Branch:       "main",
+		CreatedAt:    now.Add(-3 * time.Hour),
+	}))
+	require.NoError(t, idb.InsertSession(context.Background(), insightsdb.SessionRow{
+		CheckpointID: "dddd1111eeee",
+		SessionID:    "session-merged",
+		SessionIndex: 0,
+		Branch:       "feature/merged",
+		CreatedAt:    now.Add(-2 * time.Hour),
+	}))
+	require.NoError(t, idb.InsertSession(context.Background(), insightsdb.SessionRow{
+		CheckpointID: "ffff2222aaaa",
+		SessionID:    "session-unmerged",
+		SessionIndex: 0,
+		Branch:       "feature/unmerged",
+		CreatedAt:    now.Add(-1 * time.Hour),
+	}))
+
+	rows, err := queryMemoryLoopRows(context.Background(), idb, memoryLoopScope{Mode: memoryLoopScopeRepo}, 2)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Equal(t, "dddd1111eeee", rows[0].CheckpointID)
+	require.Equal(t, "aaaabbbbcccc", rows[1].CheckpointID)
 }
 
 func TestRunMemoryLoopShow_GroupsDetailedInventory(t *testing.T) {
@@ -783,6 +847,24 @@ func TestRunMemoryLoopRefresh_ScopeMeUsesGitHubUsername(t *testing.T) {
 	require.Contains(t, buf.String(), `No personal sessions found for owner_id "alishakawaguchi" because the insights cache has no owner_id data yet.`)
 }
 
+func TestRunMemoryLoopRefresh_ScopeRepoFailsWhenDefaultBranchUnavailable(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	gitRunMemoryLoop(t, tmpDir, "branch", "-m", "trunk")
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+
+	var buf bytes.Buffer
+	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "repo", "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "default branch")
+}
+
 func TestRunMemoryLoopRefresh_ScopeMeFailsWhenGitHubUsernameUnavailable(t *testing.T) {
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -855,6 +937,16 @@ func installFakeGitHubCLI(t *testing.T, script string) {
 	binPath := filepath.Join(binDir, "gh")
 	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func gitRunMemoryLoop(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
 }
 
 func TestRenderMemoryLoopRefreshProgress(t *testing.T) {

@@ -243,6 +243,8 @@ func TestInitializeSession_SetsModelName(t *testing.T) {
 
 func TestInitializeSession_SetsOwnerFromGitConfig(t *testing.T) {
 	dir := setupGitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".entire"), 0o755))
+	installFakeGitHubCLIForStrategyTest(t, "#!/bin/sh\ncat <<'EOF'\ngithub.com\n  X Failed to log in to github.com account alishakawaguchi (default)\n  - Active account: true\nEOF\nexit 1\n")
 	t.Chdir(dir)
 
 	s := &ManualCommitStrategy{}
@@ -256,6 +258,16 @@ func TestInitializeSession_SetsOwnerFromGitConfig(t *testing.T) {
 
 	assert.Equal(t, "Test User", state.OwnerName)
 	assert.Equal(t, "test@test.com", state.OwnerEmail)
+	assert.Equal(t, "alishakawaguchi", state.OwnerID)
+}
+
+func installFakeGitHubCLIForStrategyTest(t *testing.T, script string) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	binPath := filepath.Join(binDir, "gh")
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 // TestInitializeSession_UpdatesModelOnSubsequentTurn verifies that model

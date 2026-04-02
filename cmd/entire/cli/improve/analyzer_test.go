@@ -230,6 +230,100 @@ func TestAnalyzePatterns_OpenItems(t *testing.T) {
 	}
 }
 
+func TestAnalyzePatterns_CollectsReviewDerivedRulesWithStrengthAndCount(t *testing.T) {
+	t.Parallel()
+
+	summaries := []improve.SessionSummaryData{
+		{
+			CheckpointID: "s1",
+			Facets: facets.SessionFacets{
+				ReviewDerivedRules: []facets.ReviewDerivedRule{
+					{
+						Rule:        "Prefer package-private helpers unless a shared API is required",
+						Evidence:    []string{"Review comment asked to avoid exporting a test-only helper"},
+						SourceKind:  "pr_comment",
+						Strength:    "normal",
+						WhyReusable: "This org style preference recurs across packages.",
+					},
+					{
+						Rule:        "Prefer repo-wide naming conventions over one-off abbreviations",
+						Evidence:    []string{"Requested changes called out naming consistency"},
+						SourceKind:  "requested_changes",
+						Strength:    "strong",
+						WhyReusable: "Naming consistency is a durable review standard.",
+					},
+				},
+			},
+		},
+		{
+			CheckpointID: "s2",
+			Facets: facets.SessionFacets{
+				ReviewDerivedRules: []facets.ReviewDerivedRule{
+					{
+						Rule:        "Prefer package-private helpers unless a shared API is required",
+						Evidence:    []string{"Second review repeated the helper visibility guidance"},
+						SourceKind:  "review_thread",
+						Strength:    "normal",
+						WhyReusable: "This org style preference recurs across packages.",
+					},
+					{
+						Rule:        "Keep one-off review nits out of long-term memory",
+						Evidence:    []string{"Single file-specific nit"},
+						SourceKind:  "pr_comment",
+						Strength:    "normal",
+						WhyReusable: "This should not matter outside one file.",
+					},
+				},
+			},
+		},
+	}
+
+	result := improve.AnalyzePatterns(summaries)
+
+	findRule := func(rule string) *improve.ReviewDerivedRuleSignal {
+		t.Helper()
+		for i := range result.ReviewDerivedRules {
+			if result.ReviewDerivedRules[i].Rule == rule {
+				return &result.ReviewDerivedRules[i]
+			}
+		}
+		return nil
+	}
+
+	repeated := findRule("Prefer package-private helpers unless a shared API is required")
+	if repeated == nil {
+		t.Fatal("expected repeated review-derived rule to be collected")
+	}
+	if repeated.Count != 2 {
+		t.Fatalf("expected repeated rule count 2, got %d", repeated.Count)
+	}
+	if repeated.Strong {
+		t.Fatal("expected repeated rule to remain non-strong when only normal incidents were seen")
+	}
+
+	strongSingleton := findRule("Prefer repo-wide naming conventions over one-off abbreviations")
+	if strongSingleton == nil {
+		t.Fatal("expected strong singleton review-derived rule to be collected")
+	}
+	if strongSingleton.Count != 1 {
+		t.Fatalf("expected strong singleton count 1, got %d", strongSingleton.Count)
+	}
+	if !strongSingleton.Strong {
+		t.Fatal("expected strong singleton rule to be marked strong")
+	}
+
+	weakSingleton := findRule("Keep one-off review nits out of long-term memory")
+	if weakSingleton == nil {
+		t.Fatal("expected weak singleton review-derived rule to still be tracked for downstream filtering")
+	}
+	if weakSingleton.Count != 1 {
+		t.Fatalf("expected weak singleton count 1, got %d", weakSingleton.Count)
+	}
+	if weakSingleton.Strong {
+		t.Fatal("expected weak singleton to remain non-strong")
+	}
+}
+
 func TestAnalyzePatterns_MultipleFrictionThemes(t *testing.T) {
 	t.Parallel()
 

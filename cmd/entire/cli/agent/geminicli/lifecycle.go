@@ -16,14 +16,29 @@ var (
 	_ agent.TranscriptAnalyzer = (*GeminiCLIAgent)(nil)
 	_ agent.TokenCalculator    = (*GeminiCLIAgent)(nil)
 	_ agent.HookResponseWriter = (*GeminiCLIAgent)(nil)
+	_ agent.HookContextWriter  = (*GeminiCLIAgent)(nil)
 )
 
 // WriteHookResponse outputs a JSON hook response to stdout.
 // Gemini CLI reads this JSON and displays the systemMessage to the user.
 func (g *GeminiCLIAgent) WriteHookResponse(message string) error {
+	return g.writeHookResponse(message, "")
+}
+
+// WriteHookResponseWithContext outputs a JSON hook response that both displays a
+// system message and injects additional context into the model.
+func (g *GeminiCLIAgent) WriteHookResponseWithContext(message, additionalContext string) error {
+	return g.writeHookResponse(message, additionalContext)
+}
+
+func (g *GeminiCLIAgent) writeHookResponse(message, additionalContext string) error {
 	resp := struct {
-		SystemMessage string `json:"systemMessage,omitempty"`
+		SystemMessage      string `json:"systemMessage,omitempty"`
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext,omitempty"`
+		} `json:"hookSpecificOutput,omitempty"`
 	}{SystemMessage: message}
+	resp.HookSpecificOutput.AdditionalContext = additionalContext
 	if err := json.NewEncoder(os.Stdout).Encode(resp); err != nil {
 		return fmt.Errorf("failed to encode hook response: %w", err)
 	}

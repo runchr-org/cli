@@ -79,6 +79,7 @@ func (idb *InsightsDB) migrate() error {
 			model                TEXT,
 			branch               TEXT,
 			owner_name           TEXT,
+			owner_id             TEXT,
 			owner_email          TEXT,
 			created_at           TEXT NOT NULL,
 			input_tokens         INTEGER DEFAULT 0,
@@ -154,6 +155,15 @@ func (idb *InsightsDB) migrate() error {
 			friction            TEXT,
 			missing_instruction TEXT
 		)`,
+		`CREATE TABLE IF NOT EXISTS review_rule_signals (
+			checkpoint_id TEXT NOT NULL,
+			session_index INTEGER NOT NULL,
+			rule          TEXT NOT NULL,
+			evidence      TEXT,
+			source_kind   TEXT,
+			strength      TEXT,
+			why_reusable  TEXT
+		)`,
 		`CREATE TABLE IF NOT EXISTS suggestions (
 			id          TEXT PRIMARY KEY,
 			file_type   TEXT NOT NULL,
@@ -175,6 +185,7 @@ func (idb *InsightsDB) migrate() error {
 	}
 	for _, alter := range []string{
 		`ALTER TABLE sessions ADD COLUMN owner_name TEXT`,
+		`ALTER TABLE sessions ADD COLUMN owner_id TEXT`,
 		`ALTER TABLE sessions ADD COLUMN owner_email TEXT`,
 	} {
 		if _, err := idb.db.ExecContext(ctx, alter); err != nil && !isDuplicateColumnError(err) {

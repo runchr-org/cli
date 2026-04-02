@@ -20,7 +20,10 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/termstyle"
+	"github.com/entireio/cli/cmd/entire/cli/trailers"
+	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/spf13/cobra"
 )
 
@@ -1297,6 +1300,15 @@ func resolveMemoryLoopScope(ctx context.Context, scopeArg, branchArg string) (me
 
 	switch scope.Mode {
 	case memoryLoopScopeRepo:
+		repo, err := openRepository(ctx)
+		if err != nil {
+			return memoryLoopScope{}, fmt.Errorf("open git repository: %w", err)
+		}
+		defaultBranch, _, err := resolveMemoryLoopDefaultBranch(repo)
+		if err != nil {
+			return memoryLoopScope{}, err
+		}
+		scope.Branch = defaultBranch
 		return scope, nil
 	case memoryLoopScopeBranch:
 		if branch := strings.TrimSpace(branchArg); branch != "" {
@@ -1328,11 +1340,37 @@ func resolveMemoryLoopScope(ctx context.Context, scopeArg, branchArg string) (me
 func queryMemoryLoopRows(ctx context.Context, idb *insightsdb.InsightsDB, scope memoryLoopScope, last int) ([]insightsdb.SessionRow, error) {
 	switch scope.Mode {
 	case memoryLoopScopeRepo:
-		rows, err := idb.QueryLastNSessions(ctx, last)
+		repo, err := openRepository(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("query repo-scoped sessions: open git repository: %w", err)
+		}
+		_, defaultBranchHash, err := resolveMemoryLoopDefaultBranch(repo)
 		if err != nil {
 			return nil, fmt.Errorf("query repo-scoped sessions: %w", err)
 		}
-		return rows, nil
+		reachableCheckpointIDs, err := listReachableCheckpointIDs(ctx, repo, defaultBranchHash)
+		if err != nil {
+			return nil, fmt.Errorf("query repo-scoped sessions: %w", err)
+		}
+		totalSessions, err := idb.SessionCount(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("query repo-scoped sessions: %w", err)
+		}
+		rows, err := idb.QueryLastNSessions(ctx, totalSessions)
+		if err != nil {
+			return nil, fmt.Errorf("query repo-scoped sessions: %w", err)
+		}
+		filtered := make([]insightsdb.SessionRow, 0, len(rows))
+		for _, row := range rows {
+			if _, ok := reachableCheckpointIDs[row.CheckpointID]; !ok {
+				continue
+			}
+			filtered = append(filtered, row)
+			if last > 0 && len(filtered) >= last {
+				break
+			}
+		}
+		return filtered, nil
 	case memoryLoopScopeBranch:
 		rows, err := idb.QueryByBranch(ctx, scope.Branch, last)
 		if err != nil {
@@ -1348,6 +1386,54 @@ func queryMemoryLoopRows(ctx context.Context, idb *insightsdb.InsightsDB, scope 
 	default:
 		return nil, fmt.Errorf("unsupported scope mode %q", scope.Mode)
 	}
+}
+
+func resolveMemoryLoopDefaultBranch(repo *git.Repository) (string, plumbing.Hash, error) {
+	defaultBranch := strings.TrimSpace(strategy.GetDefaultBranchName(repo))
+	if defaultBranch == "" {
+		return "", plumbing.ZeroHash, errors.New("could not determine default branch for --scope repo")
+	}
+
+	ref, err := repo.Reference(plumbing.NewBranchReferenceName(defaultBranch), true)
+	if err != nil {
+		ref, err = repo.Reference(plumbing.NewRemoteReferenceName("origin", defaultBranch), true)
+	}
+	if err != nil {
+		return "", plumbing.ZeroHash, fmt.Errorf("resolve default branch %q: %w", defaultBranch, err)
+	}
+
+	return defaultBranch, ref.Hash(), nil
+}
+
+func listReachableCheckpointIDs(ctx context.Context, repo *git.Repository, from plumbing.Hash) (map[string]struct{}, error) {
+	if from == plumbing.ZeroHash {
+		return nil, errors.New("default branch has no commits")
+	}
+
+	iter, err := repo.Log(&git.LogOptions{
+		From:  from,
+		Order: git.LogOrderCommitterTime,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("iterate default branch history: %w", err)
+	}
+	defer iter.Close()
+
+	checkpointIDs := make(map[string]struct{})
+	err = iter.ForEach(func(commit *object.Commit) error {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
+		for _, checkpointID := range trailers.ParseAllCheckpoints(commit.Message) {
+			checkpointIDs[checkpointID.String()] = struct{}{}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan default branch history: %w", err)
+	}
+
+	return checkpointIDs, nil
 }
 
 func filterMemoryLoopRows(rows []insightsdb.SessionRow, scope memoryLoopScope, limit int) ([]insightsdb.SessionRow, error) {

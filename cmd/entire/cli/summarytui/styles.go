@@ -9,15 +9,21 @@ import (
 )
 
 type styles struct {
-	colorEnabled bool
-	appTitle     lipgloss.Style
-	dim          lipgloss.Style
-	statusBar    lipgloss.Style
-	chipActive   lipgloss.Style
-	chipInactive lipgloss.Style
-	tableHeader  lipgloss.Style
-	tableCell    lipgloss.Style
-	tableSelect  lipgloss.Style
+	colorEnabled  bool
+	appTitle      lipgloss.Style
+	dim           lipgloss.Style
+	statusBar     lipgloss.Style
+	chipActive    lipgloss.Style
+	chipInactive  lipgloss.Style
+	tableHeader   lipgloss.Style
+	tableCell     lipgloss.Style
+	tableSelect   lipgloss.Style
+	detailLabel   lipgloss.Style
+	detailValue   lipgloss.Style
+	sectionHeader lipgloss.Style
+	bullet        lipgloss.Style
+	emptyState    lipgloss.Style
+	errorText     lipgloss.Style
 }
 
 func newStyles() styles {
@@ -29,6 +35,7 @@ func newStyles() styles {
 
 	amber := lipgloss.Color("214")
 	gray := lipgloss.Color("245")
+	dimGray := lipgloss.Color("239")
 
 	s.appTitle = lipgloss.NewStyle().Bold(true).Foreground(amber)
 	s.dim = lipgloss.NewStyle().Faint(true)
@@ -38,6 +45,12 @@ func newStyles() styles {
 	s.tableHeader = lipgloss.NewStyle().Bold(true).Foreground(amber)
 	s.tableCell = lipgloss.NewStyle()
 	s.tableSelect = lipgloss.NewStyle().Bold(true).Foreground(amber)
+	s.detailLabel = lipgloss.NewStyle().Foreground(gray).Width(14)
+	s.detailValue = lipgloss.NewStyle()
+	s.sectionHeader = lipgloss.NewStyle().Bold(true).Foreground(amber)
+	s.bullet = lipgloss.NewStyle().Foreground(gray)
+	s.emptyState = lipgloss.NewStyle().Foreground(dimGray).Italic(true)
+	s.errorText = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	return s
 }
 
@@ -57,13 +70,6 @@ func (s styles) tableStyles() table.Styles {
 	ts.Cell = s.tableCell
 	ts.Selected = s.tableSelect
 	return ts
-}
-
-func statusFlag(v bool) string {
-	if v {
-		return "yes"
-	}
-	return "no"
 }
 
 func truncate(value string, limit int) string {

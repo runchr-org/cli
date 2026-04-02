@@ -23,7 +23,18 @@ func buildCLIResponse(result string) string {
 func TestExtractor_Extract_ReturnsStructuredFacets(t *testing.T) {
 	t.Parallel()
 
+	const literalPRComment = "Keep this helper private to the package instead of exporting it just for this test."
+
 	inner := `{
+		"review_derived_rules": [
+			{
+				"rule": "Prefer shared repo patterns over one-off file-specific fixes",
+				"evidence": ["` + literalPRComment + `"],
+				"source_kind": "pr_comment",
+				"strength": "strong",
+				"why_reusable": "This is a durable repo preference that will recur in future reviews."
+			}
+		],
 		"repeated_user_instructions": [
 			{"instruction": "Run golangci-lint before committing", "evidence": ["User repeated lint expectation"]}
 		],
@@ -61,6 +72,24 @@ func TestExtractor_Extract_ReturnsStructuredFacets(t *testing.T) {
 
 	if len(got.RepeatedUserInstructions) != 1 {
 		t.Fatalf("expected 1 repeated instruction, got %d", len(got.RepeatedUserInstructions))
+	}
+	if len(got.ReviewDerivedRules) != 1 {
+		t.Fatalf("expected 1 review-derived rule, got %d", len(got.ReviewDerivedRules))
+	}
+	if got.ReviewDerivedRules[0].Rule != "Prefer shared repo patterns over one-off file-specific fixes" {
+		t.Fatalf("unexpected review-derived rule: %q", got.ReviewDerivedRules[0].Rule)
+	}
+	if got.ReviewDerivedRules[0].Rule == "Keep this helper private to the package instead of exporting it just for this test." {
+		t.Fatalf("review-derived rule should be generalized, got literal PR comment %q", got.ReviewDerivedRules[0].Rule)
+	}
+	if got.ReviewDerivedRules[0].SourceKind != "pr_comment" {
+		t.Fatalf("unexpected source kind: %q", got.ReviewDerivedRules[0].SourceKind)
+	}
+	if got.ReviewDerivedRules[0].Strength != "strong" {
+		t.Fatalf("unexpected strength: %q", got.ReviewDerivedRules[0].Strength)
+	}
+	if got.ReviewDerivedRules[0].WhyReusable == "" {
+		t.Fatal("expected review-derived rule to explain why it is reusable")
 	}
 	if got.RepeatedUserInstructions[0].Instruction != "Run golangci-lint before committing" {
 		t.Fatalf("unexpected instruction: %q", got.RepeatedUserInstructions[0].Instruction)
@@ -107,6 +136,42 @@ func TestBuildPrompt_IncludesFacetSchema(t *testing.T) {
 		"missing_context",
 		"failure_loops",
 		"skill_signals",
+		"review_derived_rules",
+		"source_kind",
+		"why_reusable",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestBuildPrompt_InstructsReviewRuleGeneralization(t *testing.T) {
+	t.Parallel()
+
+	prompt := facets.BuildPrompt("PR review feedback")
+
+	for _, want := range []string{
+		"infer reusable rules from review fixes",
+		"do not restate PR comments",
+		"stable repo/workflow memories",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestBuildPrompt_InstructsStrongSingleSessionRetention(t *testing.T) {
+	t.Parallel()
+
+	prompt := facets.BuildPrompt("PR review feedback")
+
+	for _, want := range []string{
+		"single strong incident",
+		"org preference",
+		"coding standard",
+		"anti-pattern",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
@@ -125,6 +190,23 @@ func TestBuildPromptWithSkills_IncludesKnownSkills(t *testing.T) {
 		"e2e, dev, reviewer",
 		"canonical skill names",
 		"skill_signals",
+		"review_derived_rules",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+}
+
+func TestBuildPromptWithSkills_InstructsReviewRuleGeneralization(t *testing.T) {
+	t.Parallel()
+
+	prompt := facets.BuildPromptWithSkills("some transcript", []string{"e2e"})
+
+	for _, want := range []string{
+		"infer reusable rules from review fixes",
+		"do not restate PR comments",
+		"single strong incident",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q", want)

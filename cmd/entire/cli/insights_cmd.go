@@ -336,6 +336,7 @@ func metadataToSessionRow(cpID string, sessionIndex int, meta *checkpoint.Commit
 		Model:        meta.Model,
 		Branch:       meta.Branch,
 		OwnerName:    meta.OwnerName,
+		OwnerID:      meta.OwnerID,
 		OwnerEmail:   meta.OwnerEmail,
 		CreatedAt:    meta.CreatedAt,
 	}

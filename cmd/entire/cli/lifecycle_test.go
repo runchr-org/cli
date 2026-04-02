@@ -163,13 +163,21 @@ func TestHandleLifecycleSessionStart_EmptySessionID(t *testing.T) {
 type mockHookResponseAgent struct {
 	mockLifecycleAgent
 
-	lastMessage string
+	lastMessage        string
+	lastContextMessage string
 }
 
 var _ agent.HookResponseWriter = (*mockHookResponseAgent)(nil)
+var _ agent.HookContextWriter = (*mockHookResponseAgent)(nil)
 
 func (m *mockHookResponseAgent) WriteHookResponse(message string) error {
 	m.lastMessage = message
+	return nil
+}
+
+func (m *mockHookResponseAgent) WriteHookResponseWithContext(message, additionalContext string) error {
+	m.lastMessage = message
+	m.lastContextMessage = additionalContext
 	return nil
 }
 
@@ -215,6 +223,7 @@ func TestHandleLifecycleSessionStart_DefaultMessageWithCommits(t *testing.T) {
 	testutil.WriteFile(t, tmpDir, "init.txt", "init")
 	testutil.GitAdd(t, tmpDir, "init.txt")
 	testutil.GitCommit(t, tmpDir, "init")
+	installFakeGitHubCLIForLifecycleTest(t)
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
 
@@ -696,6 +705,7 @@ func TestHandleLifecycleTurnStart_WritesPromptContent(t *testing.T) {
 	testutil.WriteFile(t, tmpDir, "init.txt", "init")
 	testutil.GitAdd(t, tmpDir, "init.txt")
 	testutil.GitCommit(t, tmpDir, "init")
+	installFakeGitHubCLIForLifecycleTest(t)
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
 
@@ -773,8 +783,58 @@ func TestHandleLifecycleTurnStart_InjectsMemoryForClaude(t *testing.T) {
 	require.Contains(t, ag.lastMessage, "Run lint before finishing")
 }
 
+func TestHandleLifecycleTurnStart_AutoModeInjectsMemoryForCodexAndGemini(t *testing.T) {
+	testCases := []struct {
+		name      string
+		agentName types.AgentName
+		agentType types.AgentType
+	}{
+		{
+			name:      "codex",
+			agentName: agent.AgentNameCodex,
+			agentType: agent.AgentTypeCodex,
+		},
+		{
+			name:      "gemini",
+			agentName: agent.AgentNameGemini,
+			agentType: agent.AgentTypeGemini,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			testutil.InitRepo(t, tmpDir)
+			testutil.WriteFile(t, tmpDir, "init.txt", "init")
+			testutil.GitAdd(t, tmpDir, "init.txt")
+			testutil.GitCommit(t, tmpDir, "init")
+			t.Chdir(tmpDir)
+			paths.ClearWorktreeRootCache()
+
+			writeMemoryLoopStateForTurnStartTest(t, memoryloop.ModeAuto)
+
+			ag := newMockHookResponseAgent()
+			ag.name = tc.agentName
+			ag.agentType = tc.agentType
+
+			event := &agent.Event{
+				Type:      agent.TurnStart,
+				SessionID: "test-auto-memory-injection",
+				Prompt:    "fix the lint failure in capabilities.go",
+				Timestamp: time.Now(),
+			}
+
+			require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, event))
+			require.Contains(t, ag.lastMessage, "Memory For This Repo")
+			require.Contains(t, ag.lastContextMessage, "Memory For This Repo")
+			require.Contains(t, ag.lastContextMessage, "Run lint before finishing")
+		})
+	}
+}
+
 func writeMemoryLoopStateForTurnStartTest(t *testing.T, mode memoryloop.Mode) {
 	t.Helper()
+	installFakeGitHubCLIForLifecycleTest(t)
 
 	require.NoError(t, memoryloop.SaveState(context.Background(), &memoryloop.State{
 		Store: &memoryloop.Store{
@@ -795,6 +855,7 @@ func writeMemoryLoopStateForTurnStartTest(t *testing.T, mode memoryloop.Mode) {
 					Strength:   5,
 					Status:     memoryloop.StatusActive,
 					ScopeKind:  memoryloop.ScopeKindMe,
+					ScopeValue: "alishakawaguchi",
 					CreatedAt:  time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
 					UpdatedAt:  time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
 				},
@@ -881,6 +942,93 @@ func TestHandleLifecycleTurnStart_ManualModeSkipsUnsupportedAgents(t *testing.T)
 	require.Empty(t, ag.lastMessage)
 }
 
+func TestHandleLifecycleTurnStart_ManualModeDebugExplainsNoMatchingMemories(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	writeMemoryLoopStateForTurnStartTest(t, memoryloop.ModeManual)
+
+	state, err := memoryloop.LoadState(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, state.Store)
+	state.Store.Debug = true
+	require.NoError(t, memoryloop.SaveState(context.Background(), state))
+
+	ag := newMockHookResponseAgent()
+	ag.name = agent.AgentNameCodex
+	ag.agentType = agent.AgentTypeCodex
+
+	event := &agent.Event{
+		Type:      agent.TurnStart,
+		SessionID: "test-manual-memory-debug-no-match",
+		Prompt:    "set up memory-loop manual injection for codex and gemini",
+		Timestamp: time.Now(),
+	}
+
+	require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, event))
+	require.Contains(t, ag.lastMessage, "No matching memories")
+	require.Contains(t, ag.lastMessage, "manual injection")
+}
+
+func TestHandleLifecycleTurnStart_ManualModeDebugExplainsSkippedMatches(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	installFakeGitHubCLIForLifecycleTest(t)
+	require.NoError(t, memoryloop.SaveState(context.Background(), &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:          1,
+			GeneratedAt:      time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+			SourceWindow:     20,
+			Mode:             memoryloop.ModeManual,
+			ActivationPolicy: memoryloop.ActivationPolicyReview,
+			MaxInjected:      3,
+			Debug:            true,
+			Records: []memoryloop.MemoryRecord{
+				{
+					ID:         "candidate-memory",
+					Kind:       memoryloop.KindRepoRule,
+					Title:      "Codex and Gemini manual injection setup",
+					Body:       "Use manual mode for Codex and Gemini setup prompts.",
+					Confidence: "high",
+					Strength:   5,
+					Status:     memoryloop.StatusCandidate,
+					ScopeKind:  memoryloop.ScopeKindMe,
+					ScopeValue: "alishakawaguchi",
+					CreatedAt:  time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+					UpdatedAt:  time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+				},
+			},
+		},
+	}))
+
+	ag := newMockHookResponseAgent()
+	ag.name = agent.AgentNameGemini
+	ag.agentType = agent.AgentTypeGemini
+
+	event := &agent.Event{
+		Type:      agent.TurnStart,
+		SessionID: "test-manual-memory-debug-skipped",
+		Prompt:    "set up memory-loop manual injection for codex and gemini",
+		Timestamp: time.Now(),
+	}
+
+	require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, event))
+	require.Contains(t, ag.lastMessage, "No matching memories")
+	require.Contains(t, ag.lastMessage, "candidate-memory")
+	require.Contains(t, ag.lastMessage, "not active")
+}
+
 func TestHandleLifecycleTurnStart_RecordsMemoryActivityForInjectedMatches(t *testing.T) {
 	// Cannot use t.Parallel() because we use t.Chdir()
 	tmpDir := t.TempDir()
@@ -888,6 +1036,7 @@ func TestHandleLifecycleTurnStart_RecordsMemoryActivityForInjectedMatches(t *tes
 	testutil.WriteFile(t, tmpDir, "init.txt", "init")
 	testutil.GitAdd(t, tmpDir, "init.txt")
 	testutil.GitCommit(t, tmpDir, "init")
+	installFakeGitHubCLIForLifecycleTest(t)
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
 
@@ -906,9 +1055,10 @@ func TestHandleLifecycleTurnStart_RecordsMemoryActivityForInjectedMatches(t *tes
 					Title:      "Run lint before finishing",
 					Body:       "Run golangci-lint before claiming completion.",
 					Confidence: "high",
-					Strength:   4,
+					Strength:   5,
 					Status:     memoryloop.StatusActive,
 					ScopeKind:  memoryloop.ScopeKindMe,
+					ScopeValue: "alishakawaguchi",
 					CreatedAt:  time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
 					UpdatedAt:  time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
 				},
@@ -1024,7 +1174,7 @@ func TestHandleLifecycleTurnStart_RecordsMemoryLoopActivity(t *testing.T) {
         "title": "Run lint before finishing",
         "body": "Run golangci-lint before claiming completion.",
         "confidence": "high",
-        "strength": 4,
+        "strength": 5,
         "status": "active",
         "created_at": "2026-03-25T12:00:00Z",
         "updated_at": "2026-03-25T12:00:00Z"
@@ -1084,6 +1234,16 @@ func TestEffectiveMemoryLoopMode_PreStoreUsesModeDerivedFromSettings(t *testing.
 		},
 	}
 	require.Equal(t, memoryloop.ModeManual, effectiveMemoryLoopMode(&memoryloop.State{}, settingsValue))
+}
+
+func installFakeGitHubCLIForLifecycleTest(t *testing.T) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	binPath := filepath.Join(binDir, "gh")
+	script := "#!/bin/sh\ncat <<'EOF'\ngithub.com\n  ✓ Logged in to github.com account alishakawaguchi (/tmp/hosts.yml)\n  - Active account: true\nEOF\n"
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func TestEffectiveMemoryLoopMode_PreStoreExplicitModeBeatsLegacyEnabled(t *testing.T) {

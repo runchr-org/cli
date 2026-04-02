@@ -88,17 +88,29 @@ type SkillOpportunity struct {
 	AffectedSessions   []string `json:"affected_sessions,omitempty"`
 }
 
+// ReviewDerivedRuleSignal captures a stable rule inferred from review feedback.
+type ReviewDerivedRuleSignal struct {
+	Rule             string   `json:"rule"`
+	Count            int      `json:"count"`
+	Strong           bool     `json:"strong,omitempty"`
+	Evidence         []string `json:"evidence,omitempty"`
+	SourceKinds      []string `json:"source_kinds,omitempty"`
+	WhyReusable      string   `json:"why_reusable,omitempty"`
+	AffectedSessions []string `json:"affected_sessions,omitempty"`
+}
+
 // PatternAnalysis contains extracted patterns from multiple sessions.
 type PatternAnalysis struct {
-	RepeatedFriction      []FrictionPattern  `json:"repeated_friction,omitempty"`
-	RepeatedInstructions  []RecurringSignal  `json:"repeated_instructions,omitempty"`
-	MissingContextSignals []RecurringSignal  `json:"missing_context_signals,omitempty"`
-	FailureLoops          []RecurringSignal  `json:"failure_loops,omitempty"`
-	SkillOpportunities    []SkillOpportunity `json:"skill_opportunities,omitempty"`
-	RepoLearnings         []string           `json:"repo_learnings,omitempty"`
-	WorkflowLearnings     []string           `json:"workflow_learnings,omitempty"`
-	OpenItems             []string           `json:"open_items,omitempty"`
-	SessionCount          int                `json:"session_count"`
+	RepeatedFriction      []FrictionPattern         `json:"repeated_friction,omitempty"`
+	RepeatedInstructions  []RecurringSignal         `json:"repeated_instructions,omitempty"`
+	MissingContextSignals []RecurringSignal         `json:"missing_context_signals,omitempty"`
+	FailureLoops          []RecurringSignal         `json:"failure_loops,omitempty"`
+	SkillOpportunities    []SkillOpportunity        `json:"skill_opportunities,omitempty"`
+	ReviewDerivedRules    []ReviewDerivedRuleSignal `json:"review_derived_rules,omitempty"`
+	RepoLearnings         []string                  `json:"repo_learnings,omitempty"`
+	WorkflowLearnings     []string                  `json:"workflow_learnings,omitempty"`
+	OpenItems             []string                  `json:"open_items,omitempty"`
+	SessionCount          int                       `json:"session_count"`
 }
 
 // FacetCounts summarizes how many structured signals were found.

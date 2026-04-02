@@ -8,11 +8,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	checkpointid "github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/facets"
 	"github.com/entireio/cli/cmd/entire/cli/githubidentity"
 	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
+	"github.com/entireio/cli/cmd/entire/cli/llmcli"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
+	"github.com/entireio/cli/cmd/entire/cli/summarize"
 	"github.com/entireio/cli/cmd/entire/cli/summarytui"
 	"github.com/entireio/cli/cmd/entire/cli/termstyle"
 	"github.com/spf13/cobra"
@@ -25,6 +30,11 @@ type summaryOptions struct {
 	Me         bool
 	OutputJSON bool
 }
+
+const (
+	defaultSummarySessionLimit = 10
+	maxSummaryRecentSessions   = 200
+)
 
 type summarySessionView struct {
 	CheckpointID string               `json:"checkpoint_id"`
@@ -49,10 +59,13 @@ type summaryDetailView struct {
 	Learnings []insightsdb.LearningRow `json:"learnings,omitempty"`
 }
 
-var runSummaryTUI = summarytui.RunWithCurrentBranch
+var runSummaryTUI = summarytui.RunWithCurrentBranch //nolint:gochecknoglobals // injectable for testing
+var summaryRefreshCacheIfStale = refreshCacheIfStale
+var summaryBackfillSummaries = backfillSummaries
+var summaryBackfillFacets = backfillFacets
 
 func newSummaryCmd() *cobra.Command {
-	opts := summaryOptions{Last: 10}
+	opts := summaryOptions{Last: defaultSummarySessionLimit}
 
 	cmd := &cobra.Command{
 		Use:   "summary",
@@ -103,7 +116,7 @@ func runSummary(ctx context.Context, w io.Writer, opts summaryOptions) error {
 		currentBranch = branch
 	}
 
-	return runSummaryTUI(ctx, rows, currentBranch)
+	return runSummaryTUI(ctx, rows, currentBranch, generateForSession)
 }
 
 func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb.SessionRow, error) {
@@ -118,26 +131,29 @@ func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb
 	}
 	defer func() { _ = idb.Close() }()
 
-	refreshCacheIfStale(ctx, idb) //nolint:errcheck,gosec // non-fatal; use cached data if refresh fails
-	backfillSummaries(ctx, io.Discard, idb, opts.Last)
-	backfillFacets(ctx, io.Discard, idb, opts.Last)
+	outputLimit := normalizedSummarySessionLimit(opts.Last)
 
-	limit := opts.Last
-	if limit <= 0 {
-		limit = 10
-	}
-
-	total, err := idb.SessionCount(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("session count: %w", err)
-	}
-	if total == 0 {
-		return nil, nil
-	}
-
-	rows, err := idb.QueryLastNSessions(ctx, total)
+	rows, err := idb.QueryLastNSessions(ctx, maxSummaryRecentSessions)
 	if err != nil {
 		return nil, fmt.Errorf("query sessions: %w", err)
+	}
+	if len(rows) == 0 {
+		// First-run fallback: populate the cache if we have nothing local yet.
+		if err := summaryRefreshCacheIfStale(ctx, idb); err != nil {
+			return nil, fmt.Errorf("refresh insights cache: %w", err)
+		}
+		rows, err = idb.QueryLastNSessions(ctx, maxSummaryRecentSessions)
+		if err != nil {
+			return nil, fmt.Errorf("query sessions after refresh: %w", err)
+		}
+	}
+
+	summaryBackfillSummaries(ctx, io.Discard, idb, outputLimit)
+	summaryBackfillFacets(ctx, io.Discard, idb, outputLimit)
+
+	rows, err = idb.QueryLastNSessions(ctx, maxSummaryRecentSessions)
+	if err != nil {
+		return nil, fmt.Errorf("query sessions after backfill: %w", err)
 	}
 
 	ownerID := ""
@@ -160,12 +176,19 @@ func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb
 			continue
 		}
 		filtered = append(filtered, row)
-		if len(filtered) == limit {
+		if len(filtered) == outputLimit {
 			break
 		}
 	}
 
 	return filtered, nil
+}
+
+func normalizedSummarySessionLimit(last int) int {
+	if last <= 0 {
+		return defaultSummarySessionLimit
+	}
+	return min(last, maxSummaryRecentSessions)
 }
 
 //nolint:musttag // nested external structs are part of the intended JSON payload
@@ -351,9 +374,98 @@ func yesNo(v bool) string {
 	return "no"
 }
 
-func fallbackText(value, fallback string) string {
+func fallbackText(value, fb string) string {
 	if strings.TrimSpace(value) == "" {
-		return fallback
+		return fb
 	}
 	return value
+}
+
+// generateForSession generates summary and facets for a single session on demand.
+// It opens its own database connection and checkpoint store.
+func generateForSession(ctx context.Context, row insightsdb.SessionRow) (insightsdb.SessionRow, error) {
+	repo, err := openRepository(ctx)
+	if err != nil {
+		return row, fmt.Errorf("open repository: %w", err)
+	}
+	store := checkpoint.NewGitStore(repo)
+
+	cpID, err := checkpointid.NewCheckpointID(row.CheckpointID)
+	if err != nil {
+		return row, fmt.Errorf("invalid checkpoint ID: %w", err)
+	}
+
+	content, err := store.ReadSessionContent(ctx, cpID, row.SessionIndex)
+	if err != nil {
+		return row, fmt.Errorf("read session content: %w", err)
+	}
+	if len(content.Transcript) == 0 {
+		return row, fmt.Errorf("empty transcript for checkpoint %s", row.CheckpointID)
+	}
+
+	condensed, err := summarize.BuildCondensedTranscriptFromBytes(content.Transcript, content.Metadata.Agent)
+	if err != nil {
+		return row, fmt.Errorf("condense transcript: %w", err)
+	}
+	if len(condensed) == 0 {
+		return row, fmt.Errorf("condensed transcript empty for checkpoint %s", row.CheckpointID)
+	}
+
+	input := summarize.Input{
+		Transcript:   condensed,
+		FilesTouched: row.FilesTouched,
+	}
+
+	// Generate summary.
+	gen := &summarize.ClaudeGenerator{}
+	summary, genErr := gen.Generate(ctx, input)
+	if genErr != nil {
+		logging.Debug(ctx, "generateForSession: summary generation failed",
+			"checkpoint_id", row.CheckpointID, "error", genErr)
+	}
+	if summary != nil {
+		content.Metadata.Summary = summary
+		row = metadataToSessionRow(row.CheckpointID, row.SessionIndex, &content.Metadata)
+	}
+
+	// Extract facets.
+	formatted := summarize.FormatCondensedTranscript(input)
+	extractor := &facets.Extractor{Runner: &llmcli.Runner{}}
+	facetResult, _, extractErr := extractor.Extract(ctx, formatted)
+	if extractErr != nil {
+		logging.Debug(ctx, "generateForSession: facet extraction failed",
+			"checkpoint_id", row.CheckpointID, "error", extractErr)
+	}
+	if facetResult != nil {
+		row.Facets = *facetResult
+		row.HasFacets = true
+	}
+
+	// Persist to database.
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		return row, fmt.Errorf("find worktree root: %w", err)
+	}
+	idb, err := insightsdb.Open(filepath.Join(worktreeRoot, paths.EntireDir, "insights.db"))
+	if err != nil {
+		return row, fmt.Errorf("open insights db: %w", err)
+	}
+	defer func() { _ = idb.Close() }()
+
+	if row.HasSummary {
+		if updateErr := idb.UpdateSessionSummary(ctx, row); updateErr != nil {
+			return row, fmt.Errorf("save summary: %w", updateErr)
+		}
+	}
+	if row.HasFacets {
+		if updateErr := idb.UpdateSessionFacets(ctx, row); updateErr != nil {
+			return row, fmt.Errorf("save facets: %w", updateErr)
+		}
+	}
+
+	// Return partial success even if one phase failed.
+	if genErr != nil && extractErr != nil {
+		return row, fmt.Errorf("summary: %w; facets: %w", genErr, extractErr)
+	}
+	return row, nil
 }

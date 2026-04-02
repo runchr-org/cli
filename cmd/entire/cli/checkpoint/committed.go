@@ -375,6 +375,7 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 		Agent:                       opts.Agent,
 		Model:                       opts.Model,
 		OwnerName:                   opts.OwnerName,
+		OwnerID:                     opts.OwnerID,
 		OwnerEmail:                  opts.OwnerEmail,
 		TurnID:                      opts.TurnID,
 		IsTask:                      opts.IsTask,

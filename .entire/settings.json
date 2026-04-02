@@ -1,7 +1,6 @@
 {
   "enabled": true,
   "local_dev": true,
-  "strategy": "manual-commit",
   "strategy_options": {
     "checkpoint_remote": {
       "provider": "github",
@@ -10,5 +9,6 @@
     "summarize": {
       "enabled": true
     }
-  }
+  },
+  "strategy": "manual-commit"
 }

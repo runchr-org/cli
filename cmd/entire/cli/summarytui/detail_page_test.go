@@ -10,19 +10,19 @@ import (
 func TestDetailView_RendersMetadataAndAllSections(t *testing.T) {
 	t.Parallel()
 
-	detail := newDetailModel(newStyles(), sampleRowsForTest()[0])
+	detail := newDetailModel(newStyles(), sampleRowsForTest()[0], false)
 	detail.setSize(100, 12)
 
 	require.Contains(t, detail.view(), "SESSION DETAIL")
 
 	view := detail.renderContent()
 
-	require.Contains(t, view, "Author: alishakawaguchi")
-	require.Contains(t, view, "Author Name: Alisha Kawaguchi")
-	require.Contains(t, view, "Author Email: alisha@example.com")
-	require.Contains(t, view, "Model: sonnet")
-	require.Contains(t, view, "Tokens: 3200")
-	require.Contains(t, view, "Turns: 7")
+	require.Contains(t, view, "alishakawaguchi")
+	require.Contains(t, view, "Alisha Kawaguchi")
+	require.Contains(t, view, "alisha@example.com")
+	require.Contains(t, view, "sonnet")
+	require.Contains(t, view, "3200")
+	require.Contains(t, view, "7")
 	require.Contains(t, view, "Failure Loops")
 	require.Contains(t, view, "Skill Signals")
 	require.Contains(t, view, "Repo Gotchas")
@@ -32,7 +32,7 @@ func TestDetailView_RendersMetadataAndAllSections(t *testing.T) {
 func TestDetailUpdate_ScrollsViewport(t *testing.T) {
 	t.Parallel()
 
-	detail := newDetailModel(newStyles(), manyFacetRowForTest())
+	detail := newDetailModel(newStyles(), manyFacetRowForTest(), false)
 	detail.setSize(80, 8)
 
 	require.Equal(t, 0, detail.viewport.YOffset)
@@ -40,5 +40,5 @@ func TestDetailUpdate_ScrollsViewport(t *testing.T) {
 	next, _ := detail.update(tea.KeyMsg{Type: tea.KeyDown})
 	*detail = next
 
-	require.Greater(t, detail.viewport.YOffset, 0)
+	require.Positive(t, detail.viewport.YOffset)
 }

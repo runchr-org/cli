@@ -121,7 +121,9 @@ type EvolveSettings struct {
 type MemoryLoopSettings struct {
 	Enabled                bool   `json:"enabled"`
 	Mode                   string `json:"mode,omitempty"`
+	Debug                  bool   `json:"debug,omitempty"`
 	ActivationPolicy       string `json:"activation_policy,omitempty"`
+	OwnerID                string `json:"owner_id,omitempty"` // Deprecated: ignored, kept for backward compatibility.
 	ClaudeInjectionEnabled *bool  `json:"claude_injection_enabled,omitempty"`
 	MaxInjected            int    `json:"max_injected,omitempty"`
 	DefaultRefreshWindow   int    `json:"default_refresh_window,omitempty"`
@@ -131,6 +133,7 @@ type MemoryLoopSettings struct {
 type MemoryLoopConfig struct {
 	Enabled              bool
 	Mode                 string
+	Debug                bool
 	ActivationPolicy     string
 	MaxInjected          int
 	DefaultRefreshWindow int
@@ -165,6 +168,7 @@ func (s *EntireSettings) GetMemoryLoopConfig() MemoryLoopConfig {
 	} else {
 		cfg.Enabled = s.MemoryLoopConfig.Enabled
 	}
+	cfg.Debug = s.MemoryLoopConfig.Debug
 	if s.MemoryLoopConfig.ActivationPolicy != "" {
 		cfg.ActivationPolicy = s.MemoryLoopConfig.ActivationPolicy
 	}
@@ -477,6 +481,13 @@ func mergeMemoryLoopSettings(dst *MemoryLoopSettings, data json.RawMessage) erro
 			return fmt.Errorf("parsing memory_loop.activation_policy: %w", err)
 		}
 		dst.ActivationPolicy = policy
+	}
+	if debugRaw, ok := raw["debug"]; ok {
+		var debug bool
+		if err := json.Unmarshal(debugRaw, &debug); err != nil {
+			return fmt.Errorf("parsing memory_loop.debug: %w", err)
+		}
+		dst.Debug = debug
 	}
 	if injectionRaw, ok := raw["claude_injection_enabled"]; ok {
 		var enabled bool

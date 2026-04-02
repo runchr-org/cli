@@ -2,12 +2,37 @@ package geminicli
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/stretchr/testify/require"
 )
+
+func captureStdout(t *testing.T, fn func()) []byte {
+	t.Helper()
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+	})
+
+	fn()
+
+	require.NoError(t, w.Close())
+	data, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.NoError(t, r.Close())
+	os.Stdout = oldStdout
+
+	return data
+}
 
 func TestParseHookEvent_SessionStart(t *testing.T) {
 	t.Parallel()
@@ -230,6 +255,24 @@ func TestParseHookEvent_UnknownHook_ReturnsNil(t *testing.T) {
 	if event != nil {
 		t.Errorf("expected nil event for unknown hook, got %+v", event)
 	}
+}
+
+func TestWriteHookResponseWithContext_EncodesAdditionalContext(t *testing.T) {
+	ag := &GeminiCLIAgent{}
+
+	data := captureStdout(t, func() {
+		require.NoError(t, ag.WriteHookResponseWithContext("display message", "memory context"))
+	})
+
+	var resp struct {
+		SystemMessage      string `json:"systemMessage"`
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	require.NoError(t, json.Unmarshal(data, &resp))
+	require.Equal(t, "display message", resp.SystemMessage)
+	require.Equal(t, "memory context", resp.HookSpecificOutput.AdditionalContext)
 }
 
 func TestParseHookEvent_EmptyInput(t *testing.T) {

@@ -21,6 +21,7 @@ type SessionRow struct {
 	Model        string
 	Branch       string
 	OwnerName    string
+	OwnerID      string
 	OwnerEmail   string
 	CreatedAt    time.Time
 	InputTokens  int
@@ -97,6 +98,7 @@ func (idb *InsightsDB) GetContentFingerprint(ctx context.Context) (string, error
 		SELECT
 			(SELECT COUNT(*) FROM sessions) || ':' ||
 			(SELECT COUNT(*) FROM skill_signals) || ':' ||
+			(SELECT COUNT(*) FROM review_rule_signals) || ':' ||
 			(SELECT COUNT(*) FROM tool_calls WHERE tool_name = 'Skill') || ':' ||
 			(SELECT COUNT(*) FROM sessions WHERE has_facets = 1)
 	`).Scan(&fingerprint)
@@ -171,7 +173,7 @@ func insertSessionRow(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO sessions (
 			checkpoint_id, session_id, session_index,
-			agent, model, branch, owner_name, owner_email, created_at,
+			agent, model, branch, owner_name, owner_id, owner_email, created_at,
 			input_tokens, cache_tokens, output_tokens, total_tokens,
 			api_call_count, duration_ms, turn_count,
 			intent, outcome, agent_percentage,
@@ -179,7 +181,7 @@ func insertSessionRow(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 			score_friction, score_focus, has_summary, has_facets
 		) VALUES (
 			?, ?, ?,
-			?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?,
 			?, ?, ?,
 			?, ?, ?,
@@ -188,7 +190,7 @@ func insertSessionRow(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 		)`,
 		row.CheckpointID, row.SessionID, row.SessionIndex,
 		nullableString(row.Agent), nullableString(row.Model), nullableString(row.Branch),
-		nullableString(row.OwnerName), nullableString(row.OwnerEmail),
+		nullableString(row.OwnerName), nullableString(row.OwnerID), nullableString(row.OwnerEmail),
 		row.CreatedAt.UTC().Format(time.RFC3339),
 		row.InputTokens, row.CacheTokens, row.OutputTokens, row.TotalTokens,
 		row.APICallCount, row.DurationMs, row.TurnCount,
@@ -289,6 +291,16 @@ func insertFacets(ctx context.Context, tx *sql.Tx, row SessionRow) error {
 			return fmt.Errorf("insert skill_signals: %w", err)
 		}
 	}
+	for _, rule := range row.Facets.ReviewDerivedRules {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO review_rule_signals (checkpoint_id, session_index, rule, evidence, source_kind, strength, why_reusable)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			row.CheckpointID, row.SessionIndex, rule.Rule, joinEvidence(rule.Evidence),
+			nullableString(rule.SourceKind), nullableString(rule.Strength), nullableString(rule.WhyReusable),
+		); err != nil {
+			return fmt.Errorf("insert review_rule_signals: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -368,6 +380,7 @@ func (idb *InsightsDB) UpdateSessionFacets(ctx context.Context, row SessionRow) 
 		"missing_context_signals",
 		"failure_loops",
 		"skill_signals",
+		"review_rule_signals",
 	} {
 		if _, err = tx.ExecContext(ctx,
 			"DELETE FROM "+table+" WHERE checkpoint_id = ? AND session_index = ?", //nolint:gosec // table name is hardcoded
@@ -408,6 +421,7 @@ func isEmptyFacets(v facets.SessionFacets) bool {
 		len(v.MissingContext) == 0 &&
 		len(v.FailureLoops) == 0 &&
 		len(v.SkillSignals) == 0 &&
+		len(v.ReviewDerivedRules) == 0 &&
 		len(v.RepoGotchas) == 0 &&
 		len(v.WorkflowGaps) == 0
 }

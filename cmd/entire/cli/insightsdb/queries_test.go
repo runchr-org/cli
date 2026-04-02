@@ -262,6 +262,15 @@ func TestQueryLastNSessions_LoadsStructuredFacets(t *testing.T) {
 		MissingContext: []facets.MissingContextSignal{
 			{Item: "Repo requires canary after prompt changes", Evidence: []string{"Vogon parser mismatch"}},
 		},
+		ReviewDerivedRules: []facets.ReviewDerivedRule{
+			{
+				Rule:        "Prefer package-private helpers unless a shared API is required",
+				Evidence:    []string{"Review comment asked to avoid exporting a test-only helper"},
+				SourceKind:  "pr_comment",
+				Strength:    "strong",
+				WhyReusable: "This is a recurring org style preference rather than a one-off file fix.",
+			},
+		},
 	}
 	require.NoError(t, db.InsertSession(ctx, row))
 
@@ -273,4 +282,7 @@ func TestQueryLastNSessions_LoadsStructuredFacets(t *testing.T) {
 	assert.Equal(t, "Run tests before committing", sessions[0].Facets.RepeatedUserInstructions[0].Instruction)
 	require.Len(t, sessions[0].Facets.MissingContext, 1)
 	assert.Equal(t, "Repo requires canary after prompt changes", sessions[0].Facets.MissingContext[0].Item)
+	require.Len(t, sessions[0].Facets.ReviewDerivedRules, 1)
+	assert.Equal(t, "Prefer package-private helpers unless a shared API is required", sessions[0].Facets.ReviewDerivedRules[0].Rule)
+	assert.Equal(t, "pr_comment", sessions[0].Facets.ReviewDerivedRules[0].SourceKind)
 }

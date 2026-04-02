@@ -48,6 +48,7 @@ func TestOpen_CreatesAllTables(t *testing.T) {
 		"files_touched",
 		"friction",
 		"learnings",
+		"review_rule_signals",
 		"suggestions",
 	}
 	for _, table := range expected {

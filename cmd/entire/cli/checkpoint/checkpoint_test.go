@@ -248,6 +248,7 @@ func TestWriteCommitted_OwnerFieldsPersisted(t *testing.T) {
 		AuthorName:   "Condense Author",
 		AuthorEmail:  "condense@example.com",
 		OwnerName:    "Session Owner",
+		OwnerID:      "alishakawaguchi",
 		OwnerEmail:   "owner@example.com",
 	})
 	require.NoError(t, err)
@@ -271,6 +272,7 @@ func TestWriteCommitted_OwnerFieldsPersisted(t *testing.T) {
 	var sessionMetadata CommittedMetadata
 	require.NoError(t, json.Unmarshal([]byte(sessionContent), &sessionMetadata))
 	require.Equal(t, "Session Owner", sessionMetadata.OwnerName)
+	require.Equal(t, "alishakawaguchi", sessionMetadata.OwnerID)
 	require.Equal(t, "owner@example.com", sessionMetadata.OwnerEmail)
 }
 

@@ -86,6 +86,8 @@ type generateRecord struct {
 	Kind             Kind     `json:"kind"`
 	Title            string   `json:"title"`
 	Body             string   `json:"body"`
+	SkillName        string   `json:"skill_name,omitempty"`
+	SkillPath        string   `json:"skill_path,omitempty"`
 	Why              string   `json:"why"`
 	Evidence         []string `json:"evidence"`
 	SourceSessionIDs []string `json:"source_session_ids"`
@@ -164,6 +166,8 @@ func buildGeneratedRecordsDetailed(resp generateResponse, input GenerateInput, n
 			Kind:             kind,
 			Title:            title,
 			Body:             body,
+			SkillName:        strings.TrimSpace(item.SkillName),
+			SkillPath:        strings.TrimSpace(item.SkillPath),
 			Why:              strings.TrimSpace(item.Why),
 			Evidence:         trimSlice(item.Evidence, 3),
 			SourceSessionIDs: trimSlice(item.SourceSessionIDs, input.SourceWindow),
@@ -174,6 +178,10 @@ func buildGeneratedRecordsDetailed(resp generateResponse, input GenerateInput, n
 			Fingerprint:      FingerprintForRecord(kind, title, body),
 			CreatedAt:        now,
 			UpdatedAt:        now,
+		}
+		if !passesReviewDerivedGate(record, input.Analysis) {
+			stats.FilteredGenericCount++
+			continue
 		}
 
 		key := normalizedGeneratedCandidateKey(kind, title, body)
@@ -246,6 +254,18 @@ func BuildPrompt(input GenerateInput) string {
 			fmt.Fprintf(&sb, "  friction: %q\n", friction)
 		}
 	}
+	for _, rule := range input.Analysis.ReviewDerivedRules {
+		fmt.Fprintf(&sb, "review_derived_rule: %s (count=%d strong_singleton=%t)\n", rule.Rule, rule.Count, rule.Strong)
+		if rule.WhyReusable != "" {
+			fmt.Fprintf(&sb, "  why_reusable: %s\n", rule.WhyReusable)
+		}
+		for _, sourceKind := range trimSlice(rule.SourceKinds, 3) {
+			fmt.Fprintf(&sb, "  source_kind: %s\n", sourceKind)
+		}
+		for _, evidence := range trimSlice(rule.Evidence, 3) {
+			fmt.Fprintf(&sb, "  evidence: %q\n", evidence)
+		}
+	}
 	for _, learning := range trimSlice(input.Analysis.RepoLearnings, 5) {
 		fmt.Fprintf(&sb, "repo_learning: %s\n", learning)
 	}
@@ -278,6 +298,8 @@ func BuildPrompt(input GenerateInput) string {
     "kind": "repo_rule|workflow_rule|agent_instruction|skill_patch|anti_pattern",
     "title": "short title",
     "body": "one actionable sentence",
+    "skill_name": "required for skill_patch, omit otherwise",
+    "skill_path": "optional concrete SKILL.md path for skill_patch",
 	    "why": "why this memory matters for later sessions",
 	    "evidence": ["short quote"],
 	    "source_session_ids": ["session-id"],
@@ -289,7 +311,11 @@ func BuildPrompt(input GenerateInput) string {
 Guidelines:
 - Distill stable repo-specific lessons, not generic coding advice
 - Prefer rules the developer would want injected into future Claude sessions
+- derive reusable rules from review fixes when review_derived_rule signals support them
+- Do not restate PR comments or requested-changes text verbatim
+- Only use review-derived rules when they are repeated or flagged as a strong singleton org preference/anti-pattern
 - Convert skill-related friction into skill_patch memories when appropriate
+- When kind is skill_patch, include the concrete skill_name and skill_path when known
 - Avoid duplicates and avoid one-off incidents without repeated evidence
 - Only generate records with confidence "high" or "medium"
 - Set strength to 3, 4, or 5; lower-strength signals are noise
@@ -329,6 +355,61 @@ func normalizeGeneratedText(value string) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(strings.Fields(b.String()), " "))
+}
+
+func passesReviewDerivedGate(record MemoryRecord, analysis improve.PatternAnalysis) bool {
+	if len(analysis.ReviewDerivedRules) == 0 {
+		return true
+	}
+	for _, signal := range analysis.ReviewDerivedRules {
+		if generatedMatchesReviewEvidence(record, signal) {
+			return false
+		}
+	}
+
+	signal, score := bestMatchingReviewDerivedRule(record, analysis.ReviewDerivedRules)
+	if signal == nil || score < 0.50 {
+		return true
+	}
+	return signal.Count >= 2 || signal.Strong
+}
+
+func bestMatchingReviewDerivedRule(record MemoryRecord, signals []improve.ReviewDerivedRuleSignal) (*improve.ReviewDerivedRuleSignal, float64) {
+	bestScore := 0.0
+	var best *improve.ReviewDerivedRuleSignal
+	for i := range signals {
+		score := logicalRuleSimilarity(
+			MemoryRecord{Title: record.Title, Body: record.Body},
+			MemoryRecord{Title: signals[i].Rule},
+		)
+		if score > bestScore {
+			bestScore = score
+			best = &signals[i]
+		}
+	}
+	return best, bestScore
+}
+
+func generatedMatchesReviewEvidence(record MemoryRecord, signal improve.ReviewDerivedRuleSignal) bool {
+	title := normalizeGeneratedText(record.Title)
+	body := normalizeGeneratedText(record.Body)
+	combined := normalizeGeneratedText(record.Title + " " + record.Body)
+	for _, evidence := range signal.Evidence {
+		normalizedEvidence := normalizeGeneratedText(evidence)
+		if normalizedEvidence == "" {
+			continue
+		}
+		if normalizedEvidence == title || normalizedEvidence == body || normalizedEvidence == combined {
+			return true
+		}
+		if strings.Contains(body, normalizedEvidence) || strings.Contains(combined, normalizedEvidence) {
+			return true
+		}
+		if strings.Contains(normalizedEvidence, body) || strings.Contains(normalizedEvidence, combined) {
+			return true
+		}
+	}
+	return false
 }
 
 func isGenericGeneratedCandidate(title, body string) bool {

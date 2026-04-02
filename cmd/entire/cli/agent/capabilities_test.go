@@ -86,6 +86,9 @@ func (m *mockFullAgent) GenerateText(context.Context, string, string) (string, e
 // HookResponseWriter
 func (m *mockFullAgent) WriteHookResponse(string) error { return nil }
 
+// HookContextWriter
+func (m *mockFullAgent) WriteHookResponseWithContext(string, string) error { return nil }
+
 // SubagentAwareExtractor
 func (m *mockFullAgent) ExtractAllModifiedFiles([]byte, int, string) ([]string, error) {
 	return nil, nil
@@ -294,6 +297,51 @@ func TestAsHookResponseWriter(t *testing.T) {
 		}
 	})
 }
+
+func TestAsHookContextWriter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("not implemented", func(t *testing.T) {
+		t.Parallel()
+		_, ok := AsHookContextWriter(&mockBaseAgent{})
+		if ok {
+			t.Error("expected false")
+		}
+	})
+
+	t.Run("builtin agent", func(t *testing.T) {
+		t.Parallel()
+		ag := &mockHookResponseAgent{}
+		hcw, ok := AsHookContextWriter(ag)
+		if !ok || hcw == nil {
+			t.Error("expected true for built-in agent implementing HookContextWriter")
+		}
+	})
+
+	t.Run("declared true", func(t *testing.T) {
+		t.Parallel()
+		ag := &mockFullAgent{caps: DeclaredCaps{HookContextWriter: true}}
+		hcw, ok := AsHookContextWriter(ag)
+		if !ok || hcw == nil {
+			t.Error("expected true")
+		}
+	})
+
+	t.Run("declared false", func(t *testing.T) {
+		t.Parallel()
+		ag := &mockFullAgent{caps: DeclaredCaps{HookContextWriter: false}}
+		_, ok := AsHookContextWriter(ag)
+		if ok {
+			t.Error("expected false")
+		}
+	})
+}
+
+type mockHookResponseAgent struct {
+	mockBaseAgent
+}
+
+func (m *mockHookResponseAgent) WriteHookResponseWithContext(string, string) error { return nil }
 
 func TestAsSubagentAwareExtractor(t *testing.T) {
 	t.Parallel()

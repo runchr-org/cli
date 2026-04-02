@@ -42,11 +42,11 @@ func (idb *InsightsDB) QueryByBranch(ctx context.Context, branch string, limit i
 	)
 }
 
-// QueryByOwnerEmail returns sessions filtered by owner email, most recent first.
-func (idb *InsightsDB) QueryByOwnerEmail(ctx context.Context, ownerEmail string, limit int) ([]SessionRow, error) {
+// QueryByOwnerID returns sessions filtered by owner ID, most recent first.
+func (idb *InsightsDB) QueryByOwnerID(ctx context.Context, ownerID string, limit int) ([]SessionRow, error) {
 	return idb.querySessions(ctx,
-		"SELECT "+sessionColumns+" FROM sessions WHERE owner_email = ? ORDER BY created_at DESC LIMIT ?",
-		ownerEmail, limit,
+		"SELECT "+sessionColumns+" FROM sessions WHERE owner_id = ? ORDER BY created_at DESC LIMIT ?",
+		ownerID, limit,
 	)
 }
 
@@ -119,7 +119,7 @@ func (idb *InsightsDB) QuerySessionsWithFriction(ctx context.Context, pattern st
 // sessionColumns is the ordered column list for SELECT queries on the sessions table.
 const sessionColumns = `
 	checkpoint_id, session_id, session_index,
-	agent, model, branch, owner_name, owner_email, created_at,
+	agent, model, branch, owner_name, owner_id, owner_email, created_at,
 	input_tokens, cache_tokens, output_tokens, total_tokens,
 	api_call_count, duration_ms, turn_count,
 	intent, outcome, agent_percentage,
@@ -159,12 +159,12 @@ func (idb *InsightsDB) querySessions(ctx context.Context, query string, args ...
 func scanSession(rows *sql.Rows) (SessionRow, error) {
 	var row SessionRow
 	var createdAt string
-	var agent, model, branch, ownerName, ownerEmail, intent, outcome sql.NullString
+	var agent, model, branch, ownerName, ownerID, ownerEmail, intent, outcome sql.NullString
 	var hasSummary, hasFacets int
 
 	err := rows.Scan(
 		&row.CheckpointID, &row.SessionID, &row.SessionIndex,
-		&agent, &model, &branch, &ownerName, &ownerEmail, &createdAt,
+		&agent, &model, &branch, &ownerName, &ownerID, &ownerEmail, &createdAt,
 		&row.InputTokens, &row.CacheTokens, &row.OutputTokens, &row.TotalTokens,
 		&row.APICallCount, &row.DurationMs, &row.TurnCount,
 		&intent, &outcome, &row.AgentPct,
@@ -179,6 +179,7 @@ func scanSession(rows *sql.Rows) (SessionRow, error) {
 	row.Model = model.String
 	row.Branch = branch.String
 	row.OwnerName = ownerName.String
+	row.OwnerID = ownerID.String
 	row.OwnerEmail = ownerEmail.String
 	row.Intent = intent.String
 	row.Outcome = outcome.String
@@ -342,6 +343,10 @@ func (idb *InsightsDB) loadFacets(ctx context.Context, checkpointID string, sess
 	if err != nil {
 		return result, err
 	}
+	result.ReviewDerivedRules, err = idb.loadReviewDerivedRules(ctx, checkpointID, sessionIndex)
+	if err != nil {
+		return result, err
+	}
 	return result, nil
 }
 
@@ -461,6 +466,38 @@ func (idb *InsightsDB) loadSkillSignals(ctx context.Context, checkpointID string
 	}
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate skill_signals: %w", err)
+	}
+	return values, nil
+}
+
+func (idb *InsightsDB) loadReviewDerivedRules(ctx context.Context, checkpointID string, sessionIndex int) ([]facets.ReviewDerivedRule, error) {
+	rows, err := idb.db.QueryContext(ctx,
+		`SELECT rule, evidence, source_kind, strength, why_reusable FROM review_rule_signals
+		 WHERE checkpoint_id = ? AND session_index = ?`,
+		checkpointID, sessionIndex,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load review_rule_signals: %w", err)
+	}
+	defer rows.Close()
+
+	var values []facets.ReviewDerivedRule
+	for rows.Next() {
+		var rule string
+		var evidence, sourceKind, strength, whyReusable sql.NullString
+		if err = rows.Scan(&rule, &evidence, &sourceKind, &strength, &whyReusable); err != nil {
+			return nil, fmt.Errorf("scan review_rule_signal: %w", err)
+		}
+		values = append(values, facets.ReviewDerivedRule{
+			Rule:        rule,
+			Evidence:    splitEvidence(evidence.String),
+			SourceKind:  sourceKind.String,
+			Strength:    strength.String,
+			WhyReusable: whyReusable.String,
+		})
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate review_rule_signals: %w", err)
 	}
 	return values, nil
 }
@@ -618,13 +655,13 @@ func (idb *InsightsDB) QuerySkillToolCallSessions(ctx context.Context) ([]SkillT
 	return results, nil
 }
 
-// HasOwnerData returns true if any session has a non-empty owner_email.
-func (idb *InsightsDB) HasOwnerData(ctx context.Context) (bool, error) {
+// HasOwnerIDData returns true if any session has a non-empty owner_id.
+func (idb *InsightsDB) HasOwnerIDData(ctx context.Context) (bool, error) {
 	var count int
 	err := idb.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM (SELECT 1 FROM sessions WHERE owner_email != '' LIMIT 1)`).Scan(&count)
+		`SELECT COUNT(*) FROM (SELECT 1 FROM sessions WHERE owner_id != '' LIMIT 1)`).Scan(&count)
 	if err != nil {
-		return false, fmt.Errorf("check owner data: %w", err)
+		return false, fmt.Errorf("check owner ID data: %w", err)
 	}
 	return count > 0, nil
 }

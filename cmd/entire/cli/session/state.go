@@ -140,8 +140,10 @@ type State struct {
 	ModelName string `json:"model_name,omitempty"`
 
 	// OwnerName and OwnerEmail capture the git identity active when the session started.
+	// OwnerID is the canonical personal identifier used for memory-loop personal scope.
 	// These fields are used for durable session attribution in shared repos/worktrees.
 	OwnerName  string `json:"owner_name,omitempty"`
+	OwnerID    string `json:"owner_id,omitempty"`
 	OwnerEmail string `json:"owner_email,omitempty"`
 
 	// Token usage tracking (accumulated across all checkpoints in this session)

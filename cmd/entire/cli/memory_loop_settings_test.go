@@ -79,6 +79,26 @@ func TestLoadEntireSettings_MemoryLoopModeAndPolicy(t *testing.T) {
 	require.Equal(t, 7, cfg.MaxInjected)
 }
 
+func TestLoadEntireSettings_MemoryLoopDebug(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, settings.EntireSettingsFile), []byte(`{
+  "enabled": true,
+  "memory_loop": {
+    "mode": "manual",
+    "debug": true
+  }
+}`), 0o644))
+	t.Chdir(tmpDir)
+
+	loaded, err := LoadEntireSettings(context.Background())
+	require.NoError(t, err)
+	cfg := loaded.GetMemoryLoopConfig()
+	require.Equal(t, "manual", cfg.Mode)
+	require.True(t, cfg.Debug)
+}
+
 func TestLoadEntireSettings_MemoryLoopExplicitModeOverridesLegacyEnabled(t *testing.T) {
 	tmpDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755))
@@ -166,4 +186,23 @@ func TestLoadEntireSettings_MemoryLoopDefaultsMaxInjectedToTwo(t *testing.T) {
 
 	cfg := loaded.GetMemoryLoopConfig()
 	require.Equal(t, 2, cfg.MaxInjected)
+}
+
+func TestLoadEntireSettings_MemoryLoopIgnoresLegacyOwnerID(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, settings.EntireSettingsFile), []byte(`{
+  "enabled": true,
+  "memory_loop": {
+    "mode": "manual",
+    "owner_id": "alishakawaguchi"
+  }
+}`), 0o644))
+	t.Chdir(tmpDir)
+
+	loaded, err := LoadEntireSettings(context.Background())
+	require.NoError(t, err)
+	cfg := loaded.GetMemoryLoopConfig()
+	require.Equal(t, "manual", cfg.Mode)
 }

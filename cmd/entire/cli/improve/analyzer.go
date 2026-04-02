@@ -84,6 +84,15 @@ type skillOpportunityAccumulator struct {
 	sessions           map[string]struct{}
 }
 
+type reviewRuleAccumulator struct {
+	count       int
+	strong      bool
+	evidence    []string
+	sourceKinds []string
+	whyReusable string
+	sessions    map[string]struct{}
+}
+
 // AnalyzePatterns extracts recurring patterns from session summary data.
 // This is the "index phase" — it works on data already in memory from SQLite.
 func AnalyzePatterns(summaries []SessionSummaryData) PatternAnalysis {
@@ -97,6 +106,7 @@ func AnalyzePatterns(summaries []SessionSummaryData) PatternAnalysis {
 	missingContextSignals := make(map[string]*recurringSignalAccumulator)
 	failureLoopSignals := make(map[string]*recurringSignalAccumulator)
 	skillSignals := make(map[string]*skillOpportunityAccumulator)
+	reviewRules := make(map[string]*reviewRuleAccumulator)
 
 	for _, s := range summaries {
 		for _, f := range s.Friction {
@@ -158,6 +168,31 @@ func AnalyzePatterns(summaries []SessionSummaryData) PatternAnalysis {
 				acc.sessions[s.CheckpointID] = struct{}{}
 			}
 		}
+		for _, rule := range s.Facets.ReviewDerivedRules {
+			key := rule.Rule
+			if key == "" {
+				continue
+			}
+			acc := reviewRules[key]
+			if acc == nil {
+				acc = &reviewRuleAccumulator{sessions: make(map[string]struct{})}
+				reviewRules[key] = acc
+			}
+			acc.count++
+			if strings.EqualFold(rule.Strength, "strong") {
+				acc.strong = true
+			}
+			acc.evidence = appendLimited(acc.evidence, rule.Evidence, maxFrictionExamples)
+			if rule.SourceKind != "" && !containsString(acc.sourceKinds, rule.SourceKind) {
+				acc.sourceKinds = append(acc.sourceKinds, rule.SourceKind)
+			}
+			if acc.whyReusable == "" {
+				acc.whyReusable = rule.WhyReusable
+			}
+			if s.CheckpointID != "" {
+				acc.sessions[s.CheckpointID] = struct{}{}
+			}
+		}
 	}
 
 	// Build repeated friction list (threshold: 2+ occurrences)
@@ -182,6 +217,7 @@ func AnalyzePatterns(summaries []SessionSummaryData) PatternAnalysis {
 	missingSignals := buildRecurringSignals(missingContextSignals)
 	failureLoops := buildRecurringSignals(failureLoopSignals)
 	skillOpportunities := buildSkillOpportunities(skillSignals)
+	reviewDerivedRules := buildReviewDerivedRules(reviewRules)
 
 	// Deduplicate learnings by scope
 	repoSeen := make(map[string]struct{})
@@ -223,6 +259,7 @@ func AnalyzePatterns(summaries []SessionSummaryData) PatternAnalysis {
 		MissingContextSignals: missingSignals,
 		FailureLoops:          failureLoops,
 		SkillOpportunities:    skillOpportunities,
+		ReviewDerivedRules:    reviewDerivedRules,
 		RepoLearnings:         repoLearnings,
 		WorkflowLearnings:     workflowLearnings,
 		OpenItems:             openItems,
@@ -294,10 +331,35 @@ func buildSkillOpportunities(bySkill map[string]*skillOpportunityAccumulator) []
 	return opportunities
 }
 
+func buildReviewDerivedRules(byRule map[string]*reviewRuleAccumulator) []ReviewDerivedRuleSignal {
+	rules := make([]ReviewDerivedRuleSignal, 0, len(byRule))
+	for rule, acc := range byRule {
+		rules = append(rules, ReviewDerivedRuleSignal{
+			Rule:             rule,
+			Count:            acc.count,
+			Strong:           acc.strong,
+			Evidence:         acc.evidence,
+			SourceKinds:      acc.sourceKinds,
+			WhyReusable:      acc.whyReusable,
+			AffectedSessions: sessionIDs(acc.sessions),
+		})
+	}
+	return rules
+}
+
 func sessionIDs(values map[string]struct{}) []string {
 	out := make([]string, 0, len(values))
 	for id := range values {
 		out = append(out, id)
 	}
 	return out
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

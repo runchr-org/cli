@@ -1,6 +1,7 @@
 package summarytui
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,38 +19,56 @@ func TestRootView_RendersSessionTableColumns(t *testing.T) {
 
 	out := newRootModelForTest().View()
 
-	require.Contains(t, out, "SUMMARY")
-	require.Contains(t, out, "FACETS")
-	require.Contains(t, out, "Claude Code")
-	require.Contains(t, out, "feature/summary-browser")
+	require.Contains(t, out, "TIME")
+	require.Contains(t, out, "AGENT")
+	require.Contains(t, out, "BRANCH")
+	require.Contains(t, out, "TOKENS")
+	// Verify removed columns are not in the table header
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "TIME") && strings.Contains(line, "AGENT") {
+			// This is the header line — verify removed columns are absent
+			require.NotContains(t, line, "SUMMARY")
+			require.NotContains(t, line, "FACETS")
+			require.NotContains(t, line, "TURNS")
+			break
+		}
+	}
+	require.Contains(t, out, "Cursor") // sess-2 on main is visible with Repo filter
+	require.Contains(t, out, "main")   // branch column
+	require.Contains(t, out, "Repo")   // filter chip
 	require.Contains(t, out, "Current Branch")
-	require.Contains(t, out, "Main")
 	require.Contains(t, out, "All")
 	require.Contains(t, out, "Page 1/1")
 	require.Contains(t, out, "enter detail")
 }
 
-func TestNewRootModel_DefaultsToCurrentBranchFilter(t *testing.T) {
+func TestNewRootModel_DefaultsToRepoFilter(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(sampleRowsForTest(), "feature/summary-browser")
+	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil)
 
-	require.Equal(t, filterCurrentBranch, root.filter)
+	require.Equal(t, filterRepo, root.filter)
 	require.Len(t, root.filteredRows, 1)
-	require.Equal(t, "sess-1", root.filteredRows[0].SessionID)
+	require.Equal(t, "sess-2", root.filteredRows[0].SessionID)
 }
 
 func TestRootUpdate_CycleFilterRebuildsVisibleRows(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(sampleRowsForTest(), "feature/summary-browser")
-
-	next, _ := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
-	root = requireRootModel(t, next)
-	require.Equal(t, filterMainBranch, root.filter)
+	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil)
+	// Default is filterRepo — shows only main/master rows
+	require.Equal(t, filterRepo, root.filter)
 	require.Len(t, root.filteredRows, 1)
 	require.Equal(t, "sess-2", root.filteredRows[0].SessionID)
 
+	// First cycle: Repo → Current Branch
+	next, _ := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	root = requireRootModel(t, next)
+	require.Equal(t, filterCurrentBranch, root.filter)
+	require.Len(t, root.filteredRows, 1)
+	require.Equal(t, "sess-1", root.filteredRows[0].SessionID)
+
+	// Second cycle: Current Branch → All
 	next, _ = root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	root = requireRootModel(t, next)
 	require.Equal(t, filterAllBranches, root.filter)
@@ -59,23 +78,23 @@ func TestRootUpdate_CycleFilterRebuildsVisibleRows(t *testing.T) {
 func TestRootUpdate_FilterChangeResetsPaginatorPage(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser")
+	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", nil)
 	root.pageSize = 2
 	root.rebuildFilteredRows()
-	root.paginator.Page = 2
+	root.paginator.Page = 1
 	root.rebuildTable()
 
 	next, _ := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	root = requireRootModel(t, next)
 
 	require.Equal(t, 0, root.paginator.Page)
-	require.Equal(t, filterMainBranch, root.filter)
+	require.Equal(t, filterCurrentBranch, root.filter)
 }
 
 func TestRootUpdate_PageNavigationMovesBetweenFilteredPages(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser")
+	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", nil)
 	root.filter = filterAllBranches
 	root.pageSize = 2
 	root.paginator = paginator.New()
@@ -95,7 +114,7 @@ func TestRootUpdate_PageNavigationMovesBetweenFilteredPages(t *testing.T) {
 func TestRootUpdate_WindowSizeSetsTableDimensions(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(sampleRowsForTest(), "feature/summary-browser")
+	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil)
 
 	next, _ := root.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
 	root = requireRootModel(t, next)
@@ -109,7 +128,9 @@ func TestRootUpdate_WindowSizeSetsTableDimensions(t *testing.T) {
 func TestRootUpdate_WindowSizeExpandsPageSizeBeyondDefault(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(manyCurrentBranchRowsForTest(20), "feature/summary-browser")
+	root := newRootModel(manyCurrentBranchRowsForTest(20), "feature/summary-browser", nil)
+	root.filter = filterCurrentBranch
+	root.rebuildFilteredRows()
 	require.Equal(t, defaultPageSize, root.pageSize)
 
 	next, _ := root.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -122,7 +143,8 @@ func TestRootUpdate_WindowSizeExpandsPageSizeBeyondDefault(t *testing.T) {
 func TestRootUpdate_WindowSizePreservesSelectedSessionWhenPossible(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(manyCurrentBranchRowsForTest(12), "feature/summary-browser")
+	root := newRootModel(manyCurrentBranchRowsForTest(12), "feature/summary-browser", nil)
+	root.filter = filterCurrentBranch
 	root.pageSize = 3
 	root.rebuildFilteredRows()
 	root.nextPage()
@@ -153,14 +175,15 @@ func TestRootUpdate_EnterOpensSessionDetailPage(t *testing.T) {
 	updated := requireRootModel(t, next)
 
 	require.NotNil(t, updated.detailPage)
-	require.Equal(t, "sess-1", updated.detailPage.row.SessionID)
+	// Default filter is Repo (main), so first visible row is sess-2
+	require.Equal(t, "sess-2", updated.detailPage.row.SessionID)
 }
 
 func TestRootUpdate_EscapeClosesSessionDetailPage(t *testing.T) {
 	t.Parallel()
 
 	root := newRootModelForTest()
-	root.detailPage = newDetailModel(root.styles, sampleRowsForTest()[0])
+	root.detailPage = newDetailModel(root.styles, sampleRowsForTest()[0], false)
 
 	next, cmd := root.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	require.NotNil(t, cmd)
@@ -176,7 +199,7 @@ func TestRootUpdate_EscapeClosesSessionDetailPage(t *testing.T) {
 func TestDetailView_RendersSummaryAndFacets(t *testing.T) {
 	t.Parallel()
 
-	detail := newDetailModel(newStyles(), sampleRowsForTest()[0])
+	detail := newDetailModel(newStyles(), sampleRowsForTest()[0], false)
 	require.Contains(t, detail.view(), "SESSION DETAIL")
 
 	view := detail.renderContent()
@@ -199,10 +222,68 @@ func TestDetailView_EmptyStatesAreExplicit(t *testing.T) {
 	row.Learnings = nil
 	row.Facets = facets.SessionFacets{}
 
-	view := newDetailModel(newStyles(), row).renderContent()
+	view := newDetailModel(newStyles(), row, false).renderContent()
 
 	require.Contains(t, view, "No summary cached")
 	require.Contains(t, view, "No facets cached")
+}
+
+func TestRootUpdate_QKeyQuitsFromTable(t *testing.T) {
+	t.Parallel()
+
+	root := newRootModelForTest()
+
+	_, cmd := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	require.NotNil(t, cmd)
+	// tea.Quit returns a special quit message
+	msg := cmd()
+	require.IsType(t, tea.QuitMsg{}, msg)
+}
+
+func TestRootUpdate_QKeyQuitsFromDetail(t *testing.T) {
+	t.Parallel()
+
+	root := newRootModelForTest()
+	root.detailPage = newDetailModel(root.styles, sampleRowsForTest()[0], false)
+
+	_, cmd := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	require.NotNil(t, cmd)
+	msg := cmd()
+	require.IsType(t, tea.QuitMsg{}, msg)
+}
+
+func TestRootUpdate_GenerateFromDetail(t *testing.T) {
+	t.Parallel()
+
+	generateCalled := false
+	generateFn := func(_ context.Context, row insightsdb.SessionRow) (insightsdb.SessionRow, error) {
+		generateCalled = true
+		row.HasSummary = true
+		row.Intent = "Generated intent"
+		return row, nil
+	}
+
+	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", generateFn)
+	root.filter = filterAllBranches
+	root.rebuildFilteredRows()
+	root.detailPage = newDetailModel(root.styles, sampleRowsForTest()[0], true)
+
+	next, cmd := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	root = requireRootModel(t, next)
+
+	require.True(t, root.generating)
+	require.NotNil(t, cmd)
+
+	// Execute the command and feed result back
+	msg := cmd()
+	next, _ = root.Update(msg)
+	root = requireRootModel(t, next)
+
+	require.True(t, generateCalled)
+	require.False(t, root.generating)
+	require.NotNil(t, root.detailPage)
+	require.Equal(t, "Generated intent", root.detailPage.row.Intent)
+	require.Equal(t, "Generated", root.detailPage.status)
 }
 
 func TestRootView_RespectsWidth(t *testing.T) {
@@ -217,7 +298,7 @@ func TestRootView_RespectsWidth(t *testing.T) {
 }
 
 func newRootModelForTest() rootModel {
-	m := newRootModel(sampleRowsForTest(), "feature/summary-browser")
+	m := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil)
 	m.width = 100
 	m.height = 30
 	m.table.SetWidth(100)

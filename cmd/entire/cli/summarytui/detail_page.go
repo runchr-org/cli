@@ -2,6 +2,7 @@ package summarytui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -11,17 +12,20 @@ import (
 
 //nolint:recvcheck // bubbletea-style model mixes pointer sizing with value update/view methods
 type detailModel struct {
-	styles   styles
-	row      insightsdb.SessionRow
-	viewport viewport.Model
-	width    int
-	height   int
+	styles      styles
+	row         insightsdb.SessionRow
+	viewport    viewport.Model
+	width       int
+	height      int
+	canGenerate bool   // true when a generate function is available
+	status      string // "Generating...", "Generated", "Error: ...", or ""
 }
 
-func newDetailModel(styles styles, row insightsdb.SessionRow) *detailModel {
+func newDetailModel(styles styles, row insightsdb.SessionRow, canGenerate bool) *detailModel {
 	m := &detailModel{
-		styles: styles,
-		row:    row,
+		styles:      styles,
+		row:         row,
+		canGenerate: canGenerate,
 	}
 	m.setSize(100, 20)
 	return m
@@ -29,9 +33,25 @@ func newDetailModel(styles styles, row insightsdb.SessionRow) *detailModel {
 
 func (m detailModel) view() string {
 	var b strings.Builder
-	b.WriteString("SESSION DETAIL\n\n")
+	b.WriteString(m.styles.render(m.styles.appTitle, "SESSION DETAIL"))
+	b.WriteString("\n\n")
 	b.WriteString(m.viewport.View())
-	b.WriteString("\n\nEsc returns to the session table")
+	b.WriteString("\n\n")
+
+	if m.status != "" {
+		style := m.styles.chipActive
+		if strings.HasPrefix(m.status, "Error:") {
+			style = m.styles.errorText
+		}
+		b.WriteString(m.styles.render(style, m.status))
+		b.WriteString("  ")
+	}
+
+	help := "j/k scroll  esc back  q quit"
+	if m.canGenerate {
+		help = "j/k scroll  g generate  esc back  q quit"
+	}
+	b.WriteString(m.styles.render(m.styles.statusBar, help))
 	return b.String()
 }
 
@@ -51,63 +71,97 @@ func (m *detailModel) setSize(width, height int) {
 func (m detailModel) renderContent() string {
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "Agent: %s\n", m.row.Agent)
+	// Metadata section
+	m.writeField(&b, "Agent", m.row.Agent)
 	if m.row.OwnerID != "" {
-		fmt.Fprintf(&b, "Author: %s\n", m.row.OwnerID)
+		m.writeField(&b, "Author", m.row.OwnerID)
 	}
 	if m.row.OwnerName != "" {
-		fmt.Fprintf(&b, "Author Name: %s\n", m.row.OwnerName)
+		m.writeField(&b, "Author Name", m.row.OwnerName)
 	}
 	if m.row.OwnerEmail != "" {
-		fmt.Fprintf(&b, "Author Email: %s\n", m.row.OwnerEmail)
+		m.writeField(&b, "Author Email", m.row.OwnerEmail)
 	}
 	if m.row.Model != "" {
-		fmt.Fprintf(&b, "Model: %s\n", m.row.Model)
+		m.writeField(&b, "Model", m.row.Model)
 	}
-	fmt.Fprintf(&b, "Session: %s\n", m.row.SessionID)
+	m.writeField(&b, "Session", m.row.SessionID)
 	if m.row.Branch != "" {
-		fmt.Fprintf(&b, "Branch: %s\n", m.row.Branch)
+		m.writeField(&b, "Branch", m.row.Branch)
 	}
-	fmt.Fprintf(&b, "Checkpoint: %s\n", m.row.CheckpointID)
-	fmt.Fprintf(&b, "Created: %s\n", m.row.CreatedAt.Format("2006-01-02 15:04"))
-	fmt.Fprintf(&b, "Tokens: %d\n", m.row.TotalTokens)
-	fmt.Fprintf(&b, "Turns: %d\n\n", m.row.TurnCount)
+	m.writeField(&b, "Checkpoint", m.row.CheckpointID)
+	m.writeField(&b, "Created", m.row.CreatedAt.Format("2006-01-02 15:04"))
+	m.writeField(&b, "Tokens", strconv.Itoa(m.row.TotalTokens))
+	m.writeField(&b, "Turns", strconv.Itoa(m.row.TurnCount))
 
-	b.WriteString("Summary\n")
+	b.WriteString("\n")
+	m.writeSectionHeader(&b, "Summary")
 	b.WriteString(m.renderSummary())
 	b.WriteString("\n\n")
-	b.WriteString("Facets\n")
+	m.writeSectionHeader(&b, "Facets")
 	b.WriteString(m.renderFacets())
 	return b.String()
 }
 
+func (m detailModel) writeField(b *strings.Builder, label, value string) {
+	b.WriteString(m.styles.render(m.styles.detailLabel, label))
+	b.WriteString(m.styles.render(m.styles.detailValue, value))
+	b.WriteString("\n")
+}
+
+func (m detailModel) writeSectionHeader(b *strings.Builder, title string) {
+	header := fmt.Sprintf("─── %s ", title)
+	header += strings.Repeat("─", max(0, 40-len(header)))
+	b.WriteString(m.styles.render(m.styles.sectionHeader, header))
+	b.WriteString("\n\n")
+}
+
+func (m detailModel) writeBullet(b *strings.Builder, text string) {
+	b.WriteString("  ")
+	b.WriteString(m.styles.render(m.styles.bullet, "•"))
+	b.WriteString(" ")
+	b.WriteString(text)
+	b.WriteString("\n")
+}
+
+func (m detailModel) writeEmptyState(b *strings.Builder, text string) {
+	b.WriteString("  ")
+	b.WriteString(m.styles.render(m.styles.emptyState, text))
+	b.WriteString("\n")
+}
+
 func (m detailModel) renderSummary() string {
 	if !m.row.HasSummary {
-		return "No summary cached"
+		return m.styles.render(m.styles.emptyState, "  No summary cached")
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Intent: %s\n", fallback(m.row.Intent, "No summary cached"))
-	fmt.Fprintf(&b, "Outcome: %s\n", fallback(m.row.Outcome, "No summary cached"))
-	b.WriteString("Friction:\n")
+	m.writeField(&b, "Intent", fallback(m.row.Intent, "—"))
+	m.writeField(&b, "Outcome", fallback(m.row.Outcome, "—"))
+	b.WriteString("\n")
+
+	b.WriteString(m.styles.render(m.styles.detailLabel, "Friction"))
+	b.WriteString("\n")
 	if len(m.row.Friction) == 0 {
-		b.WriteString("  No friction recorded\n")
+		m.writeEmptyState(&b, "No friction recorded")
 	} else {
 		for _, item := range m.row.Friction {
-			fmt.Fprintf(&b, "  - %s\n", item)
+			m.writeBullet(&b, item)
 		}
 	}
 
-	b.WriteString("Learnings:\n")
+	b.WriteString("\n")
+	b.WriteString(m.styles.render(m.styles.detailLabel, "Learnings"))
+	b.WriteString("\n")
 	if len(m.row.Learnings) == 0 {
-		b.WriteString("  No learnings recorded\n")
+		m.writeEmptyState(&b, "No learnings recorded")
 	} else {
 		for _, item := range m.row.Learnings {
 			if item.Path != "" {
-				fmt.Fprintf(&b, "  - [%s] %s (%s)\n", item.Scope, item.Finding, item.Path)
+				m.writeBullet(&b, fmt.Sprintf("[%s] %s (%s)", item.Scope, item.Finding, item.Path))
 				continue
 			}
-			fmt.Fprintf(&b, "  - [%s] %s\n", item.Scope, item.Finding)
+			m.writeBullet(&b, fmt.Sprintf("[%s] %s", item.Scope, item.Finding))
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
@@ -115,74 +169,65 @@ func (m detailModel) renderSummary() string {
 
 func (m detailModel) renderFacets() string {
 	if !m.row.HasFacets {
-		return "No facets cached"
+		return m.styles.render(m.styles.emptyState, "  No facets cached")
 	}
 
 	var b strings.Builder
-	b.WriteString("Repeated Instructions:\n")
-	if len(m.row.Facets.RepeatedUserInstructions) == 0 {
-		b.WriteString("  None\n")
-	} else {
+
+	m.writeFacetSection(&b, "Repeated Instructions", len(m.row.Facets.RepeatedUserInstructions), func() {
 		for _, item := range m.row.Facets.RepeatedUserInstructions {
-			fmt.Fprintf(&b, "  - %s\n", item.Instruction)
+			m.writeBullet(&b, item.Instruction)
 		}
-	}
+	})
 
-	b.WriteString("Missing Context:\n")
-	if len(m.row.Facets.MissingContext) == 0 {
-		b.WriteString("  None\n")
-	} else {
+	m.writeFacetSection(&b, "Missing Context", len(m.row.Facets.MissingContext), func() {
 		for _, item := range m.row.Facets.MissingContext {
-			fmt.Fprintf(&b, "  - %s\n", item.Item)
+			m.writeBullet(&b, item.Item)
 		}
-	}
+	})
 
-	b.WriteString("Failure Loops:\n")
-	if len(m.row.Facets.FailureLoops) == 0 {
-		b.WriteString("  None\n")
-	} else {
+	m.writeFacetSection(&b, "Failure Loops", len(m.row.Facets.FailureLoops), func() {
 		for _, item := range m.row.Facets.FailureLoops {
-			fmt.Fprintf(&b, "  - %s (%d)\n", item.Description, item.Count)
+			m.writeBullet(&b, fmt.Sprintf("%s (%d)", item.Description, item.Count))
 		}
-	}
+	})
 
-	b.WriteString("Skill Signals:\n")
-	if len(m.row.Facets.SkillSignals) == 0 {
-		b.WriteString("  None\n")
-	} else {
+	m.writeFacetSection(&b, "Skill Signals", len(m.row.Facets.SkillSignals), func() {
 		for _, item := range m.row.Facets.SkillSignals {
-			fmt.Fprintf(&b, "  - %s\n", item.SkillName)
+			m.writeBullet(&b, item.SkillName)
 		}
-	}
+	})
 
-	b.WriteString("Review-Derived Rules:\n")
-	if len(m.row.Facets.ReviewDerivedRules) == 0 {
-		b.WriteString("  None\n")
-	} else {
+	m.writeFacetSection(&b, "Review-Derived Rules", len(m.row.Facets.ReviewDerivedRules), func() {
 		for _, item := range m.row.Facets.ReviewDerivedRules {
-			fmt.Fprintf(&b, "  - %s\n", item.Rule)
+			m.writeBullet(&b, item.Rule)
 		}
-	}
+	})
 
-	b.WriteString("Repo Gotchas:\n")
-	if len(m.row.Facets.RepoGotchas) == 0 {
-		b.WriteString("  None\n")
-	} else {
+	m.writeFacetSection(&b, "Repo Gotchas", len(m.row.Facets.RepoGotchas), func() {
 		for _, item := range m.row.Facets.RepoGotchas {
-			fmt.Fprintf(&b, "  - %s\n", item)
+			m.writeBullet(&b, item)
 		}
-	}
+	})
 
-	b.WriteString("Workflow Gaps:\n")
-	if len(m.row.Facets.WorkflowGaps) == 0 {
-		b.WriteString("  None\n")
-	} else {
+	m.writeFacetSection(&b, "Workflow Gaps", len(m.row.Facets.WorkflowGaps), func() {
 		for _, item := range m.row.Facets.WorkflowGaps {
-			fmt.Fprintf(&b, "  - %s\n", item)
+			m.writeBullet(&b, item)
 		}
-	}
+	})
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m detailModel) writeFacetSection(b *strings.Builder, title string, count int, writeItems func()) {
+	b.WriteString(m.styles.render(m.styles.detailLabel, title))
+	b.WriteString("\n")
+	if count == 0 {
+		m.writeEmptyState(b, "None")
+	} else {
+		writeItems()
+	}
+	b.WriteString("\n")
 }
 
 func fallback(value, defaultValue string) string {

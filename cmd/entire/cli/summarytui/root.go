@@ -17,12 +17,16 @@ import (
 const defaultPageSize = 10
 const rootVerticalChrome = 6
 
+// GenerateFunc generates summary and facets for a single session on demand.
+// Returns the updated session row with populated summary/facet data.
+type GenerateFunc func(ctx context.Context, row insightsdb.SessionRow) (insightsdb.SessionRow, error)
+
 type branchFilter int
 
 const (
-	filterCurrentBranch branchFilter = iota
-	filterMainBranch
-	filterAllBranches
+	filterRepo          branchFilter = iota // default branch (main/master)
+	filterCurrentBranch                     // current working branch
+	filterAllBranches                       // all branches
 )
 
 //nolint:recvcheck // bubbletea pattern: value receiver for interface, pointer receivers for mutation helpers
@@ -39,6 +43,8 @@ type rootModel struct {
 	height        int
 	styles        styles
 	detailPage    *detailModel
+	generateFn    GenerateFunc
+	generating    bool
 }
 
 type openDetailMsg struct {
@@ -47,12 +53,20 @@ type openDetailMsg struct {
 
 type closeDetailMsg struct{}
 
-func Run(ctx context.Context, rows []insightsdb.SessionRow) error {
-	return RunWithCurrentBranch(ctx, rows, "")
+type generateDoneMsg struct {
+	row insightsdb.SessionRow
 }
 
-func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, currentBranch string) error {
-	p := tea.NewProgram(newRootModel(rows, currentBranch), tea.WithAltScreen())
+type generateErrMsg struct {
+	err error
+}
+
+func Run(ctx context.Context, rows []insightsdb.SessionRow) error {
+	return RunWithCurrentBranch(ctx, rows, "", nil)
+}
+
+func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, currentBranch string, generateFn GenerateFunc) error {
+	p := tea.NewProgram(newRootModel(rows, currentBranch, generateFn), tea.WithAltScreen())
 	_, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("run summary TUI: %w", err)
@@ -60,16 +74,13 @@ func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, curre
 	return nil
 }
 
-func newRootModel(rows []insightsdb.SessionRow, currentBranch string) rootModel {
+func newRootModel(rows []insightsdb.SessionRow, currentBranch string, generateFn GenerateFunc) rootModel {
 	columns := []table.Column{
-		{Title: "TIME", Width: 16},
-		{Title: "AGENT", Width: 14},
-		{Title: "BRANCH", Width: 24},
-		{Title: "CHECKPOINT", Width: 12},
-		{Title: "SUMMARY", Width: 8},
-		{Title: "FACETS", Width: 7},
-		{Title: "TOKENS", Width: 8},
-		{Title: "TURNS", Width: 5},
+		{Title: "TIME", Width: 19},
+		{Title: "AGENT", Width: 16},
+		{Title: "BRANCH", Width: 26},
+		{Title: "CHECKPOINT", Width: 15},
+		{Title: "TOKENS", Width: 10},
 	}
 	styles := newStyles()
 	t := table.New(table.WithColumns(columns), table.WithFocused(true))
@@ -80,13 +91,14 @@ func newRootModel(rows []insightsdb.SessionRow, currentBranch string) rootModel 
 		ctx:           context.Background(),
 		rows:          append([]insightsdb.SessionRow(nil), rows...),
 		currentBranch: currentBranch,
-		filter:        filterCurrentBranch,
+		filter:        filterRepo,
 		table:         t,
 		paginator:     p,
 		pageSize:      defaultPageSize,
 		styles:        styles,
 		width:         100,
 		height:        30,
+		generateFn:    generateFn,
 	}
 	m.rebuildFilteredRows()
 	return m
@@ -96,7 +108,7 @@ func (m rootModel) Init() tea.Cmd {
 	return nil
 }
 
-//nolint:ireturn // required by bubbletea Model interface
+//nolint:cyclop,ireturn // required by bubbletea Model interface; state machine has inherent branching
 func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -108,51 +120,104 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if m.detailPage != nil {
-			//nolint:exhaustive // only quit/back keys are handled here; all others delegate to the viewport
-			switch msg.Type {
-			case tea.KeyEsc:
-				return m, func() tea.Msg { return closeDetailMsg{} }
-			case tea.KeyCtrlC:
-				return m, tea.Quit
-			default:
-			}
-			var cmd tea.Cmd
-			*m.detailPage, cmd = m.detailPage.update(msg)
-			return m, cmd
+			return m.updateDetailKeys(msg)
 		}
-
-		switch {
-		case key.Matches(msg, keys.cycleFilter):
-			m.cycleFilter()
-			return m, nil
-		case key.Matches(msg, keys.nextPage):
-			m.nextPage()
-			return m, nil
-		case key.Matches(msg, keys.prevPage):
-			m.prevPage()
-			return m, nil
-		}
-
-		//nolint:exhaustive // only command-specific keys are handled here; all others fall through to the table widget
-		switch msg.Type {
-		case tea.KeyEnter:
-			if row := m.selectedRow(); row != nil {
-				selected := *row
-				return m, func() tea.Msg { return openDetailMsg{row: selected} }
-			}
-		case tea.KeyCtrlC:
-			return m, tea.Quit
-		default:
-		}
+		return m.updateTableKeys(msg)
 
 	case openDetailMsg:
-		m.detailPage = newDetailModel(m.styles, msg.row)
+		m.detailPage = newDetailModel(m.styles, msg.row, m.generateFn != nil)
 		m.detailPage.setSize(m.width, m.height)
 		return m, nil
 
 	case closeDetailMsg:
 		m.detailPage = nil
+		m.generating = false
 		return m, nil
+
+	case generateDoneMsg:
+		m.generating = false
+		m.updateRowData(msg.row)
+		if m.detailPage != nil {
+			m.detailPage.row = msg.row
+			m.detailPage.status = "Generated"
+			m.detailPage.setSize(m.width, m.height) // re-render content
+		}
+		return m, nil
+
+	case generateErrMsg:
+		m.generating = false
+		if m.detailPage != nil {
+			m.detailPage.status = "Error: " + msg.err.Error()
+		}
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.table, cmd = m.table.Update(msg)
+	return m, cmd
+}
+
+//nolint:ireturn // required by bubbletea pattern
+func (m rootModel) updateDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	//nolint:exhaustive // only quit/back/generate keys handled; rest delegates to viewport
+	switch msg.Type {
+	case tea.KeyEsc:
+		return m, func() tea.Msg { return closeDetailMsg{} }
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "q":
+			return m, tea.Quit
+		case "g":
+			if m.generateFn != nil && !m.generating && m.detailPage != nil {
+				m.generating = true
+				m.detailPage.status = "Generating summary and facets..."
+				row := m.detailPage.row
+				ctx := m.ctx
+				fn := m.generateFn
+				return m, func() tea.Msg {
+					updated, err := fn(ctx, row)
+					if err != nil {
+						return generateErrMsg{err: err}
+					}
+					return generateDoneMsg{row: updated}
+				}
+			}
+		}
+	default:
+	}
+	var cmd tea.Cmd
+	*m.detailPage, cmd = m.detailPage.update(msg)
+	return m, cmd
+}
+
+//nolint:ireturn // required by bubbletea pattern
+func (m rootModel) updateTableKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, keys.cycleFilter):
+		m.cycleFilter()
+		return m, nil
+	case key.Matches(msg, keys.nextPage):
+		m.nextPage()
+		return m, nil
+	case key.Matches(msg, keys.prevPage):
+		m.prevPage()
+		return m, nil
+	case key.Matches(msg, keys.quit):
+		return m, tea.Quit
+	}
+
+	//nolint:exhaustive // only command-specific keys are handled here; all others fall through to the table widget
+	switch msg.Type {
+	case tea.KeyEnter:
+		if row := m.selectedRow(); row != nil {
+			selected := *row
+			return m, func() tea.Msg { return openDetailMsg{row: selected} }
+		}
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	default:
 	}
 
 	var cmd tea.Cmd
@@ -176,6 +241,22 @@ func (m rootModel) View() string {
 	b.WriteString("\n\n")
 	b.WriteString(m.styles.render(m.styles.statusBar, "j/k navigate  f filter  ←/→ page  enter detail  q quit"))
 	return b.String()
+}
+
+func (m *rootModel) updateRowData(updated insightsdb.SessionRow) {
+	for i, row := range m.rows {
+		if row.SessionID == updated.SessionID {
+			m.rows[i] = updated
+			break
+		}
+	}
+	for i, row := range m.filteredRows {
+		if row.SessionID == updated.SessionID {
+			m.filteredRows[i] = updated
+			break
+		}
+	}
+	m.rebuildTable()
 }
 
 func (m *rootModel) rebuildFilteredRows() {
@@ -207,10 +288,7 @@ func (m *rootModel) rebuildTable() {
 			row.Agent,
 			truncate(row.Branch, 24),
 			checkpoint,
-			statusFlag(row.HasSummary),
-			statusFlag(row.HasFacets),
 			strconv.Itoa(row.TotalTokens),
-			strconv.Itoa(row.TurnCount),
 		})
 	}
 	m.table.SetRows(rows)
@@ -235,7 +313,7 @@ func (m rootModel) selectedRow() *insightsdb.SessionRow {
 func (m rootModel) applyFilter() []insightsdb.SessionRow {
 	filtered := make([]insightsdb.SessionRow, 0, len(m.rows))
 	for _, row := range m.rows {
-		if m.filter == filterMainBranch && row.Branch != "main" {
+		if m.filter == filterRepo && row.Branch != "main" && row.Branch != "master" {
 			continue
 		}
 		if m.filter == filterCurrentBranch && m.currentBranch != "" && row.Branch != m.currentBranch {
@@ -294,8 +372,8 @@ func renderFilterChips(styles styles, active branchFilter) string {
 		filter branchFilter
 		label  string
 	}{
+		{filterRepo, "Repo"},
 		{filterCurrentBranch, "Current Branch"},
-		{filterMainBranch, "Main"},
 		{filterAllBranches, "All"},
 	}
 

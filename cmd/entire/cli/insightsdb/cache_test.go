@@ -101,6 +101,7 @@ func TestInsertSession_BasicFields(t *testing.T) {
 		Model:        "claude-3-5-sonnet",
 		Branch:       "main",
 		OwnerName:    "Test User",
+		OwnerID:      "alishakawaguchi",
 		OwnerEmail:   "test@example.com",
 		CreatedAt:    time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC),
 		InputTokens:  1000,
@@ -130,6 +131,7 @@ func TestInsertSession_BasicFields(t *testing.T) {
 	assert.Equal(t, "claude-3-5-sonnet", got.Model)
 	assert.Equal(t, "main", got.Branch)
 	assert.Equal(t, "Test User", got.OwnerName)
+	assert.Equal(t, "alishakawaguchi", got.OwnerID)
 	assert.Equal(t, "test@example.com", got.OwnerEmail)
 	assert.Equal(t, 1000, got.InputTokens)
 	assert.Equal(t, 200, got.CacheTokens)
@@ -141,6 +143,33 @@ func TestInsertSession_BasicFields(t *testing.T) {
 	assert.Equal(t, "fix bug", got.Intent)
 	assert.Equal(t, "success", got.Outcome)
 	assert.InDelta(t, 0.85, got.AgentPct, 0.001)
+}
+
+func TestQueryByOwnerID_ReturnsMatchingSessions(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, db.InsertSession(ctx, insightsdb.SessionRow{
+		CheckpointID: "chk-owner-1",
+		SessionID:    "sess-owner-1",
+		SessionIndex: 0,
+		OwnerID:      "alishakawaguchi",
+		CreatedAt:    time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC),
+	}))
+	require.NoError(t, db.InsertSession(ctx, insightsdb.SessionRow{
+		CheckpointID: "chk-owner-2",
+		SessionID:    "sess-owner-2",
+		SessionIndex: 0,
+		OwnerID:      "someone-else",
+		CreatedAt:    time.Date(2026, 3, 24, 11, 0, 0, 0, time.UTC),
+	}))
+
+	rows, err := db.QueryByOwnerID(ctx, "alishakawaguchi", 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "sess-owner-1", rows[0].SessionID)
 }
 
 func TestInsertSession_WithDenormalizedFields(t *testing.T) {
@@ -204,6 +233,15 @@ func TestInsertSession_WithStructuredFacets(t *testing.T) {
 					MissingInstruction: "Warn about trailing nolint comments on signatures",
 				},
 			},
+			ReviewDerivedRules: []facets.ReviewDerivedRule{
+				{
+					Rule:        "Prefer package-private helpers unless a shared API is required",
+					Evidence:    []string{"Review comment asked to avoid exporting a test-only helper"},
+					SourceKind:  "pr_comment",
+					Strength:    "strong",
+					WhyReusable: "This is a recurring org style preference rather than a one-off file fix.",
+				},
+			},
 		},
 	}
 
@@ -220,6 +258,71 @@ func TestInsertSession_WithStructuredFacets(t *testing.T) {
 	assert.Equal(t, "Run golangci-lint before committing", got.Facets.RepeatedUserInstructions[0].Instruction)
 	require.Len(t, got.Facets.SkillSignals, 1)
 	assert.Equal(t, "project:go-linting", got.Facets.SkillSignals[0].SkillName)
+	require.Len(t, got.Facets.ReviewDerivedRules, 1)
+	assert.Equal(t, "Prefer package-private helpers unless a shared API is required", got.Facets.ReviewDerivedRules[0].Rule)
+	assert.Equal(t, "pr_comment", got.Facets.ReviewDerivedRules[0].SourceKind)
+	assert.Equal(t, "strong", got.Facets.ReviewDerivedRules[0].Strength)
+	assert.Equal(t, "This is a recurring org style preference rather than a one-off file fix.", got.Facets.ReviewDerivedRules[0].WhyReusable)
+}
+
+func TestGetContentFingerprint_ChangesWhenReviewRuleSignalsChange(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	before, err := db.GetContentFingerprint(ctx)
+	require.NoError(t, err)
+
+	row := minimalSessionRow("chk-fingerprint-review", "sess-fingerprint-review", 0)
+	row.Facets = facets.SessionFacets{
+		ReviewDerivedRules: []facets.ReviewDerivedRule{
+			{
+				Rule:        "Prefer package-private helpers unless a shared API is required",
+				Evidence:    []string{"Review comment asked to avoid exporting a test-only helper"},
+				SourceKind:  "pr_comment",
+				Strength:    "strong",
+				WhyReusable: "This is a recurring org style preference rather than a one-off file fix.",
+			},
+		},
+	}
+
+	err = db.InsertSession(ctx, row)
+	require.NoError(t, err)
+
+	after, err := db.GetContentFingerprint(ctx)
+	require.NoError(t, err)
+	assert.NotEqual(t, before, after)
+}
+
+func TestInsertSession_WithReviewDerivedRulesSetsHasFacets(t *testing.T) {
+	t.Parallel()
+
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	row := minimalSessionRow("chk-review-only", "sess-review-only", 0)
+	row.Facets = facets.SessionFacets{
+		ReviewDerivedRules: []facets.ReviewDerivedRule{
+			{
+				Rule:        "Prefer package-private helpers unless a shared API is required",
+				Evidence:    []string{"Review comment asked to avoid exporting a test-only helper"},
+				SourceKind:  "pr_comment",
+				Strength:    "strong",
+				WhyReusable: "This is a recurring org style preference rather than a one-off file fix.",
+			},
+		},
+	}
+
+	err := db.InsertSession(ctx, row)
+	require.NoError(t, err)
+
+	sessions, err := db.QueryLastNSessions(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.True(t, sessions[0].HasFacets)
+	require.Len(t, sessions[0].Facets.ReviewDerivedRules, 1)
+	assert.Equal(t, "Prefer package-private helpers unless a shared API is required", sessions[0].Facets.ReviewDerivedRules[0].Rule)
 }
 
 func TestInsertSession_ScoreFields(t *testing.T) {

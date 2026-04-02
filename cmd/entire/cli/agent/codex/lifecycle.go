@@ -15,14 +15,33 @@ import (
 var (
 	_ agent.HookSupport        = (*CodexAgent)(nil)
 	_ agent.HookResponseWriter = (*CodexAgent)(nil)
+	_ agent.HookContextWriter  = (*CodexAgent)(nil)
 )
 
 // WriteHookResponse outputs a JSON hook response to stdout.
 // Codex reads the systemMessage field and displays it to the user.
 func (c *CodexAgent) WriteHookResponse(message string) error {
+	return c.writeHookResponse(message, "")
+}
+
+// WriteHookResponseWithContext outputs a JSON hook response that both displays a
+// system message and injects additional context into the model.
+func (c *CodexAgent) WriteHookResponseWithContext(message, additionalContext string) error {
+	return c.writeHookResponse(message, additionalContext)
+}
+
+func (c *CodexAgent) writeHookResponse(message, additionalContext string) error {
+	type hookSpecificOutput struct {
+		AdditionalContext string `json:"additionalContext,omitempty"`
+	}
+
 	resp := struct {
-		SystemMessage string `json:"systemMessage,omitempty"`
+		SystemMessage      string              `json:"systemMessage,omitempty"`
+		HookSpecificOutput *hookSpecificOutput `json:"hookSpecificOutput,omitempty"`
 	}{SystemMessage: message}
+	if additionalContext != "" {
+		resp.HookSpecificOutput = &hookSpecificOutput{AdditionalContext: additionalContext}
+	}
 	if err := json.NewEncoder(os.Stdout).Encode(resp); err != nil {
 		return fmt.Errorf("failed to encode hook response: %w", err)
 	}
