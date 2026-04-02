@@ -46,7 +46,11 @@ type openDetailMsg struct {
 type closeDetailMsg struct{}
 
 func Run(ctx context.Context, rows []insightsdb.SessionRow) error {
-	p := tea.NewProgram(newRootModel(rows, ""), tea.WithAltScreen())
+	return RunWithCurrentBranch(ctx, rows, "")
+}
+
+func RunWithCurrentBranch(ctx context.Context, rows []insightsdb.SessionRow, currentBranch string) error {
+	p := tea.NewProgram(newRootModel(rows, currentBranch), tea.WithAltScreen())
 	_, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("run summary TUI: %w", err)
@@ -65,7 +69,9 @@ func newRootModel(rows []insightsdb.SessionRow, currentBranch string) rootModel 
 		{Title: "TOKENS", Width: 8},
 		{Title: "TURNS", Width: 5},
 	}
+	styles := newStyles()
 	t := table.New(table.WithColumns(columns), table.WithFocused(true))
+	t.SetStyles(styles.tableStyles())
 	p := paginator.New()
 	p.PerPage = defaultPageSize
 	m := rootModel{
@@ -76,7 +82,7 @@ func newRootModel(rows []insightsdb.SessionRow, currentBranch string) rootModel 
 		table:         t,
 		paginator:     p,
 		pageSize:      defaultPageSize,
-		styles:        newStyles(),
+		styles:        styles,
 		width:         100,
 		height:        30,
 	}
@@ -153,13 +159,15 @@ func (m rootModel) View() string {
 	}
 
 	var b strings.Builder
-	b.WriteString("SESSION SUMMARY BROWSER\n\n")
-	b.WriteString(filterLabel(m.filter))
+	b.WriteString(m.styles.render(m.styles.appTitle, "SESSION SUMMARY"))
+	b.WriteString("\n\n")
+	b.WriteString(renderFilterChips(m.styles, m.filter))
 	b.WriteString("  ")
-	b.WriteString(pageLabel(m.paginator))
+	b.WriteString(m.styles.render(m.styles.dim, pageLabel(m.paginator)))
 	b.WriteString("\n\n")
 	b.WriteString(m.table.View())
-	b.WriteString("\n\nj/k navigate  f filter  ←/→ page  enter open detail  q quit")
+	b.WriteString("\n\n")
+	b.WriteString(m.styles.render(m.styles.statusBar, "j/k navigate  f filter  ←/→ page  enter detail  q quit"))
 	return b.String()
 }
 
@@ -283,6 +291,29 @@ func filterLabel(filter branchFilter) string {
 
 func pageLabel(p paginator.Model) string {
 	return fmt.Sprintf("Page %d/%d", p.Page+1, max(1, p.TotalPages))
+}
+
+func renderFilterChips(styles styles, active branchFilter) string {
+	labels := []struct {
+		filter branchFilter
+		label  string
+	}{
+		{filterCurrentBranch, "Current Branch"},
+		{filterMainBranch, "Main"},
+		{filterAllBranches, "All"},
+	}
+
+	parts := make([]string, 0, len(labels))
+	for _, item := range labels {
+		text := item.label
+		if item.filter == active {
+			text = "[" + text + "]"
+			parts = append(parts, styles.render(styles.chipActive, text))
+			continue
+		}
+		parts = append(parts, styles.render(styles.chipInactive, text))
+	}
+	return strings.Join(parts, " ")
 }
 
 func (m *rootModel) resize(width, height int) {

@@ -23,7 +23,10 @@ func TestRootView_RendersSessionTableColumns(t *testing.T) {
 	require.Contains(t, out, "Claude Code")
 	require.Contains(t, out, "feature/summary-browser")
 	require.Contains(t, out, "Current Branch")
+	require.Contains(t, out, "Main")
+	require.Contains(t, out, "All")
 	require.Contains(t, out, "Page 1/1")
+	require.Contains(t, out, "enter detail")
 }
 
 func TestNewRootModel_DefaultsToCurrentBranchFilter(t *testing.T) {

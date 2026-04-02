@@ -49,7 +49,7 @@ type summaryDetailView struct {
 	Learnings []insightsdb.LearningRow `json:"learnings,omitempty"`
 }
 
-var runSummaryTUI = summarytui.Run
+var runSummaryTUI = summarytui.RunWithCurrentBranch
 
 func newSummaryCmd() *cobra.Command {
 	opts := summaryOptions{Last: 10}
@@ -98,7 +98,12 @@ func runSummary(ctx context.Context, w io.Writer, opts summaryOptions) error {
 		return nil
 	}
 
-	return runSummaryTUI(ctx, rows)
+	currentBranch := ""
+	if branch, err := GetCurrentBranch(ctx); err == nil {
+		currentBranch = branch
+	}
+
+	return runSummaryTUI(ctx, rows, currentBranch)
 }
 
 func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb.SessionRow, error) {

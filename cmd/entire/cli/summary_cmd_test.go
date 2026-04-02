@@ -100,7 +100,7 @@ func TestRunSummary_AccessibleDoesNotStartTUI(t *testing.T) {
 	t.Cleanup(func() { runSummaryTUI = originalRun })
 
 	var called bool
-	runSummaryTUI = func(_ context.Context, _ []insightsdb.SessionRow) error {
+	runSummaryTUI = func(_ context.Context, _ []insightsdb.SessionRow, _ string) error {
 		called = true
 		return nil
 	}
@@ -110,6 +110,32 @@ func TestRunSummary_AccessibleDoesNotStartTUI(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, called, "accessible mode should not launch the TUI")
 	require.Contains(t, buf.String(), "Session Summary")
+}
+
+func TestRunSummary_PassesCurrentBranchToTUI(t *testing.T) {
+	tmpDir := t.TempDir()
+	setupSummaryTestRepo(t, tmpDir)
+	testutil.GitCheckoutNewBranch(t, tmpDir, "feature/summary-browser")
+	insertSummaryTestSession(t, tmpDir, sampleSummarySessionRow())
+
+	originalRun := runSummaryTUI
+	t.Cleanup(func() { runSummaryTUI = originalRun })
+
+	var (
+		called        bool
+		currentBranch string
+	)
+	runSummaryTUI = func(_ context.Context, _ []insightsdb.SessionRow, branch string) error {
+		called = true
+		currentBranch = branch
+		return nil
+	}
+
+	var buf bytes.Buffer
+	err := runSummary(context.Background(), &buf, summaryOptions{Last: 10})
+	require.NoError(t, err)
+	require.True(t, called, "non-accessible mode should launch the TUI")
+	require.Equal(t, "feature/summary-browser", currentBranch)
 }
 
 func TestLoadSummarySessions_FilterByBranch(t *testing.T) {
