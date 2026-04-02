@@ -14,6 +14,7 @@ import (
 )
 
 const defaultPageSize = 10
+const rootVerticalChrome = 6
 
 type branchFilter int
 
@@ -89,6 +90,10 @@ func (m rootModel) Init() tea.Cmd {
 
 func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.resize(msg.Width, msg.Height)
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.detailPage != nil {
 			switch msg.Type {
@@ -272,4 +277,44 @@ func filterLabel(filter branchFilter) string {
 
 func pageLabel(p paginator.Model) string {
 	return fmt.Sprintf("Page %d/%d", p.Page+1, max(1, p.TotalPages))
+}
+
+func (m *rootModel) resize(width, height int) {
+	selectedSessionID := ""
+	if selected := m.selectedRow(); selected != nil {
+		selectedSessionID = selected.SessionID
+	}
+
+	m.width = width
+	m.height = height
+	m.table.SetWidth(width)
+
+	tableHeight := max(3, height-rootVerticalChrome)
+	m.table.SetHeight(tableHeight)
+	m.pageSize = max(1, tableHeight-1)
+
+	m.rebuildFilteredRows()
+	m.restoreSelection(selectedSessionID)
+}
+
+func (m *rootModel) restoreSelection(sessionID string) {
+	if sessionID == "" || len(m.filteredRows) == 0 {
+		return
+	}
+
+	for idx, row := range m.filteredRows {
+		if row.SessionID != sessionID {
+			continue
+		}
+
+		m.paginator.Page = idx / m.pageSize
+		m.rebuildTable()
+
+		cursor := idx % m.pageSize
+		if pageRows := m.currentPageRows(); len(pageRows) > 0 && cursor >= len(pageRows) {
+			cursor = len(pageRows) - 1
+		}
+		m.table.SetCursor(cursor)
+		return
+	}
 }

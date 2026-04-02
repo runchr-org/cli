@@ -1,6 +1,7 @@
 package summarytui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +87,54 @@ func TestRootUpdate_PageNavigationMovesBetweenFilteredPages(t *testing.T) {
 
 	require.Equal(t, 1, root.paginator.Page)
 	require.Equal(t, "sess-3", root.selectedRow().SessionID)
+}
+
+func TestRootUpdate_WindowSizeSetsTableDimensions(t *testing.T) {
+	t.Parallel()
+
+	root := newRootModel(sampleRowsForTest(), "feature/summary-browser")
+
+	next, _ := root.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
+	root = next.(rootModel)
+
+	require.Equal(t, 120, root.width)
+	require.Equal(t, 32, root.height)
+	require.Equal(t, 120, root.table.Width())
+	require.Greater(t, root.table.Height(), 0)
+}
+
+func TestRootUpdate_WindowSizeExpandsPageSizeBeyondDefault(t *testing.T) {
+	t.Parallel()
+
+	root := newRootModel(manyCurrentBranchRowsForTest(20), "feature/summary-browser")
+	require.Equal(t, defaultPageSize, root.pageSize)
+
+	next, _ := root.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	root = next.(rootModel)
+
+	require.Greater(t, root.pageSize, defaultPageSize)
+	require.Equal(t, 1, root.paginator.TotalPages)
+}
+
+func TestRootUpdate_WindowSizePreservesSelectedSessionWhenPossible(t *testing.T) {
+	t.Parallel()
+
+	root := newRootModel(manyCurrentBranchRowsForTest(12), "feature/summary-browser")
+	root.pageSize = 3
+	root.rebuildFilteredRows()
+	root.nextPage()
+	root.table.SetCursor(1)
+
+	selected := root.selectedRow()
+	require.NotNil(t, selected)
+	require.Equal(t, "sess-5", selected.SessionID)
+
+	next, _ := root.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
+	root = next.(rootModel)
+
+	selected = root.selectedRow()
+	require.NotNil(t, selected)
+	require.Equal(t, "sess-5", selected.SessionID)
 }
 
 func TestRootUpdate_EnterOpensSessionDetailPage(t *testing.T) {
@@ -262,4 +311,20 @@ func paginatedRowsForTest() []insightsdb.SessionRow {
 			HasSummary:   true,
 		},
 	}
+}
+
+func manyCurrentBranchRowsForTest(count int) []insightsdb.SessionRow {
+	now := time.Date(2026, time.April, 2, 12, 0, 0, 0, time.UTC)
+	rows := make([]insightsdb.SessionRow, 0, count)
+	for i := range count {
+		rows = append(rows, insightsdb.SessionRow{
+			CheckpointID: "chk-" + strconv.Itoa(i+1),
+			SessionID:    "sess-" + strconv.Itoa(i+1),
+			Agent:        "Claude Code",
+			Branch:       "feature/summary-browser",
+			CreatedAt:    now.Add(-time.Duration(i) * time.Minute),
+			HasSummary:   true,
+		})
+	}
+	return rows
 }
