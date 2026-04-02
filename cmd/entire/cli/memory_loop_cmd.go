@@ -324,6 +324,13 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 		return err
 	}
 
+	switch scope.Mode {
+	case memoryLoopScopeRepo, memoryLoopScopeBranch:
+		renderMemoryLoopRefreshProgress(w, fmt.Sprintf("Scope: %s (branch: %s)", scope.Mode, scope.Branch))
+	case memoryLoopScopeMe:
+		renderMemoryLoopRefreshProgress(w, fmt.Sprintf("Scope: me (%s)", scope.OwnerID))
+	}
+
 	renderMemoryLoopRefreshProgress(w, "Loading scoped sessions...")
 	rows, err := queryMemoryLoopRows(ctx, idb, scope, last)
 	if err != nil {
