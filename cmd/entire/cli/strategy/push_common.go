@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -172,8 +173,12 @@ func fetchAndMergeSessionsCommon(ctx context.Context, target, branchName string)
 	// this cherry-picks local commits onto remote tip, updating the local ref.
 	// If reconciliation fails, abort — proceeding to tree merge on disconnected
 	// branches would silently combine unrelated histories.
-	if reconcileErr := ReconcileDisconnectedMetadataBranch(ctx, repo, fetchedRefName, os.Stderr); reconcileErr != nil {
-		return fmt.Errorf("metadata reconciliation failed: %w", reconcileErr)
+	// Only run for the metadata branch — reconciliation is specific to that branch's
+	// orphan-detection logic and would be incorrect for other branches.
+	if branchName == paths.MetadataBranchName {
+		if reconcileErr := ReconcileDisconnectedMetadataBranch(ctx, repo, fetchedRefName, os.Stderr); reconcileErr != nil {
+			return fmt.Errorf("metadata reconciliation failed: %w", reconcileErr)
+		}
 	}
 
 	// Get local branch (re-read after potential reconciliation update)
