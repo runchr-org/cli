@@ -82,17 +82,38 @@ type generateResponse struct {
 	Records []generateRecord `json:"records"`
 }
 
+type sourceSignal struct {
+	Type string `json:"type"`
+	Key  string `json:"key"`
+}
+
+type matchedSignal struct {
+	Kind             string
+	Count            int
+	AllowsSingleton  bool
+	AffectedSessions []string
+}
+
+func (m matchedSignal) AffectedSessionSet() map[string]bool {
+	set := make(map[string]bool, len(m.AffectedSessions))
+	for _, id := range m.AffectedSessions {
+		set[id] = true
+	}
+	return set
+}
+
 type generateRecord struct {
-	Kind             Kind     `json:"kind"`
-	Title            string   `json:"title"`
-	Body             string   `json:"body"`
-	SkillName        string   `json:"skill_name,omitempty"`
-	SkillPath        string   `json:"skill_path,omitempty"`
-	Why              string   `json:"why"`
-	Evidence         []string `json:"evidence"`
-	SourceSessionIDs []string `json:"source_session_ids"`
-	Confidence       string   `json:"confidence"`
-	Strength         int      `json:"strength"`
+	Kind             Kind          `json:"kind"`
+	Title            string        `json:"title"`
+	Body             string        `json:"body"`
+	SkillName        string        `json:"skill_name,omitempty"`
+	SkillPath        string        `json:"skill_path,omitempty"`
+	Why              string        `json:"why"`
+	Evidence         []string      `json:"evidence"`
+	SourceSessionIDs []string      `json:"source_session_ids"`
+	SourceSignal     *sourceSignal `json:"source_signal,omitempty"`
+	Confidence       string        `json:"confidence"`
+	Strength         int           `json:"strength"`
 }
 
 type generatedCandidate struct {
@@ -103,9 +124,10 @@ type generatedCandidate struct {
 }
 
 type GenerationStats struct {
-	FilteredWeakCount    int
-	FilteredGenericCount int
-	DedupedCount         int
+	FilteredWeakCount       int
+	FilteredGenericCount    int
+	FilteredNoEvidenceCount int
+	DedupedCount            int
 }
 
 func (g *Generator) Generate(ctx context.Context, input GenerateInput) ([]MemoryRecord, GenerationStats, *llmcli.UsageInfo, error) {
@@ -137,6 +159,7 @@ func buildGeneratedRecords(resp generateResponse, input GenerateInput, now time.
 }
 
 func buildGeneratedRecordsDetailed(resp generateResponse, input GenerateInput, now time.Time) ([]MemoryRecord, GenerationStats) {
+	validSourceIDs := buildValidSourceIDs(input.Sessions)
 	orderedKeys := make([]string, 0, len(resp.Records))
 	bestByKey := make(map[string]generatedCandidate)
 	stats := GenerationStats{}
@@ -179,8 +202,12 @@ func buildGeneratedRecordsDetailed(resp generateResponse, input GenerateInput, n
 			CreatedAt:        now,
 			UpdatedAt:        now,
 		}
-		if !passesReviewDerivedGate(record, input.Analysis) {
+		if isLiteralReviewEvidence(record, input.Analysis.ReviewDerivedRules) {
 			stats.FilteredGenericCount++
+			continue
+		}
+		if !passesEvidenceGate(record, item.SourceSignal, input.Analysis, validSourceIDs) {
+			stats.FilteredNoEvidenceCount++
 			continue
 		}
 
@@ -266,17 +293,22 @@ func BuildPrompt(input GenerateInput) string {
 			fmt.Fprintf(&sb, "  evidence: %q\n", evidence)
 		}
 	}
-	for _, learning := range trimSlice(input.Analysis.RepoLearnings, 5) {
-		fmt.Fprintf(&sb, "repo_learning: %s\n", learning)
-	}
-	for _, learning := range trimSlice(input.Analysis.WorkflowLearnings, 5) {
-		fmt.Fprintf(&sb, "workflow_learning: %s\n", learning)
+	// repo_learning and workflow_learning are context-only (unstructured, no count/affected sessions).
+	// They cannot survive the evidence gate, so mark them as ineligible for source_signal attribution.
+	if len(input.Analysis.RepoLearnings) > 0 || len(input.Analysis.WorkflowLearnings) > 0 {
+		sb.WriteString("<!-- context-only: not eligible for source_signal attribution -->\n")
+		for _, learning := range trimSlice(input.Analysis.RepoLearnings, 5) {
+			fmt.Fprintf(&sb, "repo_learning: %s\n", learning)
+		}
+		for _, learning := range trimSlice(input.Analysis.WorkflowLearnings, 5) {
+			fmt.Fprintf(&sb, "workflow_learning: %s\n", learning)
+		}
 	}
 	sb.WriteString("</analysis>\n\n")
 
 	sb.WriteString("<recent_sessions>\n")
 	for _, session := range input.Sessions {
-		fmt.Fprintf(&sb, "session: %s agent=%s model=%s\n", session.SessionID, session.Agent, session.Model)
+		fmt.Fprintf(&sb, "session: %s agent=%s model=%s\n", session.CheckpointID, session.Agent, session.Model)
 		for _, friction := range trimSlice(session.Friction, 3) {
 			fmt.Fprintf(&sb, "  friction: %q\n", friction)
 		}
@@ -300,17 +332,26 @@ func BuildPrompt(input GenerateInput) string {
     "body": "one actionable sentence",
     "skill_name": "required for skill_patch, omit otherwise",
     "skill_path": "optional concrete SKILL.md path for skill_patch",
-	    "why": "why this memory matters for later sessions",
-	    "evidence": ["short quote"],
-	    "source_session_ids": ["session-id"],
-	    "confidence": "high|medium|low",
-	    "strength": 3
-	  }]
-	}
+    "source_signal": {
+      "type": "repeated_instruction|missing_context|failure_loop|skill_opportunity|review_derived_rule",
+      "key": "the exact signal value or rule text from <analysis> that this record derives from"
+    },
+    "why": "why this memory matters for later sessions",
+    "evidence": ["short quote"],
+    "source_session_ids": ["checkpoint-id from <recent_sessions>"],
+    "confidence": "high|medium|low",
+    "strength": 3
+  }]
+}
 
 Guidelines:
 - Distill stable repo-specific lessons, not generic coding advice
 - Prefer rules the developer would want injected into future Claude sessions
+- Every record MUST include source_signal referencing the analysis signal it derives from
+- source_signal.type must be one of: repeated_instruction, missing_context, failure_loop, skill_opportunity, review_derived_rule
+- source_signal.key must match the signal value from the <analysis> block as closely as possible
+- Do NOT derive records from repo_learning or workflow_learning lines (they are context-only)
+- source_session_ids must reference checkpoint IDs from <recent_sessions> where the pattern was observed
 - derive reusable rules from review fixes when review_derived_rule signals support them
 - Do not restate PR comments or requested-changes text verbatim
 - Only use review-derived rules when they are repeated or flagged as a strong singleton org preference/anti-pattern
@@ -357,56 +398,144 @@ func normalizeGeneratedText(value string) string {
 	return strings.TrimSpace(strings.Join(strings.Fields(b.String()), " "))
 }
 
-func passesReviewDerivedGate(record MemoryRecord, analysis improve.PatternAnalysis) bool {
-	if len(analysis.ReviewDerivedRules) == 0 {
-		return true
+// passesEvidenceGate enforces that a generated record traces back to a
+// repeated upstream analysis signal (Layer 1: provenance) and cites valid
+// source IDs from that signal's affected sessions (Layer 2: session validation).
+func passesEvidenceGate(record MemoryRecord, signal *sourceSignal, analysis improve.PatternAnalysis, validSourceIDs map[string]bool) bool {
+	if signal == nil || signal.Key == "" {
+		return false
 	}
-	for _, signal := range analysis.ReviewDerivedRules {
-		if generatedMatchesReviewEvidence(record, signal) {
-			return false
+
+	matched, found := lookupSignal(signal, analysis)
+	if !found {
+		return false
+	}
+
+	allowSingleton := matched.AllowsSingleton
+	if matched.Kind == "skill_opportunity" && record.Kind != KindSkillPatch {
+		allowSingleton = false
+	}
+	if !allowSingleton && matched.Count < 2 {
+		return false
+	}
+
+	validCount := 0
+	affected := matched.AffectedSessionSet()
+	for _, id := range record.SourceSessionIDs {
+		if validSourceIDs[id] && affected[id] {
+			validCount++
 		}
 	}
-
-	signal, score := bestMatchingReviewDerivedRule(record, analysis.ReviewDerivedRules)
-	if signal == nil || score < 0.50 {
-		return true
+	if allowSingleton {
+		return validCount >= 1
 	}
-	return signal.Count >= 2 || signal.Strong
+	return validCount >= 2
 }
 
-func bestMatchingReviewDerivedRule(record MemoryRecord, signals []improve.ReviewDerivedRuleSignal) (*improve.ReviewDerivedRuleSignal, float64) {
-	bestScore := 0.0
-	var best *improve.ReviewDerivedRuleSignal
-	for i := range signals {
-		score := logicalRuleSimilarity(
-			MemoryRecord{Title: record.Title, Body: record.Body},
-			MemoryRecord{Title: signals[i].Rule},
-		)
-		if score > bestScore {
-			bestScore = score
-			best = &signals[i]
+func lookupSignal(signal *sourceSignal, analysis improve.PatternAnalysis) (matchedSignal, bool) {
+	normalized := normalizeGeneratedText(signal.Key)
+	switch signal.Type {
+	case "repeated_instruction":
+		return findRecurringSignal(normalized, "repeated_instruction", analysis.RepeatedInstructions)
+	case "missing_context":
+		return findRecurringSignal(normalized, "missing_context", analysis.MissingContextSignals)
+	case "failure_loop":
+		return findRecurringSignal(normalized, "failure_loop", analysis.FailureLoops)
+	case "skill_opportunity":
+		return findSkillSignal(normalized, analysis.SkillOpportunities)
+	case "review_derived_rule":
+		return findReviewRuleSignal(normalized, analysis.ReviewDerivedRules)
+	default:
+		return matchedSignal{}, false
+	}
+}
+
+func findRecurringSignal(normalizedKey, kind string, signals []improve.RecurringSignal) (matchedSignal, bool) {
+	for _, s := range signals {
+		if normalizeGeneratedText(s.Value) == normalizedKey {
+			return matchedSignal{
+				Kind:             kind,
+				Count:            s.Count,
+				AllowsSingleton:  false,
+				AffectedSessions: s.AffectedSessions,
+			}, true
 		}
 	}
-	return best, bestScore
+	// Fallback: substring match (key contained in signal value or vice versa).
+	for _, s := range signals {
+		nv := normalizeGeneratedText(s.Value)
+		if strings.Contains(nv, normalizedKey) || strings.Contains(normalizedKey, nv) {
+			return matchedSignal{
+				Kind:             kind,
+				Count:            s.Count,
+				AllowsSingleton:  false,
+				AffectedSessions: s.AffectedSessions,
+			}, true
+		}
+	}
+	return matchedSignal{}, false
 }
 
-func generatedMatchesReviewEvidence(record MemoryRecord, signal improve.ReviewDerivedRuleSignal) bool {
+func findSkillSignal(normalizedKey string, signals []improve.SkillOpportunity) (matchedSignal, bool) {
+	for _, s := range signals {
+		if normalizeGeneratedText(s.SkillName) == normalizedKey {
+			return matchedSignal{
+				Kind:             "skill_opportunity",
+				Count:            s.Count,
+				AllowsSingleton:  true,
+				AffectedSessions: s.AffectedSessions,
+			}, true
+		}
+	}
+	return matchedSignal{}, false
+}
+
+func findReviewRuleSignal(normalizedKey string, signals []improve.ReviewDerivedRuleSignal) (matchedSignal, bool) {
+	for _, s := range signals {
+		if normalizeGeneratedText(s.Rule) == normalizedKey {
+			return matchedSignal{
+				Kind:             "review_derived_rule",
+				Count:            s.Count,
+				AllowsSingleton:  s.Strong,
+				AffectedSessions: s.AffectedSessions,
+			}, true
+		}
+	}
+	// Fallback: substring match for review rules.
+	for _, s := range signals {
+		nv := normalizeGeneratedText(s.Rule)
+		if strings.Contains(nv, normalizedKey) || strings.Contains(normalizedKey, nv) {
+			return matchedSignal{
+				Kind:             "review_derived_rule",
+				Count:            s.Count,
+				AllowsSingleton:  s.Strong,
+				AffectedSessions: s.AffectedSessions,
+			}, true
+		}
+	}
+	return matchedSignal{}, false
+}
+
+// isLiteralReviewEvidence rejects records that restate PR review comments verbatim.
+func isLiteralReviewEvidence(record MemoryRecord, rules []improve.ReviewDerivedRuleSignal) bool {
 	title := normalizeGeneratedText(record.Title)
 	body := normalizeGeneratedText(record.Body)
 	combined := normalizeGeneratedText(record.Title + " " + record.Body)
-	for _, evidence := range signal.Evidence {
-		normalizedEvidence := normalizeGeneratedText(evidence)
-		if normalizedEvidence == "" {
-			continue
-		}
-		if normalizedEvidence == title || normalizedEvidence == body || normalizedEvidence == combined {
-			return true
-		}
-		if strings.Contains(body, normalizedEvidence) || strings.Contains(combined, normalizedEvidence) {
-			return true
-		}
-		if strings.Contains(normalizedEvidence, body) || strings.Contains(normalizedEvidence, combined) {
-			return true
+	for _, rule := range rules {
+		for _, evidence := range rule.Evidence {
+			ne := normalizeGeneratedText(evidence)
+			if ne == "" {
+				continue
+			}
+			if ne == title || ne == body || ne == combined {
+				return true
+			}
+			if strings.Contains(body, ne) || strings.Contains(combined, ne) {
+				return true
+			}
+			if strings.Contains(ne, body) || strings.Contains(ne, combined) {
+				return true
+			}
 		}
 	}
 	return false
@@ -525,4 +654,16 @@ func clamp(value, lo, hi int) int {
 		return hi
 	}
 	return value
+}
+
+// buildValidSourceIDs builds a set of checkpoint IDs from the input sessions
+// for validating LLM-cited source_session_ids against real session data.
+func buildValidSourceIDs(sessions []insightsdb.SessionRow) map[string]bool {
+	ids := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		if s.CheckpointID != "" {
+			ids[s.CheckpointID] = true
+		}
+	}
+	return ids
 }

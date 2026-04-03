@@ -399,6 +399,7 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 	reconcile.History.SourceWindow = last
 	reconcile.History.FilteredWeakCount = generationStats.FilteredWeakCount
 	reconcile.History.FilteredGenericCount = generationStats.FilteredGenericCount
+	reconcile.History.FilteredNoEvidenceCount = generationStats.FilteredNoEvidenceCount
 	reconcile.History.DedupedCount = generationStats.DedupedCount
 	refreshHistory := append(existingRefreshHistory(state), reconcile.History)
 	reconciledRecords := memoryloop.DeriveOutcomes(reconcile.Records, rows, now)
@@ -1139,7 +1140,7 @@ func renderRefreshHistorySection(w io.Writer, s termstyle.Styles, history []memo
 	for _, item := range recentRefreshHistory(history, 10) {
 		fmt.Fprintf(
 			w,
-			"  - %s  %s%s  generated %d, activated %d, candidate %d, filtered weak %d, filtered generic %d, deduped %d, demoted %d, pruned %d\n",
+			"  - %s  %s%s  generated %d, activated %d, candidate %d, filtered weak %d, filtered generic %d, filtered no-evidence %d, deduped %d, demoted %d, pruned %d\n",
 			item.At.Format(time.RFC3339),
 			item.Scope,
 			formatOptionalScopeValue(item.ScopeValue),
@@ -1148,6 +1149,7 @@ func renderRefreshHistorySection(w io.Writer, s termstyle.Styles, history []memo
 			item.CandidateCount,
 			item.FilteredWeakCount,
 			item.FilteredGenericCount,
+			item.FilteredNoEvidenceCount,
 			item.DedupedCount,
 			item.DemotedCount,
 			item.PrunedCount,

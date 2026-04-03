@@ -186,21 +186,22 @@ type MemoryRecord struct {
 }
 
 type RefreshHistory struct {
-	At                   time.Time `json:"at"`
-	Scope                string    `json:"scope,omitempty"`
-	ScopeValue           string    `json:"scope_value,omitempty"`
-	SourceWindow         int       `json:"source_window,omitempty"`
-	GeneratedCount       int       `json:"generated_count,omitempty"`
-	ActivatedCount       int       `json:"activated_count,omitempty"`
-	CandidateCount       int       `json:"candidate_count,omitempty"`
-	FilteredWeakCount    int       `json:"filtered_weak_count,omitempty"`
-	FilteredGenericCount int       `json:"filtered_generic_count,omitempty"`
-	DedupedCount         int       `json:"deduped_count,omitempty"`
-	DemotedCount         int       `json:"demoted_count,omitempty"`
-	PrunedCount          int       `json:"pruned_count,omitempty"`
-	InputTokens          int       `json:"input_tokens,omitempty"`
-	OutputTokens         int       `json:"output_tokens,omitempty"`
-	TotalCostUSD         float64   `json:"total_cost_usd,omitempty"`
+	At                      time.Time `json:"at"`
+	Scope                   string    `json:"scope,omitempty"`
+	ScopeValue              string    `json:"scope_value,omitempty"`
+	SourceWindow            int       `json:"source_window,omitempty"`
+	GeneratedCount          int       `json:"generated_count,omitempty"`
+	ActivatedCount          int       `json:"activated_count,omitempty"`
+	CandidateCount          int       `json:"candidate_count,omitempty"`
+	FilteredWeakCount       int       `json:"filtered_weak_count,omitempty"`
+	FilteredGenericCount    int       `json:"filtered_generic_count,omitempty"`
+	FilteredNoEvidenceCount int       `json:"filtered_no_evidence_count,omitempty"`
+	DedupedCount            int       `json:"deduped_count,omitempty"`
+	DemotedCount            int       `json:"demoted_count,omitempty"`
+	PrunedCount             int       `json:"pruned_count,omitempty"`
+	InputTokens             int       `json:"input_tokens,omitempty"`
+	OutputTokens            int       `json:"output_tokens,omitempty"`
+	TotalCostUSD            float64   `json:"total_cost_usd,omitempty"`
 }
 
 type Store struct {
