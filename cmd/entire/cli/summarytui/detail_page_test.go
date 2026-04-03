@@ -1,6 +1,7 @@
 package summarytui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/facets"
@@ -204,4 +205,74 @@ func TestFormatDuration(t *testing.T) {
 	require.Equal(t, "59m 59s", formatDuration(3599000))
 	require.Equal(t, "1h 0m", formatDuration(3600000))
 	require.Equal(t, "2h 15m", formatDuration(8100000))
+}
+
+func TestRenderCodeBox(t *testing.T) {
+	t.Parallel()
+
+	row := insightsdb.SessionRow{
+		FilesTouched:            []string{"cmd/cli/foo.go", "cmd/cli/bar.go"},
+		ToolCounts:              map[string]int{"Edit": 12, "Read": 8, "Bash": 5, "Grep": 3},
+		ImplementationRationale: []string{"Used testutil for isolation"},
+		Tradeoffs:               []string{"Slower setup vs guaranteed isolation"},
+		CodebasePatterns:        []string{"Always use repo root for paths"},
+	}
+	s := newStyles()
+	content := renderCodeBox(s, row, 80)
+
+	require.Contains(t, content, "CODE")
+	require.Contains(t, content, "FILES TOUCHED")
+	require.Contains(t, content, "cmd/cli/foo.go")
+	require.Contains(t, content, "cmd/cli/bar.go")
+	require.Contains(t, content, "TOOL USAGE")
+	require.Contains(t, content, "Edit (12)")
+	require.Contains(t, content, "Read (8)")
+	require.Contains(t, content, "IMPLEMENTATION RATIONALE")
+	require.Contains(t, content, "Used testutil for isolation")
+	require.Contains(t, content, "TRADEOFFS")
+	require.Contains(t, content, "Slower setup vs guaranteed isolation")
+	require.Contains(t, content, "CODEBASE PATTERNS")
+	require.Contains(t, content, "Always use repo root for paths")
+}
+
+func TestRenderCodeBox_OmitsEmptySubSections(t *testing.T) {
+	t.Parallel()
+
+	row := insightsdb.SessionRow{
+		FilesTouched: []string{"file.go"},
+	}
+	s := newStyles()
+	content := renderCodeBox(s, row, 80)
+
+	require.Contains(t, content, "FILES TOUCHED")
+	require.NotContains(t, content, "TOOL USAGE")
+	require.NotContains(t, content, "IMPLEMENTATION RATIONALE")
+	require.NotContains(t, content, "TRADEOFFS")
+	require.NotContains(t, content, "CODEBASE PATTERNS")
+}
+
+func TestRenderCodeBox_ReturnsEmptyWhenAllEmpty(t *testing.T) {
+	t.Parallel()
+
+	row := insightsdb.SessionRow{}
+	s := newStyles()
+	content := renderCodeBox(s, row, 80)
+
+	require.Empty(t, content)
+}
+
+func TestRenderCodeBox_ToolsSortedByCount(t *testing.T) {
+	t.Parallel()
+
+	row := insightsdb.SessionRow{
+		ToolCounts: map[string]int{"Grep": 1, "Edit": 10, "Read": 5},
+	}
+	s := newStyles()
+	content := renderCodeBox(s, row, 80)
+
+	editIdx := strings.Index(content, "Edit")
+	readIdx := strings.Index(content, "Read")
+	grepIdx := strings.Index(content, "Grep")
+	require.Less(t, editIdx, readIdx, "Edit (10) should appear before Read (5)")
+	require.Less(t, readIdx, grepIdx, "Read (5) should appear before Grep (1)")
 }

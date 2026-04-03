@@ -2,6 +2,7 @@ package summarytui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -102,6 +103,64 @@ func renderSubSection(s styles, title string, lines []string) []string {
 	result := []string{s.render(s.dim, strings.ToUpper(title))}
 	result = append(result, lines...)
 	return result
+}
+
+func renderCodeBox(s styles, row insightsdb.SessionRow, width int) string {
+	var allLines []string
+
+	// Files touched
+	var fileLines []string
+	for _, f := range row.FilesTouched {
+		fileLines = append(fileLines, s.render(s.bullet, "• ")+f)
+	}
+	allLines = append(allLines, renderSubSection(s, "Files Touched", fileLines)...)
+
+	// Tool usage — sorted by count descending, compact single line
+	if len(row.ToolCounts) > 0 {
+		type toolCount struct {
+			name  string
+			count int
+		}
+		sorted := make([]toolCount, 0, len(row.ToolCounts))
+		for name, count := range row.ToolCounts {
+			sorted = append(sorted, toolCount{name, count})
+		}
+		sort.Slice(sorted, func(i, j int) bool {
+			return sorted[i].count > sorted[j].count
+		})
+		var parts []string
+		for _, tc := range sorted {
+			parts = append(parts, fmt.Sprintf("%s (%d)", tc.name, tc.count))
+		}
+		toolLine := s.render(s.bullet, "• ") + strings.Join(parts, " · ")
+		allLines = append(allLines, renderSubSection(s, "Tool Usage", []string{toolLine})...)
+	}
+
+	// Implementation rationale
+	var rationaleLines []string
+	for _, item := range row.ImplementationRationale {
+		rationaleLines = append(rationaleLines, s.render(s.bullet, "• ")+item)
+	}
+	allLines = append(allLines, renderSubSection(s, "Implementation Rationale", rationaleLines)...)
+
+	// Tradeoffs
+	var tradeoffLines []string
+	for _, item := range row.Tradeoffs {
+		tradeoffLines = append(tradeoffLines, s.render(s.bullet, "• ")+item)
+	}
+	allLines = append(allLines, renderSubSection(s, "Tradeoffs", tradeoffLines)...)
+
+	// Codebase patterns
+	var patternLines []string
+	for _, item := range row.CodebasePatterns {
+		patternLines = append(patternLines, s.render(s.bullet, "• ")+item)
+	}
+	allLines = append(allLines, renderSubSection(s, "Codebase Patterns", patternLines)...)
+
+	if len(allLines) == 0 {
+		return ""
+	}
+	return s.renderBox("CODE", strings.Join(allLines, "\n"), width)
 }
 
 func renderSummaryBox(s styles, row insightsdb.SessionRow, width int) string {
