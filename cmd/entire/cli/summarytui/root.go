@@ -1,4 +1,3 @@
-//nolint:ireturn // bubbletea model methods in this file must return framework interfaces
 package summarytui
 
 import (
@@ -75,7 +74,7 @@ func Run(ctx context.Context, rows []insightsdb.SessionRow) error {
 }
 
 func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, currentBranch string, repoRows []insightsdb.SessionRow, generateFn GenerateFunc) error {
-	p := tea.NewProgram(newRootModel(rows, currentBranch, repoRows, generateFn), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(newRootModel(rows, currentBranch, repoRows, generateFn), tea.WithAltScreen())
 	_, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("run summary TUI: %w", err)
@@ -91,7 +90,7 @@ func newRootModel(rows []insightsdb.SessionRow, currentBranch string, repoRows [
 	accessible := os.Getenv("ACCESSIBLE") != ""
 
 	vp := viewport.New(60, 20)
-	vp.MouseWheelEnabled = true
+	vp.MouseWheelEnabled = false
 
 	m := rootModel{
 		ctx:           context.Background(),
@@ -140,11 +139,6 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.genStatus = "Error: " + msg.err.Error()
 		return m, nil
 
-	case tea.MouseMsg:
-		// Route mouse events (scroll wheel) to detail viewport
-		var cmd tea.Cmd
-		m.detailVP, cmd = m.detailVP.Update(msg)
-		return m, cmd
 	}
 
 	return m, nil
@@ -190,7 +184,6 @@ func (m rootModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-//nolint:ireturn // required by bubbletea pattern
 func (m rootModel) handleGenerate() (tea.Model, tea.Cmd) {
 	if m.generateFn == nil || m.generating {
 		return m, nil
@@ -597,7 +590,7 @@ func (m *rootModel) resize(width, height int) {
 
 	// Detail viewport: subtract detail header (1) + separator (1) + metadata header (~3) + blank line (1) = 6
 	vp := viewport.New(m.detailWidth(), max(3, contentHeight-6))
-	vp.MouseWheelEnabled = true
+	vp.MouseWheelEnabled = false
 	m.detailVP = vp
 
 	m.rebuildFilteredRows()
