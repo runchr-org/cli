@@ -451,3 +451,35 @@ func TestAnalyzePatterns_CreatesSkillOpportunities(t *testing.T) {
 		t.Fatalf("expected skill opportunity count 2, got %d", result.SkillOpportunities[0].Count)
 	}
 }
+
+func TestAnalyzePatterns_IncludesSingletonSkillOpportunities(t *testing.T) {
+	t.Parallel()
+
+	summaries := []improve.SessionSummaryData{
+		{
+			CheckpointID: "s1",
+			Facets: facets.SessionFacets{
+				SkillSignals: []facets.SkillSignal{
+					{
+						SkillName:          "project:review",
+						SkillPath:          ".codex/skills/review/SKILL.md",
+						Friction:           []string{"Skill did not include retry step"},
+						MissingInstruction: "Add retry step after failure",
+					},
+				},
+			},
+		},
+	}
+
+	result := improve.AnalyzePatterns(summaries)
+
+	if len(result.SkillOpportunities) != 1 {
+		t.Fatalf("expected 1 skill opportunity, got %d", len(result.SkillOpportunities))
+	}
+	if result.SkillOpportunities[0].Count != 1 {
+		t.Fatalf("expected skill opportunity count 1, got %d", result.SkillOpportunities[0].Count)
+	}
+	if len(result.SkillOpportunities[0].AffectedSessions) != 1 {
+		t.Fatalf("expected 1 affected session, got %d", len(result.SkillOpportunities[0].AffectedSessions))
+	}
+}

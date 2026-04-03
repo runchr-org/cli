@@ -316,7 +316,7 @@ func buildRecurringSignals(byValue map[string]*recurringSignalAccumulator) []Rec
 func buildSkillOpportunities(bySkill map[string]*skillOpportunityAccumulator) []SkillOpportunity {
 	opportunities := make([]SkillOpportunity, 0, len(bySkill))
 	for skillName, acc := range bySkill {
-		if acc.count < 2 {
+		if acc.count < 1 {
 			continue
 		}
 		opportunities = append(opportunities, SkillOpportunity{
