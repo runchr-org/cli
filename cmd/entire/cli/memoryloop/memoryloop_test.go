@@ -2367,13 +2367,13 @@ func TestRecordInjectionActivity_UpdatesCountsAndLogs(t *testing.T) {
 	require.Equal(t, "sess-1", state.InjectionLogs[0].SessionID)
 }
 
-func TestDeriveOutcomesFromEvidence_MarksReinforcedAndIneffective(t *testing.T) {
+func TestDeriveOutcomesFromEvidence_MarksNeutralAndIneffective(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.March, 26, 12, 0, 0, 0, time.UTC)
 	records := []MemoryRecord{
 		{
-			ID:          "reinforced",
+			ID:          "not-injected",
 			Kind:        KindRepoRule,
 			Title:       "Run lint before finishing",
 			Body:        "Run golangci-lint before claiming completion.",
@@ -2382,7 +2382,7 @@ func TestDeriveOutcomesFromEvidence_MarksReinforcedAndIneffective(t *testing.T) 
 			Outcome:     OutcomeNeutral,
 			CreatedAt:   now.Add(-48 * time.Hour),
 			UpdatedAt:   now.Add(-48 * time.Hour),
-			Fingerprint: "reinforced",
+			Fingerprint: "not-injected",
 		},
 		{
 			ID:          "ineffective",
@@ -2405,7 +2405,9 @@ func TestDeriveOutcomesFromEvidence_MarksReinforcedAndIneffective(t *testing.T) 
 		"Tighten the project skill because the retry step is still missing.",
 	}, now)
 
-	require.Equal(t, OutcomeReinforced, updated[0].Outcome)
+	// Non-injected memory with overlap stays neutral (can't claim credit).
+	require.Equal(t, OutcomeNeutral, updated[0].Outcome)
+	// Injected memory with overlap is ineffective (friction persisted).
 	require.Equal(t, OutcomeIneffective, updated[1].Outcome)
 }
 
@@ -2855,22 +2857,34 @@ func TestRecordInjectionActivity_UpdatesMatchedAndInjectedCounts(t *testing.T) {
 	require.Len(t, state.InjectionLogs, 1)
 }
 
-func TestDeriveOutcomes_MarksReinforcedAndIneffective(t *testing.T) {
+func TestDeriveOutcomes_TemporalOutcomeEvaluation(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.March, 27, 1, 30, 0, 0, time.UTC)
+	injectedAt := now.Add(-2 * time.Hour)
 	records := []MemoryRecord{
 		{
-			ID:          "lint",
-			Kind:        KindRepoRule,
-			Title:       "Run lint before finishing",
-			Body:        "Run golangci-lint before claiming completion.",
-			Origin:      OriginGenerated,
-			InjectCount: 2,
-			Status:      StatusActive,
+			ID:             "ineffective-lint",
+			Kind:           KindRepoRule,
+			Title:          "Run lint before finishing",
+			Body:           "Run golangci-lint before claiming completion.",
+			Origin:         OriginGenerated,
+			InjectCount:    2,
+			LastInjectedAt: injectedAt,
+			Status:         StatusActive,
 		},
 		{
-			ID:     "skill",
+			ID:             "reinforced-test",
+			Kind:           KindRepoRule,
+			Title:          "Run tests before committing",
+			Body:           "Always run mise run test:ci before committing.",
+			Origin:         OriginGenerated,
+			InjectCount:    1,
+			LastInjectedAt: injectedAt,
+			Status:         StatusActive,
+		},
+		{
+			ID:     "not-injected",
 			Kind:   KindSkillPatch,
 			Title:  "Tighten the project skill",
 			Body:   "Add the missing retry step to the project skill.",
@@ -2886,9 +2900,12 @@ func TestDeriveOutcomes_MarksReinforcedAndIneffective(t *testing.T) {
 			Status: StatusActive,
 		},
 	}
+	// Session created AFTER injection — friction about lint persists,
+	// but no friction about tests (injection worked).
 	sessions := []insightsdb.SessionRow{
 		{
-			Friction: []string{"lint failed again after the agent finished"},
+			CreatedAt: now.Add(-1 * time.Hour), // after injectedAt
+			Friction:  []string{"lint failed again after the agent finished"},
 			Facets: facets.SessionFacets{
 				SkillSignals: []facets.SkillSignal{
 					{SkillName: "project skill", Friction: []string{"missing retry step in the project skill"}},
@@ -2898,9 +2915,10 @@ func TestDeriveOutcomes_MarksReinforcedAndIneffective(t *testing.T) {
 	}
 
 	updated := DeriveOutcomes(records, sessions, now)
-	require.Equal(t, OutcomeIneffective, updated[0].Outcome)
-	require.Equal(t, OutcomeReinforced, updated[1].Outcome)
-	require.Equal(t, OutcomeNeutral, updated[2].Outcome)
+	require.Equal(t, OutcomeIneffective, updated[0].Outcome, "lint friction persisted post-injection")
+	require.Equal(t, OutcomeReinforced, updated[1].Outcome, "test friction stopped post-injection")
+	require.Equal(t, OutcomeNeutral, updated[2].Outcome, "not injected stays neutral")
+	require.Equal(t, OutcomeNeutral, updated[3].Outcome, "manual stays neutral")
 }
 
 func TestPruneRecords_ArchivesEligibleGeneratedRecordsButSkipsManual(t *testing.T) {

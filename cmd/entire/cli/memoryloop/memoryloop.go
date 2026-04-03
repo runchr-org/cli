@@ -198,6 +198,7 @@ type RefreshHistory struct {
 	FilteredWeakCount       int                        `json:"filtered_weak_count,omitempty"`
 	FilteredGenericCount    int                        `json:"filtered_generic_count,omitempty"`
 	FilteredNoEvidenceCount int                        `json:"filtered_no_evidence_count,omitempty"`
+	FilteredKindCount       int                        `json:"filtered_kind_count,omitempty"`
 	DedupedCount            int                        `json:"deduped_count,omitempty"`
 	DemotedCount            int                        `json:"demoted_count,omitempty"`
 	PrunedCount             int                        `json:"pruned_count,omitempty"`
@@ -207,6 +208,7 @@ type RefreshHistory struct {
 	Threshold               string                     `json:"threshold,omitempty"`
 	ThresholdOverride       bool                       `json:"threshold_override,omitempty"`
 	ResolvedConfig          *GenerationThresholdConfig `json:"resolved_config,omitempty"`
+	KindFocus               string                     `json:"kind_focus,omitempty"`
 }
 
 type Store struct {
@@ -1081,10 +1083,63 @@ func RecordInjectionActivity(state *State, matches []Match, log InjectionLog, no
 	}
 }
 
+// DeriveOutcomes evaluates whether injected memories are helping.
+// For each injected memory, only sessions AFTER the last injection are checked.
+// If the same friction still appears post-injection → ineffective.
+// If friction stopped appearing post-injection → reinforced.
+// Non-injected memories stay neutral.
 func DeriveOutcomes(records []MemoryRecord, sessions []insightsdb.SessionRow, _ time.Time) []MemoryRecord {
-	return DeriveOutcomesFromEvidence(records, []string{buildOutcomeSignalText(sessions)}, time.Time{})
+	updated := append([]MemoryRecord(nil), records...)
+
+	// Build full evidence for non-injected records.
+	allSignalTokens := tokenize(buildOutcomeSignalText(sessions))
+
+	for i := range updated {
+		if updated[i].Origin == OriginManual {
+			updated[i].Outcome = OutcomeNeutral
+			continue
+		}
+
+		recordTokens := tokenize(strings.Join([]string{updated[i].Title, updated[i].Body, updated[i].Why}, " "))
+
+		if updated[i].InjectCount > 0 && !updated[i].LastInjectedAt.IsZero() {
+			// For injected memories: only evaluate against post-injection sessions.
+			var postInjectionSessions []insightsdb.SessionRow
+			for _, s := range sessions {
+				if s.CreatedAt.After(updated[i].LastInjectedAt) {
+					postInjectionSessions = append(postInjectionSessions, s)
+				}
+			}
+			if len(postInjectionSessions) == 0 {
+				// No sessions since injection — can't evaluate yet.
+				updated[i].Outcome = OutcomeNeutral
+				continue
+			}
+			postSignalTokens := tokenize(buildOutcomeSignalText(postInjectionSessions))
+			overlap := countTokenOverlap(recordTokens, postSignalTokens)
+			if overlap > 0 {
+				updated[i].Outcome = OutcomeIneffective
+			} else {
+				updated[i].Outcome = OutcomeReinforced
+			}
+		} else {
+			// Non-injected: neutral regardless of overlap.
+			overlap := countTokenOverlap(recordTokens, allSignalTokens)
+			if overlap > 0 {
+				// Topic appears in sessions but memory was never injected — neutral,
+				// not reinforced (we can't claim credit for something not injected).
+				updated[i].Outcome = OutcomeNeutral
+			} else {
+				updated[i].Outcome = OutcomeNeutral
+			}
+		}
+	}
+
+	return updated
 }
 
+// DeriveOutcomesFromEvidence is the test-friendly version that accepts raw evidence strings.
+// It uses the simpler overlap-based logic without temporal awareness.
 func DeriveOutcomesFromEvidence(records []MemoryRecord, evidence []string, _ time.Time) []MemoryRecord {
 	updated := append([]MemoryRecord(nil), records...)
 	signalTokens := tokenize(strings.Join(evidence, " "))
@@ -1096,12 +1151,7 @@ func DeriveOutcomesFromEvidence(records []MemoryRecord, evidence []string, _ tim
 		}
 
 		recordTokens := tokenize(strings.Join([]string{updated[i].Title, updated[i].Body, updated[i].Why}, " "))
-		overlap := 0
-		for token := range recordTokens {
-			if _, ok := signalTokens[token]; ok {
-				overlap++
-			}
-		}
+		overlap := countTokenOverlap(recordTokens, signalTokens)
 
 		switch {
 		case overlap == 0:
@@ -1109,11 +1159,21 @@ func DeriveOutcomesFromEvidence(records []MemoryRecord, evidence []string, _ tim
 		case updated[i].InjectCount > 0:
 			updated[i].Outcome = OutcomeIneffective
 		default:
-			updated[i].Outcome = OutcomeReinforced
+			updated[i].Outcome = OutcomeNeutral
 		}
 	}
 
 	return updated
+}
+
+func countTokenOverlap(recordTokens, signalTokens map[string]struct{}) int {
+	overlap := 0
+	for token := range recordTokens {
+		if _, ok := signalTokens[token]; ok {
+			overlap++
+		}
+	}
+	return overlap
 }
 
 func PruneRecords(records []MemoryRecord, now time.Time) ([]MemoryRecord, PruneResult) {
