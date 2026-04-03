@@ -10,6 +10,7 @@ type keyMap struct {
 	nextPage          key.Binding
 	prevPage          key.Binding
 	generate          key.Binding
+	copyDetail        key.Binding
 	quit              key.Binding
 }
 
@@ -41,6 +42,10 @@ var keys = keyMap{
 	generate: key.NewBinding(
 		key.WithKeys("g"),
 		key.WithHelp("g", "generate"),
+	),
+	copyDetail: key.NewBinding(
+		key.WithKeys("y"),
+		key.WithHelp("y", "copy"),
 	),
 	quit: key.NewBinding(
 		key.WithKeys("q"),

@@ -336,6 +336,12 @@ func formatTokensForDetail(tokens int) string {
 	}
 }
 
+// renderDetailPlainText renders session detail as plain text (no ANSI) for clipboard copy.
+func renderDetailPlainText(row insightsdb.SessionRow) string {
+	plain := styles{} // colorEnabled=false → render() is passthrough
+	return renderMetadataHeader(plain, row, 80) + "\n\n" + renderDetailContent(plain, row, 80)
+}
+
 func formatDuration(ms int64) string {
 	totalSec := ms / 1000
 	switch {
