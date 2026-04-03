@@ -182,8 +182,8 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.state.Store.InjectionScopes) > 0 {
 			selectOpts = append(selectOpts, memoryloop.WithInjectionScopes(m.state.Store.InjectionScopes))
 		}
-		matches := memoryloop.SelectRelevant(*m.state.Store, msg.prompt, time.Now(), selectOpts...)
-		return m, func() tea.Msg { return testPromptResultMsg{matches: matches} }
+		report := memoryloop.PreviewSelection(*m.state.Store, msg.prompt, time.Now(), selectOpts...)
+		return m, func() tea.Msg { return testPromptResultMsg{report: report} }
 
 	case refreshStartedMsg:
 		if m.isRefreshing {

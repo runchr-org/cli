@@ -139,6 +139,81 @@ func TestRootView_ExternalSkillPatchUsesAgentFileLabel(t *testing.T) {
 	require.NotContains(t, out, "Apply to skill files")
 }
 
+func TestInjectionView_PromptTesterShowsAllActiveMemories(t *testing.T) {
+	t.Parallel()
+
+	root := newRootModelForStyleTest()
+
+	// Simulate a prompt test result with both matched and skipped memories
+	root.injectionTab.report = memoryloop.SelectionReport{
+		Matches: []memoryloop.Match{
+			{
+				Record: memoryloop.MemoryRecord{
+					ID:     "memory-1",
+					Title:  "Run tests before merging",
+					Status: memoryloop.StatusActive,
+				},
+				Score:  6,
+				Reason: "keyword overlap: tests, merging",
+			},
+		},
+		Skipped: []memoryloop.SkippedMatch{
+			{
+				Record: memoryloop.MemoryRecord{
+					ID:     "memory-2",
+					Title:  "Keep repo memory reviewable",
+					Status: memoryloop.StatusCandidate,
+				},
+				Reason: "not active",
+			},
+			{
+				Record: memoryloop.MemoryRecord{
+					ID:     "memory-3",
+					Title:  "Use structured logging",
+					Status: memoryloop.StatusActive,
+				},
+				Reason: "scope mismatch",
+			},
+		},
+	}
+
+	out := root.injectionTab.view()
+
+	// Verify summary count
+	require.Contains(t, out, "1 would inject, 2 skipped")
+
+	// Verify matched memory shows with INJECT label
+	require.Contains(t, out, "INJECT")
+	require.Contains(t, out, "Run tests before merging")
+
+	// Verify skipped memories show with SKIP label and reasons
+	require.Contains(t, out, "SKIP")
+	require.Contains(t, out, "Keep repo memory reviewable")
+	require.Contains(t, out, "not active")
+	require.Contains(t, out, "Use structured logging")
+	require.Contains(t, out, "scope mismatch")
+
+	// Verify no raw score numbers appear
+	require.NotContains(t, out, "score: 6")
+	require.NotContains(t, out, "score:")
+}
+
+func TestInjectionView_EmptyResultShowsNothing(t *testing.T) {
+	t.Parallel()
+
+	root := newRootModelForStyleTest()
+
+	out := root.injectionTab.view()
+
+	// No results card when no test has been run
+	require.NotContains(t, out, "would inject")
+	require.NotContains(t, out, "SKIP")
+
+	// Section labels still present
+	require.Contains(t, out, "PROMPT TESTER")
+	require.Contains(t, out, "RECENT INJECTIONS")
+}
+
 func newRootModelForStyleTest() rootModel {
 	styles := newStyles()
 	m := rootModel{

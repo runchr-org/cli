@@ -22,7 +22,7 @@ type injectionModel struct {
 	logTable   table.Model
 	input      textinput.Model
 	inputFocus bool
-	matches    []memoryloop.Match
+	report     memoryloop.SelectionReport
 }
 
 func newInjectionModel(s tuiStyles) injectionModel {
@@ -101,7 +101,7 @@ func (m *injectionModel) rebuildLogTable() {
 func (m injectionModel) update(msg tea.Msg) (injectionModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case testPromptResultMsg:
-		m.matches = msg.matches
+		m.report = msg.report
 		return m, nil
 
 	case tea.KeyMsg:
@@ -158,22 +158,45 @@ func (m injectionModel) view() string {
 	b.WriteString(m.input.View())
 	b.WriteString("\n")
 
-	// Match results in bordered card
-	if len(m.matches) > 0 {
+	// Results card showing all evaluated memories
+	totalResults := len(m.report.Matches) + len(m.report.Skipped)
+	if totalResults > 0 {
 		var mb strings.Builder
-		mb.WriteString(m.styles.render(m.styles.bold, fmt.Sprintf("Matches (%d)", len(m.matches))))
-		mb.WriteString("\n\n")
-		for i, match := range m.matches {
+		mb.WriteString(m.styles.render(m.styles.bold,
+			fmt.Sprintf("%d would inject, %d skipped", len(m.report.Matches), len(m.report.Skipped))))
+		mb.WriteString("\n")
+
+		for i, match := range m.report.Matches {
+			mb.WriteString("\n")
 			fmt.Fprintf(&mb, "%s  %s",
-				m.styles.render(m.styles.title, match.Record.Title),
-				m.styles.render(m.styles.active, fmt.Sprintf("score: %d", match.Score)))
+				m.styles.render(m.styles.active, "INJECT"),
+				m.styles.render(m.styles.title, match.Record.Title))
 			if match.Reason != "" {
 				fmt.Fprintf(&mb, "\n  %s", m.styles.render(m.styles.dim, match.Reason))
 			}
-			if i < len(m.matches)-1 {
-				mb.WriteString("\n\n")
+			if i < len(m.report.Matches)-1 {
+				mb.WriteString("\n")
 			}
 		}
+
+		if len(m.report.Matches) > 0 && len(m.report.Skipped) > 0 {
+			mb.WriteString("\n\n")
+			mb.WriteString(m.styles.render(m.styles.dim, strings.Repeat("-", 40)))
+		}
+
+		for i, skipped := range m.report.Skipped {
+			mb.WriteString("\n")
+			fmt.Fprintf(&mb, "%s  %s",
+				m.styles.render(m.styles.dim, "SKIP"),
+				m.styles.render(m.styles.dim, skipped.Record.Title))
+			if skipped.Reason != "" {
+				fmt.Fprintf(&mb, "  %s", m.styles.render(m.styles.dim, "("+skipped.Reason+")"))
+			}
+			if i < len(m.report.Skipped)-1 {
+				mb.WriteString("\n")
+			}
+		}
+
 		cardStyle := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("245")).

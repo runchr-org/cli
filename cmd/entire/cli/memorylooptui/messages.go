@@ -79,7 +79,7 @@ type testPromptMsg struct {
 
 // testPromptResultMsg contains the results of a prompt test.
 type testPromptResultMsg struct {
-	matches []memoryloop.Match
+	report memoryloop.SelectionReport
 }
 
 // refreshStartedMsg indicates a refresh has begun.
