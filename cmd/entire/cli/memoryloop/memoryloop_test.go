@@ -3134,3 +3134,54 @@ func TestSelectRelevant_WithCurrentOwnerID_FiltersPersonalMemories(t *testing.T)
 	require.Contains(t, ids, "repo")
 	require.NotContains(t, ids, "theirs")
 }
+
+func TestParseKeywords(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{name: "simple", input: "go test, deploy", expected: []string{"go test", "deploy"}},
+		{name: "trims whitespace", input: "  go test , deploy  ", expected: []string{"go test", "deploy"}},
+		{name: "drops empty", input: "go test,,deploy,", expected: []string{"go test", "deploy"}},
+		{name: "dedup case insensitive", input: "Go Test, go test, DEPLOY", expected: []string{"Go Test", "DEPLOY"}},
+		{name: "drops short", input: "a, go test, b", expected: []string{"go test"}},
+		{name: "max 10", input: "a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12", expected: []string{"a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10"}},
+		{name: "empty string", input: "", expected: nil},
+		{name: "all short", input: "a, b, c", expected: nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseKeywords(tc.input)
+			require.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+func TestCountMatchedKeywords(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		prompt   string
+		phrases  []string
+		expected int
+	}{
+		{name: "exact phrase match", prompt: "run go test -v", phrases: []string{"go test"}, expected: 1},
+		{name: "no match wrong order", prompt: "test the go module", phrases: []string{"go test"}, expected: 0},
+		{name: "case insensitive", prompt: "Run Go Test", phrases: []string{"go test"}, expected: 1},
+		{name: "multiple matches", prompt: "run go test and deploy", phrases: []string{"go test", "deploy"}, expected: 2},
+		{name: "partial no match", prompt: "pytest coverage", phrases: []string{"go test"}, expected: 0},
+		{name: "overlapping phrases", prompt: "run go test now", phrases: []string{"go", "go test"}, expected: 2},
+		{name: "empty phrases", prompt: "anything", phrases: nil, expected: 0},
+		{name: "empty prompt", prompt: "", phrases: []string{"go test"}, expected: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := countMatchedKeywords(strings.ToLower(tc.prompt), tc.phrases)
+			require.Equal(t, tc.expected, result)
+		})
+	}
+}

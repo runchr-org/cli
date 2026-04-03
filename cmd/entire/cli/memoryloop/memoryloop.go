@@ -1591,6 +1591,49 @@ func tokenize(text string) map[string]struct{} {
 	return tokens
 }
 
+const MaxKeywordsPerRecord = 10
+const MinKeywordLength = 2
+
+// ParseKeywords parses a comma-separated keyword string into a deduplicated,
+// trimmed slice. Drops entries shorter than MinKeywordLength. Caps at MaxKeywordsPerRecord.
+func ParseKeywords(input string) []string {
+	if strings.TrimSpace(input) == "" {
+		return nil
+	}
+	parts := strings.Split(input, ",")
+	seen := make(map[string]struct{}, len(parts))
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		kw := strings.TrimSpace(part)
+		if len(kw) < MinKeywordLength {
+			continue
+		}
+		lower := strings.ToLower(kw)
+		if _, ok := seen[lower]; ok {
+			continue
+		}
+		seen[lower] = struct{}{}
+		result = append(result, kw)
+		if len(result) >= MaxKeywordsPerRecord {
+			break
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func countMatchedKeywords(promptLower string, phrases []string) int {
+	count := 0
+	for _, phrase := range phrases {
+		if strings.Contains(promptLower, phrase) {
+			count++
+		}
+	}
+	return count
+}
+
 func minInt(a, b int) int {
 	if a < b {
 		return a
