@@ -42,24 +42,24 @@ const (
 
 //nolint:recvcheck // bubbletea pattern: value receiver for interface, pointer receivers for mutation helpers
 type rootModel struct {
-	ctx             context.Context
-	rows            []insightsdb.SessionRow
-	filteredRows    []insightsdb.SessionRow
-	currentBranch   string
-	repoCheckpoints map[string]struct{} // checkpoint IDs reachable from default branch
-	branchFilter    branchFilter
-	timeFilter      timeFilter
-	cursor          int
-	paginator       paginator.Model
-	pageSize        int
-	detailVP        viewport.Model
-	width           int
-	height          int
-	styles          styles
-	generateFn      GenerateFunc
-	generating      bool
-	genStatus       string // status message for generate operation
-	accessible      bool   // accessible mode fallback
+	ctx           context.Context
+	branchRows    []insightsdb.SessionRow // rows for "current branch" view
+	repoRows      []insightsdb.SessionRow // rows for "repo" view
+	filteredRows  []insightsdb.SessionRow
+	currentBranch string
+	branchFilter  branchFilter
+	timeFilter    timeFilter
+	cursor        int
+	paginator     paginator.Model
+	pageSize      int
+	detailVP      viewport.Model
+	width         int
+	height        int
+	styles        styles
+	generateFn    GenerateFunc
+	generating    bool
+	genStatus     string // status message for generate operation
+	accessible    bool   // accessible mode fallback
 }
 
 type generateDoneMsg struct {
@@ -74,8 +74,8 @@ func Run(ctx context.Context, rows []insightsdb.SessionRow) error {
 	return RunWithCurrentBranch(ctx, rows, "", nil, nil)
 }
 
-func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, currentBranch string, repoCheckpoints map[string]struct{}, generateFn GenerateFunc) error {
-	p := tea.NewProgram(newRootModel(rows, currentBranch, repoCheckpoints, generateFn), tea.WithAltScreen(), tea.WithMouseCellMotion())
+func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, currentBranch string, repoRows []insightsdb.SessionRow, generateFn GenerateFunc) error {
+	p := tea.NewProgram(newRootModel(rows, currentBranch, repoRows, generateFn), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("run summary TUI: %w", err)
@@ -83,7 +83,7 @@ func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, curre
 	return nil
 }
 
-func newRootModel(rows []insightsdb.SessionRow, currentBranch string, repoCheckpoints map[string]struct{}, generateFn GenerateFunc) rootModel {
+func newRootModel(rows []insightsdb.SessionRow, currentBranch string, repoRows []insightsdb.SessionRow, generateFn GenerateFunc) rootModel {
 	s := newStyles()
 	p := paginator.New()
 	p.PerPage = defaultPageSize
@@ -94,20 +94,20 @@ func newRootModel(rows []insightsdb.SessionRow, currentBranch string, repoCheckp
 	vp.MouseWheelEnabled = true
 
 	m := rootModel{
-		ctx:             context.Background(),
-		rows:            append([]insightsdb.SessionRow(nil), rows...),
-		currentBranch:   currentBranch,
-		repoCheckpoints: repoCheckpoints,
-		branchFilter:    filterCurrentBranch,
-		timeFilter:      timeFilterAll,
-		paginator:       p,
-		pageSize:        defaultPageSize,
-		styles:          s,
-		width:           100,
-		height:          30,
-		detailVP:        vp,
-		generateFn:      generateFn,
-		accessible:      accessible,
+		ctx:           context.Background(),
+		branchRows:    append([]insightsdb.SessionRow(nil), rows...),
+		repoRows:      append([]insightsdb.SessionRow(nil), repoRows...),
+		currentBranch: currentBranch,
+		branchFilter:  filterCurrentBranch,
+		timeFilter:    timeFilterAll,
+		paginator:     p,
+		pageSize:      defaultPageSize,
+		styles:        s,
+		width:         100,
+		height:        30,
+		detailVP:      vp,
+		generateFn:    generateFn,
+		accessible:    accessible,
 	}
 	m.rebuildFilteredRows()
 	m.updateDetailViewport()
@@ -415,9 +415,15 @@ func (m rootModel) contentHeight() int {
 // --- Data management ---
 
 func (m *rootModel) updateRowData(updated insightsdb.SessionRow) {
-	for i, row := range m.rows {
+	for i, row := range m.branchRows {
 		if row.SessionID == updated.SessionID {
-			m.rows[i] = updated
+			m.branchRows[i] = updated
+			break
+		}
+	}
+	for i, row := range m.repoRows {
+		if row.SessionID == updated.SessionID {
+			m.repoRows[i] = updated
 			break
 		}
 	}
@@ -448,9 +454,18 @@ func (m *rootModel) rebuildFilteredRows() {
 }
 
 func (m rootModel) applyFilter() []insightsdb.SessionRow {
-	filtered := make([]insightsdb.SessionRow, 0, len(m.rows))
+	// Select source rows based on branch filter scope.
+	var source []insightsdb.SessionRow
+	switch m.branchFilter {
+	case filterCurrentBranch:
+		source = m.branchRows
+	case filterRepo:
+		source = m.repoRows
+	}
+
+	filtered := make([]insightsdb.SessionRow, 0, len(source))
 	now := time.Now()
-	for _, row := range m.rows {
+	for _, row := range source {
 		// Time filter
 		switch m.timeFilter {
 		case timeFilter24h:
@@ -469,19 +484,11 @@ func (m rootModel) applyFilter() []insightsdb.SessionRow {
 			// no time filtering
 		}
 
-		// Branch filter
-		switch m.branchFilter {
-		case filterCurrentBranch:
-			if m.currentBranch != "" && row.Branch != m.currentBranch {
-				continue
-			}
-		case filterRepo:
-			if m.repoCheckpoints != nil {
-				if _, ok := m.repoCheckpoints[row.CheckpointID]; !ok {
-					continue
-				}
-			}
+		// Current-branch view still filters by branch name.
+		if m.branchFilter == filterCurrentBranch && m.currentBranch != "" && row.Branch != m.currentBranch {
+			continue
 		}
+
 		filtered = append(filtered, row)
 	}
 	return filtered

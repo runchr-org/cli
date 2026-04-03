@@ -68,17 +68,18 @@ func TestNewRootModel_DefaultsToCurrentBranchFilter(t *testing.T) {
 func TestRootUpdate_CycleBranchFilterRebuildsVisibleRows(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil, nil)
+	rows := sampleRowsForTest()
+	root := newRootModel(rows, "feature/summary-browser", rows, nil)
 	require.Equal(t, filterCurrentBranch, root.branchFilter)
 	require.Len(t, root.filteredRows, 1)
 
-	// First cycle: Current Branch → All (key "2")
+	// First cycle: Current Branch → Repo (key "2")
 	next, _ := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	root = requireRootModel(t, next)
 	require.Equal(t, filterRepo, root.branchFilter)
 	require.Len(t, root.filteredRows, 2)
 
-	// Second cycle: All → Current Branch (wraps around)
+	// Second cycle: Repo → Current Branch (wraps around)
 	next, _ = root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	root = requireRootModel(t, next)
 	require.Equal(t, filterCurrentBranch, root.branchFilter)
@@ -129,7 +130,7 @@ func TestRootUpdate_CycleTimeFilter(t *testing.T) {
 func TestRootUpdate_FilterChangeResetsCursor(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", nil, nil)
+	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", paginatedRowsForTest(), nil)
 	root.branchFilter = filterRepo
 	root.rebuildFilteredRows()
 	root.moveCursor(2) // move to third row
@@ -144,7 +145,7 @@ func TestRootUpdate_FilterChangeResetsCursor(t *testing.T) {
 func TestRootUpdate_CursorMovement(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", nil, nil)
+	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", paginatedRowsForTest(), nil)
 	root.branchFilter = filterRepo
 	root.rebuildFilteredRows()
 	require.Equal(t, 0, root.cursor)
@@ -185,7 +186,8 @@ func TestRootUpdate_CursorDoesNotExceedBounds(t *testing.T) {
 func TestRootUpdate_CursorChangeUpdatesDetail(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil, nil)
+	rows := sampleRowsForTest()
+	root := newRootModel(rows, "feature/summary-browser", rows, nil)
 	root.branchFilter = filterRepo
 	root.cursor = 0
 	root.rebuildFilteredRows()
@@ -211,7 +213,7 @@ func TestRootUpdate_CursorChangeUpdatesDetail(t *testing.T) {
 func TestRootUpdate_PageNavigation(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", nil, nil)
+	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", paginatedRowsForTest(), nil)
 	root.branchFilter = filterRepo
 	root.pageSize = 2
 	root.rebuildFilteredRows()
@@ -286,7 +288,8 @@ func TestRootUpdate_Generate(t *testing.T) {
 		return row, nil
 	}
 
-	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil, generateFn)
+	rows := sampleRowsForTest()
+	root := newRootModel(rows, "feature/summary-browser", rows, generateFn)
 	root.branchFilter = filterRepo
 	root.rebuildFilteredRows()
 	root.updateDetailViewport()
@@ -346,7 +349,8 @@ func TestRootView_EmptyFilteredRows(t *testing.T) {
 // --- Helpers ---
 
 func newRootModelForTest() rootModel {
-	m := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil, nil)
+	rows := sampleRowsForTest()
+	m := newRootModel(rows, "feature/summary-browser", rows, nil)
 	m.width = 100
 	m.height = 30
 	m.pageSize = 10

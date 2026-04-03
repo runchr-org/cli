@@ -58,6 +58,24 @@ func (idb *InsightsDB) QueryByCheckpointPrefix(ctx context.Context, prefix strin
 	)
 }
 
+// QueryByCheckpointIDs returns the most recent sessions whose checkpoint_id is
+// in the given set, ordered by created_at DESC, limited to n rows.
+func (idb *InsightsDB) QueryByCheckpointIDs(ctx context.Context, ids []string, n int) ([]SessionRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids)+1)
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	args[len(ids)] = n
+	query := "SELECT " + sessionColumns + " FROM sessions WHERE checkpoint_id IN (" +
+		strings.Join(placeholders, ",") + ") ORDER BY created_at DESC LIMIT ?"
+	return idb.querySessions(ctx, query, args...)
+}
+
 // SessionCount returns the total number of cached sessions.
 func (idb *InsightsDB) SessionCount(ctx context.Context) (int, error) {
 	var count int

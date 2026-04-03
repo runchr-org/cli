@@ -64,6 +64,35 @@ type summaryDetailView struct {
 }
 
 var runSummaryTUI = summarytui.RunWithCurrentBranch //nolint:gochecknoglobals // injectable for testing
+
+// loadRepoSessions returns the most recent sessions whose checkpoints are reachable
+// from the default branch. Returns nil silently on any error.
+func loadRepoSessions(ctx context.Context) []insightsdb.SessionRow {
+	repoCheckpoints := buildRepoCheckpointSet(ctx)
+	if repoCheckpoints == nil || len(repoCheckpoints) == 0 {
+		return nil
+	}
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		return nil
+	}
+	idb, err := insightsdb.Open(filepath.Join(worktreeRoot, paths.EntireDir, "insights.db"))
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = idb.Close() }()
+
+	ids := make([]string, 0, len(repoCheckpoints))
+	for id := range repoCheckpoints {
+		ids = append(ids, id)
+	}
+	rows, err := idb.QueryByCheckpointIDs(ctx, ids, maxSummaryRecentSessions)
+	if err != nil {
+		return nil
+	}
+	return rows
+}
+
 var summaryRefreshCacheIfStale = refreshCacheIfStale
 
 func newSummaryCmd() *cobra.Command {
@@ -123,11 +152,11 @@ func runSummary(ctx context.Context, w io.Writer, opts summaryOptions) error {
 		currentBranch = branch
 	}
 
-	// Build the set of checkpoint IDs reachable from the default branch
-	// so the TUI can filter "repo" scope to merged sessions.
-	repoCheckpoints := buildRepoCheckpointSet(ctx)
+	// Load repo-scoped rows: the most recent sessions whose checkpoints
+	// are reachable from the default branch (independent view from current-branch rows).
+	repoRows := loadRepoSessions(ctx)
 
-	return runSummaryTUI(ctx, rows, currentBranch, repoCheckpoints, generateForSession)
+	return runSummaryTUI(ctx, rows, currentBranch, repoRows, generateForSession)
 }
 
 func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb.SessionRow, error) {
