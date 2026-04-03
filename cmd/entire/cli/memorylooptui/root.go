@@ -190,7 +190,6 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.isRefreshing = true
-		// Full async refresh will be added in a later task.
 		return m, func() tea.Msg {
 			return flashMsg{text: "Refresh not yet implemented in TUI. Use: entire memory-loop refresh", success: false}
 		}
@@ -324,10 +323,7 @@ func (m rootModel) handleAddMemory(msg addMemoryMsg) (tea.Model, tea.Cmd) {
 	if err := m.saveState(); err != nil {
 		return m, func() tea.Msg { return flashMsg{text: fmt.Sprintf("save failed: %v", err), success: false} }
 	}
-	m.memoriesTab.setState(m.state)
-	m.injectionTab.setState(m.state)
-	m.historyTab.setState(m.state)
-	m.settingsTab.setState(m.state)
+	m.pushState()
 	return m, nil
 }
 
@@ -340,10 +336,7 @@ func (m rootModel) handlePrune() (tea.Model, tea.Cmd) {
 	if err := m.saveState(); err != nil {
 		return m, func() tea.Msg { return flashMsg{text: fmt.Sprintf("save failed: %v", err), success: false} }
 	}
-	m.memoriesTab.setState(m.state)
-	m.injectionTab.setState(m.state)
-	m.historyTab.setState(m.state)
-	m.settingsTab.setState(m.state)
+	m.pushState()
 	msg := fmt.Sprintf("Pruned %d records", result.ArchivedCount)
 	return m, func() tea.Msg { return flashMsg{text: msg, success: true} }
 }
@@ -390,10 +383,7 @@ func (m rootModel) handleSettingsChanged(msg settingsChangedMsg) (tea.Model, tea
 	if err := m.saveState(); err != nil {
 		return m, func() tea.Msg { return flashMsg{text: fmt.Sprintf("save failed: %v", err), success: false} }
 	}
-	m.memoriesTab.setState(m.state)
-	m.injectionTab.setState(m.state)
-	m.historyTab.setState(m.state)
-	m.settingsTab.setState(m.state)
+	m.pushState()
 	return m, nil
 }
 

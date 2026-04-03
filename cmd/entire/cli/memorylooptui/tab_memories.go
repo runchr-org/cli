@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
+	"github.com/entireio/cli/cmd/entire/cli/stringutil"
 )
 
 type statusFilter int
@@ -606,9 +607,5 @@ func statusDotPlain(status memoryloop.Status) string {
 }
 
 func truncate(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen-1]) + "\u2026"
+	return stringutil.TruncateRunes(s, maxLen, "\u2026")
 }

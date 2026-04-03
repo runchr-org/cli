@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/entireio/cli/cmd/entire/cli/stringutil"
 	"github.com/entireio/cli/cmd/entire/cli/termstyle"
 )
 
@@ -102,11 +103,5 @@ func (s styles) renderBox(title, content string, width int) string {
 }
 
 func truncate(value string, limit int) string {
-	if limit <= 0 || len(value) <= limit {
-		return value
-	}
-	if limit <= 3 {
-		return value[:limit]
-	}
-	return value[:limit-3] + "..."
+	return stringutil.TruncateRunes(value, limit, "...")
 }

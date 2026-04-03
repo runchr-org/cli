@@ -1,6 +1,7 @@
 package improve
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/facets"
@@ -183,7 +184,7 @@ func AnalyzePatterns(summaries []SessionSummaryData) PatternAnalysis {
 				acc.strong = true
 			}
 			acc.evidence = appendLimited(acc.evidence, rule.Evidence, maxFrictionExamples)
-			if rule.SourceKind != "" && !containsString(acc.sourceKinds, rule.SourceKind) {
+			if rule.SourceKind != "" && !slices.Contains(acc.sourceKinds, rule.SourceKind) {
 				acc.sourceKinds = append(acc.sourceKinds, rule.SourceKind)
 			}
 			if acc.whyReusable == "" {
@@ -353,13 +354,4 @@ func sessionIDs(values map[string]struct{}) []string {
 		out = append(out, id)
 	}
 	return out
-}
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }

@@ -32,13 +32,17 @@ func (g *GeminiCLIAgent) WriteHookResponseWithContext(message, additionalContext
 }
 
 func (g *GeminiCLIAgent) writeHookResponse(message, additionalContext string) error {
+	type hookSpecificOutput struct {
+		AdditionalContext string `json:"additionalContext,omitempty"`
+	}
+
 	resp := struct {
-		SystemMessage      string `json:"systemMessage,omitempty"`
-		HookSpecificOutput struct {
-			AdditionalContext string `json:"additionalContext,omitempty"`
-		} `json:"hookSpecificOutput,omitempty"`
+		SystemMessage      string              `json:"systemMessage,omitempty"`
+		HookSpecificOutput *hookSpecificOutput `json:"hookSpecificOutput,omitempty"`
 	}{SystemMessage: message}
-	resp.HookSpecificOutput.AdditionalContext = additionalContext
+	if additionalContext != "" {
+		resp.HookSpecificOutput = &hookSpecificOutput{AdditionalContext: additionalContext}
+	}
 	if err := json.NewEncoder(os.Stdout).Encode(resp); err != nil {
 		return fmt.Errorf("failed to encode hook response: %w", err)
 	}

@@ -26,6 +26,7 @@ const (
 	DefaultRefreshWindow = 20
 	maxInjectionLogs     = 50
 	maxInjectionBytes    = 1200
+	maxHistoryEvents     = 100
 )
 
 var stopWords = map[string]struct{}{
@@ -940,6 +941,9 @@ func RecordInjectionActivity(state *State, matches []Match, log InjectionLog, no
 			Type: "injected",
 			At:   now,
 		})
+		if len(state.Store.Records[i].History) > maxHistoryEvents {
+			state.Store.Records[i].History = state.Store.Records[i].History[len(state.Store.Records[i].History)-maxHistoryEvents:]
+		}
 	}
 
 	state.InjectionLogs = append(state.InjectionLogs, log)
