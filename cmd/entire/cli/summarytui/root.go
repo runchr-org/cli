@@ -370,7 +370,7 @@ func (m rootModel) renderDetailPane(width, _ int) string {
 func (m rootModel) renderStatusBar() string {
 	var parts []string
 	parts = append(parts, "j/k navigate")
-	parts = append(parts, "scroll detail")
+	parts = append(parts, "pgup/dn scroll")
 	parts = append(parts, "1 time")
 	parts = append(parts, "2 branch")
 	parts = append(parts, "←→ page")
