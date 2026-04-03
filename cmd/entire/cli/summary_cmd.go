@@ -69,7 +69,7 @@ var runSummaryTUI = summarytui.RunWithCurrentBranch //nolint:gochecknoglobals //
 // from the default branch. Returns nil silently on any error.
 func loadRepoSessions(ctx context.Context) []insightsdb.SessionRow {
 	repoCheckpoints := buildRepoCheckpointSet(ctx)
-	if repoCheckpoints == nil || len(repoCheckpoints) == 0 {
+	if len(repoCheckpoints) == 0 {
 		return nil
 	}
 	worktreeRoot, err := paths.WorktreeRoot(ctx)
