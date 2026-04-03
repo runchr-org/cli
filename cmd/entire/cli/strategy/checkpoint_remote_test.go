@@ -137,6 +137,39 @@ func TestDeriveCheckpointURL(t *testing.T) {
 	}
 }
 
+func TestDeriveCheckpointURL_SSHUpgradedToHTTPS_WhenTokenSet(t *testing.T) {
+	t.Setenv(CheckpointTokenEnvVar, "ghp_test123")
+
+	config := &settings.CheckpointRemoteConfig{Provider: "github", Repo: "org/checkpoints"}
+
+	// SSH origin should produce HTTPS checkpoint URL when token is set.
+	got, err := deriveCheckpointURL("git@github.com:org/main-repo.git", config)
+	require.NoError(t, err)
+	assert.Equal(t, "https://github.com/org/checkpoints.git", got)
+}
+
+func TestDeriveCheckpointURL_HTTPSUnchanged_WhenTokenSet(t *testing.T) {
+	t.Setenv(CheckpointTokenEnvVar, "ghp_test123")
+
+	config := &settings.CheckpointRemoteConfig{Provider: "github", Repo: "org/checkpoints"}
+
+	// HTTPS origin stays HTTPS.
+	got, err := deriveCheckpointURL("https://github.com/org/main-repo.git", config)
+	require.NoError(t, err)
+	assert.Equal(t, "https://github.com/org/checkpoints.git", got)
+}
+
+func TestDeriveCheckpointURL_SSHPreserved_WhenNoToken(t *testing.T) {
+	t.Setenv(CheckpointTokenEnvVar, "")
+
+	config := &settings.CheckpointRemoteConfig{Provider: "github", Repo: "org/checkpoints"}
+
+	// SSH origin stays SSH when no token is set.
+	got, err := deriveCheckpointURL("git@github.com:org/main-repo.git", config)
+	require.NoError(t, err)
+	assert.Equal(t, "git@github.com:org/checkpoints.git", got)
+}
+
 func TestExtractOwnerFromRemoteURL(t *testing.T) {
 	t.Parallel()
 

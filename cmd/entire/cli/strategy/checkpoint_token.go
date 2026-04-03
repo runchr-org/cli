@@ -66,6 +66,11 @@ func CheckpointGitCommand(ctx context.Context, target string, args ...string) *e
 	}
 }
 
+// hasCheckpointToken returns true if ENTIRE_CHECKPOINT_TOKEN is set to a non-empty value.
+func hasCheckpointToken() bool {
+	return strings.TrimSpace(os.Getenv(CheckpointTokenEnvVar)) != ""
+}
+
 // appendCheckpointTokenEnv appends GIT_CONFIG_COUNT-based env vars to inject
 // an Authorization header into git HTTP requests. The token is sent as a Basic
 // credential with the format "x-access-token:<token>" (base64-encoded), which

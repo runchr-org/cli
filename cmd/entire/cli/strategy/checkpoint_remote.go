@@ -240,8 +240,18 @@ func deriveCheckpointURL(pushRemoteURL string, config *settings.CheckpointRemote
 }
 
 // deriveCheckpointURLFromInfo constructs a checkpoint URL from already-parsed remote info.
+// When ENTIRE_CHECKPOINT_TOKEN is set and the origin uses SSH, the URL is forced to HTTPS
+// so the token can be used for authentication.
 func deriveCheckpointURLFromInfo(info *gitRemoteInfo, config *settings.CheckpointRemoteConfig) (string, error) {
-	switch info.protocol {
+	protocol := info.protocol
+
+	// If a checkpoint token is available and the origin is SSH, upgrade to HTTPS
+	// so the token can actually be used for authentication.
+	if protocol == protocolSSH && hasCheckpointToken() {
+		protocol = protocolHTTPS
+	}
+
+	switch protocol {
 	case protocolSSH:
 		// SCP format: git@host:owner/repo.git
 		return fmt.Sprintf("git@%s:%s.git", info.host, config.Repo), nil
