@@ -197,21 +197,24 @@ go test -tags=integration ./cmd/entire/cli/integration_test -run TestLogin
 
 ## Commands Reference
 
-| Command          | Description                                                                                       |
-| ---------------- | ------------------------------------------------------------------------------------------------- |
-| `entire clean`   | Clean up session data and orphaned Entire data (use `--all` for repo-wide cleanup)                |
-| `entire disable` | Remove Entire hooks from repository                                                               |
-| `entire doctor`  | Fix or clean up stuck sessions                                                                    |
-| `entire enable`  | Enable Entire in your repository                                                                  |
-| `entire explain` | Explain a session or commit                                                                       |
-| `entire login`   | Authenticate the CLI with Entire device auth                                                      |
-| `entire resume`  | Switch to a branch, restore latest checkpointed session metadata, and show command(s) to continue |
-| `entire rewind`  | Rewind to a previous checkpoint                                                                   |
-| `entire status`  | Show current session info                                                                         |
-| `entire sessions stop` | Mark one or more active sessions as ended                                                   |
-| `entire version` | Show Entire CLI version                                                                           |
+
+| Command                | Description                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| `entire clean`         | Clean up session data and orphaned Entire data (use `--all` for repo-wide cleanup)                |
+| `entire disable`       | Remove Entire hooks from repository                                                               |
+| `entire doctor`        | Fix or clean up stuck sessions                                                                    |
+| `entire enable`        | Enable Entire in your repository                                                                  |
+| `entire explain`       | Explain a session or commit                                                                       |
+| `entire login`         | Authenticate the CLI with Entire device auth                                                      |
+| `entire resume`        | Switch to a branch, restore latest checkpointed session metadata, and show command(s) to continue |
+| `entire rewind`        | Rewind to a previous checkpoint                                                                   |
+| `entire status`        | Show current session info                                                                         |
+| `entire sessions stop` | Mark one or more active sessions as ended                                                         |
+| `entire version`       | Show Entire CLI version                                                                           |
+
 
 ### `entire enable` Flags
+
 
 | Flag                                        | Description                                                                                                       |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -222,6 +225,7 @@ go test -tags=integration ./cmd/entire/cli/integration_test -run TestLogin
 | `--skip-push-sessions`                      | Disable automatic pushing of session logs on git push                                                             |
 | `--checkpoint-remote <provider:owner/repo>` | Push checkpoint branches to a separate repo (e.g., `github:org/checkpoints-repo`)                                 |
 | `--telemetry=false`                         | Disable anonymous usage analytics                                                                                 |
+
 
 **Examples:**
 
@@ -260,6 +264,7 @@ Personal overrides, gitignored by default:
 
 ### Configuration Options
 
+
 | Option                               | Values                                       | Description                                             |
 | ------------------------------------ | -------------------------------------------- | ------------------------------------------------------- |
 | `enabled`                            | `true`, `false`                              | Enable/disable Entire                                   |
@@ -269,9 +274,11 @@ Personal overrides, gitignored by default:
 | `strategy_options.summarize.enabled` | `true`, `false`                              | Auto-generate AI summaries at commit time               |
 | `telemetry`                          | `true`, `false`                              | Send anonymous usage statistics to Posthog              |
 
+
 ### Agent Hook Configuration
 
 Each agent stores its hook configuration in its own directory. When you run `entire enable`, hooks are installed in the appropriate location for each selected agent:
+
 
 | Agent            | Hook Location                 | Format            |
 | ---------------- | ----------------------------- | ----------------- |
@@ -281,6 +288,7 @@ Each agent stores its hook configuration in its own directory. When you run `ent
 | Cursor           | `.cursor/hooks.json`          | JSON hooks config |
 | Factory AI Droid | `.factory/settings.json`      | JSON hooks config |
 | Copilot CLI      | `.github/hooks/entire.json`   | JSON hooks config |
+
 
 You can enable multiple agents at the same time — each agent's hooks are independent. Entire detects which agents are active by checking for installed hooks, not by a setting in `settings.json`.
 
@@ -427,12 +435,14 @@ Entire automatically redacts detected secrets (API keys, tokens, credentials) wh
 
 ### Common Issues
 
+
 | Issue                    | Solution                                                |
 | ------------------------ | ------------------------------------------------------- |
 | "Not a git repository"   | Navigate to a Git repository first                      |
 | "Entire is disabled"     | Run `entire enable`                                     |
 | "No rewind points found" | Work with your configured agent and commit your changes |
 | "shadow branch conflict" | Run `entire clean --force`                              |
+
 
 ### SSH Authentication Errors
 
@@ -536,7 +546,7 @@ entire --help              # General help
 entire <command> --help    # Command-specific help
 ```
 
-- **GitHub Issues:** Report bugs or request features at https://github.com/entireio/cli/issues
+- **GitHub Issues:** Report bugs or request features at [https://github.com/entireio/cli/issues](https://github.com/entireio/cli/issues)
 - **Contributing:** See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 
 ## License
