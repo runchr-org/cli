@@ -78,6 +78,7 @@ type GenerateInput struct {
 	SourceWindow    int
 	MaxRecords      int
 	ThresholdConfig GenerationThresholdConfig
+	KindFocus       Kind // If non-empty, tailor prompt to focus on this kind only.
 }
 
 type generateResponse struct {
@@ -129,6 +130,7 @@ type GenerationStats struct {
 	FilteredWeakCount       int
 	FilteredGenericCount    int
 	FilteredNoEvidenceCount int
+	FilteredKindCount       int
 	DedupedCount            int
 }
 
@@ -239,6 +241,10 @@ func buildGeneratedRecordsDetailed(resp generateResponse, input GenerateInput, n
 		kind := item.Kind
 		if kind == "" {
 			kind = KindRepoRule
+		}
+		if input.KindFocus != "" && kind != input.KindFocus {
+			stats.FilteredKindCount++
+			continue
 		}
 		confidence := normalizeConfidence(item.Confidence)
 		strength := clamp(item.Strength, 1, 5)
@@ -391,10 +397,15 @@ func BuildPrompt(input GenerateInput) string {
 	}
 	sb.WriteString("</recent_sessions>\n\n")
 
+	kindEnum := "repo_rule|workflow_rule|agent_instruction|skill_patch|anti_pattern"
+	if input.KindFocus != "" {
+		kindEnum = string(input.KindFocus)
+	}
+
 	fmt.Fprintf(&sb, `Return ONLY JSON with this structure:
 {
   "records": [{
-    "kind": "repo_rule|workflow_rule|agent_instruction|skill_patch|anti_pattern",
+    "kind": "%s",
     "title": "short title",
     "body": "one actionable sentence",
     "skill_name": "required for skill_patch, omit otherwise",
@@ -429,7 +440,24 @@ Guidelines:
 - Set strength to 3, 4, or 5; lower-strength signals are noise
 - Prefer fewer, higher-quality records over comprehensive coverage
 - Return at most %d records
-`, input.MaxRecords)
+`, kindEnum, input.MaxRecords)
+
+	if input.KindFocus != "" {
+		fmt.Fprintf(&sb, "\nFocus exclusively on generating %s memories.\n", input.KindFocus)
+		switch input.KindFocus {
+		case KindRepoRule:
+			sb.WriteString("Generate repository-specific coding rules, conventions, and patterns that developers repeatedly need.\n")
+		case KindWorkflowRule:
+			sb.WriteString("Generate developer workflow rules — build, test, deploy, and CI/CD patterns.\n")
+		case KindAgentInstruction:
+			sb.WriteString("Generate instructions for AI coding agents — preferences, constraints, and behavioral guidance.\n")
+		case KindSkillPatch:
+			sb.WriteString("Generate skill-related friction memories — missing instructions, misconfigured skills, and skill gaps.\n")
+		case KindAntiPattern:
+			sb.WriteString("Generate anti-pattern memories — recurring mistakes, bad practices, and things to avoid.\n")
+		}
+		fmt.Fprintf(&sb, "All records MUST have kind set to %q. Do not generate records of other kinds.\n", input.KindFocus)
+	}
 
 	return sb.String()
 }

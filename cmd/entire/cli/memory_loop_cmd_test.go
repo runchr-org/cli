@@ -821,7 +821,7 @@ func TestRunMemoryLoopRefresh_InvalidSettingsReturnsError(t *testing.T) {
 	paths.ClearWorktreeRootCache()
 
 	var buf bytes.Buffer
-	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "repo", "", false)
+	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "repo", "", "", false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid memory_loop.activation_policy")
 }
@@ -843,7 +843,7 @@ func TestRunMemoryLoopRefresh_ScopeMeUsesGitHubUsername(t *testing.T) {
 	paths.ClearWorktreeRootCache()
 
 	var buf bytes.Buffer
-	require.NoError(t, runMemoryLoopRefresh(context.Background(), &buf, 10, "me", "", false))
+	require.NoError(t, runMemoryLoopRefresh(context.Background(), &buf, 10, "me", "", "", false))
 	require.Contains(t, buf.String(), `No personal sessions found for owner_id "alishakawaguchi" because the insights cache has no owner_id data yet.`)
 }
 
@@ -860,7 +860,7 @@ func TestRunMemoryLoopRefresh_ScopeRepoFailsWhenDefaultBranchUnavailable(t *test
 	t.Cleanup(paths.ClearWorktreeRootCache)
 
 	var buf bytes.Buffer
-	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "repo", "", false)
+	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "repo", "", "", false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "default branch")
 }
@@ -882,7 +882,7 @@ func TestRunMemoryLoopRefresh_ScopeMeFailsWhenGitHubUsernameUnavailable(t *testi
 	paths.ClearWorktreeRootCache()
 
 	var buf bytes.Buffer
-	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "me", "", false)
+	err := runMemoryLoopRefresh(context.Background(), &buf, 10, "me", "", "", false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "GitHub username")
 }
@@ -919,7 +919,7 @@ func TestRunMemoryLoopRefresh_ScopeMeWithoutMatchingSessionsLeavesSnapshotUntouc
 	}))
 
 	var buf bytes.Buffer
-	require.NoError(t, runMemoryLoopRefresh(context.Background(), &buf, 10, "me", "", false))
+	require.NoError(t, runMemoryLoopRefresh(context.Background(), &buf, 10, "me", "", "", false))
 	require.Contains(t, buf.String(), "No personal sessions found for owner_id \"alishakawaguchi\" because the insights cache has no owner_id data yet.")
 
 	loaded, err := memoryloop.LoadState(context.Background())
@@ -960,7 +960,7 @@ func TestRunMemoryLoopRefresh_DebugPrintsBackfillSkipDetailsToTerminal(t *testin
 	require.NoError(t, idb.Close())
 
 	var buf bytes.Buffer
-	require.NoError(t, runMemoryLoopRefresh(context.Background(), &buf, 10, "me", "", true))
+	require.NoError(t, runMemoryLoopRefresh(context.Background(), &buf, 10, "me", "", "", true))
 	require.Contains(t, buf.String(), "skipped 1")
 	require.Contains(t, buf.String(), "debug: invalid checkpoint ID")
 	require.Contains(t, buf.String(), "invalid-checkpoint-id")

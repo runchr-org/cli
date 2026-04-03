@@ -138,17 +138,19 @@ func newMemoryLoopRefreshCmd() *cobra.Command {
 	var scope string
 	var branch string
 	var debug bool
+	var kind string
 
 	cmd := &cobra.Command{
 		Use:   "refresh",
 		Short: "Rebuild the memory snapshot from recent sessions",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runMemoryLoopRefresh(cmd.Context(), cmd.OutOrStdout(), last, scope, branch, debug)
+			return runMemoryLoopRefresh(cmd.Context(), cmd.OutOrStdout(), last, scope, branch, kind, debug)
 		},
 	}
 	cmd.Flags().IntVar(&last, "last", memoryloop.DefaultRefreshWindow, "number of recent sessions to distill into memory")
 	cmd.Flags().StringVar(&scope, "scope", string(memoryLoopScopeRepo), "session scope to use: repo, branch, or me")
 	cmd.Flags().StringVar(&branch, "branch", "", "branch name to use when --scope branch (defaults to current branch)")
+	cmd.Flags().StringVar(&kind, "kind", "", "focus generation on a specific memory kind: repo_rule, workflow_rule, agent_instruction, skill_patch, anti_pattern")
 	cmd.Flags().BoolVar(&debug, "debug", false, "print skipped backfill details inline")
 	return cmd
 }
@@ -296,7 +298,23 @@ func newMemoryLoopPruneCmd() *cobra.Command {
 	}
 }
 
-func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, branchArg string, debug bool) error {
+var validKindFocusValues = map[memoryloop.Kind]bool{
+	memoryloop.KindRepoRule:         true,
+	memoryloop.KindWorkflowRule:     true,
+	memoryloop.KindAgentInstruction: true,
+	memoryloop.KindSkillPatch:       true,
+	memoryloop.KindAntiPattern:      true,
+}
+
+func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, branchArg, kindArg string, debug bool) error {
+	var kindFocus memoryloop.Kind
+	if kindArg != "" {
+		kindFocus = memoryloop.Kind(kindArg)
+		if !validKindFocusValues[kindFocus] {
+			return fmt.Errorf("invalid --kind value %q; must be one of: repo_rule, workflow_rule, agent_instruction, skill_patch, anti_pattern", kindArg)
+		}
+	}
+
 	worktreeRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		return fmt.Errorf("not in a git repository: %w", err)
@@ -321,11 +339,69 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 		return err
 	}
 
+	state, err := loadMemoryLoopState(ctx)
+	if err != nil {
+		return fmt.Errorf("load memory-loop state: %w", err)
+	}
+
+	memoryCfg := cfg.GetMemoryLoopConfig()
+	thresholdPreset := memoryCfg.GenerationThreshold
+	if thresholdPreset == "" {
+		thresholdPreset = "balanced"
+	}
+	var thresholdOverrides *memoryloop.GenerationThresholdOverrides
+	if memoryCfg.GenerationOverrides != nil {
+		thresholdOverrides = &memoryloop.GenerationThresholdOverrides{
+			MinStrength:      memoryCfg.GenerationOverrides.MinStrength,
+			MinConfidence:    memoryCfg.GenerationOverrides.MinConfidence,
+			EvidenceSessions: memoryCfg.GenerationOverrides.EvidenceSessions,
+			GenericFilter:    memoryCfg.GenerationOverrides.GenericFilter,
+			SingletonPolicy:  memoryCfg.GenerationOverrides.SingletonPolicy,
+		}
+	}
+
+	maxInjected := memoryCfg.MaxInjected
+	mode := memoryloop.Mode(memoryCfg.Mode)
+	storeDebug := memoryCfg.Debug
+	activationPolicy := memoryloop.ActivationPolicy(memoryCfg.ActivationPolicy)
+	var injectionScopes []memoryloop.ScopeKind
+	if state.Store != nil {
+		if state.Store.Mode != "" {
+			mode = state.Store.Mode
+		}
+		storeDebug = state.Store.Debug
+		if state.Store.MaxInjected > 0 {
+			maxInjected = state.Store.MaxInjected
+		}
+		if state.Store.ActivationPolicy != "" {
+			activationPolicy = state.Store.ActivationPolicy
+		}
+		if state.Store.GenerationThreshold != "" {
+			thresholdPreset = state.Store.GenerationThreshold
+		}
+		if state.Store.GenerationOverrides != nil {
+			thresholdOverrides = state.Store.GenerationOverrides
+		}
+		if len(state.Store.InjectionScopes) > 0 {
+			injectionScopes = state.Store.InjectionScopes
+		}
+	}
+
+	thresholdCfg := memoryloop.ResolveGenerationThreshold(thresholdPreset, thresholdOverrides)
+
 	switch scope.Mode {
 	case memoryLoopScopeRepo, memoryLoopScopeBranch:
 		renderMemoryLoopRefreshProgress(w, fmt.Sprintf("Scope: %s (branch: %s)", scope.Mode, scope.Branch))
 	case memoryLoopScopeMe:
 		renderMemoryLoopRefreshProgress(w, fmt.Sprintf("Scope: me (%s)", scope.OwnerID))
+	}
+	thresholdLabel := thresholdPreset
+	if thresholdOverrides != nil {
+		thresholdLabel += " (with overrides)"
+	}
+	renderMemoryLoopRefreshProgress(w, "Generation threshold: "+thresholdLabel)
+	if kindFocus != "" {
+		renderMemoryLoopRefreshProgress(w, "Generation kind: "+string(kindFocus))
 	}
 
 	renderMemoryLoopRefreshProgress(w, "Loading scoped sessions...")
@@ -353,23 +429,6 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 
 	analysis := improve.AnalyzePatterns(sessionRowsToSummaries(rows))
 
-	memoryCfg := cfg.GetMemoryLoopConfig()
-	thresholdPreset := memoryCfg.GenerationThreshold
-	if thresholdPreset == "" {
-		thresholdPreset = "balanced"
-	}
-	var thresholdOverrides *memoryloop.GenerationThresholdOverrides
-	if memoryCfg.GenerationOverrides != nil {
-		thresholdOverrides = &memoryloop.GenerationThresholdOverrides{
-			MinStrength:      memoryCfg.GenerationOverrides.MinStrength,
-			MinConfidence:    memoryCfg.GenerationOverrides.MinConfidence,
-			EvidenceSessions: memoryCfg.GenerationOverrides.EvidenceSessions,
-			GenericFilter:    memoryCfg.GenerationOverrides.GenericFilter,
-			SingletonPolicy:  memoryCfg.GenerationOverrides.SingletonPolicy,
-		}
-	}
-	thresholdCfg := memoryloop.ResolveGenerationThreshold(thresholdPreset, thresholdOverrides)
-
 	gen := memoryloop.Generator{Runner: &llmcli.Runner{}}
 	renderMemoryLoopRefreshProgress(w, "Distilling memories...")
 	records, generationStats, usage, err := gen.Generate(ctx, memoryloop.GenerateInput{
@@ -378,31 +437,10 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 		SourceWindow:    last,
 		MaxRecords:      memoryloop.DefaultMaxRecords,
 		ThresholdConfig: thresholdCfg,
+		KindFocus:       kindFocus,
 	})
 	if err != nil {
 		return fmt.Errorf("generate memory snapshot: %w", err)
-	}
-
-	state, err := loadMemoryLoopState(ctx)
-	if err != nil {
-		return fmt.Errorf("load memory-loop state: %w", err)
-	}
-
-	maxInjected := memoryCfg.MaxInjected
-	mode := memoryloop.Mode(memoryCfg.Mode)
-	storeDebug := memoryCfg.Debug
-	activationPolicy := memoryloop.ActivationPolicy(memoryCfg.ActivationPolicy)
-	if state.Store != nil {
-		if state.Store.Mode != "" {
-			mode = state.Store.Mode
-		}
-		storeDebug = state.Store.Debug
-		if state.Store.MaxInjected > 0 {
-			maxInjected = state.Store.MaxInjected
-		}
-		if state.Store.ActivationPolicy != "" {
-			activationPolicy = state.Store.ActivationPolicy
-		}
 	}
 
 	now := time.Now().UTC()
@@ -421,7 +459,9 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 	reconcile.History.FilteredWeakCount = generationStats.FilteredWeakCount
 	reconcile.History.FilteredGenericCount = generationStats.FilteredGenericCount
 	reconcile.History.FilteredNoEvidenceCount = generationStats.FilteredNoEvidenceCount
+	reconcile.History.FilteredKindCount = generationStats.FilteredKindCount
 	reconcile.History.DedupedCount = generationStats.DedupedCount
+	reconcile.History.KindFocus = string(kindFocus)
 	reconcile.History.Threshold = thresholdPreset
 	reconcile.History.ThresholdOverride = thresholdOverrides != nil
 	reconcile.History.ResolvedConfig = &thresholdCfg
@@ -440,17 +480,20 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 	}
 
 	state.Store = &memoryloop.Store{
-		Version:          1,
-		GeneratedAt:      now,
-		SourceWindow:     last,
-		Scope:            string(scope.Mode),
-		ScopeValue:       scopeValue,
-		Records:          reconciledRecords,
-		Mode:             mode,
-		Debug:            storeDebug,
-		ActivationPolicy: activationPolicy,
-		MaxInjected:      maxInjected,
-		RefreshHistory:   refreshHistory,
+		Version:             1,
+		GeneratedAt:         now,
+		SourceWindow:        last,
+		Scope:               string(scope.Mode),
+		ScopeValue:          scopeValue,
+		Records:             reconciledRecords,
+		Mode:                mode,
+		Debug:               storeDebug,
+		ActivationPolicy:    activationPolicy,
+		MaxInjected:         maxInjected,
+		InjectionScopes:     injectionScopes,
+		GenerationThreshold: thresholdPreset,
+		GenerationOverrides: thresholdOverrides,
+		RefreshHistory:      refreshHistory,
 	}
 
 	renderMemoryLoopRefreshProgress(w, "Saving memory store...")
@@ -825,7 +868,7 @@ func editMemoryLoopWizardRequest(ctx context.Context, request memorylooptui.Wiza
 		),
 	)
 	if formErr := form.Run(); formErr != nil {
-		return "", fmt.Errorf("edit form cancelled")
+		return "", errors.New("edit form cancelled")
 	}
 
 	// Build edit input from form values.
