@@ -63,24 +63,24 @@ func renderMetadataHeader(s styles, row insightsdb.SessionRow, width int) string
 func renderDetailContent(s styles, row insightsdb.SessionRow, width int) string {
 	var sections []string
 
-	// Summary section
-	if row.HasSummary {
-		sections = append(sections, renderSummaryBox(s, row, width))
+	// Box 1: SUMMARY (intent, outcome, scores, stats)
+	if box := renderSummaryBox(s, row, width); box != "" {
+		sections = append(sections, box)
 	}
 
-	// Friction section
-	if row.HasSummary && len(row.Friction) > 0 {
-		sections = append(sections, renderFrictionBox(s, row, width))
+	// Box 2: CODE (files, tools, rationale, tradeoffs, patterns)
+	if box := renderCodeBox(s, row, width); box != "" {
+		sections = append(sections, box)
 	}
 
-	// Learnings section
+	// Box 3: LEARNINGS
 	if row.HasSummary && len(row.Learnings) > 0 {
 		sections = append(sections, renderLearningsBox(s, row, width))
 	}
 
-	// Insights section (merged facets)
-	if row.HasFacets {
-		if box := renderInsightsBox(s, row, width); box != "" {
+	// Box 4: SIGNALS (friction + all facets with evidence)
+	if row.HasFacets || (row.HasSummary && len(row.Friction) > 0) {
+		if box := renderSignalsBox(s, row, width); box != "" {
 			sections = append(sections, box)
 		}
 	}
@@ -93,9 +93,6 @@ func renderDetailContent(s styles, row insightsdb.SessionRow, width int) string 
 }
 
 // renderSubSection renders a dim uppercase sub-section header followed by content lines.
-// Used by Tasks 3 and 4 (renderCodeBox, renderSignalsBox).
-//
-
 func renderSubSection(s styles, title string, lines []string) []string {
 	if len(lines) == 0 {
 		return nil
@@ -210,14 +207,6 @@ func renderSummaryBox(s styles, row insightsdb.SessionRow, width int) string {
 	return s.renderBox("SUMMARY", strings.Join(lines, "\n"), width)
 }
 
-func renderFrictionBox(s styles, row insightsdb.SessionRow, width int) string {
-	var lines []string
-	for _, item := range row.Friction {
-		lines = append(lines, s.render(s.bullet, "• ")+item)
-	}
-	return s.renderBox("FRICTION", strings.Join(lines, "\n"), width)
-}
-
 func renderLearningsBox(s styles, row insightsdb.SessionRow, width int) string {
 	var lines []string
 	for _, item := range row.Learnings {
@@ -322,37 +311,6 @@ func renderSignalsBox(s styles, row insightsdb.SessionRow, width int) string {
 		return ""
 	}
 	return s.renderBox("SIGNALS", strings.Join(allLines, "\n"), width)
-}
-
-func renderInsightsBox(s styles, row insightsdb.SessionRow, width int) string {
-	var lines []string
-
-	for _, item := range row.Facets.RepoGotchas {
-		lines = append(lines, s.render(s.bullet, "• ")+s.render(s.detailLabel, "Repo Gotcha: ")+item)
-	}
-	for _, item := range row.Facets.WorkflowGaps {
-		lines = append(lines, s.render(s.bullet, "• ")+s.render(s.detailLabel, "Workflow Gap: ")+item)
-	}
-	for _, item := range row.Facets.FailureLoops {
-		lines = append(lines, s.render(s.bullet, "• ")+s.render(s.detailLabel, "Failure Loop: ")+fmt.Sprintf("%s (%d)", item.Description, item.Count))
-	}
-	for _, item := range row.Facets.MissingContext {
-		lines = append(lines, s.render(s.bullet, "• ")+s.render(s.detailLabel, "Missing Context: ")+item.Item)
-	}
-	for _, item := range row.Facets.RepeatedUserInstructions {
-		lines = append(lines, s.render(s.bullet, "• ")+s.render(s.detailLabel, "Repeated: ")+item.Instruction)
-	}
-	for _, item := range row.Facets.SkillSignals {
-		lines = append(lines, s.render(s.bullet, "• ")+s.render(s.detailLabel, "Skill: ")+item.SkillName)
-	}
-	for _, item := range row.Facets.ReviewDerivedRules {
-		lines = append(lines, s.render(s.bullet, "• ")+s.render(s.detailLabel, "Rule: ")+item.Rule)
-	}
-
-	if len(lines) == 0 {
-		return ""
-	}
-	return s.renderBox("INSIGHTS", strings.Join(lines, "\n"), width)
 }
 
 func formatTokensForDetail(tokens int) string {
