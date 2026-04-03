@@ -148,8 +148,10 @@ func runSummary(ctx context.Context, w io.Writer, opts summaryOptions) error {
 	}
 
 	currentBranch := ""
-	if branch, err := GetCurrentBranch(ctx); err == nil {
-		currentBranch = branch
+	if opts.CheckpointPrefix == "" {
+		if branch, err := GetCurrentBranch(ctx); err == nil {
+			currentBranch = branch
+		}
 	}
 
 	// Load repo-scoped rows: the most recent sessions whose checkpoints

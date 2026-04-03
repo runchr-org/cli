@@ -207,6 +207,31 @@ func TestRunSummary_PassesCurrentBranchToTUI(t *testing.T) {
 	require.Equal(t, "feature/summary-browser", currentBranch)
 }
 
+func TestRunSummary_CheckpointPrefixDisablesBranchFilter(t *testing.T) {
+	tmpDir := t.TempDir()
+	setupSummaryTestRepo(t, tmpDir)
+	testutil.GitCheckoutNewBranch(t, tmpDir, "feature/other")
+
+	// Insert a session on "main" so it differs from the current branch.
+	row := sampleSummarySessionRow()
+	row.Branch = "main"
+	insertSummaryTestSession(t, tmpDir, row)
+
+	originalRun := runSummaryTUI
+	t.Cleanup(func() { runSummaryTUI = originalRun })
+
+	var currentBranch string
+	runSummaryTUI = func(_ context.Context, _ []insightsdb.SessionRow, branch string, _ []insightsdb.SessionRow, _ summarytui.GenerateFunc) error {
+		currentBranch = branch
+		return nil
+	}
+
+	var buf bytes.Buffer
+	err := runSummary(context.Background(), &buf, summaryOptions{CheckpointPrefix: "chk-summary"})
+	require.NoError(t, err)
+	require.Empty(t, currentBranch, "checkpoint prefix lookup should pass empty branch to disable TUI branch filtering")
+}
+
 func TestLoadSummarySessions_FilterByBranch(t *testing.T) {
 	tmpDir := t.TempDir()
 	setupSummaryTestRepo(t, tmpDir)
