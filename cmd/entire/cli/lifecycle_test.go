@@ -1400,6 +1400,66 @@ func TestHandleLifecycleTurnStart_RecordsMemoryLoopActivity(t *testing.T) {
 	require.Equal(t, "test-memory-activity", state.InjectionLogs[0].SessionID)
 }
 
+func TestHandleLifecycleTurnStart_IgnoresTaskPromptsForMemoryLoopActivity(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	installFakeGitHubCLIForLifecycleTest(t)
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	require.NoError(t, memoryloop.SaveState(context.Background(), &memoryloop.State{
+		Store: &memoryloop.Store{
+			Version:          1,
+			GeneratedAt:      time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+			SourceWindow:     20,
+			Mode:             memoryloop.ModeAuto,
+			ActivationPolicy: memoryloop.ActivationPolicyReview,
+			MaxInjected:      3,
+			Records: []memoryloop.MemoryRecord{
+				{
+					ID:         "review-spec",
+					Kind:       memoryloop.KindAgentInstruction,
+					Title:      "Claude Codex review spec",
+					Body:       "Whenever claude writes a design doc or spec when planning make sure to run /codex:adversarial-review when you see phrases like spec written, design doc written. implementation plan.",
+					Confidence: "high",
+					Strength:   5,
+					Status:     memoryloop.StatusActive,
+					ScopeKind:  memoryloop.ScopeKindMe,
+					ScopeValue: "alishakawaguchi",
+					CreatedAt:  time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+					UpdatedAt:  time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+				},
+			},
+		},
+	}))
+
+	ag := newMockHookResponseAgent()
+	ag.name = memoryLoopClaudeAgentName
+	ag.agentType = testClaudeCodeAgentType
+
+	event := &agent.Event{
+		Type:      agent.TurnStart,
+		SessionID: "test-task-prompt",
+		Prompt:    "<task>Run an adversarial design review of the spec written at docs/superpowers/specs/2026-04-03-memory-loop-edit-keywords-threshold-design.md. Review only.</task>",
+		Timestamp: time.Now(),
+	}
+
+	require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, event))
+
+	state, err := memoryloop.LoadState(context.Background())
+	require.NoError(t, err)
+	require.Len(t, state.Store.Records, 1)
+	require.Equal(t, 0, state.Store.Records[0].MatchCount)
+	require.Equal(t, 0, state.Store.Records[0].InjectCount)
+	require.True(t, state.Store.Records[0].LastMatchedAt.IsZero())
+	require.True(t, state.Store.Records[0].LastInjectedAt.IsZero())
+	require.Empty(t, state.InjectionLogs)
+	require.Empty(t, ag.lastMessage)
+}
+
 func TestEffectiveMemoryLoopMode_PreStoreUsesModeDerivedFromSettings(t *testing.T) {
 	t.Parallel()
 

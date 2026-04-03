@@ -26,6 +26,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
+	"github.com/entireio/cli/cmd/entire/cli/textutil"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
 	"github.com/entireio/cli/perf"
@@ -276,6 +277,10 @@ func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Eve
 	if event.Prompt == "" {
 		return nil
 	}
+	prompt, ok := normalizeMemoryLoopPrompt(event.Prompt)
+	if !ok {
+		return nil
+	}
 
 	writer, ok := agent.AsHookResponseWriter(ag)
 	if !ok {
@@ -298,10 +303,10 @@ func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Eve
 
 	now := time.Now().UTC()
 	selectOpts := buildMemoryLoopSelectOpts(ctx, state.Snapshot)
-	report := memoryloop.PreviewSelection(*state.Snapshot, event.Prompt, now, selectOpts...)
+	report := memoryloop.PreviewSelection(*state.Snapshot, prompt, now, selectOpts...)
 	if len(report.Matches) == 0 {
 		if debug {
-			if err := writer.WriteHookResponse(buildMemoryLoopDebugPrompt(event.Prompt, report)); err != nil {
+			if err := writer.WriteHookResponse(buildMemoryLoopDebugPrompt(prompt, report)); err != nil {
 				return fmt.Errorf("failed to write memory-loop debug prompt: %w", err)
 			}
 		}
@@ -360,7 +365,7 @@ func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Eve
 
 	logEntry := memoryloop.InjectionLog{
 		SessionID:         event.SessionID,
-		PromptPreview:     truncatePromptPreview(event.Prompt, 500),
+		PromptPreview:     truncatePromptPreview(prompt, 500),
 		InjectedMemoryIDs: ids,
 		InjectedAt:        now,
 		Reason:            strings.Join(reasons, ", "),
@@ -493,6 +498,23 @@ func truncatePromptPreview(prompt string, maxLen int) string {
 		return string(runes)
 	}
 	return string(runes[:maxLen]) + "..."
+}
+
+func normalizeMemoryLoopPrompt(prompt string) (string, bool) {
+	cleaned := textutil.StripIDEContextTags(prompt)
+	if cleaned == "" {
+		return "", false
+	}
+	if isMemoryLoopInternalPrompt(cleaned) {
+		return "", false
+	}
+	return cleaned, true
+}
+
+func isMemoryLoopInternalPrompt(prompt string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(prompt))
+	return strings.HasPrefix(trimmed, "<task>") ||
+		strings.HasPrefix(trimmed, "<task-notification>")
 }
 
 // handleLifecycleTurnEnd handles turn end: validates transcript, extracts metadata,

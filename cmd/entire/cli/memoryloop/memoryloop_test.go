@@ -3251,6 +3251,36 @@ func TestAddManualRecord_KeywordsCapped(t *testing.T) {
 	require.Len(t, record.Keywords, MaxKeywordsPerRecord)
 }
 
+func TestPreviewSelection_MatchesPersonalMemoryWithoutStoredOwnerID(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	report := PreviewSelection(Snapshot{
+		Version:     1,
+		MaxInjected: 2,
+		Records: []MemoryRecord{
+			{
+				ID:         "agent_instruction-claude-codex-review-spec",
+				Kind:       KindAgentInstruction,
+				Title:      "Claude Codex review spec",
+				Body:       "Whenever claude writes a design doc or spec when planning make sure to run /codex:adversarial-review when you see phrases like spec written, design doc written. implementation plan.",
+				Confidence: "high",
+				Strength:   4,
+				Status:     StatusActive,
+				Origin:     OriginManual,
+				ScopeKind:  ScopeKindMe,
+				UpdatedAt:  now.Add(-time.Hour),
+				CreatedAt:  now.Add(-2 * time.Hour),
+			},
+		},
+	}, "spec written to docs/superpowers/specs/2026-04-03-memory-loop-edit-keywords-threshold-design.md", now,
+		WithCurrentOwnerID("alishakawaguchi"),
+	)
+
+	require.Len(t, report.Matches, 1)
+	require.Equal(t, "agent_instruction-claude-codex-review-spec", report.Matches[0].Record.ID)
+}
+
 func TestEditRecord_UpdateTitle(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)

@@ -439,7 +439,10 @@ func (c *selectConfig) matchesScope(record MemoryRecord) bool {
 			return true
 		}
 		if record.ScopeValue == "" {
-			return record.LegacyInferred
+			// Older personal memories and TUI-created manual memories may not have
+			// a persisted owner ID. Treat them as belonging to the current user
+			// rather than making them permanently uninjected.
+			return record.LegacyInferred || record.Origin == OriginManual
 		}
 		return strings.EqualFold(record.ScopeValue, c.currentOwnerID)
 	case ScopeKindRepo:
