@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/llmcli"
 )
 
@@ -82,7 +83,13 @@ func (e *Extractor) Extract(ctx context.Context, transcriptText string, knownSki
 
 	var result SessionFacets
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return nil, nil, fmt.Errorf("parse facets JSON: %w", err)
+		if extracted := jsonutil.ExtractJSONObject(raw); extracted != "" {
+			if err2 := json.Unmarshal([]byte(extracted), &result); err2 != nil {
+				return nil, nil, fmt.Errorf("parse facets JSON: %w", err)
+			}
+		} else {
+			return nil, nil, fmt.Errorf("parse facets JSON: %w", err)
+		}
 	}
 
 	return &result, usage, nil

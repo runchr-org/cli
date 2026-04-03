@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/llmcli"
 )
 
@@ -60,7 +61,13 @@ func (g *Generator) Generate(ctx context.Context, analysis PatternAnalysis, cont
 
 	var resp suggestionResponse
 	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
-		return nil, fmt.Errorf("failed to parse improvement suggestions: %w", err)
+		if extracted := jsonutil.ExtractJSONObject(raw); extracted != "" {
+			if err2 := json.Unmarshal([]byte(extracted), &resp); err2 != nil {
+				return nil, fmt.Errorf("failed to parse improvement suggestions: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("failed to parse improvement suggestions: %w", err)
+		}
 	}
 
 	now := time.Now()

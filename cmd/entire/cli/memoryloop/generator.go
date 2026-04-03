@@ -10,6 +10,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/improve"
 	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
+	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/llmcli"
 )
 
@@ -147,7 +148,7 @@ func (g *Generator) Generate(ctx context.Context, input GenerateInput) ([]Memory
 	var resp generateResponse
 	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
 		// LLM may return JSON followed by trailing text; extract the first JSON object.
-		if extracted := extractJSONObject(raw); extracted != "" {
+		if extracted := jsonutil.ExtractJSONObject(raw); extracted != "" {
 			if err2 := json.Unmarshal([]byte(extracted), &resp); err2 != nil {
 				return nil, GenerationStats{}, nil, fmt.Errorf("parse memory-loop JSON: %w", err)
 			}
@@ -372,39 +373,6 @@ Guidelines:
 `, input.MaxRecords)
 
 	return sb.String()
-}
-
-// extractJSONObject finds the first top-level JSON object in s by matching
-// braces. Returns empty string if no balanced object is found.
-func extractJSONObject(s string) string {
-	start := strings.IndexByte(s, '{')
-	if start < 0 {
-		return ""
-	}
-	depth := 0
-	inString := false
-	escaped := false
-	for i := start; i < len(s); i++ {
-		if escaped {
-			escaped = false
-			continue
-		}
-		c := s[i]
-		switch {
-		case c == '\\' && inString:
-			escaped = true
-		case c == '"':
-			inString = !inString
-		case !inString && c == '{':
-			depth++
-		case !inString && c == '}':
-			depth--
-			if depth == 0 {
-				return s[start : i+1]
-			}
-		}
-	}
-	return ""
 }
 
 func cleanGeneratedText(value string) string {

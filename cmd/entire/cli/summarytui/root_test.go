@@ -58,7 +58,7 @@ func TestRootView_ShowsDetailForSelectedRow(t *testing.T) {
 func TestNewRootModel_DefaultsToCurrentBranchFilter(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", "main", nil)
+	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil)
 
 	require.Equal(t, filterCurrentBranch, root.branchFilter)
 	require.Len(t, root.filteredRows, 1)
@@ -68,7 +68,7 @@ func TestNewRootModel_DefaultsToCurrentBranchFilter(t *testing.T) {
 func TestRootUpdate_CycleBranchFilterRebuildsVisibleRows(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", "main", nil)
+	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil)
 	require.Equal(t, filterCurrentBranch, root.branchFilter)
 	require.Len(t, root.filteredRows, 1)
 
@@ -78,12 +78,12 @@ func TestRootUpdate_CycleBranchFilterRebuildsVisibleRows(t *testing.T) {
 	require.Equal(t, filterAllBranches, root.branchFilter)
 	require.Len(t, root.filteredRows, 2)
 
-	// Second cycle: All → Repo
+	// Second cycle: All → Current Branch (wraps around)
 	next, _ = root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	root = requireRootModel(t, next)
-	require.Equal(t, filterRepo, root.branchFilter)
+	require.Equal(t, filterCurrentBranch, root.branchFilter)
 	require.Len(t, root.filteredRows, 1)
-	require.Equal(t, "sess-2", root.filteredRows[0].SessionID)
+	require.Equal(t, "sess-1", root.filteredRows[0].SessionID)
 }
 
 func TestRootUpdate_CycleTimeFilter(t *testing.T) {
@@ -96,7 +96,7 @@ func TestRootUpdate_CycleTimeFilter(t *testing.T) {
 		{SessionID: "old-month", Agent: "Claude", Branch: "main", CreatedAt: now.Add(-15 * 24 * time.Hour)},
 	}
 
-	root := newRootModel(rows, "", "main", nil)
+	root := newRootModel(rows, "", nil)
 	require.Equal(t, timeFilterAll, root.timeFilter)
 	require.Len(t, root.filteredRows, 3)
 
@@ -129,7 +129,7 @@ func TestRootUpdate_CycleTimeFilter(t *testing.T) {
 func TestRootUpdate_FilterChangeResetsCursor(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", "main", nil)
+	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", nil)
 	root.branchFilter = filterAllBranches
 	root.rebuildFilteredRows()
 	root.moveCursor(2) // move to third row
@@ -144,7 +144,7 @@ func TestRootUpdate_FilterChangeResetsCursor(t *testing.T) {
 func TestRootUpdate_CursorMovement(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", "main", nil)
+	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", nil)
 	root.branchFilter = filterAllBranches
 	root.rebuildFilteredRows()
 	require.Equal(t, 0, root.cursor)
@@ -168,7 +168,7 @@ func TestRootUpdate_CursorMovement(t *testing.T) {
 func TestRootUpdate_CursorDoesNotExceedBounds(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", "main", nil)
+	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil)
 	require.Len(t, root.filteredRows, 1) // repo filter, only main row
 
 	// Move up from 0 — should stay at 0
@@ -185,7 +185,7 @@ func TestRootUpdate_CursorDoesNotExceedBounds(t *testing.T) {
 func TestRootUpdate_CursorChangeUpdatesDetail(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", "main", nil)
+	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil)
 	root.branchFilter = filterAllBranches
 	root.cursor = 0
 	root.rebuildFilteredRows()
@@ -211,7 +211,7 @@ func TestRootUpdate_CursorChangeUpdatesDetail(t *testing.T) {
 func TestRootUpdate_PageNavigation(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", "main", nil)
+	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", nil)
 	root.branchFilter = filterAllBranches
 	root.pageSize = 2
 	root.rebuildFilteredRows()
@@ -231,7 +231,7 @@ func TestRootUpdate_PageNavigation(t *testing.T) {
 func TestRootUpdate_WindowSizeRecalculates(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", "main", nil)
+	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil)
 
 	next, _ := root.Update(tea.WindowSizeMsg{Width: 120, Height: 32})
 	root = requireRootModel(t, next)
@@ -245,7 +245,7 @@ func TestRootUpdate_WindowSizeRecalculates(t *testing.T) {
 func TestRootUpdate_WindowSizePreservesSelection(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(manyCurrentBranchRowsForTest(12), "feature/summary-browser", "main", nil)
+	root := newRootModel(manyCurrentBranchRowsForTest(12), "feature/summary-browser", nil)
 	root.branchFilter = filterCurrentBranch
 	root.pageSize = 3
 	root.rebuildFilteredRows()
@@ -286,7 +286,7 @@ func TestRootUpdate_Generate(t *testing.T) {
 		return row, nil
 	}
 
-	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", "main", generateFn)
+	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", generateFn)
 	root.branchFilter = filterAllBranches
 	root.rebuildFilteredRows()
 	root.updateDetailViewport()
@@ -319,9 +319,9 @@ func TestRootView_FilterBarShowsActiveValues(t *testing.T) {
 	root := newRootModelForTest()
 	out := root.renderFilterBar()
 
-	// Default: timeFilterAll active, filterRepo active
-	require.Contains(t, out, "all")  // time
-	require.Contains(t, out, "repo") // branch
+	// Default: timeFilterAll active, filterCurrentBranch active
+	require.Contains(t, out, "all")     // time
+	require.Contains(t, out, "current") // branch
 }
 
 func TestRootView_GenerateStatusShown(t *testing.T) {
@@ -337,7 +337,7 @@ func TestRootView_GenerateStatusShown(t *testing.T) {
 func TestRootView_EmptyFilteredRows(t *testing.T) {
 	t.Parallel()
 
-	root := newRootModel(nil, "", "main", nil)
+	root := newRootModel(nil, "", nil)
 	out := root.View()
 
 	require.Contains(t, out, "No sessions to display")
@@ -346,7 +346,7 @@ func TestRootView_EmptyFilteredRows(t *testing.T) {
 // --- Helpers ---
 
 func newRootModelForTest() rootModel {
-	m := newRootModel(sampleRowsForTest(), "feature/summary-browser", "main", nil)
+	m := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil)
 	m.width = 100
 	m.height = 30
 	m.pageSize = 10

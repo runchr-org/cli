@@ -27,9 +27,8 @@ type GenerateFunc func(ctx context.Context, row insightsdb.SessionRow) (insights
 type branchFilter int
 
 const (
-	filterRepo          branchFilter = iota // default branch (main/master)
-	filterCurrentBranch                     // current working branch
-	filterAllBranches                       // all branches
+	filterCurrentBranch branchFilter = iota // current working branch
+	filterAllBranches                       // all branches in this repo
 )
 
 type timeFilter int
@@ -47,7 +46,6 @@ type rootModel struct {
 	rows          []insightsdb.SessionRow
 	filteredRows  []insightsdb.SessionRow
 	currentBranch string
-	defaultBranch string
 	branchFilter  branchFilter
 	timeFilter    timeFilter
 	cursor        int
@@ -72,11 +70,11 @@ type generateErrMsg struct {
 }
 
 func Run(ctx context.Context, rows []insightsdb.SessionRow) error {
-	return RunWithCurrentBranch(ctx, rows, "", "", nil)
+	return RunWithCurrentBranch(ctx, rows, "", nil)
 }
 
-func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, currentBranch, defaultBranch string, generateFn GenerateFunc) error {
-	p := tea.NewProgram(newRootModel(rows, currentBranch, defaultBranch, generateFn), tea.WithAltScreen(), tea.WithMouseCellMotion())
+func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, currentBranch string, generateFn GenerateFunc) error {
+	p := tea.NewProgram(newRootModel(rows, currentBranch, generateFn), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("run summary TUI: %w", err)
@@ -84,7 +82,7 @@ func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, curre
 	return nil
 }
 
-func newRootModel(rows []insightsdb.SessionRow, currentBranch, defaultBranch string, generateFn GenerateFunc) rootModel {
+func newRootModel(rows []insightsdb.SessionRow, currentBranch string, generateFn GenerateFunc) rootModel {
 	s := newStyles()
 	p := paginator.New()
 	p.PerPage = defaultPageSize
@@ -98,7 +96,6 @@ func newRootModel(rows []insightsdb.SessionRow, currentBranch, defaultBranch str
 		ctx:           context.Background(),
 		rows:          append([]insightsdb.SessionRow(nil), rows...),
 		currentBranch: currentBranch,
-		defaultBranch: defaultBranch,
 		branchFilter:  filterCurrentBranch,
 		timeFilter:    timeFilterAll,
 		paginator:     p,
@@ -272,7 +269,6 @@ func (m rootModel) renderFilterBar() string {
 		filter branchFilter
 		label  string
 	}{
-		{filterRepo, "repo"},
 		{filterCurrentBranch, "current"},
 		{filterAllBranches, "all"},
 	}
@@ -472,9 +468,6 @@ func (m rootModel) applyFilter() []insightsdb.SessionRow {
 		}
 
 		// Branch filter
-		if m.branchFilter == filterRepo && m.defaultBranch != "" && row.Branch != m.defaultBranch {
-			continue
-		}
 		if m.branchFilter == filterCurrentBranch && m.currentBranch != "" && row.Branch != m.currentBranch {
 			continue
 		}
@@ -533,7 +526,7 @@ func (m *rootModel) cycleTime() {
 }
 
 func (m *rootModel) cycleBranch() {
-	m.branchFilter = (m.branchFilter + 1) % 3
+	m.branchFilter = (m.branchFilter + 1) % 2
 	m.paginator.Page = 0
 	m.cursor = 0
 	m.genStatus = ""

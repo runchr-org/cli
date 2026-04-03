@@ -122,14 +122,8 @@ func runSummary(ctx context.Context, w io.Writer, opts summaryOptions) error {
 	if branch, err := GetCurrentBranch(ctx); err == nil {
 		currentBranch = branch
 	}
-	defaultBranch := ""
-	if opts.CheckpointPrefix == "" {
-		// Only apply default branch filter when browsing all sessions.
-		// When viewing a specific checkpoint, show all branches.
-		defaultBranch = GetDefaultBranch(ctx)
-	}
 
-	return runSummaryTUI(ctx, rows, currentBranch, defaultBranch, generateForSession)
+	return runSummaryTUI(ctx, rows, currentBranch, generateForSession)
 }
 
 func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb.SessionRow, error) {
