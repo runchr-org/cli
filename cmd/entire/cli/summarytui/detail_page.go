@@ -93,11 +93,17 @@ func renderDetailContent(s styles, row insightsdb.SessionRow, width int) string 
 }
 
 // renderSubSection renders a dim uppercase sub-section header followed by content lines.
-func renderSubSection(s styles, title string, lines []string) []string {
+// Returns nil if lines is empty. Prepends a blank line separator when appending to
+// existing content (caller passes current length so first sub-section has no leading gap).
+func renderSubSection(s styles, currentLen int, title string, lines []string) []string {
 	if len(lines) == 0 {
 		return nil
 	}
-	result := []string{s.render(s.dim, strings.ToUpper(title))}
+	var result []string
+	if currentLen > 0 {
+		result = append(result, "") // blank line separator between sub-sections
+	}
+	result = append(result, s.render(s.dim, strings.ToUpper(title)))
 	result = append(result, lines...)
 	return result
 }
@@ -110,7 +116,7 @@ func renderCodeBox(s styles, row insightsdb.SessionRow, width int) string {
 	for _, f := range row.FilesTouched {
 		fileLines = append(fileLines, s.render(s.bullet, "• ")+f)
 	}
-	allLines = append(allLines, renderSubSection(s, "Files Touched", fileLines)...)
+	allLines = append(allLines, renderSubSection(s, len(allLines), "Files Touched", fileLines)...)
 
 	// Tool usage — sorted by count descending, compact single line
 	if len(row.ToolCounts) > 0 {
@@ -130,7 +136,7 @@ func renderCodeBox(s styles, row insightsdb.SessionRow, width int) string {
 			parts = append(parts, fmt.Sprintf("%s (%d)", tc.name, tc.count))
 		}
 		toolLine := s.render(s.bullet, "• ") + strings.Join(parts, " · ")
-		allLines = append(allLines, renderSubSection(s, "Tool Usage", []string{toolLine})...)
+		allLines = append(allLines, renderSubSection(s, len(allLines), "Tool Usage", []string{toolLine})...)
 	}
 
 	// Implementation rationale
@@ -138,21 +144,21 @@ func renderCodeBox(s styles, row insightsdb.SessionRow, width int) string {
 	for _, item := range row.ImplementationRationale {
 		rationaleLines = append(rationaleLines, s.render(s.bullet, "• ")+item)
 	}
-	allLines = append(allLines, renderSubSection(s, "Implementation Rationale", rationaleLines)...)
+	allLines = append(allLines, renderSubSection(s, len(allLines), "Implementation Rationale", rationaleLines)...)
 
 	// Tradeoffs
 	var tradeoffLines []string
 	for _, item := range row.Tradeoffs {
 		tradeoffLines = append(tradeoffLines, s.render(s.bullet, "• ")+item)
 	}
-	allLines = append(allLines, renderSubSection(s, "Tradeoffs", tradeoffLines)...)
+	allLines = append(allLines, renderSubSection(s, len(allLines), "Tradeoffs", tradeoffLines)...)
 
 	// Codebase patterns
 	var patternLines []string
 	for _, item := range row.CodebasePatterns {
 		patternLines = append(patternLines, s.render(s.bullet, "• ")+item)
 	}
-	allLines = append(allLines, renderSubSection(s, "Codebase Patterns", patternLines)...)
+	allLines = append(allLines, renderSubSection(s, len(allLines), "Codebase Patterns", patternLines)...)
 
 	if len(allLines) == 0 {
 		return ""
@@ -169,8 +175,11 @@ func renderSummaryBox(s styles, row insightsdb.SessionRow, width int) string {
 		lines = append(lines, s.render(s.detailLabel, "Outcome: ")+s.render(s.detailValue, row.Outcome))
 	}
 
-	// Score line
+	// Score line — add spacing after intent/outcome
 	if row.OverallScore > 0 {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
 		scoreLine := s.render(s.detailLabel, "Score: ") +
 			s.render(s.detailValue, fmt.Sprintf("%.1f", row.OverallScore)) + " " +
 			s.render(s.dim, fmt.Sprintf("— tok:%.1f · 1st:%.1f · fric:%.1f · foc:%.1f",
@@ -178,9 +187,12 @@ func renderSummaryBox(s styles, row insightsdb.SessionRow, width int) string {
 		lines = append(lines, scoreLine)
 	}
 
-	// Stats line
+	// Stats line — add spacing if following intent/outcome without a score line
 	hasStats := row.InputTokens > 0 || row.OutputTokens > 0 || row.APICallCount > 0 || row.DurationMs > 0
 	if hasStats {
+		if len(lines) > 0 && row.OverallScore == 0 {
+			lines = append(lines, "")
+		}
 		var parts []string
 		parts = append(parts, s.render(s.detailLabel, "Tokens: ")+
 			s.render(s.detailValue, formatTokensForDetail(row.InputTokens)+" in · "+
@@ -237,7 +249,7 @@ func renderSignalsBox(s styles, row insightsdb.SessionRow, width int) string {
 		for _, item := range row.Friction {
 			frictionLines = append(frictionLines, s.render(s.bullet, "• ")+item)
 		}
-		allLines = append(allLines, renderSubSection(s, "Friction", frictionLines)...)
+		allLines = append(allLines, renderSubSection(s, len(allLines), "Friction", frictionLines)...)
 	}
 
 	// Failure loops
@@ -247,7 +259,7 @@ func renderSignalsBox(s styles, row insightsdb.SessionRow, width int) string {
 			fmt.Sprintf("%s (×%d)", item.Description, item.Count))
 		loopLines = append(loopLines, renderEvidence(s, item.Evidence)...)
 	}
-	allLines = append(allLines, renderSubSection(s, "Failure Loops", loopLines)...)
+	allLines = append(allLines, renderSubSection(s, len(allLines), "Failure Loops", loopLines)...)
 
 	// Repeated instructions
 	var repeatLines []string
@@ -255,7 +267,7 @@ func renderSignalsBox(s styles, row insightsdb.SessionRow, width int) string {
 		repeatLines = append(repeatLines, s.render(s.bullet, "• ")+item.Instruction)
 		repeatLines = append(repeatLines, renderEvidence(s, item.Evidence)...)
 	}
-	allLines = append(allLines, renderSubSection(s, "Repeated Instructions", repeatLines)...)
+	allLines = append(allLines, renderSubSection(s, len(allLines), "Repeated Instructions", repeatLines)...)
 
 	// Missing context
 	var ctxLines []string
@@ -263,7 +275,7 @@ func renderSignalsBox(s styles, row insightsdb.SessionRow, width int) string {
 		ctxLines = append(ctxLines, s.render(s.bullet, "• ")+item.Item)
 		ctxLines = append(ctxLines, renderEvidence(s, item.Evidence)...)
 	}
-	allLines = append(allLines, renderSubSection(s, "Missing Context", ctxLines)...)
+	allLines = append(allLines, renderSubSection(s, len(allLines), "Missing Context", ctxLines)...)
 
 	// Skill signals
 	var skillLines []string
@@ -276,7 +288,7 @@ func renderSignalsBox(s styles, row insightsdb.SessionRow, width int) string {
 			skillLines = append(skillLines, s.render(s.dim, "  missing: "+item.MissingInstruction))
 		}
 	}
-	allLines = append(allLines, renderSubSection(s, "Skill Signals", skillLines)...)
+	allLines = append(allLines, renderSubSection(s, len(allLines), "Skill Signals", skillLines)...)
 
 	// Review-derived rules
 	var ruleLines []string
@@ -291,21 +303,21 @@ func renderSignalsBox(s styles, row insightsdb.SessionRow, width int) string {
 			ruleLines = append(ruleLines, s.render(s.dim, "  reusable: "+item.WhyReusable))
 		}
 	}
-	allLines = append(allLines, renderSubSection(s, "Review Rules", ruleLines)...)
+	allLines = append(allLines, renderSubSection(s, len(allLines), "Review Rules", ruleLines)...)
 
 	// Repo gotchas
 	var gotchaLines []string
 	for _, item := range row.Facets.RepoGotchas {
 		gotchaLines = append(gotchaLines, s.render(s.bullet, "• ")+item)
 	}
-	allLines = append(allLines, renderSubSection(s, "Repo Gotchas", gotchaLines)...)
+	allLines = append(allLines, renderSubSection(s, len(allLines), "Repo Gotchas", gotchaLines)...)
 
 	// Workflow gaps
 	var gapLines []string
 	for _, item := range row.Facets.WorkflowGaps {
 		gapLines = append(gapLines, s.render(s.bullet, "• ")+item)
 	}
-	allLines = append(allLines, renderSubSection(s, "Workflow Gaps", gapLines)...)
+	allLines = append(allLines, renderSubSection(s, len(allLines), "Workflow Gaps", gapLines)...)
 
 	if len(allLines) == 0 {
 		return ""
