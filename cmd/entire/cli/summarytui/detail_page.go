@@ -95,7 +95,7 @@ func renderDetailContent(s styles, row insightsdb.SessionRow, width int) string 
 // renderSubSection renders a dim uppercase sub-section header followed by content lines.
 // Used by Tasks 3 and 4 (renderCodeBox, renderSignalsBox).
 //
-//nolint:unused // forward-declared; used by renderCodeBox and renderSignalsBox in Tasks 3-4
+
 func renderSubSection(s styles, title string, lines []string) []string {
 	if len(lines) == 0 {
 		return nil
@@ -228,6 +228,100 @@ func renderLearningsBox(s styles, row insightsdb.SessionRow, width int) string {
 		lines = append(lines, s.render(s.bullet, "• ")+text)
 	}
 	return s.renderBox("LEARNINGS", strings.Join(lines, "\n"), width)
+}
+
+// renderEvidence renders evidence lines indented with ↳ prefix in dim style.
+func renderEvidence(s styles, evidence []string) []string {
+	var lines []string
+	for _, e := range evidence {
+		lines = append(lines, s.render(s.dim, "  ↳ "+e))
+	}
+	return lines
+}
+
+func renderSignalsBox(s styles, row insightsdb.SessionRow, width int) string {
+	var allLines []string
+
+	// Friction (from summary, not facets)
+	if row.HasSummary {
+		var frictionLines []string
+		for _, item := range row.Friction {
+			frictionLines = append(frictionLines, s.render(s.bullet, "• ")+item)
+		}
+		allLines = append(allLines, renderSubSection(s, "Friction", frictionLines)...)
+	}
+
+	// Failure loops
+	var loopLines []string
+	for _, item := range row.Facets.FailureLoops {
+		loopLines = append(loopLines, s.render(s.bullet, "• ")+
+			fmt.Sprintf("%s (×%d)", item.Description, item.Count))
+		loopLines = append(loopLines, renderEvidence(s, item.Evidence)...)
+	}
+	allLines = append(allLines, renderSubSection(s, "Failure Loops", loopLines)...)
+
+	// Repeated instructions
+	var repeatLines []string
+	for _, item := range row.Facets.RepeatedUserInstructions {
+		repeatLines = append(repeatLines, s.render(s.bullet, "• ")+item.Instruction)
+		repeatLines = append(repeatLines, renderEvidence(s, item.Evidence)...)
+	}
+	allLines = append(allLines, renderSubSection(s, "Repeated Instructions", repeatLines)...)
+
+	// Missing context
+	var ctxLines []string
+	for _, item := range row.Facets.MissingContext {
+		ctxLines = append(ctxLines, s.render(s.bullet, "• ")+item.Item)
+		ctxLines = append(ctxLines, renderEvidence(s, item.Evidence)...)
+	}
+	allLines = append(allLines, renderSubSection(s, "Missing Context", ctxLines)...)
+
+	// Skill signals
+	var skillLines []string
+	for _, item := range row.Facets.SkillSignals {
+		skillLines = append(skillLines, s.render(s.bullet, "• ")+s.render(s.detailValue, item.SkillName))
+		for _, f := range item.Friction {
+			skillLines = append(skillLines, s.render(s.dim, "  friction: "+f))
+		}
+		if item.MissingInstruction != "" {
+			skillLines = append(skillLines, s.render(s.dim, "  missing: "+item.MissingInstruction))
+		}
+	}
+	allLines = append(allLines, renderSubSection(s, "Skill Signals", skillLines)...)
+
+	// Review-derived rules
+	var ruleLines []string
+	for _, item := range row.Facets.ReviewDerivedRules {
+		ruleLines = append(ruleLines, s.render(s.bullet, "• ")+item.Rule)
+		if item.SourceKind != "" || item.Strength != "" {
+			ruleLines = append(ruleLines, s.render(s.dim,
+				"  source: "+item.SourceKind+" · strength: "+item.Strength))
+		}
+		ruleLines = append(ruleLines, renderEvidence(s, item.Evidence)...)
+		if item.WhyReusable != "" {
+			ruleLines = append(ruleLines, s.render(s.dim, "  reusable: "+item.WhyReusable))
+		}
+	}
+	allLines = append(allLines, renderSubSection(s, "Review Rules", ruleLines)...)
+
+	// Repo gotchas
+	var gotchaLines []string
+	for _, item := range row.Facets.RepoGotchas {
+		gotchaLines = append(gotchaLines, s.render(s.bullet, "• ")+item)
+	}
+	allLines = append(allLines, renderSubSection(s, "Repo Gotchas", gotchaLines)...)
+
+	// Workflow gaps
+	var gapLines []string
+	for _, item := range row.Facets.WorkflowGaps {
+		gapLines = append(gapLines, s.render(s.bullet, "• ")+item)
+	}
+	allLines = append(allLines, renderSubSection(s, "Workflow Gaps", gapLines)...)
+
+	if len(allLines) == 0 {
+		return ""
+	}
+	return s.renderBox("SIGNALS", strings.Join(allLines, "\n"), width)
 }
 
 func renderInsightsBox(s styles, row insightsdb.SessionRow, width int) string {

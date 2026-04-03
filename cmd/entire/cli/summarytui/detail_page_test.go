@@ -276,3 +276,101 @@ func TestRenderCodeBox_ToolsSortedByCount(t *testing.T) {
 	require.Less(t, editIdx, readIdx, "Edit (10) should appear before Read (5)")
 	require.Less(t, readIdx, grepIdx, "Read (5) should appear before Grep (1)")
 }
+
+func TestRenderSignalsBox(t *testing.T) {
+	t.Parallel()
+
+	row := insightsdb.SessionRow{
+		HasSummary: true,
+		HasFacets:  true,
+		Friction:   []string{"Fixture setup duplicated"},
+		Facets: facets.SessionFacets{
+			FailureLoops: []facets.FailureLoop{
+				{Description: "Test kept failing on CI", Count: 3, Evidence: []string{"linter passed locally"}},
+			},
+			RepeatedUserInstructions: []facets.RepeatedInstruction{
+				{Instruction: "Run tests before committing", Evidence: []string{"told you to run tests"}},
+			},
+			MissingContext: []facets.MissingContextSignal{
+				{Item: "CI requires GPG disabled", Evidence: []string{"tried commit without --no-gpg-sign"}},
+			},
+			SkillSignals: []facets.SkillSignal{
+				{SkillName: "tdd", Friction: []string{"wrote impl before tests"}, MissingInstruction: "enforce test-first"},
+			},
+			ReviewDerivedRules: []facets.ReviewDerivedRule{
+				{Rule: "Isolate git state", Evidence: []string{"reviewer flagged shared state"}, SourceKind: "code-review", Strength: "strong", WhyReusable: "applies to all git tests"},
+			},
+			RepoGotchas:  []string{"go-git v5 deletes ignored dirs"},
+			WorkflowGaps: []string{"No pre-commit hook for tests"},
+		},
+	}
+	s := newStyles()
+	content := renderSignalsBox(s, row, 80)
+
+	require.Contains(t, content, "SIGNALS")
+	// Friction
+	require.Contains(t, content, "FRICTION")
+	require.Contains(t, content, "Fixture setup duplicated")
+	// Failure loops with evidence
+	require.Contains(t, content, "FAILURE LOOPS")
+	require.Contains(t, content, "Test kept failing on CI")
+	require.Contains(t, content, "×3")
+	require.Contains(t, content, "↳")
+	require.Contains(t, content, "linter passed locally")
+	// Repeated instructions with evidence
+	require.Contains(t, content, "REPEATED INSTRUCTIONS")
+	require.Contains(t, content, "Run tests before committing")
+	require.Contains(t, content, "told you to run tests")
+	// Missing context with evidence
+	require.Contains(t, content, "MISSING CONTEXT")
+	require.Contains(t, content, "CI requires GPG disabled")
+	require.Contains(t, content, "tried commit without --no-gpg-sign")
+	// Skill signals with details
+	require.Contains(t, content, "SKILL SIGNALS")
+	require.Contains(t, content, "tdd")
+	require.Contains(t, content, "wrote impl before tests")
+	require.Contains(t, content, "enforce test-first")
+	// Review rules with details
+	require.Contains(t, content, "REVIEW RULES")
+	require.Contains(t, content, "Isolate git state")
+	require.Contains(t, content, "code-review")
+	require.Contains(t, content, "strong")
+	require.Contains(t, content, "reviewer flagged shared state")
+	require.Contains(t, content, "applies to all git tests")
+	// Simple lists
+	require.Contains(t, content, "REPO GOTCHAS")
+	require.Contains(t, content, "go-git v5 deletes ignored dirs")
+	require.Contains(t, content, "WORKFLOW GAPS")
+	require.Contains(t, content, "No pre-commit hook for tests")
+}
+
+func TestRenderSignalsBox_ReturnsEmptyForNoSignals(t *testing.T) {
+	t.Parallel()
+
+	row := insightsdb.SessionRow{
+		HasFacets: true,
+		Facets:    facets.SessionFacets{},
+	}
+	s := newStyles()
+	content := renderSignalsBox(s, row, 80)
+
+	require.Empty(t, content)
+}
+
+func TestRenderSignalsBox_OmitsEmptySubSections(t *testing.T) {
+	t.Parallel()
+
+	row := insightsdb.SessionRow{
+		HasFacets: true,
+		Facets: facets.SessionFacets{
+			RepoGotchas: []string{"a gotcha"},
+		},
+	}
+	s := newStyles()
+	content := renderSignalsBox(s, row, 80)
+
+	require.Contains(t, content, "REPO GOTCHAS")
+	require.NotContains(t, content, "FRICTION")
+	require.NotContains(t, content, "FAILURE LOOPS")
+	require.NotContains(t, content, "REPEATED INSTRUCTIONS")
+}
