@@ -91,6 +91,19 @@ func renderDetailContent(s styles, row insightsdb.SessionRow, width int) string 
 	return strings.Join(sections, "\n\n")
 }
 
+// renderSubSection renders a dim uppercase sub-section header followed by content lines.
+// Used by Tasks 3 and 4 (renderCodeBox, renderSignalsBox).
+//
+//nolint:unused // forward-declared; used by renderCodeBox and renderSignalsBox in Tasks 3-4
+func renderSubSection(s styles, title string, lines []string) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	result := []string{s.render(s.dim, strings.ToUpper(title))}
+	result = append(result, lines...)
+	return result
+}
+
 func renderSummaryBox(s styles, row insightsdb.SessionRow, width int) string {
 	var lines []string
 	if row.Intent != "" {
@@ -99,6 +112,39 @@ func renderSummaryBox(s styles, row insightsdb.SessionRow, width int) string {
 	if row.Outcome != "" {
 		lines = append(lines, s.render(s.detailLabel, "Outcome: ")+s.render(s.detailValue, row.Outcome))
 	}
+
+	// Score line
+	if row.OverallScore > 0 {
+		scoreLine := s.render(s.detailLabel, "Score: ") +
+			s.render(s.detailValue, fmt.Sprintf("%.1f", row.OverallScore)) + " " +
+			s.render(s.dim, fmt.Sprintf("— tok:%.1f · 1st:%.1f · fric:%.1f · foc:%.1f",
+				row.ScoreTokenEff, row.ScoreFirstPass, row.ScoreFriction, row.ScoreFocus))
+		lines = append(lines, scoreLine)
+	}
+
+	// Stats line
+	hasStats := row.InputTokens > 0 || row.OutputTokens > 0 || row.APICallCount > 0 || row.DurationMs > 0
+	if hasStats {
+		var parts []string
+		parts = append(parts, s.render(s.detailLabel, "Tokens: ")+
+			s.render(s.detailValue, formatTokensForDetail(row.InputTokens)+" in · "+
+				formatTokensForDetail(row.CacheTokens)+" cache · "+
+				formatTokensForDetail(row.OutputTokens)+" out"))
+		if row.APICallCount > 0 {
+			parts = append(parts, s.render(s.detailLabel, "API: ")+
+				s.render(s.detailValue, fmt.Sprintf("%d calls", row.APICallCount)))
+		}
+		if row.DurationMs > 0 {
+			parts = append(parts, s.render(s.detailLabel, "Time: ")+
+				s.render(s.detailValue, formatDuration(row.DurationMs)))
+		}
+		if row.AgentPct > 0 {
+			parts = append(parts, s.render(s.detailLabel, "Agent: ")+
+				s.render(s.detailValue, fmt.Sprintf("%d%%", int(row.AgentPct))))
+		}
+		lines = append(lines, strings.Join(parts, "   "))
+	}
+
 	if len(lines) == 0 {
 		return ""
 	}

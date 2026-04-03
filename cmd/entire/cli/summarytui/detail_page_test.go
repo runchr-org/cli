@@ -130,6 +130,69 @@ func TestFormatTokensForDetail(t *testing.T) {
 	require.Equal(t, "1.5M", formatTokensForDetail(1500000))
 }
 
+func TestRenderSummaryBox_WithScoresAndStats(t *testing.T) {
+	t.Parallel()
+
+	row := insightsdb.SessionRow{
+		HasSummary:     true,
+		Intent:         "Fix flaky tests",
+		Outcome:        "Stabilized 3 tests",
+		OverallScore:   7.2,
+		ScoreTokenEff:  8.1,
+		ScoreFirstPass: 6.0,
+		ScoreFriction:  7.5,
+		ScoreFocus:     7.8,
+		InputTokens:    45200,
+		CacheTokens:    12100,
+		OutputTokens:   8300,
+		APICallCount:   23,
+		DurationMs:     272000,
+		AgentPct:       82.0,
+	}
+	s := newStyles()
+	content := renderSummaryBox(s, row, 80)
+
+	require.Contains(t, content, "SUMMARY")
+	require.Contains(t, content, "Fix flaky tests")
+	require.Contains(t, content, "Stabilized 3 tests")
+	require.Contains(t, content, "7.2")
+	require.Contains(t, content, "tok:8.1")
+	require.Contains(t, content, "1st:6.0")
+	require.Contains(t, content, "fric:7.5")
+	require.Contains(t, content, "foc:7.8")
+	require.Contains(t, content, "45.2k in")
+	require.Contains(t, content, "12.1k cache")
+	require.Contains(t, content, "8.3k out")
+	require.Contains(t, content, "23 calls")
+	require.Contains(t, content, "4m 32s")
+	require.Contains(t, content, "82%")
+}
+
+func TestRenderSummaryBox_OmitsScoresWhenZero(t *testing.T) {
+	t.Parallel()
+
+	row := insightsdb.SessionRow{
+		HasSummary: true,
+		Intent:     "Quick fix",
+	}
+	s := newStyles()
+	content := renderSummaryBox(s, row, 80)
+
+	require.Contains(t, content, "Quick fix")
+	require.NotContains(t, content, "Score:")
+	require.NotContains(t, content, "Tokens:")
+}
+
+func TestRenderSummaryBox_EmptyWhenNoData(t *testing.T) {
+	t.Parallel()
+
+	row := insightsdb.SessionRow{}
+	s := newStyles()
+	content := renderSummaryBox(s, row, 80)
+
+	require.Empty(t, content)
+}
+
 func TestFormatDuration(t *testing.T) {
 	t.Parallel()
 
