@@ -129,3 +129,16 @@ func TestFormatTokensForDetail(t *testing.T) {
 	require.Equal(t, "3.2k", formatTokensForDetail(3200))
 	require.Equal(t, "1.5M", formatTokensForDetail(1500000))
 }
+
+func TestFormatDuration(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "0s", formatDuration(0))
+	require.Equal(t, "5s", formatDuration(5000))
+	require.Equal(t, "59s", formatDuration(59000))
+	require.Equal(t, "1m 0s", formatDuration(60000))
+	require.Equal(t, "4m 32s", formatDuration(272000))
+	require.Equal(t, "59m 59s", formatDuration(3599000))
+	require.Equal(t, "1h 0m", formatDuration(3600000))
+	require.Equal(t, "2h 15m", formatDuration(8100000))
+}

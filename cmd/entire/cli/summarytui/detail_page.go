@@ -166,3 +166,19 @@ func formatTokensForDetail(tokens int) string {
 		return strconv.Itoa(tokens)
 	}
 }
+
+func formatDuration(ms int64) string {
+	totalSec := ms / 1000
+	switch {
+	case totalSec >= 3600:
+		h := totalSec / 3600
+		m := (totalSec % 3600) / 60
+		return fmt.Sprintf("%dh %dm", h, m)
+	case totalSec >= 60:
+		m := totalSec / 60
+		s := totalSec % 60
+		return fmt.Sprintf("%dm %ds", m, s)
+	default:
+		return fmt.Sprintf("%ds", totalSec)
+	}
+}
