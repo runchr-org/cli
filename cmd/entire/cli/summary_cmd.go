@@ -123,7 +123,11 @@ func runSummary(ctx context.Context, w io.Writer, opts summaryOptions) error {
 		currentBranch = branch
 	}
 
-	return runSummaryTUI(ctx, rows, currentBranch, generateForSession)
+	// Build the set of checkpoint IDs reachable from the default branch
+	// so the TUI can filter "repo" scope to merged sessions.
+	repoCheckpoints := buildRepoCheckpointSet(ctx)
+
+	return runSummaryTUI(ctx, rows, currentBranch, repoCheckpoints, generateForSession)
 }
 
 func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb.SessionRow, error) {
@@ -410,6 +414,25 @@ func fallbackText(value, fb string) string {
 		return fb
 	}
 	return value
+}
+
+// buildRepoCheckpointSet returns the set of checkpoint IDs reachable from the
+// default branch. Returns nil if the default branch can't be resolved (the TUI
+// will treat nil as "repo filter unavailable" and show all sessions).
+func buildRepoCheckpointSet(ctx context.Context) map[string]struct{} {
+	repo, err := openRepository(ctx)
+	if err != nil {
+		return nil
+	}
+	_, defaultBranchHash, err := resolveMemoryLoopDefaultBranch(repo)
+	if err != nil {
+		return nil
+	}
+	ids, err := listReachableCheckpointIDs(ctx, repo, defaultBranchHash)
+	if err != nil {
+		return nil
+	}
+	return ids
 }
 
 // generateForSession generates summary and facets for a single session on demand.

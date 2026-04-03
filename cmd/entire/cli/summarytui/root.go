@@ -42,23 +42,24 @@ const (
 
 //nolint:recvcheck // bubbletea pattern: value receiver for interface, pointer receivers for mutation helpers
 type rootModel struct {
-	ctx           context.Context
-	rows          []insightsdb.SessionRow
-	filteredRows  []insightsdb.SessionRow
-	currentBranch string
-	branchFilter  branchFilter
-	timeFilter    timeFilter
-	cursor        int
-	paginator     paginator.Model
-	pageSize      int
-	detailVP      viewport.Model
-	width         int
-	height        int
-	styles        styles
-	generateFn    GenerateFunc
-	generating    bool
-	genStatus     string // status message for generate operation
-	accessible    bool   // accessible mode fallback
+	ctx             context.Context
+	rows            []insightsdb.SessionRow
+	filteredRows    []insightsdb.SessionRow
+	currentBranch   string
+	repoCheckpoints map[string]struct{} // checkpoint IDs reachable from default branch
+	branchFilter    branchFilter
+	timeFilter      timeFilter
+	cursor          int
+	paginator       paginator.Model
+	pageSize        int
+	detailVP        viewport.Model
+	width           int
+	height          int
+	styles          styles
+	generateFn      GenerateFunc
+	generating      bool
+	genStatus       string // status message for generate operation
+	accessible      bool   // accessible mode fallback
 }
 
 type generateDoneMsg struct {
@@ -70,11 +71,11 @@ type generateErrMsg struct {
 }
 
 func Run(ctx context.Context, rows []insightsdb.SessionRow) error {
-	return RunWithCurrentBranch(ctx, rows, "", nil)
+	return RunWithCurrentBranch(ctx, rows, "", nil, nil)
 }
 
-func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, currentBranch string, generateFn GenerateFunc) error {
-	p := tea.NewProgram(newRootModel(rows, currentBranch, generateFn), tea.WithAltScreen(), tea.WithMouseCellMotion())
+func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, currentBranch string, repoCheckpoints map[string]struct{}, generateFn GenerateFunc) error {
+	p := tea.NewProgram(newRootModel(rows, currentBranch, repoCheckpoints, generateFn), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("run summary TUI: %w", err)
@@ -82,7 +83,7 @@ func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, curre
 	return nil
 }
 
-func newRootModel(rows []insightsdb.SessionRow, currentBranch string, generateFn GenerateFunc) rootModel {
+func newRootModel(rows []insightsdb.SessionRow, currentBranch string, repoCheckpoints map[string]struct{}, generateFn GenerateFunc) rootModel {
 	s := newStyles()
 	p := paginator.New()
 	p.PerPage = defaultPageSize
@@ -93,19 +94,20 @@ func newRootModel(rows []insightsdb.SessionRow, currentBranch string, generateFn
 	vp.MouseWheelEnabled = true
 
 	m := rootModel{
-		ctx:           context.Background(),
-		rows:          append([]insightsdb.SessionRow(nil), rows...),
-		currentBranch: currentBranch,
-		branchFilter:  filterCurrentBranch,
-		timeFilter:    timeFilterAll,
-		paginator:     p,
-		pageSize:      defaultPageSize,
-		styles:        s,
-		width:         100,
-		height:        30,
-		detailVP:      vp,
-		generateFn:    generateFn,
-		accessible:    accessible,
+		ctx:             context.Background(),
+		rows:            append([]insightsdb.SessionRow(nil), rows...),
+		currentBranch:   currentBranch,
+		repoCheckpoints: repoCheckpoints,
+		branchFilter:    filterCurrentBranch,
+		timeFilter:      timeFilterAll,
+		paginator:       p,
+		pageSize:        defaultPageSize,
+		styles:          s,
+		width:           100,
+		height:          30,
+		detailVP:        vp,
+		generateFn:      generateFn,
+		accessible:      accessible,
 	}
 	m.rebuildFilteredRows()
 	m.updateDetailViewport()
@@ -468,8 +470,17 @@ func (m rootModel) applyFilter() []insightsdb.SessionRow {
 		}
 
 		// Branch filter
-		if m.branchFilter == filterCurrentBranch && m.currentBranch != "" && row.Branch != m.currentBranch {
-			continue
+		switch m.branchFilter {
+		case filterCurrentBranch:
+			if m.currentBranch != "" && row.Branch != m.currentBranch {
+				continue
+			}
+		case filterRepo:
+			if m.repoCheckpoints != nil {
+				if _, ok := m.repoCheckpoints[row.CheckpointID]; !ok {
+					continue
+				}
+			}
 		}
 		filtered = append(filtered, row)
 	}
