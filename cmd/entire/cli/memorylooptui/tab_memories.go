@@ -265,6 +265,33 @@ func (m memoriesModel) update(msg tea.Msg) (memoriesModel, tea.Cmd) {
 				}
 			}
 
+		case key.Matches(keyMsg, memoriesKeyMap.Promote):
+			if r := m.selectedRecord(); r != nil {
+				r := *r
+				return m, func() tea.Msg {
+					return quickLifecycleMsg{recordID: r.ID, action: memoryloop.LifecycleActionPromote}
+				}
+			}
+			return m, nil
+
+		case key.Matches(keyMsg, memoriesKeyMap.Suppress):
+			if r := m.selectedRecord(); r != nil {
+				r := *r
+				return m, func() tea.Msg {
+					return quickLifecycleMsg{recordID: r.ID, action: memoryloop.LifecycleActionSuppress}
+				}
+			}
+			return m, nil
+
+		case key.Matches(keyMsg, memoriesKeyMap.Archive):
+			if r := m.selectedRecord(); r != nil {
+				r := *r
+				return m, func() tea.Msg {
+					return quickLifecycleMsg{recordID: r.ID, action: memoryloop.LifecycleActionArchive}
+				}
+			}
+			return m, nil
+
 		case key.Matches(keyMsg, memoriesKeyMap.Prune):
 			return m, func() tea.Msg { return pruneMsg{} }
 		}

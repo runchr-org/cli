@@ -55,6 +55,12 @@ type wizardResultMsg struct {
 // wizardCloseMsg closes the wizard without submitting a request.
 type wizardCloseMsg struct{}
 
+// quickLifecycleMsg requests a direct lifecycle transition from the list view.
+type quickLifecycleMsg struct {
+	recordID string
+	action   memoryloop.LifecycleAction
+}
+
 // pruneMsg requests pruning stale/ineffective records.
 type pruneMsg struct{}
 

@@ -165,6 +165,9 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case addMemoryMsg:
 		return m.handleAddMemory(msg)
 
+	case quickLifecycleMsg:
+		return m.handleQuickLifecycle(msg)
+
 	case pruneMsg:
 		return m.handlePrune()
 
@@ -345,6 +348,29 @@ func (m rootModel) handlePrune() (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg { return flashMsg{text: msg, success: true} }
 }
 
+func (m rootModel) handleQuickLifecycle(msg quickLifecycleMsg) (tea.Model, tea.Cmd) {
+	if m.state == nil || m.state.Store == nil || m.isRefreshing {
+		return m, nil
+	}
+
+	updated, changed, err := memoryloop.TransitionRecordLifecycle(m.state.Store.Records, msg.recordID, msg.action, time.Now().UTC())
+	if err != nil {
+		m.setFlash(err.Error(), false)
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{} })
+	}
+
+	m.state.Store.Records = updated
+	if err := m.saveState(); err != nil {
+		m.setFlash(fmt.Sprintf("save failed: %v", err), false)
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{} })
+	}
+
+	m.pushState()
+	flash := fmt.Sprintf("%s → %s", changed.Title, changed.Status)
+	m.setFlash(flash, true)
+	return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{} })
+}
+
 func (m rootModel) handleSettingsChanged(msg settingsChangedMsg) (tea.Model, tea.Cmd) {
 	if m.state == nil || m.state.Store == nil {
 		return m, nil
@@ -483,7 +509,7 @@ func (m rootModel) activeTabHints() string {
 	}
 	switch m.activeTab {
 	case tabMemories:
-		return "j/k navigate · enter open detail · f filter · S scope · n new · ? help"
+		return "j/k navigate · enter detail · P promote · s suppress · x archive · f filter · S scope · n new · ? help"
 	case tabInjection:
 		return "i focus input · enter test · esc unfocus · j/k navigate · ? help"
 	case tabHistory:
@@ -525,7 +551,8 @@ func (m rootModel) renderHelp() string {
 	b.WriteString(m.styles.render(m.styles.title, "Memories"))
 	b.WriteString("\n")
 	b.WriteString("  j/k  navigate    enter  open detail      w  open detail    f  filter    S  scope\n")
-	b.WriteString("  D    prune       n      new memory      /  search\n")
+	b.WriteString("  P    promote     s      suppress         x  archive        D  prune     /  search\n")
+	b.WriteString("  n    new memory\n")
 	b.WriteString("\n")
 	b.WriteString(m.styles.render(m.styles.title, "Detail Page"))
 	b.WriteString("\n")

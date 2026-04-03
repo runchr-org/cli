@@ -18,6 +18,9 @@ type memoriesKeys struct {
 	Down        key.Binding
 	Enter       key.Binding
 	Wizard      key.Binding
+	Promote     key.Binding
+	Suppress    key.Binding
+	Archive     key.Binding
 	Prune       key.Binding
 	Filter      key.Binding
 	ScopeFilter key.Binding
@@ -76,6 +79,9 @@ var memoriesKeyMap = memoriesKeys{
 	Down:        key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "down")),
 	Enter:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open detail")),
 	Wizard:      key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "open detail")),
+	Promote:     key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "promote")),
+	Suppress:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "suppress")),
+	Archive:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "archive")),
 	Prune:       key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "prune")),
 	Filter:      key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "cycle filter")),
 	ScopeFilter: key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "cycle scope")),
