@@ -65,8 +65,6 @@ type summaryDetailView struct {
 
 var runSummaryTUI = summarytui.RunWithCurrentBranch //nolint:gochecknoglobals // injectable for testing
 var summaryRefreshCacheIfStale = refreshCacheIfStale
-var summaryBackfillSummaries = backfillSummaries
-var summaryBackfillFacets = backfillFacets
 
 func newSummaryCmd() *cobra.Command {
 	opts := summaryOptions{Last: defaultSummarySessionLimit}
@@ -167,13 +165,6 @@ func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb
 		if len(rows) == 0 {
 			return nil, fmt.Errorf("checkpoint not found: %s", opts.CheckpointPrefix)
 		}
-		summaryBackfillSummaries(ctx, io.Discard, idb, len(rows), false, "")
-		summaryBackfillFacets(ctx, io.Discard, idb, len(rows), false, "")
-		// Re-query to pick up backfilled data.
-		rows, err = idb.QueryByCheckpointPrefix(ctx, opts.CheckpointPrefix)
-		if err != nil {
-			return nil, fmt.Errorf("query by checkpoint after backfill: %w", err)
-		}
 		return rows, nil
 	}
 
@@ -190,14 +181,6 @@ func loadSummarySessions(ctx context.Context, opts summaryOptions) ([]insightsdb
 		if err != nil {
 			return nil, fmt.Errorf("query sessions after refresh: %w", err)
 		}
-	}
-
-	summaryBackfillSummaries(ctx, io.Discard, idb, outputLimit, false, "")
-	summaryBackfillFacets(ctx, io.Discard, idb, outputLimit, false, "")
-
-	rows, err = idb.QueryLastNSessions(ctx, maxSummaryRecentSessions)
-	if err != nil {
-		return nil, fmt.Errorf("query sessions after backfill: %w", err)
 	}
 
 	ownerID := ""

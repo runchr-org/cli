@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -82,16 +81,10 @@ func TestLoadSummarySessions_CheckpointPrefix(t *testing.T) {
 	}
 	_ = idb.Close()
 
-	// Stub out backfill and TUI to avoid LLM calls
-	origBackfillSummaries := summaryBackfillSummaries
-	origBackfillFacets := summaryBackfillFacets
+	// Stub out refresh and TUI to avoid LLM calls
 	origRefresh := summaryRefreshCacheIfStale
-	summaryBackfillSummaries = func(_ context.Context, _ io.Writer, _ *insightsdb.InsightsDB, _ int, _ bool, _ string) {}
-	summaryBackfillFacets = func(_ context.Context, _ io.Writer, _ *insightsdb.InsightsDB, _ int, _ bool, _ string) {}
 	summaryRefreshCacheIfStale = func(_ context.Context, _ *insightsdb.InsightsDB) error { return nil }
 	t.Cleanup(func() {
-		summaryBackfillSummaries = origBackfillSummaries
-		summaryBackfillFacets = origBackfillFacets
 		summaryRefreshCacheIfStale = origRefresh
 	})
 
@@ -276,41 +269,26 @@ func TestLoadSummarySessions_CapsToMostRecent200(t *testing.T) {
 	require.Equal(t, "sess-199", rows[len(rows)-1].SessionID)
 }
 
-func TestLoadSummarySessions_PopulatedCacheSkipsRefreshAndUsesVisibleBackfillLimit(t *testing.T) {
+func TestLoadSummarySessions_PopulatedCacheSkipsRefresh(t *testing.T) {
 	tmpDir := t.TempDir()
 	setupSummaryTestRepo(t, tmpDir)
 	insertSummaryTestSession(t, tmpDir, sampleSummarySessionRow())
 
 	originalRefresh := summaryRefreshCacheIfStale
-	originalBackfillSummaries := summaryBackfillSummaries
-	originalBackfillFacets := summaryBackfillFacets
 	t.Cleanup(func() {
 		summaryRefreshCacheIfStale = originalRefresh
-		summaryBackfillSummaries = originalBackfillSummaries
-		summaryBackfillFacets = originalBackfillFacets
 	})
 
 	refreshCalled := false
-	summaryLimit := 0
-	facetLimit := 0
-
 	summaryRefreshCacheIfStale = func(context.Context, *insightsdb.InsightsDB) error {
 		refreshCalled = true
 		return nil
-	}
-	summaryBackfillSummaries = func(_ context.Context, _ io.Writer, _ *insightsdb.InsightsDB, lastN int, _ bool, _ string) {
-		summaryLimit = lastN
-	}
-	summaryBackfillFacets = func(_ context.Context, _ io.Writer, _ *insightsdb.InsightsDB, lastN int, _ bool, _ string) {
-		facetLimit = lastN
 	}
 
 	rows, err := loadSummarySessions(context.Background(), summaryOptions{Last: 10})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.False(t, refreshCalled)
-	require.Equal(t, 10, summaryLimit)
-	require.Equal(t, 10, facetLimit)
 }
 
 func sampleSummarySessionRow() insightsdb.SessionRow {
