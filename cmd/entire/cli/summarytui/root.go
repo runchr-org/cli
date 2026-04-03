@@ -99,7 +99,7 @@ func newRootModel(rows []insightsdb.SessionRow, currentBranch, defaultBranch str
 		rows:          append([]insightsdb.SessionRow(nil), rows...),
 		currentBranch: currentBranch,
 		defaultBranch: defaultBranch,
-		branchFilter:  filterRepo,
+		branchFilter:  filterCurrentBranch,
 		timeFilter:    timeFilterAll,
 		paginator:     p,
 		pageSize:      defaultPageSize,

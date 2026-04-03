@@ -55,35 +55,35 @@ func TestRootView_ShowsDetailForSelectedRow(t *testing.T) {
 	require.Contains(t, out, "Fix flaky tests")
 }
 
-func TestNewRootModel_DefaultsToRepoFilter(t *testing.T) {
+func TestNewRootModel_DefaultsToCurrentBranchFilter(t *testing.T) {
 	t.Parallel()
 
 	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", "main", nil)
 
-	require.Equal(t, filterRepo, root.branchFilter)
+	require.Equal(t, filterCurrentBranch, root.branchFilter)
 	require.Len(t, root.filteredRows, 1)
-	require.Equal(t, "sess-2", root.filteredRows[0].SessionID)
+	require.Equal(t, "sess-1", root.filteredRows[0].SessionID)
 }
 
 func TestRootUpdate_CycleBranchFilterRebuildsVisibleRows(t *testing.T) {
 	t.Parallel()
 
 	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", "main", nil)
-	require.Equal(t, filterRepo, root.branchFilter)
-	require.Len(t, root.filteredRows, 1)
-
-	// First cycle: Repo → Current Branch (key "2")
-	next, _ := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
-	root = requireRootModel(t, next)
 	require.Equal(t, filterCurrentBranch, root.branchFilter)
 	require.Len(t, root.filteredRows, 1)
-	require.Equal(t, "sess-1", root.filteredRows[0].SessionID)
 
-	// Second cycle: Current Branch → All
-	next, _ = root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	// First cycle: Current Branch → All (key "2")
+	next, _ := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	root = requireRootModel(t, next)
 	require.Equal(t, filterAllBranches, root.branchFilter)
 	require.Len(t, root.filteredRows, 2)
+
+	// Second cycle: All → Repo
+	next, _ = root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	root = requireRootModel(t, next)
+	require.Equal(t, filterRepo, root.branchFilter)
+	require.Len(t, root.filteredRows, 1)
+	require.Equal(t, "sess-2", root.filteredRows[0].SessionID)
 }
 
 func TestRootUpdate_CycleTimeFilter(t *testing.T) {
