@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 
@@ -76,7 +74,7 @@ func Run(ctx context.Context, rows []insightsdb.SessionRow) error {
 }
 
 func RunWithCurrentBranch(_ context.Context, rows []insightsdb.SessionRow, currentBranch string, repoRows []insightsdb.SessionRow, generateFn GenerateFunc) error {
-	p := tea.NewProgram(newRootModel(rows, currentBranch, repoRows, generateFn), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(newRootModel(rows, currentBranch, repoRows, generateFn), tea.WithAltScreen())
 	_, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("run summary TUI: %w", err)
@@ -92,7 +90,7 @@ func newRootModel(rows []insightsdb.SessionRow, currentBranch string, repoRows [
 	accessible := os.Getenv("ACCESSIBLE") != ""
 
 	vp := viewport.New(60, 20)
-	vp.MouseWheelEnabled = true
+	vp.MouseWheelEnabled = false
 
 	m := rootModel{
 		ctx:           context.Background(),
@@ -141,10 +139,6 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.genStatus = "Error: " + msg.err.Error()
 		return m, nil
 
-	case tea.MouseMsg:
-		var cmd tea.Cmd
-		m.detailVP, cmd = m.detailVP.Update(msg)
-		return m, cmd
 	}
 
 	return m, nil
@@ -175,9 +169,6 @@ func (m rootModel) updateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, keys.generate):
 		return m.handleGenerate()
-	case key.Matches(msg, keys.copyDetail):
-		m.handleCopyDetail()
-		return m, nil
 	}
 
 	//nolint:exhaustive // only Ctrl+C needs special handling here
@@ -213,33 +204,6 @@ func (m rootModel) handleGenerate() (tea.Model, tea.Cmd) {
 		}
 		return generateDoneMsg{row: updated}
 	}
-}
-
-func (m *rootModel) handleCopyDetail() {
-	row := m.selectedRow()
-	if row == nil {
-		return
-	}
-	content := renderDetailPlainText(*row)
-	if err := copyToClipboard(content); err != nil {
-		m.genStatus = "Copy failed"
-		return
-	}
-	m.genStatus = "Copied to clipboard"
-}
-
-func copyToClipboard(text string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("pbcopy")
-	case "linux":
-		cmd = exec.Command("xclip", "-selection", "clipboard")
-	default:
-		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
-	}
-	cmd.Stdin = strings.NewReader(text)
-	return cmd.Run()
 }
 
 func (m rootModel) View() string {
@@ -413,7 +377,6 @@ func (m rootModel) renderStatusBar() string {
 	if m.generateFn != nil {
 		parts = append(parts, "g generate")
 	}
-	parts = append(parts, "y copy")
 	parts = append(parts, "q quit")
 	status := strings.Join(parts, "  ")
 
@@ -627,7 +590,7 @@ func (m *rootModel) resize(width, height int) {
 
 	// Detail viewport: subtract detail header (1) + separator (1) + metadata header (~3) + blank line (1) = 6
 	vp := viewport.New(m.detailWidth(), max(3, contentHeight-6))
-	vp.MouseWheelEnabled = true
+	vp.MouseWheelEnabled = false
 	m.detailVP = vp
 
 	m.rebuildFilteredRows()
