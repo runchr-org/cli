@@ -3,6 +3,8 @@ package memorylooptui
 import (
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -41,6 +43,7 @@ var wizardActionOptions = []struct {
 	intent WizardIntent
 	label  string
 }{
+	{intent: WizardIntentEdit, label: "Edit"},
 	{intent: WizardIntentAdopt, label: "Adopt to scope"},
 	{intent: WizardIntentApply, label: "Apply to files"},
 	{intent: WizardIntentSuppress, label: "Suppress"},
@@ -97,7 +100,7 @@ func (m wizardModel) update(msg tea.Msg) (wizardModel, tea.Cmd) {
 				m.stage = wizardStageScope
 			case WizardIntentApply:
 				m.stage = wizardStageLocation
-			case WizardIntentSuppress, WizardIntentArchive, "":
+			case WizardIntentEdit, WizardIntentSuppress, WizardIntentArchive, "":
 				m.stage = wizardStageAction
 			default:
 				m.stage = wizardStageAction
@@ -201,6 +204,13 @@ func (m wizardModel) advanceFromAction() (wizardModel, tea.Cmd) {
 		m.request.Targets = nil
 		m.previewTargets = nil
 		m.previewError = ""
+	case WizardIntentEdit:
+		m.stage = wizardStagePreview
+		m.request.Scope = ""
+		m.request.Location = ""
+		m.request.Targets = nil
+		m.previewTargets = nil
+		m.previewError = ""
 	case WizardIntentSuppress, WizardIntentArchive, "":
 		m.stage = wizardStagePreview
 		m.request.Scope = ""
@@ -244,7 +254,7 @@ func (m wizardModel) confirmationError() error {
 			return errors.New("no targets resolved")
 		}
 		return nil
-	case WizardIntentSuppress, WizardIntentArchive:
+	case WizardIntentEdit, WizardIntentSuppress, WizardIntentArchive:
 		return nil
 	default:
 		return fmt.Errorf("unknown wizard action: %s", m.request.Intent)
@@ -253,6 +263,8 @@ func (m wizardModel) confirmationError() error {
 
 func (m wizardModel) confirmationFlash() string {
 	switch m.request.Intent {
+	case WizardIntentEdit:
+		return "Opening edit form for " + m.record.Title
 	case WizardIntentAdopt:
 		return "Prepared adoption request for " + m.record.Title
 	case WizardIntentApply:
@@ -383,6 +395,10 @@ func (m wizardModel) renderPreview() string {
 				b.WriteString("\n")
 			}
 		}
+	case WizardIntentEdit:
+		b.WriteString("  ")
+		b.WriteString("Edit will open an interactive form for title, keywords, and body.")
+		b.WriteString("\n")
 	case WizardIntentSuppress, WizardIntentArchive, "":
 		b.WriteString("\n")
 	default:
@@ -427,6 +443,8 @@ func (m wizardModel) applyLocationTitle() string {
 
 func wizardActionLabel(intent WizardIntent) string {
 	switch intent {
+	case WizardIntentEdit:
+		return "Edit"
 	case WizardIntentAdopt:
 		return "Adopt to scope"
 	case WizardIntentApply:
@@ -451,4 +469,49 @@ func wrapIndex(idx, size int) int {
 		return 0
 	}
 	return idx
+}
+
+var errNoEditor = errors.New("no editor configured")
+
+func editInEditor(current string) (string, error) {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = os.Getenv("VISUAL")
+	}
+	if editor == "" {
+		return "", errNoEditor
+	}
+
+	tmpFile, err := os.CreateTemp("", "entire-memory-*.md")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(current); err != nil {
+		tmpFile.Close()
+		return "", fmt.Errorf("write temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	parts := strings.Fields(editor)
+	cmdArgs := append(parts[1:], tmpFile.Name())
+	editCmd := exec.Command(parts[0], cmdArgs...)
+	editCmd.Stdin = os.Stdin
+	editCmd.Stdout = os.Stdout
+	editCmd.Stderr = os.Stderr
+	if err := editCmd.Run(); err != nil {
+		return "", fmt.Errorf("editor exited with error: %w", err)
+	}
+
+	data, err := os.ReadFile(tmpFile.Name())
+	if err != nil {
+		return "", fmt.Errorf("read temp file: %w", err)
+	}
+
+	result := strings.TrimSpace(string(data))
+	if result == "" {
+		return "", errors.New("empty body — edit cancelled")
+	}
+	return result, nil
 }

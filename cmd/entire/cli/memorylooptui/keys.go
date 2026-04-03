@@ -56,6 +56,7 @@ type historyKeys struct {
 type settingsKeys struct {
 	Mode        key.Binding
 	Policy      key.Binding
+	Threshold   key.Binding
 	MaxUp       key.Binding
 	MaxDown     key.Binding
 	ScopeRepo   key.Binding
@@ -117,6 +118,7 @@ var historyKeyMap = historyKeys{
 var settingsKeyMap = settingsKeys{
 	Mode:        key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "cycle mode")),
 	Policy:      key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "cycle policy")),
+	Threshold:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "cycle threshold")),
 	MaxUp:       key.NewBinding(key.WithKeys("+", "="), key.WithHelp("+", "increase max")),
 	MaxDown:     key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "decrease max")),
 	ScopeRepo:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "toggle repo scope")),

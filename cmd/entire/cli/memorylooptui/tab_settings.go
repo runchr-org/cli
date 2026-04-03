@@ -12,6 +12,7 @@ import (
 
 var modeOrder = []memoryloop.Mode{memoryloop.ModeOff, memoryloop.ModeManual, memoryloop.ModeAuto}
 var policyOrder = []memoryloop.ActivationPolicy{memoryloop.ActivationPolicyReview, memoryloop.ActivationPolicyAuto}
+var thresholdOrder = []string{"relaxed", "balanced", "strict"}
 
 //nolint:recvcheck // bubbletea pattern: pointer receivers for mutation, value for update/view
 type settingsModel struct {
@@ -77,6 +78,11 @@ func (m settingsModel) update(msg tea.Msg) (settingsModel, tea.Cmd) {
 	case key.Matches(keyMsg, settingsKeyMap.ScopeBranch):
 		scopes := toggleScope(m.state.Store.InjectionScopes, memoryloop.ScopeKindBranch)
 		changed.injectionScopes = &scopes
+		hasChange = true
+
+	case key.Matches(keyMsg, settingsKeyMap.Threshold):
+		next := cycleThreshold(m.state.Store.GenerationThreshold)
+		changed.generationThreshold = &next
 		hasChange = true
 	}
 
@@ -187,6 +193,38 @@ func (m settingsModel) view() string {
 		b.WriteString("\n")
 	}
 
+	// Generation Threshold card
+	{
+		var c strings.Builder
+		c.WriteString(m.styles.render(m.styles.bold, "Generation Threshold"))
+		c.WriteString("  ")
+		c.WriteString(m.styles.render(m.styles.dim, "Controls how aggressively memories are filtered during refresh"))
+		c.WriteString("\n")
+		current := store.GenerationThreshold
+		if current == "" {
+			current = "balanced"
+		}
+		hasOverrides := store.GenerationOverrides != nil
+		for _, preset := range thresholdOrder {
+			label := preset
+			if preset == current {
+				if hasOverrides {
+					label += "*"
+				}
+				c.WriteString(selectedChip.Render(label))
+			} else {
+				c.WriteString(unselectedChip.Render(label))
+			}
+			c.WriteString(" ")
+		}
+		if hasOverrides {
+			c.WriteString("\n")
+			c.WriteString(m.styles.render(m.styles.dim, "Overrides active — run 'entire memory-loop threshold --clear-overrides' to reset"))
+		}
+		b.WriteString(cardStyle.Render(c.String()))
+		b.WriteString("\n")
+	}
+
 	// Injection status card
 	{
 		var c strings.Builder
@@ -228,6 +266,18 @@ func cyclePolicy(current memoryloop.ActivationPolicy) memoryloop.ActivationPolic
 		}
 	}
 	return memoryloop.ActivationPolicyReview
+}
+
+func cycleThreshold(current string) string {
+	if current == "" {
+		current = "balanced"
+	}
+	for i, t := range thresholdOrder {
+		if t == current {
+			return thresholdOrder[(i+1)%len(thresholdOrder)]
+		}
+	}
+	return "balanced"
 }
 
 // effectiveInjectionScopes returns the active scopes, defaulting to all if empty.

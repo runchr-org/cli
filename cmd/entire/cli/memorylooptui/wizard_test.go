@@ -48,8 +48,11 @@ func TestWizard_AdoptToScope_EmitsAdoptionRequest(t *testing.T) {
 	)
 
 	var cmd tea.Cmd
+	// Down to Adopt (index 1, since Edit is now index 0)
+	w, _ = w.update(tea.KeyMsg{Type: tea.KeyDown})
 	w, _ = w.update(tea.KeyMsg{Type: tea.KeyEnter})
 
+	// Down to "me" scope
 	w, _ = w.update(tea.KeyMsg{Type: tea.KeyDown})
 	w, _ = w.update(tea.KeyMsg{Type: tea.KeyEnter})
 
@@ -77,6 +80,8 @@ func TestWizard_ApplyToFiles_ProjectShowsResolvedTargets(t *testing.T) {
 	)
 
 	var cmd tea.Cmd
+	// Down twice to Apply (index 2, since Edit=0, Adopt=1)
+	w, _ = w.update(tea.KeyMsg{Type: tea.KeyDown})
 	w, _ = w.update(tea.KeyMsg{Type: tea.KeyDown})
 
 	w, _ = w.update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -110,6 +115,8 @@ func TestWizard_PreviewStateBeforeConfirm(t *testing.T) {
 		},
 	)
 
+	// Down twice to Apply (index 2, since Edit=0, Adopt=1)
+	w, _ = w.update(tea.KeyMsg{Type: tea.KeyDown})
 	w, _ = w.update(tea.KeyMsg{Type: tea.KeyDown})
 	w, _ = w.update(tea.KeyMsg{Type: tea.KeyEnter})
 	w, _ = w.update(tea.KeyMsg{Type: tea.KeyEnter})

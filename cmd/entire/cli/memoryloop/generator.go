@@ -73,10 +73,11 @@ type Generator struct {
 }
 
 type GenerateInput struct {
-	Analysis     improve.PatternAnalysis
-	Sessions     []insightsdb.SessionRow
-	SourceWindow int
-	MaxRecords   int
+	Analysis        improve.PatternAnalysis
+	Sessions        []insightsdb.SessionRow
+	SourceWindow    int
+	MaxRecords      int
+	ThresholdConfig GenerationThresholdConfig
 }
 
 type generateResponse struct {
@@ -131,6 +132,60 @@ type GenerationStats struct {
 	DedupedCount            int
 }
 
+type GenerationThresholdConfig struct {
+	MinStrength      int    `json:"min_strength"`
+	MinConfidence    string `json:"min_confidence"`
+	EvidenceSessions int    `json:"evidence_sessions"`
+	GenericFilter    bool   `json:"generic_filter"`
+	SingletonPolicy  string `json:"singleton_policy"`
+}
+
+type GenerationThresholdOverrides struct {
+	MinStrength      *int    `json:"min_strength,omitempty"`
+	MinConfidence    *string `json:"min_confidence,omitempty"`
+	EvidenceSessions *int    `json:"evidence_sessions,omitempty"`
+	GenericFilter    *bool   `json:"generic_filter,omitempty"`
+	SingletonPolicy  *string `json:"singleton_policy,omitempty"`
+}
+
+var thresholdPresets = map[string]GenerationThresholdConfig{
+	"relaxed":  {MinStrength: 2, MinConfidence: "low", EvidenceSessions: 1, GenericFilter: false, SingletonPolicy: "all"},
+	"balanced": {MinStrength: 3, MinConfidence: "medium", EvidenceSessions: 2, GenericFilter: true, SingletonPolicy: "review-rules"},
+	"strict":   {MinStrength: 4, MinConfidence: "high", EvidenceSessions: 3, GenericFilter: true, SingletonPolicy: "none"},
+}
+
+func ResolveGenerationThreshold(preset string, overrides *GenerationThresholdOverrides) GenerationThresholdConfig {
+	cfg, ok := thresholdPresets[preset]
+	if !ok {
+		cfg = thresholdPresets["balanced"]
+	}
+	if overrides == nil {
+		return cfg
+	}
+	if overrides.MinStrength != nil {
+		cfg.MinStrength = clamp(*overrides.MinStrength, 1, 5)
+	}
+	if overrides.MinConfidence != nil {
+		switch *overrides.MinConfidence {
+		case "low", "medium", "high":
+			cfg.MinConfidence = *overrides.MinConfidence
+		}
+	}
+	if overrides.EvidenceSessions != nil {
+		cfg.EvidenceSessions = clamp(*overrides.EvidenceSessions, 1, 10)
+	}
+	if overrides.GenericFilter != nil {
+		cfg.GenericFilter = *overrides.GenericFilter
+	}
+	if overrides.SingletonPolicy != nil {
+		switch *overrides.SingletonPolicy {
+		case "all", "review-rules", "none":
+			cfg.SingletonPolicy = *overrides.SingletonPolicy
+		}
+	}
+	return cfg
+}
+
 func (g *Generator) Generate(ctx context.Context, input GenerateInput) ([]MemoryRecord, GenerationStats, *llmcli.UsageInfo, error) {
 	if g.Runner == nil {
 		g.Runner = &llmcli.Runner{}
@@ -167,6 +222,10 @@ func buildGeneratedRecords(resp generateResponse, input GenerateInput, now time.
 }
 
 func buildGeneratedRecordsDetailed(resp generateResponse, input GenerateInput, now time.Time) ([]MemoryRecord, GenerationStats) {
+	cfg := input.ThresholdConfig
+	if cfg.MinStrength == 0 {
+		cfg = ResolveGenerationThreshold("balanced", nil)
+	}
 	validSourceIDs := buildValidSourceIDs(input.Sessions)
 	orderedKeys := make([]string, 0, len(resp.Records))
 	bestByKey := make(map[string]generatedCandidate)
@@ -183,11 +242,11 @@ func buildGeneratedRecordsDetailed(resp generateResponse, input GenerateInput, n
 		}
 		confidence := normalizeConfidence(item.Confidence)
 		strength := clamp(item.Strength, 1, 5)
-		if confidence == confidenceLow || strength < 3 {
+		if confidenceRank(confidence) < confidenceRank(cfg.MinConfidence) || strength < cfg.MinStrength {
 			stats.FilteredWeakCount++
 			continue
 		}
-		if isGenericGeneratedCandidate(title, body) {
+		if cfg.GenericFilter && isGenericGeneratedCandidate(title, body) {
 			stats.FilteredGenericCount++
 			continue
 		}
@@ -214,7 +273,7 @@ func buildGeneratedRecordsDetailed(resp generateResponse, input GenerateInput, n
 			stats.FilteredGenericCount++
 			continue
 		}
-		if !passesEvidenceGate(record, item.SourceSignal, input.Analysis, validSourceIDs) {
+		if !passesEvidenceGate(record, item.SourceSignal, input.Analysis, validSourceIDs, cfg.EvidenceSessions, cfg.SingletonPolicy) {
 			stats.FilteredNoEvidenceCount++
 			continue
 		}
@@ -409,7 +468,7 @@ func normalizeGeneratedText(value string) string {
 // passesEvidenceGate enforces that a generated record traces back to a
 // repeated upstream analysis signal (Layer 1: provenance) and cites valid
 // source IDs from that signal's affected sessions (Layer 2: session validation).
-func passesEvidenceGate(record MemoryRecord, signal *sourceSignal, analysis improve.PatternAnalysis, validSourceIDs map[string]bool) bool {
+func passesEvidenceGate(record MemoryRecord, signal *sourceSignal, analysis improve.PatternAnalysis, validSourceIDs map[string]bool, requiredSessions int, singletonPolicy string) bool {
 	if signal == nil || signal.Key == "" {
 		return false
 	}
@@ -419,11 +478,19 @@ func passesEvidenceGate(record MemoryRecord, signal *sourceSignal, analysis impr
 		return false
 	}
 
-	allowSingleton := matched.AllowsSingleton
-	if matched.Kind == "skill_opportunity" && record.Kind != KindSkillPatch {
+	allowSingleton := false
+	switch singletonPolicy {
+	case "all":
+		allowSingleton = true
+	case "review-rules":
+		allowSingleton = matched.AllowsSingleton
+		if matched.Kind == "skill_opportunity" && record.Kind != KindSkillPatch {
+			allowSingleton = false
+		}
+	case "none":
 		allowSingleton = false
 	}
-	if !allowSingleton && matched.Count < 2 {
+	if !allowSingleton && matched.Count < requiredSessions {
 		return false
 	}
 
@@ -437,7 +504,7 @@ func passesEvidenceGate(record MemoryRecord, signal *sourceSignal, analysis impr
 	if allowSingleton {
 		return validCount >= 1
 	}
-	return validCount >= 2
+	return validCount >= requiredSessions
 }
 
 func lookupSignal(signal *sourceSignal, analysis improve.PatternAnalysis) (matchedSignal, bool) {

@@ -17,9 +17,15 @@ type addMemoryMsg struct {
 	input memoryloop.ManualRecordInput
 }
 
+// editMemoryMsg requests editing an existing memory record.
+type editMemoryMsg struct {
+	input memoryloop.EditRecordInput
+}
+
 type WizardIntent string
 
 const (
+	WizardIntentEdit     WizardIntent = "edit"
 	WizardIntentAdopt    WizardIntent = "adopt"
 	WizardIntentApply    WizardIntent = "apply"
 	WizardIntentSuppress WizardIntent = "suppress"
@@ -64,12 +70,13 @@ type quickLifecycleMsg struct {
 // pruneMsg requests pruning stale/ineffective records.
 type pruneMsg struct{}
 
-// settingsChangedMsg indicates mode, policy, max_injected, or injection_scopes was changed.
+// settingsChangedMsg indicates mode, policy, max_injected, injection_scopes, or threshold was changed.
 type settingsChangedMsg struct {
-	mode             *memoryloop.Mode
-	activationPolicy *memoryloop.ActivationPolicy
-	maxInjected      *int
-	injectionScopes  *[]memoryloop.ScopeKind
+	mode                *memoryloop.Mode
+	activationPolicy    *memoryloop.ActivationPolicy
+	maxInjected         *int
+	injectionScopes     *[]memoryloop.ScopeKind
+	generationThreshold *string
 }
 
 // testPromptMsg requests a prompt relevance test.

@@ -88,6 +88,8 @@ func newMemoryLoopCmd() *cobra.Command {
 	cmd.AddCommand(newMemoryLoopArchiveCmd())
 	cmd.AddCommand(newMemoryLoopPruneCmd())
 	cmd.AddCommand(newMemoryLoopTuiCmd())
+	cmd.AddCommand(newMemoryLoopEditCmd())
+	cmd.AddCommand(newMemoryLoopThresholdCmd())
 
 	return cmd
 }
@@ -349,13 +351,32 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 	}
 
 	analysis := improve.AnalyzePatterns(sessionRowsToSummaries(rows))
+
+	memoryCfg := cfg.GetMemoryLoopConfig()
+	thresholdPreset := memoryCfg.GenerationThreshold
+	if thresholdPreset == "" {
+		thresholdPreset = "balanced"
+	}
+	var thresholdOverrides *memoryloop.GenerationThresholdOverrides
+	if memoryCfg.GenerationOverrides != nil {
+		thresholdOverrides = &memoryloop.GenerationThresholdOverrides{
+			MinStrength:      memoryCfg.GenerationOverrides.MinStrength,
+			MinConfidence:    memoryCfg.GenerationOverrides.MinConfidence,
+			EvidenceSessions: memoryCfg.GenerationOverrides.EvidenceSessions,
+			GenericFilter:    memoryCfg.GenerationOverrides.GenericFilter,
+			SingletonPolicy:  memoryCfg.GenerationOverrides.SingletonPolicy,
+		}
+	}
+	thresholdCfg := memoryloop.ResolveGenerationThreshold(thresholdPreset, thresholdOverrides)
+
 	gen := memoryloop.Generator{Runner: &llmcli.Runner{}}
 	renderMemoryLoopRefreshProgress(w, "Distilling memories...")
 	records, generationStats, usage, err := gen.Generate(ctx, memoryloop.GenerateInput{
-		Analysis:     analysis,
-		Sessions:     rows,
-		SourceWindow: last,
-		MaxRecords:   memoryloop.DefaultMaxRecords,
+		Analysis:        analysis,
+		Sessions:        rows,
+		SourceWindow:    last,
+		MaxRecords:      memoryloop.DefaultMaxRecords,
+		ThresholdConfig: thresholdCfg,
 	})
 	if err != nil {
 		return fmt.Errorf("generate memory snapshot: %w", err)
@@ -366,7 +387,6 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 		return fmt.Errorf("load memory-loop state: %w", err)
 	}
 
-	memoryCfg := cfg.GetMemoryLoopConfig()
 	maxInjected := memoryCfg.MaxInjected
 	mode := memoryloop.Mode(memoryCfg.Mode)
 	storeDebug := memoryCfg.Debug
@@ -401,6 +421,9 @@ func runMemoryLoopRefresh(ctx context.Context, w io.Writer, last int, scopeArg, 
 	reconcile.History.FilteredGenericCount = generationStats.FilteredGenericCount
 	reconcile.History.FilteredNoEvidenceCount = generationStats.FilteredNoEvidenceCount
 	reconcile.History.DedupedCount = generationStats.DedupedCount
+	reconcile.History.Threshold = thresholdPreset
+	reconcile.History.ThresholdOverride = thresholdOverrides != nil
+	reconcile.History.ResolvedConfig = &thresholdCfg
 	refreshHistory := append(existingRefreshHistory(state), reconcile.History)
 	reconciledRecords := memoryloop.DeriveOutcomes(reconcile.Records, rows, now)
 	reconciledRecords, pruneResult := memoryloop.PruneRecords(reconciledRecords, now)
@@ -1528,5 +1551,150 @@ func renderEmptyMemoryLoopScopeMessage(ctx context.Context, w io.Writer, idb *in
 	}
 
 	fmt.Fprintf(w, "No sessions found for personal scope %q.\n", scope.OwnerID)
+	return nil
+}
+
+func newMemoryLoopEditCmd() *cobra.Command {
+	var title, body, keywords string
+
+	cmd := &cobra.Command{
+		Use:   "edit <id>",
+		Short: "Edit a memory's title, body, or keywords",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runMemoryLoopEdit(cmd, args[0], title, body, keywords)
+		},
+	}
+	cmd.Flags().StringVar(&title, "title", "", "New title")
+	cmd.Flags().StringVar(&body, "body", "", "New body")
+	cmd.Flags().StringVar(&keywords, "keywords", "", "Comma-separated keywords")
+	return cmd
+}
+
+func runMemoryLoopEdit(cmd *cobra.Command, id, title, body, keywords string) error {
+	ctx := cmd.Context()
+	state, err := loadMemoryLoopStoreState(ctx)
+	if err != nil {
+		return err
+	}
+
+	var input memoryloop.EditRecordInput
+	hasFlag := false
+	if cmd.Flags().Changed("title") {
+		input.Title = &title
+		hasFlag = true
+	}
+	if cmd.Flags().Changed("body") {
+		input.Body = &body
+		hasFlag = true
+	}
+	if cmd.Flags().Changed("keywords") {
+		kw := memoryloop.ParseKeywords(keywords)
+		input.Keywords = &kw
+		hasFlag = true
+	}
+
+	if !hasFlag {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Interactive edit mode not yet implemented. Use --title, --body, or --keywords flags.")
+		return NewSilentError(errors.New("no flags provided"))
+	}
+
+	now := time.Now().UTC()
+	records, record, err := memoryloop.EditRecord(state.Store.Records, id, input, now)
+	if err != nil {
+		return fmt.Errorf("edit memory: %w", err)
+	}
+	state.Store.Records = records
+	if err := memoryloop.SaveState(ctx, state); err != nil {
+		return fmt.Errorf("save memory-loop state: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Updated memory: %s\n", record.Title)
+	return nil
+}
+
+func newMemoryLoopThresholdCmd() *cobra.Command {
+	var clearOverrides bool
+	var minStrength, evidenceSessions int
+	var minConfidence, singletonPolicy string
+	var genericFilter string
+
+	cmd := &cobra.Command{
+		Use:   "threshold [relaxed|balanced|strict]",
+		Short: "Set generation threshold preset",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runMemoryLoopThreshold(cmd, args, clearOverrides, minStrength, evidenceSessions, minConfidence, singletonPolicy, genericFilter)
+		},
+	}
+	cmd.Flags().BoolVar(&clearOverrides, "clear-overrides", false, "Clear all threshold overrides")
+	cmd.Flags().IntVar(&minStrength, "min-strength", 0, "Override minimum strength (1-5)")
+	cmd.Flags().IntVar(&evidenceSessions, "evidence-sessions", 0, "Override required evidence sessions (1-10)")
+	cmd.Flags().StringVar(&minConfidence, "min-confidence", "", "Override minimum confidence (low|medium|high)")
+	cmd.Flags().StringVar(&singletonPolicy, "singleton-policy", "", "Override singleton policy (all|review-rules|none)")
+	cmd.Flags().StringVar(&genericFilter, "generic-filter", "", "Override generic filter (true|false)")
+	return cmd
+}
+
+func runMemoryLoopThreshold(cmd *cobra.Command, args []string, clearOverrides bool, minStrength, evidenceSessions int, minConfidence, singletonPolicy, genericFilter string) error {
+	ctx := cmd.Context()
+	s, err := settings.Load(ctx)
+	if err != nil {
+		return fmt.Errorf("load settings: %w", err)
+	}
+	if s.MemoryLoopConfig == nil {
+		s.MemoryLoopConfig = &settings.MemoryLoopSettings{}
+	}
+
+	if len(args) > 0 {
+		preset := args[0]
+		switch preset {
+		case "relaxed", "balanced", "strict":
+			s.MemoryLoopConfig.GenerationThreshold = preset
+		default:
+			return fmt.Errorf("unknown threshold preset: %s (expected relaxed, balanced, or strict)", preset)
+		}
+	}
+
+	if clearOverrides {
+		s.MemoryLoopConfig.GenerationOverrides = nil
+	} else {
+		if cmd.Flags().Changed("min-strength") || cmd.Flags().Changed("evidence-sessions") ||
+			cmd.Flags().Changed("min-confidence") || cmd.Flags().Changed("singleton-policy") ||
+			cmd.Flags().Changed("generic-filter") {
+			if s.MemoryLoopConfig.GenerationOverrides == nil {
+				s.MemoryLoopConfig.GenerationOverrides = &settings.GenerationThresholdOverrides{}
+			}
+			ov := s.MemoryLoopConfig.GenerationOverrides
+			if cmd.Flags().Changed("min-strength") {
+				ov.MinStrength = &minStrength
+			}
+			if cmd.Flags().Changed("evidence-sessions") {
+				ov.EvidenceSessions = &evidenceSessions
+			}
+			if cmd.Flags().Changed("min-confidence") {
+				ov.MinConfidence = &minConfidence
+			}
+			if cmd.Flags().Changed("singleton-policy") {
+				ov.SingletonPolicy = &singletonPolicy
+			}
+			if cmd.Flags().Changed("generic-filter") {
+				val := genericFilter == "true"
+				ov.GenericFilter = &val
+			}
+		}
+	}
+
+	if err := settings.Save(ctx, s); err != nil {
+		return fmt.Errorf("save settings: %w", err)
+	}
+
+	preset := s.MemoryLoopConfig.GenerationThreshold
+	if preset == "" {
+		preset = "balanced"
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Generation threshold set to: %s\n", preset)
+	if s.MemoryLoopConfig.GenerationOverrides != nil {
+		fmt.Fprintln(cmd.OutOrStdout(), "Overrides are active.")
+	}
 	return nil
 }

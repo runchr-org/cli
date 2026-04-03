@@ -117,16 +117,28 @@ type EvolveSettings struct {
 	SessionThreshold int `json:"session_threshold,omitempty"`
 }
 
+// GenerationThresholdOverrides contains optional per-field overrides for the generation threshold.
+// Defined in the settings package to avoid import cycles with memoryloop.
+type GenerationThresholdOverrides struct {
+	MinStrength      *int    `json:"min_strength,omitempty"`
+	MinConfidence    *string `json:"min_confidence,omitempty"`
+	EvidenceSessions *int    `json:"evidence_sessions,omitempty"`
+	GenericFilter    *bool   `json:"generic_filter,omitempty"`
+	SingletonPolicy  *string `json:"singleton_policy,omitempty"`
+}
+
 // MemoryLoopSettings configures the repo-scoped memory loop PoC.
 type MemoryLoopSettings struct {
-	Enabled                bool   `json:"enabled"`
-	Mode                   string `json:"mode,omitempty"`
-	Debug                  bool   `json:"debug,omitempty"`
-	ActivationPolicy       string `json:"activation_policy,omitempty"`
-	OwnerID                string `json:"owner_id,omitempty"` // Deprecated: ignored, kept for backward compatibility.
-	ClaudeInjectionEnabled *bool  `json:"claude_injection_enabled,omitempty"`
-	MaxInjected            int    `json:"max_injected,omitempty"`
-	DefaultRefreshWindow   int    `json:"default_refresh_window,omitempty"`
+	Enabled                bool                          `json:"enabled"`
+	Mode                   string                        `json:"mode,omitempty"`
+	Debug                  bool                          `json:"debug,omitempty"`
+	ActivationPolicy       string                        `json:"activation_policy,omitempty"`
+	OwnerID                string                        `json:"owner_id,omitempty"` // Deprecated: ignored, kept for backward compatibility.
+	ClaudeInjectionEnabled *bool                         `json:"claude_injection_enabled,omitempty"`
+	MaxInjected            int                           `json:"max_injected,omitempty"`
+	DefaultRefreshWindow   int                           `json:"default_refresh_window,omitempty"`
+	GenerationThreshold    string                        `json:"generation_threshold,omitempty"`
+	GenerationOverrides    *GenerationThresholdOverrides `json:"generation_overrides,omitempty"`
 }
 
 // MemoryLoopConfig is the effective memory-loop configuration with defaults applied.
@@ -137,6 +149,8 @@ type MemoryLoopConfig struct {
 	ActivationPolicy     string
 	MaxInjected          int
 	DefaultRefreshWindow int
+	GenerationThreshold  string
+	GenerationOverrides  *GenerationThresholdOverrides
 }
 
 // GetEvolveConfig returns the evolution loop configuration with defaults applied.
@@ -193,6 +207,12 @@ func (s *EntireSettings) GetMemoryLoopConfig() MemoryLoopConfig {
 	}
 	if cfg.DefaultRefreshWindow == 0 {
 		cfg.DefaultRefreshWindow = 20
+	}
+	if s.MemoryLoopConfig.GenerationThreshold != "" {
+		cfg.GenerationThreshold = s.MemoryLoopConfig.GenerationThreshold
+	}
+	if s.MemoryLoopConfig.GenerationOverrides != nil {
+		cfg.GenerationOverrides = s.MemoryLoopConfig.GenerationOverrides
 	}
 	return cfg
 }

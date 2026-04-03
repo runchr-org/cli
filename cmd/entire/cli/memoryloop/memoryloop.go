@@ -184,41 +184,47 @@ type MemoryRecord struct {
 	Outcome          Outcome        `json:"outcome,omitempty"`
 	History          []HistoryEvent `json:"history,omitempty"`
 	LegacyInferred   bool           `json:"legacy_inferred,omitempty"`
+	Keywords         []string       `json:"keywords,omitempty"`
 }
 
 type RefreshHistory struct {
-	At                      time.Time `json:"at"`
-	Scope                   string    `json:"scope,omitempty"`
-	ScopeValue              string    `json:"scope_value,omitempty"`
-	SourceWindow            int       `json:"source_window,omitempty"`
-	GeneratedCount          int       `json:"generated_count,omitempty"`
-	ActivatedCount          int       `json:"activated_count,omitempty"`
-	CandidateCount          int       `json:"candidate_count,omitempty"`
-	FilteredWeakCount       int       `json:"filtered_weak_count,omitempty"`
-	FilteredGenericCount    int       `json:"filtered_generic_count,omitempty"`
-	FilteredNoEvidenceCount int       `json:"filtered_no_evidence_count,omitempty"`
-	DedupedCount            int       `json:"deduped_count,omitempty"`
-	DemotedCount            int       `json:"demoted_count,omitempty"`
-	PrunedCount             int       `json:"pruned_count,omitempty"`
-	InputTokens             int       `json:"input_tokens,omitempty"`
-	OutputTokens            int       `json:"output_tokens,omitempty"`
-	TotalCostUSD            float64   `json:"total_cost_usd,omitempty"`
+	At                      time.Time                  `json:"at"`
+	Scope                   string                     `json:"scope,omitempty"`
+	ScopeValue              string                     `json:"scope_value,omitempty"`
+	SourceWindow            int                        `json:"source_window,omitempty"`
+	GeneratedCount          int                        `json:"generated_count,omitempty"`
+	ActivatedCount          int                        `json:"activated_count,omitempty"`
+	CandidateCount          int                        `json:"candidate_count,omitempty"`
+	FilteredWeakCount       int                        `json:"filtered_weak_count,omitempty"`
+	FilteredGenericCount    int                        `json:"filtered_generic_count,omitempty"`
+	FilteredNoEvidenceCount int                        `json:"filtered_no_evidence_count,omitempty"`
+	DedupedCount            int                        `json:"deduped_count,omitempty"`
+	DemotedCount            int                        `json:"demoted_count,omitempty"`
+	PrunedCount             int                        `json:"pruned_count,omitempty"`
+	InputTokens             int                        `json:"input_tokens,omitempty"`
+	OutputTokens            int                        `json:"output_tokens,omitempty"`
+	TotalCostUSD            float64                    `json:"total_cost_usd,omitempty"`
+	Threshold               string                     `json:"threshold,omitempty"`
+	ThresholdOverride       bool                       `json:"threshold_override,omitempty"`
+	ResolvedConfig          *GenerationThresholdConfig `json:"resolved_config,omitempty"`
 }
 
 type Store struct {
-	Version          int              `json:"version"`
-	GeneratedAt      time.Time        `json:"generated_at"`
-	SourceWindow     int              `json:"source_window"`
-	Scope            string           `json:"scope,omitempty"`
-	ScopeValue       string           `json:"scope_value,omitempty"`
-	Records          []MemoryRecord   `json:"records,omitempty"`
-	Mode             Mode             `json:"mode,omitempty"`
-	Debug            bool             `json:"debug,omitempty"`
-	ActivationPolicy ActivationPolicy `json:"activation_policy,omitempty"`
-	InjectionEnabled bool             `json:"injection_enabled"`
-	MaxInjected      int              `json:"max_injected"`
-	InjectionScopes  []ScopeKind      `json:"injection_scopes,omitempty"`
-	RefreshHistory   []RefreshHistory `json:"refresh_history,omitempty"`
+	Version             int                           `json:"version"`
+	GeneratedAt         time.Time                     `json:"generated_at"`
+	SourceWindow        int                           `json:"source_window"`
+	Scope               string                        `json:"scope,omitempty"`
+	ScopeValue          string                        `json:"scope_value,omitempty"`
+	Records             []MemoryRecord                `json:"records,omitempty"`
+	Mode                Mode                          `json:"mode,omitempty"`
+	Debug               bool                          `json:"debug,omitempty"`
+	ActivationPolicy    ActivationPolicy              `json:"activation_policy,omitempty"`
+	InjectionEnabled    bool                          `json:"injection_enabled"`
+	MaxInjected         int                           `json:"max_injected"`
+	InjectionScopes     []ScopeKind                   `json:"injection_scopes,omitempty"`
+	RefreshHistory      []RefreshHistory              `json:"refresh_history,omitempty"`
+	GenerationThreshold string                        `json:"generation_threshold,omitempty"`
+	GenerationOverrides *GenerationThresholdOverrides `json:"generation_overrides,omitempty"`
 }
 
 type Snapshot = Store
@@ -283,6 +289,7 @@ type ManualRecordInput struct {
 	Kind       Kind
 	Title      string
 	Body       string
+	Keywords   []string
 	ScopeKind  ScopeKind
 	ScopeValue string
 	OwnerEmail string
@@ -302,7 +309,8 @@ type PruneResult struct {
 }
 
 type recordMatchSignals struct {
-	primaryTokens map[string]struct{}
+	primaryTokens  map[string]struct{}
+	keywordPhrases []string
 }
 
 func StatePath(ctx context.Context) (string, error) {
@@ -457,7 +465,8 @@ func PreviewSelection(snapshot Snapshot, prompt string, now time.Time, opts ...S
 	}
 
 	promptTokens := tokenize(prompt)
-	if len(promptTokens) == 0 {
+	promptLower := strings.ToLower(prompt)
+	if len(promptTokens) == 0 && promptLower == "" {
 		return SelectionReport{}
 	}
 
@@ -466,8 +475,9 @@ func PreviewSelection(snapshot Snapshot, prompt string, now time.Time, opts ...S
 	for _, record := range snapshot.Records {
 		signals := buildRecordMatchSignals(record)
 		primaryOverlap := tokenOverlap(promptTokens, signals.primaryTokens)
+		keywordOverlap := countMatchedKeywords(promptLower, signals.keywordPhrases)
 		if !cfg.passesScope(record) {
-			if primaryOverlap > 0 {
+			if primaryOverlap > 0 || keywordOverlap > 0 {
 				skipped = append(skipped, SkippedMatch{
 					Record: record,
 					Reason: "scope mismatch",
@@ -475,8 +485,8 @@ func PreviewSelection(snapshot Snapshot, prompt string, now time.Time, opts ...S
 			}
 			continue
 		}
-		if reason, rejected := injectionRejectionReason(record, primaryOverlap); rejected {
-			if primaryOverlap > 0 {
+		if reason, rejected := injectionRejectionReason(record, primaryOverlap, keywordOverlap); rejected {
+			if primaryOverlap > 0 || keywordOverlap > 0 {
 				skipped = append(skipped, SkippedMatch{
 					Record: record,
 					Reason: reason,
@@ -484,7 +494,7 @@ func PreviewSelection(snapshot Snapshot, prompt string, now time.Time, opts ...S
 			}
 			continue
 		}
-		candidate := buildScoredCandidate(record, primaryOverlap, now)
+		candidate := buildScoredCandidate(record, primaryOverlap, keywordOverlap, now)
 		if candidate.adjustedScore <= 0 {
 			skipped = append(skipped, SkippedMatch{
 				Record: record,
@@ -775,6 +785,7 @@ func AddManualRecord(records []MemoryRecord, input ManualRecordInput, now time.T
 		Title:       strings.TrimSpace(input.Title),
 		Body:        strings.TrimSpace(input.Body),
 		Fingerprint: FingerprintForRecord(input.Kind, input.Title, input.Body),
+		Keywords:    capKeywords(input.Keywords),
 		ScopeKind:   input.ScopeKind,
 		ScopeValue:  strings.TrimSpace(input.ScopeValue),
 		Origin:      OriginManual,
@@ -796,6 +807,7 @@ func AddManualRecord(records []MemoryRecord, input ManualRecordInput, now time.T
 		existing.Title = record.Title
 		existing.Body = record.Body
 		existing.Fingerprint = record.Fingerprint
+		existing.Keywords = record.Keywords
 		existing.ScopeKind = record.ScopeKind
 		existing.ScopeValue = record.ScopeValue
 		existing.Origin = OriginManual
@@ -812,6 +824,120 @@ func AddManualRecord(records []MemoryRecord, input ManualRecordInput, now time.T
 
 	updated = append(updated, record)
 	return updated, record, nil
+}
+
+// EditRecordInput specifies which fields to update on an existing record.
+// Only non-nil fields are applied.
+type EditRecordInput struct {
+	Title    *string
+	Body     *string
+	Keywords *[]string
+}
+
+// EditRecord applies partial updates to an existing memory record.
+// Only non-nil fields in input are changed. Archived records cannot be edited.
+// Returns the updated slice, the edited record, and any error.
+func EditRecord(records []MemoryRecord, id string, input EditRecordInput, now time.Time) ([]MemoryRecord, MemoryRecord, error) {
+	idx := -1
+	for i := range records {
+		if records[i].ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return records, MemoryRecord{}, fmt.Errorf("record not found: %s", id)
+	}
+
+	updated := append([]MemoryRecord(nil), records...)
+	record := updated[idx]
+
+	if record.Status == StatusArchived {
+		return records, MemoryRecord{}, fmt.Errorf("cannot edit archived record %q", id)
+	}
+
+	// Validate non-nil fields.
+	if input.Title != nil && strings.TrimSpace(*input.Title) == "" {
+		return records, MemoryRecord{}, errors.New("title cannot be empty")
+	}
+	if input.Body != nil && strings.TrimSpace(*input.Body) == "" {
+		return records, MemoryRecord{}, errors.New("body cannot be empty")
+	}
+
+	// Track which fields actually changed for history.
+	var changedFields []string
+	prevTitle := record.Title
+	prevBody := record.Body
+	prevKeywords := record.Keywords
+
+	if input.Title != nil && *input.Title != record.Title {
+		record.Title = *input.Title
+		changedFields = append(changedFields, "title")
+	}
+	if input.Body != nil && *input.Body != record.Body {
+		record.Body = *input.Body
+		changedFields = append(changedFields, "body")
+	}
+	if input.Keywords != nil {
+		newKW := capKeywords(*input.Keywords)
+		if !keywordsEqual(record.Keywords, newKW) {
+			record.Keywords = newKW
+			changedFields = append(changedFields, "keywords")
+		}
+	}
+
+	// No-op if nothing actually changed.
+	if len(changedFields) == 0 {
+		return updated, record, nil
+	}
+
+	// Recompute fingerprint only if title or body changed.
+	for _, f := range changedFields {
+		if f == "title" || f == "body" {
+			record.Fingerprint = FingerprintForRecord(record.Kind, record.Title, record.Body)
+			break
+		}
+	}
+
+	record.UpdatedAt = now
+
+	// Build history detail JSON.
+	detail := map[string]interface{}{
+		"fields": changedFields,
+	}
+	for _, f := range changedFields {
+		switch f {
+		case "title":
+			detail["prev_title"] = prevTitle
+		case "body":
+			detail["prev_body"] = prevBody
+		case "keywords":
+			detail["prev_keywords"] = strings.Join(prevKeywords, ",")
+		}
+	}
+	detailBytes, _ := json.Marshal(detail)
+
+	record.History = append(record.History, HistoryEvent{
+		Type:   "edited",
+		At:     now,
+		Detail: string(detailBytes),
+	})
+
+	updated[idx] = record
+	return updated, record, nil
+}
+
+// keywordsEqual reports whether two keyword slices are identical.
+func keywordsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func AdoptRecord(records []MemoryRecord, input AdoptionInput, now time.Time) ([]MemoryRecord, MemoryRecord, error) {
@@ -1290,12 +1416,17 @@ type diskState struct {
 	InjectionLogs []InjectionLog `json:"injection_logs,omitempty"`
 }
 
-func buildScoredCandidate(record MemoryRecord, primaryOverlap int, now time.Time) scoredCandidate {
-	baseScore := scoreRecord(record, primaryOverlap, now)
+func buildScoredCandidate(record MemoryRecord, primaryOverlap, keywordOverlap int, now time.Time) scoredCandidate {
+	baseScore := scoreRecord(record, primaryOverlap, keywordOverlap, now)
 	outcomeBonus := outcomeBonus(record.Outcome)
 	scopeBonus := scopeBonus(record)
 	cooldownPenalty := cooldownPenalty(record.LastInjectedAt, now)
 	adjustedScore := baseScore + outcomeBonus + scopeBonus - cooldownPenalty
+
+	reason := "title/body overlap"
+	if keywordOverlap > 0 {
+		reason = fmt.Sprintf("title/body overlap + %d keyword match(es)", keywordOverlap)
+	}
 
 	return scoredCandidate{
 		record:          record,
@@ -1304,7 +1435,7 @@ func buildScoredCandidate(record MemoryRecord, primaryOverlap int, now time.Time
 		scopeBonus:      scopeBonus,
 		cooldownPenalty: cooldownPenalty,
 		adjustedScore:   adjustedScore,
-		reason:          "title/body overlap",
+		reason:          reason,
 		rationale: SelectionRationale{
 			BaseScore:       baseScore,
 			OutcomeBonus:    outcomeBonus,
@@ -1450,12 +1581,12 @@ func hasSelectedTopicDuplicate(record MemoryRecord, selectedTopics map[string]st
 	return ok
 }
 
-func scoreRecord(record MemoryRecord, primaryOverlap int, now time.Time) int {
-	if primaryOverlap == 0 {
+func scoreRecord(record MemoryRecord, primaryOverlap, keywordOverlap int, now time.Time) int {
+	if primaryOverlap == 0 && keywordOverlap == 0 {
 		return 0
 	}
 
-	score := primaryOverlap * 7
+	score := primaryOverlap*7 + keywordOverlap*21
 	switch record.Kind {
 	case KindRepoRule, KindAgentInstruction:
 		score += 15
@@ -1531,11 +1662,19 @@ func cooldownPenalty(lastInjectedAt time.Time, now time.Time) int {
 }
 
 func buildRecordMatchSignals(record MemoryRecord) recordMatchSignals {
+	phrases := make([]string, 0, len(record.Keywords))
+	for _, kw := range record.Keywords {
+		kw = strings.TrimSpace(strings.ToLower(kw))
+		if kw != "" {
+			phrases = append(phrases, kw)
+		}
+	}
 	return recordMatchSignals{
 		primaryTokens: tokenize(strings.Join([]string{
 			record.Title,
 			record.Body,
 		}, " ")),
+		keywordPhrases: phrases,
 	}
 }
 
@@ -1549,7 +1688,7 @@ func tokenOverlap(promptTokens, recordTokens map[string]struct{}) int {
 	return overlap
 }
 
-func injectionRejectionReason(record MemoryRecord, primaryOverlap int) (string, bool) {
+func injectionRejectionReason(record MemoryRecord, primaryOverlap, keywordOverlap int) (string, bool) {
 	if record.Status != "" && record.Status != StatusActive {
 		return "not active", true
 	}
@@ -1559,16 +1698,17 @@ func injectionRejectionReason(record MemoryRecord, primaryOverlap int) (string, 
 	if record.Strength < 3 {
 		return "strength below injection threshold", true
 	}
-	if primaryOverlap >= 2 {
+	totalOverlap := primaryOverlap + keywordOverlap
+	if totalOverlap >= 2 {
 		return "", false
 	}
-	if primaryOverlap == 1 &&
+	if totalOverlap == 1 &&
 		(record.Kind == KindRepoRule || record.Kind == KindAgentInstruction) &&
 		strings.EqualFold(record.Confidence, "high") &&
 		record.Strength >= 5 {
 		return "", false
 	}
-	if primaryOverlap == 1 {
+	if totalOverlap == 1 {
 		return "single-token overlap below injection threshold", true
 	}
 	return "", true
@@ -1622,6 +1762,16 @@ func ParseKeywords(input string) []string {
 		return nil
 	}
 	return result
+}
+
+func capKeywords(keywords []string) []string {
+	if len(keywords) == 0 {
+		return nil
+	}
+	if len(keywords) > MaxKeywordsPerRecord {
+		keywords = keywords[:MaxKeywordsPerRecord]
+	}
+	return keywords
 }
 
 func countMatchedKeywords(promptLower string, phrases []string) int {

@@ -111,6 +111,13 @@ func (m *memoryDetailModel) renderContentCard() string {
 		body.WriteString(m.styles.render(m.styles.dim, "No memory body recorded."))
 	}
 
+	if len(m.record.Keywords) > 0 {
+		body.WriteString("\n\n")
+		body.WriteString(m.styles.render(m.styles.sectionHeader, "KEYWORDS"))
+		body.WriteString("\n")
+		body.WriteString(strings.Join(m.record.Keywords, ", "))
+	}
+
 	body.WriteString("\n\n")
 	body.WriteString(m.styles.render(m.styles.sectionHeader, "WHY"))
 	body.WriteString("\n")

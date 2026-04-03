@@ -2,6 +2,7 @@ package memoryloop
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -3184,4 +3185,175 @@ func TestCountMatchedKeywords(t *testing.T) {
 			require.Equal(t, tc.expected, result)
 		})
 	}
+}
+
+func TestScoreRecord_KeywordBoost(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	record := MemoryRecord{
+		Kind:      KindRepoRule,
+		Title:     "Run lint",
+		Body:      "Always run lint before committing",
+		Strength:  4,
+		UpdatedAt: now.Add(-1 * time.Hour),
+	}
+
+	scoreNoKeyword := scoreRecord(record, 2, 0, now)
+	scoreWithKeyword := scoreRecord(record, 2, 1, now)
+
+	require.Equal(t, 21, scoreWithKeyword-scoreNoKeyword, "one keyword match should add 21 to score")
+}
+
+func TestScoreRecord_KeywordOnlyNoBypass(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	record := MemoryRecord{
+		Kind:     KindRepoRule,
+		Title:    "Run lint",
+		Body:     "Always run lint",
+		Strength: 4,
+	}
+
+	score := scoreRecord(record, 0, 0, now)
+	require.Equal(t, 0, score, "zero overlap with zero keywords should still be 0")
+}
+
+func TestAddManualRecord_WithKeywords(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	records, record, err := AddManualRecord(nil, ManualRecordInput{
+		Kind:     KindRepoRule,
+		Title:    "Test memory",
+		Body:     "Always test",
+		Keywords: []string{"go test", "testing"},
+	}, now)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, []string{"go test", "testing"}, record.Keywords)
+	require.Equal(t, FingerprintForRecord(KindRepoRule, "Test memory", "Always test"), record.Fingerprint,
+		"keywords must not affect fingerprint")
+}
+
+func TestAddManualRecord_KeywordsCapped(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	keywords := make([]string, 15)
+	for i := range keywords {
+		keywords[i] = fmt.Sprintf("keyword-%02d", i)
+	}
+	_, record, err := AddManualRecord(nil, ManualRecordInput{
+		Kind:     KindRepoRule,
+		Title:    "Test",
+		Body:     "Test body",
+		Keywords: keywords,
+	}, now)
+	require.NoError(t, err)
+	require.Len(t, record.Keywords, MaxKeywordsPerRecord)
+}
+
+func TestEditRecord_UpdateTitle(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	records := []MemoryRecord{{
+		ID: "repo-rule-test", Kind: KindRepoRule, Title: "Old Title", Body: "Body",
+		Status: StatusActive, Origin: OriginGenerated, Fingerprint: FingerprintForRecord(KindRepoRule, "Old Title", "Body"),
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
+	}}
+	newTitle := "New Title"
+	updated, record, err := EditRecord(records, "repo-rule-test", EditRecordInput{Title: &newTitle}, now)
+	require.NoError(t, err)
+	require.Equal(t, "New Title", record.Title)
+	require.Equal(t, "Body", record.Body)
+	require.Equal(t, FingerprintForRecord(KindRepoRule, "New Title", "Body"), record.Fingerprint)
+	require.Equal(t, OriginGenerated, record.Origin, "origin must not change")
+	require.Equal(t, now, record.UpdatedAt)
+	require.Len(t, updated, 1)
+	require.NotEmpty(t, record.History)
+	lastEvent := record.History[len(record.History)-1]
+	require.Equal(t, "edited", lastEvent.Type)
+	require.Contains(t, lastEvent.Detail, "prev_title")
+}
+
+func TestEditRecord_UpdateKeywords(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	oldFP := FingerprintForRecord(KindRepoRule, "Title", "Body")
+	records := []MemoryRecord{{
+		ID: "repo-rule-test", Kind: KindRepoRule, Title: "Title", Body: "Body",
+		Status: StatusActive, Fingerprint: oldFP,
+	}}
+	kw := []string{"go test", "deploy"}
+	_, record, err := EditRecord(records, "repo-rule-test", EditRecordInput{Keywords: &kw}, now)
+	require.NoError(t, err)
+	require.Equal(t, []string{"go test", "deploy"}, record.Keywords)
+	require.Equal(t, oldFP, record.Fingerprint, "keywords must not change fingerprint")
+}
+
+func TestEditRecord_EmptyTitleRejected(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	records := []MemoryRecord{{
+		ID: "repo-rule-test", Kind: KindRepoRule, Title: "Title", Body: "Body", Status: StatusActive,
+	}}
+	empty := ""
+	_, _, err := EditRecord(records, "repo-rule-test", EditRecordInput{Title: &empty}, now)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "title")
+}
+
+func TestEditRecord_ArchivedRejected(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	records := []MemoryRecord{{
+		ID: "repo-rule-test", Kind: KindRepoRule, Title: "Title", Body: "Body", Status: StatusArchived,
+	}}
+	newTitle := "New"
+	_, _, err := EditRecord(records, "repo-rule-test", EditRecordInput{Title: &newTitle}, now)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "archived")
+}
+
+func TestEditRecord_NilFieldsNoOp(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	records := []MemoryRecord{{
+		ID: "repo-rule-test", Kind: KindRepoRule, Title: "Title", Body: "Body",
+		Status: StatusActive, Fingerprint: "old-fp",
+	}}
+	updated, record, err := EditRecord(records, "repo-rule-test", EditRecordInput{}, now)
+	require.NoError(t, err)
+	require.Equal(t, "Title", record.Title)
+	require.Equal(t, "old-fp", record.Fingerprint, "fingerprint unchanged when nothing edited")
+	require.Len(t, updated, 1)
+}
+
+func TestEditRecord_ClearKeywords(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	records := []MemoryRecord{{
+		ID: "repo-rule-test", Kind: KindRepoRule, Title: "Title", Body: "Body",
+		Status: StatusActive, Keywords: []string{"old"},
+	}}
+	empty := []string{}
+	_, record, err := EditRecord(records, "repo-rule-test", EditRecordInput{Keywords: &empty}, now)
+	require.NoError(t, err)
+	require.Empty(t, record.Keywords)
+}
+
+func TestReconcileGeneratedRecords_PreservesKeywords(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	fp := FingerprintForRecord(KindRepoRule, "Run lint", "Always run lint")
+	existing := []MemoryRecord{{
+		ID: "repo-rule-run-lint", Kind: KindRepoRule, Title: "Run lint", Body: "Always run lint",
+		Status: StatusActive, Fingerprint: fp, Keywords: []string{"lint", "go test"},
+	}}
+	generated := []MemoryRecord{{
+		Kind: KindRepoRule, Title: "Run lint", Body: "Always run lint before commit",
+		Fingerprint: fp, Confidence: "high", Strength: 4,
+	}}
+	result := ReconcileGeneratedRecords(existing, generated, ScopeKindRepo, "", ActivationPolicyReview, now)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, []string{"lint", "go test"}, result.Records[0].Keywords, "user keywords must be preserved")
+	require.Equal(t, "Always run lint before commit", result.Records[0].Body, "body should be updated by generator")
 }

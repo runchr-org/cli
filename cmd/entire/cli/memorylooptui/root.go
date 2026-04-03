@@ -380,6 +380,9 @@ func (m rootModel) handleSettingsChanged(msg settingsChangedMsg) (tea.Model, tea
 	if msg.injectionScopes != nil {
 		m.state.Store.InjectionScopes = *msg.injectionScopes
 	}
+	if msg.generationThreshold != nil {
+		m.state.Store.GenerationThreshold = *msg.generationThreshold
+	}
 	if err := m.saveState(); err != nil {
 		return m, func() tea.Msg { return flashMsg{text: fmt.Sprintf("save failed: %v", err), success: false} }
 	}
