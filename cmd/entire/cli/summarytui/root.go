@@ -28,7 +28,7 @@ type branchFilter int
 
 const (
 	filterCurrentBranch branchFilter = iota // current working branch
-	filterAllBranches                       // all branches in this repo
+	filterRepo                              // all branches in this repo
 )
 
 type timeFilter int
@@ -270,7 +270,7 @@ func (m rootModel) renderFilterBar() string {
 		label  string
 	}{
 		{filterCurrentBranch, "current"},
-		{filterAllBranches, "all"},
+		{filterRepo, "repo"},
 	}
 	var branchParts []string
 	for _, item := range branchLabels {

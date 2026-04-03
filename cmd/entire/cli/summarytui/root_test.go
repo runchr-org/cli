@@ -44,7 +44,7 @@ func TestRootView_ShowsDetailForSelectedRow(t *testing.T) {
 	t.Parallel()
 
 	root := newRootModelForTest()
-	root.branchFilter = filterAllBranches
+	root.branchFilter = filterRepo
 	root.rebuildFilteredRows()
 	root.updateDetailViewport()
 
@@ -75,7 +75,7 @@ func TestRootUpdate_CycleBranchFilterRebuildsVisibleRows(t *testing.T) {
 	// First cycle: Current Branch → All (key "2")
 	next, _ := root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	root = requireRootModel(t, next)
-	require.Equal(t, filterAllBranches, root.branchFilter)
+	require.Equal(t, filterRepo, root.branchFilter)
 	require.Len(t, root.filteredRows, 2)
 
 	// Second cycle: All → Current Branch (wraps around)
@@ -130,7 +130,7 @@ func TestRootUpdate_FilterChangeResetsCursor(t *testing.T) {
 	t.Parallel()
 
 	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", nil)
-	root.branchFilter = filterAllBranches
+	root.branchFilter = filterRepo
 	root.rebuildFilteredRows()
 	root.moveCursor(2) // move to third row
 
@@ -145,7 +145,7 @@ func TestRootUpdate_CursorMovement(t *testing.T) {
 	t.Parallel()
 
 	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", nil)
-	root.branchFilter = filterAllBranches
+	root.branchFilter = filterRepo
 	root.rebuildFilteredRows()
 	require.Equal(t, 0, root.cursor)
 
@@ -186,7 +186,7 @@ func TestRootUpdate_CursorChangeUpdatesDetail(t *testing.T) {
 	t.Parallel()
 
 	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", nil)
-	root.branchFilter = filterAllBranches
+	root.branchFilter = filterRepo
 	root.cursor = 0
 	root.rebuildFilteredRows()
 	root.resize(100, 30)
@@ -212,7 +212,7 @@ func TestRootUpdate_PageNavigation(t *testing.T) {
 	t.Parallel()
 
 	root := newRootModel(paginatedRowsForTest(), "feature/summary-browser", nil)
-	root.branchFilter = filterAllBranches
+	root.branchFilter = filterRepo
 	root.pageSize = 2
 	root.rebuildFilteredRows()
 	root.updateDetailViewport()
@@ -287,7 +287,7 @@ func TestRootUpdate_Generate(t *testing.T) {
 	}
 
 	root := newRootModel(sampleRowsForTest(), "feature/summary-browser", generateFn)
-	root.branchFilter = filterAllBranches
+	root.branchFilter = filterRepo
 	root.rebuildFilteredRows()
 	root.updateDetailViewport()
 
