@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/huh"
 	"github.com/entireio/cli/cmd/entire/cli/githubidentity"
 	"github.com/entireio/cli/cmd/entire/cli/improve"
 	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
@@ -767,6 +768,8 @@ func runMemoryLoopArchive(ctx context.Context, w io.Writer, id string) error {
 
 func handleMemoryLoopWizardAction(ctx context.Context, request memorylooptui.WizardRequest) (string, error) {
 	switch request.Intent {
+	case memorylooptui.WizardIntentEdit:
+		return editMemoryLoopWizardRequest(ctx, request)
 	case memorylooptui.WizardIntentAdopt:
 		return adoptMemoryLoopWizardRequest(ctx, request)
 	case memorylooptui.WizardIntentApply:
@@ -784,6 +787,65 @@ func handleMemoryLoopWizardAction(ctx context.Context, request memorylooptui.Wiz
 	default:
 		return "", fmt.Errorf("invalid wizard intent: %s", request.Intent)
 	}
+}
+
+func editMemoryLoopWizardRequest(ctx context.Context, request memorylooptui.WizardRequest) (string, error) {
+	state, err := loadMemoryLoopStoreState(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	// Find the record to pre-populate the form.
+	var found *memoryloop.MemoryRecord
+	for i := range state.Store.Records {
+		if state.Store.Records[i].ID == request.RecordID {
+			found = &state.Store.Records[i]
+			break
+		}
+	}
+	if found == nil {
+		return "", fmt.Errorf("memory record not found: %s", request.RecordID)
+	}
+
+	title := found.Title
+	body := found.Body
+	keywords := strings.Join(found.Keywords, ", ")
+
+	form := NewAccessibleForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Title").
+				Value(&title),
+			huh.NewText().
+				Title("Body").
+				Value(&body),
+			huh.NewInput().
+				Title("Keywords (comma-separated)").
+				Value(&keywords),
+		),
+	)
+	if formErr := form.Run(); formErr != nil {
+		return "", fmt.Errorf("edit form cancelled")
+	}
+
+	// Build edit input from form values.
+	input := memoryloop.EditRecordInput{
+		Title: &title,
+		Body:  &body,
+	}
+	kw := memoryloop.ParseKeywords(keywords)
+	input.Keywords = &kw
+
+	now := time.Now().UTC()
+	records, record, editErr := memoryloop.EditRecord(state.Store.Records, request.RecordID, input, now)
+	if editErr != nil {
+		return "", fmt.Errorf("edit memory: %w", editErr)
+	}
+	state.Store.Records = records
+	if saveErr := memoryloop.SaveState(ctx, state); saveErr != nil {
+		return "", fmt.Errorf("save memory-loop state: %w", saveErr)
+	}
+	return "Updated memory: " + record.Title, nil
 }
 
 func adoptMemoryLoopWizardRequest(ctx context.Context, request memorylooptui.WizardRequest) (string, error) {
