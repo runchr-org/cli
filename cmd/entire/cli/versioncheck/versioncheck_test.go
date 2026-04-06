@@ -73,6 +73,7 @@ func TestIsNightly(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.version, func(t *testing.T) {
+			t.Parallel()
 			if got := isNightly(tt.version); got != tt.want {
 				t.Errorf("isNightly(%q) = %v, want %v", tt.version, got, tt.want)
 			}
