@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: nightly-release-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   create-nightly-tag:
     runs-on: ubuntu-latest
