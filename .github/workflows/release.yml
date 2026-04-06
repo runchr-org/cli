@@ -30,27 +30,41 @@ jobs:
             homebrew-tap
             scoop-bucket
 
-      - name: Extract release notes
+      - name: Detect release type
+        id: release-type
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-
           if [[ "$VERSION" == *-* ]]; then
-            # Prerelease (nightly): generate notes from git log
-            LATEST_STABLE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' HEAD^ 2>/dev/null || echo "")
-            echo "## Nightly Build (${GITHUB_REF_NAME})" > "$RUNNER_TEMP/release_notes.md"
-            echo "" >> "$RUNNER_TEMP/release_notes.md"
-            if [ -n "$LATEST_STABLE" ]; then
-              echo "Changes since ${LATEST_STABLE}:" >> "$RUNNER_TEMP/release_notes.md"
-              echo "" >> "$RUNNER_TEMP/release_notes.md"
-              git log --oneline "${LATEST_STABLE}..HEAD" --no-merges >> "$RUNNER_TEMP/release_notes.md"
-            fi
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
-            # Stable release: require CHANGELOG entry
-            awk -v ver="$VERSION" 'BEGIN{header="^## \\[" ver "\\]"} $0 ~ header{found=1; next} /^## \[/{if(found) exit} found{print}' CHANGELOG.md > "$RUNNER_TEMP/release_notes.md"
-            if [ ! -s "$RUNNER_TEMP/release_notes.md" ]; then
-              echo "::error::No changelog entry found for version ${VERSION} in CHANGELOG.md"
-              exit 1
-            fi
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract release notes from CHANGELOG.md
+        if: steps.release-type.outputs.prerelease == 'false'
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" 'BEGIN{header="^## \\[" ver "\\]"} $0 ~ header{found=1; next} /^## \[/{if(found) exit} found{print}' CHANGELOG.md > "$RUNNER_TEMP/release_notes.md"
+          if [ ! -s "$RUNNER_TEMP/release_notes.md" ]; then
+            echo "::error::No changelog entry found for version ${VERSION} in CHANGELOG.md"
+            exit 1
+          fi
+
+      - name: Generate nightly release notes
+        if: steps.release-type.outputs.prerelease == 'true'
+        run: |
+          LAST_NIGHTLY=$(git tag -l 'v*-nightly.*' --sort=-v:refname | grep -v "^${GITHUB_REF_NAME}$" | head -1)
+          if [ -n "$LAST_NIGHTLY" ]; then
+            BASE_TAG="$LAST_NIGHTLY"
+          else
+            BASE_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' HEAD 2>/dev/null || echo "")
+          fi
+          echo "## Nightly Build (${GITHUB_REF_NAME})" > "$RUNNER_TEMP/release_notes.md"
+          echo "" >> "$RUNNER_TEMP/release_notes.md"
+          if [ -n "$BASE_TAG" ]; then
+            echo "Changes since ${BASE_TAG}:" >> "$RUNNER_TEMP/release_notes.md"
+            echo "" >> "$RUNNER_TEMP/release_notes.md"
+            git log --oneline "${BASE_TAG}..HEAD" --no-merges >> "$RUNNER_TEMP/release_notes.md"
           fi
 
       - name: Run GoReleaser
