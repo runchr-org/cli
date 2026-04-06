@@ -10,7 +10,7 @@ set -euo pipefail
 SHORT_COMMIT=$(git rev-parse --short HEAD)
 
 # Skip if a nightly tag already exists for this commit
-if git tag -l "v*-nightly.*${SHORT_COMMIT}" | grep -q .; then
+if git tag -l "v*-nightly.*.${SHORT_COMMIT}" | grep -q .; then
   echo "Nightly tag already exists for commit ${SHORT_COMMIT}, skipping." >&2
   exit 2
 fi

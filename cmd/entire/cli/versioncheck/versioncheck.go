@@ -44,13 +44,11 @@ func CheckAndNotify(ctx context.Context, w io.Writer, currentVersion string) {
 
 	// Fetch the latest version from the appropriate channel
 	var latestVersion string
-	var fetchErr error
 	if isNightly(currentVersion) {
-		latestVersion, fetchErr = fetchLatestNightlyVersion(ctx)
+		latestVersion, err = fetchLatestNightlyVersion(ctx)
 	} else {
-		latestVersion, fetchErr = fetchLatestVersion(ctx)
+		latestVersion, err = fetchLatestVersion(ctx)
 	}
-	err = fetchErr
 
 	// Always update cache to avoid retrying on every CLI invocation
 	cache.LastCheckTime = time.Now()

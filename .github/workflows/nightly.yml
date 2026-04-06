@@ -31,11 +31,12 @@ jobs:
 
       - name: Create nightly tag
         run: |
-          TAG=$(scripts/create-nightly-tag.sh) || EXIT_CODE=$?
-          if [ "${EXIT_CODE:-0}" -eq 2 ]; then
+          TAG=$(scripts/create-nightly-tag.sh)
+          EXIT_CODE=$?
+          if [ "$EXIT_CODE" -eq 2 ]; then
             echo "Skipping — no new nightly needed."
             exit 0
-          elif [ "${EXIT_CODE:-0}" -ne 0 ] || [ -z "$TAG" ]; then
+          elif [ "$EXIT_CODE" -ne 0 ] || [ -z "$TAG" ]; then
             echo "::error::Failed to generate nightly tag"
             exit 1
           fi

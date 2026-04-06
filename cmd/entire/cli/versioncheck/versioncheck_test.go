@@ -58,6 +58,7 @@ func TestIsOutdated(t *testing.T) {
 }
 
 func TestIsNightly(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		version string
 		want    bool

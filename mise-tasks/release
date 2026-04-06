@@ -31,13 +31,15 @@ git tag "$VERSION"
 echo "Created tag ${VERSION}"
 
 # Generate and create nightly tag if possible
-NIGHTLY_TAG=$(scripts/create-nightly-tag.sh 2>/dev/null) || true
+NIGHTLY_TAG=$(scripts/create-nightly-tag.sh) || true
+
+git push origin "$VERSION"
+echo "Pushed tag ${VERSION}"
+
 if [ -n "$NIGHTLY_TAG" ]; then
   git tag "$NIGHTLY_TAG"
   echo "Created tag ${NIGHTLY_TAG}"
   git push origin "$NIGHTLY_TAG"
 fi
-
-git push origin "$VERSION"
 echo ""
 echo "Done. Release workflows will start automatically."
