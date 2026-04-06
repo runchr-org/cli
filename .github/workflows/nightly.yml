@@ -36,8 +36,15 @@ jobs:
             exit 1
           fi
 
+          # Bump patch version: v0.5.4 → v0.5.5
+          MAJOR=$(echo "$LATEST_STABLE" | sed 's/^v//' | cut -d. -f1)
+          MINOR=$(echo "$LATEST_STABLE" | sed 's/^v//' | cut -d. -f2)
+          PATCH=$(echo "$LATEST_STABLE" | sed 's/^v//' | cut -d. -f3)
+          NEXT_PATCH=$((PATCH + 1))
+          NIGHTLY_VERSION="v${MAJOR}.${MINOR}.${NEXT_PATCH}"
+
           DATE=$(date -u +%Y%m%d)
-          TAG="${LATEST_STABLE}-nightly.${DATE}.${SHORT_COMMIT_ID}"
+          TAG="${NIGHTLY_VERSION}-nightly.${DATE}.${SHORT_COMMIT_ID}"
 
           if git rev-parse "${TAG}" >/dev/null 2>&1; then
             echo "Tag ${TAG} already exists, skipping."
