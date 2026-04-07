@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -74,6 +75,7 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 	// Try pushing first
 	if err := tryPushSessionsCommon(ctx, target, branchName); err == nil {
 		stop(" done")
+		printSettingsCommitHint(ctx, target)
 		return nil
 	}
 	stop("")
@@ -100,6 +102,7 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 		printCheckpointRemoteHint(target)
 	} else {
 		stop(" done")
+		printSettingsCommitHint(ctx, target)
 	}
 
 	return nil
@@ -113,6 +116,29 @@ func printCheckpointRemoteHint(target string) {
 	}
 	fmt.Fprintln(os.Stderr, "[entire] A checkpoint remote is configured in Entire settings (.entire/settings.json or .entire/settings.local.json) but could not be reached.")
 	fmt.Fprintln(os.Stderr, "[entire] Checkpoints are saved locally but not synced. Ensure you have access to the checkpoint remote.")
+}
+
+// printSettingsCommitHint prints a one-time hint after a successful checkpoint remote push
+// when .entire/settings.json is not tracked by git. entire.io needs the committed settings
+// to discover the external checkpoint repo.
+func printSettingsCommitHint(ctx context.Context, target string) {
+	if !isURL(target) {
+		return
+	}
+	if isSettingsTrackedByGit(ctx) {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "[entire] Note: Commit and push .entire/settings.json for entire.io to discover your remote checkpoint.")
+}
+
+// isSettingsTrackedByGit returns true if .entire/settings.json is tracked by git.
+func isSettingsTrackedByGit(ctx context.Context) bool {
+	cmd := exec.CommandContext(ctx, "git", "ls-files", ".entire/settings.json")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return len(strings.TrimSpace(string(output))) > 0
 }
 
 // tryPushSessionsCommon attempts to push the sessions branch.
