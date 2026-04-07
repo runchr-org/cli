@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"golang.org/x/mod/semver"
 )
 
@@ -224,7 +225,7 @@ func fetchLatestNightlyVersion(ctx context.Context) (string, error) {
 	}
 
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "entire-cli/"+currentVersion)
+	req.Header.Set("User-Agent", "entire-cli/"+versioninfo.Version)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
