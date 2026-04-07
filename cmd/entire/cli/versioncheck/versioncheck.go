@@ -224,7 +224,7 @@ func fetchLatestNightlyVersion(ctx context.Context) (string, error) {
 	}
 
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "entire-cli")
+	req.Header.Set("User-Agent", "entire-cli/"+currentVersion)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
