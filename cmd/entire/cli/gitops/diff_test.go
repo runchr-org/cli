@@ -31,6 +31,8 @@ func initTestRepo(t *testing.T) string {
 	}
 
 	run("init", "-b", "main")
+	run("config", "user.name", "Test")
+	run("config", "user.email", "test@test.com")
 	run("config", "commit.gpgsign", "false")
 
 	return dir
