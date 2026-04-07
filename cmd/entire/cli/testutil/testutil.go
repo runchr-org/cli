@@ -325,3 +325,38 @@ func GitIsolatedEnv() []string {
 		"GIT_CONFIG_SYSTEM="+gitEmptyConfigPath(), // Isolate from system git config
 	)
 }
+
+// GitRevParse returns the full commit hash for a given ref (e.g., "HEAD", "HEAD~1").
+func GitRevParse(t *testing.T, repoDir, ref string) string {
+	t.Helper()
+	//nolint:noctx // test code, no context needed for git rev-parse
+	cmd := exec.Command("git", "rev-parse", ref)
+	cmd.Dir = repoDir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse %s failed: %v", ref, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// GitCheckout checks out an existing branch.
+func GitCheckout(t *testing.T, repoDir, branchName string) {
+	t.Helper()
+	//nolint:noctx // test code, no context needed for git checkout
+	cmd := exec.Command("git", "checkout", branchName)
+	cmd.Dir = repoDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git checkout %s failed: %v\n%s", branchName, err, string(out))
+	}
+}
+
+// GitRebase rebases the current branch onto the given base.
+func GitRebase(t *testing.T, repoDir, onto string) {
+	t.Helper()
+	//nolint:noctx // test code, no context needed for git rebase
+	cmd := exec.Command("git", "rebase", onto)
+	cmd.Dir = repoDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git rebase %s failed: %v\n%s", onto, err, string(out))
+	}
+}
