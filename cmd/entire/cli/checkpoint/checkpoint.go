@@ -263,11 +263,6 @@ type WriteCommittedOptions struct {
 	// Model is the LLM model used during the session (e.g., "claude-sonnet-4-20250514")
 	Model string
 
-	// TreeHash is the git tree hash of the commit this checkpoint is linked to.
-	// Used as a fallback to re-link checkpoints when the Entire-Checkpoint trailer
-	// is stripped by git history rewrites (rebase, filter-branch, amend).
-	TreeHash string
-
 	// TurnID correlates checkpoints from the same agent turn.
 	TurnID string
 
@@ -399,11 +394,6 @@ type CommittedMetadata struct {
 	// Model is the LLM model used during the session (e.g., "claude-sonnet-4-20250514").
 	// Always written to metadata (empty string when unknown) so consumers can rely on the field's presence.
 	Model string `json:"model"`
-
-	// TreeHash is the git tree hash of the commit this checkpoint is linked to.
-	// Enables fallback re-linking when the Entire-Checkpoint trailer is stripped
-	// by git history rewrites (rebase, filter-branch, amend).
-	TreeHash string `json:"tree_hash,omitempty"`
 
 	// TurnID correlates checkpoints from the same agent turn.
 	// When a turn's work spans multiple commits, each gets its own checkpoint

@@ -645,6 +645,57 @@ func (h *postCommitActionHandler) parentCommitHash() string {
 	return ""
 }
 
+// computeLinkage computes content-based linkage signals for re-linking
+// checkpoints after git history rewrites. Called at PostCommit time when
+// all commit data is available.
+func (h *postCommitActionHandler) computeLinkage(ctx context.Context, sessionFilesTouched []string) *checkpoint.LinkageMetadata {
+	logCtx := logging.WithComponent(ctx, "checkpoint")
+	linkage := &checkpoint.LinkageMetadata{
+		TreeHash: h.commit.TreeHash.String(),
+	}
+
+	// Compute patch ID (diff content hash — survives rebase)
+	patchID, err := gitops.ComputePatchID(ctx, h.repoDir, h.parentCommitHash(), h.newHead)
+	if err != nil {
+		logging.Warn(logCtx, "failed to compute patch ID for linkage",
+			slog.String("commit", h.newHead),
+			slog.String("error", err.Error()),
+		)
+	} else {
+		linkage.PatchID = patchID
+	}
+
+	// Compute files-changed hash (committed files' blob hashes — survives rebase + other-file conflicts)
+	committedFiles := make([]string, 0, len(h.committedFileSet))
+	for f := range h.committedFileSet {
+		committedFiles = append(committedFiles, f)
+	}
+	fch, err := gitops.ComputeFilesChangedHash(ctx, h.repoDir, h.newHead, committedFiles)
+	if err != nil {
+		logging.Warn(logCtx, "failed to compute files-changed hash for linkage",
+			slog.String("commit", h.newHead),
+			slog.String("error", err.Error()),
+		)
+	} else {
+		linkage.FilesChangedHash = fch
+	}
+
+	// Compute session files hash (all files touched across session — survives squash merge)
+	if len(sessionFilesTouched) > 0 {
+		sfh, err := gitops.ComputeFilesChangedHash(ctx, h.repoDir, h.newHead, sessionFilesTouched)
+		if err != nil {
+			logging.Warn(logCtx, "failed to compute session files hash for linkage",
+				slog.String("commit", h.newHead),
+				slog.String("error", err.Error()),
+			)
+		} else {
+			linkage.SessionFilesHash = sfh
+		}
+	}
+
+	return linkage
+}
+
 func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 	logCtx := logging.WithComponent(h.ctx, "checkpoint")
 	shouldCondense := h.shouldCondenseWithOverlapCheck(state.Phase.IsActive(), state.LastInteractionTime)
@@ -666,7 +717,7 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 			parentCommitHash: h.parentCommitHash(),
 			headCommitHash:   h.newHead,
 			allAgentFiles:    h.allAgentFiles,
-			treeHash:         h.commit.TreeHash.String(),
+			linkage:          h.computeLinkage(h.ctx, state.FilesTouched),
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
@@ -696,7 +747,7 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 			parentCommitHash: h.parentCommitHash(),
 			headCommitHash:   h.newHead,
 			allAgentFiles:    h.allAgentFiles,
-			treeHash:         h.commit.TreeHash.String(),
+			linkage:          h.computeLinkage(h.ctx, state.FilesTouched),
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)

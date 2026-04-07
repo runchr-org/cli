@@ -1336,41 +1336,6 @@ func TestListCommitted_MultiSessionInfo(t *testing.T) {
 	}
 }
 
-// TestWriteCommitted_IncludesTreeHash verifies that tree_hash is stored in
-// checkpoint metadata and can be read back.
-func TestWriteCommitted_IncludesTreeHash(t *testing.T) {
-	t.Parallel()
-	repo, _ := setupBranchTestRepo(t)
-	store := NewGitStore(repo)
-	checkpointID := id.MustCheckpointID("aabb11223344")
-	treeHash := "abc123def456abc123def456abc123def456abc1"
-
-	err := store.WriteCommitted(context.Background(), WriteCommittedOptions{
-		CheckpointID:     checkpointID,
-		SessionID:        "tree-hash-session",
-		Strategy:         "manual-commit",
-		Agent:            agent.AgentTypeClaudeCode,
-		TreeHash:         treeHash,
-		Transcript:       []byte(`{"type":"human","message":{"content":"test"}}`),
-		FilesTouched:     []string{"file.go"},
-		CheckpointsCount: 1,
-		AuthorName:       "Test Author",
-		AuthorEmail:      "test@example.com",
-	})
-	if err != nil {
-		t.Fatalf("WriteCommitted() error = %v", err)
-	}
-
-	// Read back session metadata (session index 0)
-	sessionContent, err := store.ReadSessionContent(context.Background(), checkpointID, 0)
-	if err != nil {
-		t.Fatalf("ReadSessionContent() error = %v", err)
-	}
-	if sessionContent.Metadata.TreeHash != treeHash {
-		t.Errorf("TreeHash = %q, want %q", sessionContent.Metadata.TreeHash, treeHash)
-	}
-}
-
 // TestWriteCommitted_SessionWithNoPrompts verifies that a session can be
 // written without prompts and still be read correctly.
 func TestWriteCommitted_SessionWithNoPrompts(t *testing.T) {
