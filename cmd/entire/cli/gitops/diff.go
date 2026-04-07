@@ -173,11 +173,9 @@ func ComputePatchID(ctx context.Context, repoDir, parentHash, commitHash string)
 	if output == "" {
 		return "", nil
 	}
-	fields := strings.Fields(output)
-	if len(fields) < 1 {
-		return "", fmt.Errorf("unexpected git patch-id output: %q", output)
-	}
-	return fields[0], nil
+	// git patch-id outputs "<patch-id> <commit-id>"; we want the first field.
+	patchID, _, _ := strings.Cut(output, " ")
+	return patchID, nil
 }
 
 // ComputeFilesChangedHash computes a SHA256 hash of the given files' blob hashes

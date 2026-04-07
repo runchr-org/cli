@@ -697,11 +697,12 @@ func (h *postCommitActionHandler) linkageForSession(ctx context.Context, session
 	}
 
 	// Copy base linkage so each session gets its own SessionFilesHash
+	logCtx := logging.WithComponent(ctx, "checkpoint")
 	linkage := *h.baseLinkage
 	if len(sessionFilesTouched) > 0 {
 		sfh, err := gitops.ComputeFilesChangedHash(ctx, h.repoDir, h.newHead, sessionFilesTouched)
 		if err != nil {
-			logging.Warn(logging.WithComponent(ctx, "checkpoint"), "failed to compute session files hash for linkage",
+			logging.Warn(logCtx, "failed to compute session files hash for linkage",
 				slog.String("commit", h.newHead),
 				slog.String("error", err.Error()),
 			)

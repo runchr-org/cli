@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -94,7 +95,7 @@ func revParse(t *testing.T, dir, ref string) string {
 	if err != nil {
 		t.Fatalf("git rev-parse %s failed: %v", ref, err)
 	}
-	return string(out[:len(out)-1])
+	return strings.TrimSpace(string(out))
 }
 
 func gitCheckoutBranch(t *testing.T, dir, branchName string) {
