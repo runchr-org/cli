@@ -238,3 +238,21 @@ func TestInstallHooks_DoesNotModifyUserConfig(t *testing.T) {
 	require.Contains(t, string(configData), "model = \"gpt-4.1\"")
 	require.NotContains(t, string(configData), `trust_level = "trusted"`)
 }
+
+func TestInstallHooks_DoesNotCreateProjectConfigInsideCodexAgentsTree(t *testing.T) {
+	tempDir := t.TempDir()
+	codexHome := filepath.Join(tempDir, ".codex-home")
+	repoDir := filepath.Join(codexHome, "agents", "repos", "project")
+
+	require.NoError(t, os.MkdirAll(repoDir, 0o750))
+	t.Chdir(repoDir)
+	t.Setenv("CODEX_HOME", codexHome)
+
+	ag := &CodexAgent{}
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	require.NoError(t, err)
+
+	projectConfig := filepath.Join(repoDir, ".codex", configFileName)
+	_, statErr := os.Stat(projectConfig)
+	require.ErrorIs(t, statErr, os.ErrNotExist, "repo-local .codex/config.toml should not be created under $CODEX_HOME/agents")
+}
