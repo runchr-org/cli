@@ -1,0 +1,93 @@
+<h2>TUI Architecture Approaches</h2>
+<p class="subtitle">Three ways to structure the bubbletea dashboard</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Single-File Flat Model</h3>
+      <p>All TUI logic in one <code>memory_loop_tui.go</code> file within the <code>cli</code> package. One big Model struct with a switch on active tab index.</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Pros</h4>
+          <ul>
+            <li>No new packages</li>
+            <li>Follows existing single-file pattern</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Cons</h4>
+          <ul>
+            <li>1500+ lines, untestable per-tab</li>
+            <li>Merge conflict magnet</li>
+            <li>Violates Go focused-file convention</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Dedicated <code>memorylooptui/</code> Package (Recommended)</h3>
+      <p>New package with root model + per-tab sub-models in separate files. Root owns state, sub-models communicate via messages. Standard Charm ecosystem pattern.</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Pros</h4>
+          <ul>
+            <li>Each tab testable in isolation</li>
+            <li>Clean separation of concerns</li>
+            <li>Canonical bubbletea architecture</li>
+            <li>Matches existing package-per-feature style</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Cons</h4>
+          <ul>
+            <li>More files to navigate</li>
+            <li>Need message-passing discipline</li>
+          </ul>
+        </div>
+      </div>
+      <div style="font-family:monospace;font-size:12px;background:#1a1a2e;color:#a0d0a0;padding:12px;border-radius:6px;margin-top:12px;line-height:1.6">
+        memorylooptui/<br>
+        &nbsp;&nbsp;root.go&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#888">// Root model, tab switching, program entry</span><br>
+        &nbsp;&nbsp;tab_memories.go&nbsp;&nbsp;<span style="color:#888">// Table + detail + lifecycle actions</span><br>
+        &nbsp;&nbsp;tab_injection.go&nbsp;<span style="color:#888">// Log table + prompt tester</span><br>
+        &nbsp;&nbsp;tab_history.go&nbsp;&nbsp;&nbsp;<span style="color:#888">// Refresh history + async trigger</span><br>
+        &nbsp;&nbsp;tab_settings.go&nbsp;&nbsp;<span style="color:#888">// Mode/policy/max cycling</span><br>
+        &nbsp;&nbsp;keys.go&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#888">// Keybinding definitions</span><br>
+        &nbsp;&nbsp;styles.go&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#888">// Lipgloss styles from termstyle</span><br>
+        &nbsp;&nbsp;messages.go&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#888">// Custom tea.Msg types</span><br>
+        &nbsp;&nbsp;render.go&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#888">// Shared helpers (tab bar, status bar)</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Embed Inside <code>huh</code> Forms</h3>
+      <p>Build the TUI as chained <code>huh</code> forms with custom field types. Reuse <code>NewAccessibleForm</code> pattern. Tab switching simulated by form chaining.</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Pros</h4>
+          <ul>
+            <li>No new direct dependencies</li>
+            <li>ACCESSIBLE mode comes free</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Cons</h4>
+          <ul>
+            <li>huh designed for linear forms, not dashboards</li>
+            <li>No table component — must rebuild bubbles inside huh</li>
+            <li>Loses scroll position between "tabs"</li>
+            <li>Fighting the abstraction</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

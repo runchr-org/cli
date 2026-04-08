@@ -301,9 +301,6 @@ func appendLimited(dst, src []string, limit int) []string {
 func buildRecurringSignals(byValue map[string]*recurringSignalAccumulator) []RecurringSignal {
 	signals := make([]RecurringSignal, 0, len(byValue))
 	for value, acc := range byValue {
-		if acc.count < 2 {
-			continue
-		}
 		signals = append(signals, RecurringSignal{
 			Value:            value,
 			Count:            acc.count,

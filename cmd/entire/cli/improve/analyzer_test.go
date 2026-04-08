@@ -407,6 +407,42 @@ func TestAnalyzePatterns_UsesStructuredFacetsForRecurringSignals(t *testing.T) {
 	}
 }
 
+func TestAnalyzePatterns_SingleSessionRecurringSignalsIncluded(t *testing.T) {
+	t.Parallel()
+
+	summaries := []improve.SessionSummaryData{
+		{
+			CheckpointID: "s1",
+			Facets: facets.SessionFacets{
+				RepeatedUserInstructions: []facets.RepeatedInstruction{
+					{Instruction: "Always run tests before committing", Evidence: []string{"user said it once"}},
+				},
+				MissingContext: []facets.MissingContextSignal{
+					{Item: "Project uses mise for task running", Evidence: []string{"agent used make instead"}},
+				},
+				FailureLoops: []facets.FailureLoop{
+					{Description: "Build failed after edit", Count: 1, Evidence: []string{"build broke"}},
+				},
+			},
+		},
+	}
+
+	result := improve.AnalyzePatterns(summaries)
+
+	if len(result.RepeatedInstructions) != 1 {
+		t.Fatalf("expected 1 repeated instruction from single session, got %d", len(result.RepeatedInstructions))
+	}
+	if result.RepeatedInstructions[0].Count != 1 {
+		t.Errorf("expected count=1, got %d", result.RepeatedInstructions[0].Count)
+	}
+	if len(result.MissingContextSignals) != 1 {
+		t.Fatalf("expected 1 missing context signal from single session, got %d", len(result.MissingContextSignals))
+	}
+	if len(result.FailureLoops) != 1 {
+		t.Fatalf("expected 1 failure loop from single session, got %d", len(result.FailureLoops))
+	}
+}
+
 func TestAnalyzePatterns_CreatesSkillOpportunities(t *testing.T) {
 	t.Parallel()
 

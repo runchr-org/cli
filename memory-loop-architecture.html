@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memory Loop & Skill Improver Architecture</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e2e8f0; height: 100vh; overflow: hidden; }
+
+  .layout { display: grid; grid-template-columns: 280px 1fr; grid-template-rows: 1fr 180px; height: 100vh; }
+  .sidebar { grid-row: 1 / 3; background: #161822; border-right: 1px solid #2d3148; overflow-y: auto; padding: 16px; }
+  .canvas-area { position: relative; overflow: hidden; background: #0f1117; }
+  .prompt-area { background: #161822; border-top: 1px solid #2d3148; padding: 12px 16px; overflow-y: auto; }
+
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: #64748b; margin-bottom: 8px; }
+  h3 { font-size: 12px; color: #94a3b8; margin: 14px 0 6px; }
+
+  .preset-btn { display: block; width: 100%; padding: 7px 10px; margin-bottom: 4px; background: #1e2235; border: 1px solid #2d3148; border-radius: 6px; color: #cbd5e1; font-size: 12px; cursor: pointer; text-align: left; transition: all 0.15s; }
+  .preset-btn:hover { background: #252a40; border-color: #3b82f6; }
+  .preset-btn.active { background: #1e3a5f; border-color: #3b82f6; color: #93c5fd; }
+
+  .layer-toggle { display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; font-size: 12px; }
+  .layer-toggle input { accent-color: #3b82f6; }
+  .layer-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+
+  .conn-toggle { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; font-size: 12px; }
+  .conn-line { width: 20px; height: 2px; flex-shrink: 0; }
+
+  .comments-list { margin-top: 8px; }
+  .comment-item { background: #1e2235; border-radius: 6px; padding: 8px; margin-bottom: 6px; font-size: 11px; position: relative; }
+  .comment-target { color: #93c5fd; font-weight: 600; }
+  .comment-text { color: #94a3b8; margin-top: 3px; }
+  .comment-del { position: absolute; top: 6px; right: 8px; background: none; border: none; color: #475569; cursor: pointer; font-size: 14px; }
+  .comment-del:hover { color: #ef4444; }
+
+  svg { width: 100%; height: 100%; }
+  .node-group { cursor: pointer; }
+  .node-group:hover rect { filter: brightness(1.2); }
+  .node-group.commented rect { stroke-width: 2.5; }
+  .node-label { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; font-weight: 600; fill: #e2e8f0; pointer-events: none; }
+  .node-sub { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 9px; fill: #94a3b8; pointer-events: none; }
+  .node-desc { font-family: -apple-system, system-ui, sans-serif; font-size: 9px; fill: #8b97ad; pointer-events: none; }
+
+  .legend { position: absolute; bottom: 12px; left: 12px; background: #161822ee; border: 1px solid #2d3148; border-radius: 8px; padding: 10px 14px; font-size: 10px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+  .legend-line { width: 24px; height: 2px; }
+
+  .zoom-controls { position: absolute; top: 12px; right: 12px; display: flex; gap: 4px; }
+  .zoom-btn { width: 30px; height: 30px; background: #1e2235; border: 1px solid #2d3148; border-radius: 6px; color: #cbd5e1; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .zoom-btn:hover { background: #252a40; border-color: #3b82f6; }
+
+  .prompt-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .copy-btn { padding: 4px 12px; background: #3b82f6; border: none; border-radius: 4px; color: white; font-size: 11px; cursor: pointer; transition: all 0.15s; }
+  .copy-btn:hover { background: #2563eb; }
+  .copy-btn.copied { background: #10b981; }
+  .prompt-text { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; color: #94a3b8; line-height: 1.6; white-space: pre-wrap; }
+
+  .modal-overlay { position: fixed; inset: 0; background: #000000aa; display: none; align-items: center; justify-content: center; z-index: 100; }
+  .modal-overlay.visible { display: flex; }
+  .modal { background: #1e2235; border: 1px solid #2d3148; border-radius: 10px; padding: 20px; width: 380px; }
+  .modal h3 { color: #e2e8f0; font-size: 14px; margin: 0 0 4px; }
+  .modal-file { font-family: monospace; font-size: 11px; color: #64748b; margin-bottom: 12px; }
+  .modal textarea { width: 100%; height: 80px; background: #0f1117; border: 1px solid #2d3148; border-radius: 6px; color: #e2e8f0; padding: 8px; font-size: 12px; resize: none; font-family: inherit; }
+  .modal textarea:focus { outline: none; border-color: #3b82f6; }
+  .modal-actions { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; }
+  .modal-actions button { padding: 6px 14px; border-radius: 6px; border: none; font-size: 12px; cursor: pointer; }
+  .btn-cancel { background: #2d3148; color: #94a3b8; }
+  .btn-save { background: #3b82f6; color: white; }
+
+  .phase-indicator { position: absolute; top: 12px; left: 12px; font-size: 10px; color: #64748b; background: #161822ee; padding: 6px 10px; border-radius: 6px; border: 1px solid #2d3148; }
+</style>
+</head>
+<body>
+
+<div class="layout">
+  <div class="sidebar" id="sidebar"></div>
+
+  <div class="canvas-area" id="canvasArea">
+    <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div class="zoom-controls">
+      <button class="zoom-btn" id="zoomIn">+</button>
+      <button class="zoom-btn" id="zoomOut">&minus;</button>
+      <button class="zoom-btn" id="zoomReset" style="font-size:11px">Fit</button>
+    </div>
+    <div class="phase-indicator" id="phaseIndicator"></div>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="prompt-area">
+    <div class="prompt-header">
+      <h2>Prompt Output</h2>
+      <button class="copy-btn" id="copyBtn">Copy</button>
+    </div>
+    <div class="prompt-text" id="promptText"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h3 id="modalTitle"></h3>
+    <div class="modal-file" id="modalFile"></div>
+    <textarea id="modalInput" placeholder="Add a question or comment about this component..."></textarea>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="modalCancel">Cancel</button>
+      <button class="btn-save" id="modalSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── Data Model ───
+
+const LAYERS = {
+  hooks:       { label: 'Lifecycle Hooks',    color: '#f59e0b', fill: '#422006' },
+  checkpoint:  { label: 'Checkpoint Storage', color: '#3b82f6', fill: '#172554' },
+  insights:    { label: 'Insights Engine',    color: '#8b5cf6', fill: '#2e1065' },
+  memory:      { label: 'Memory Loop',        color: '#10b981', fill: '#052e16' },
+  skill:       { label: 'Skill Analytics',    color: '#ec4899', fill: '#500724' },
+  session:     { label: 'Session State',      color: '#6366f1', fill: '#1e1b4b' },
+  llm:         { label: 'LLM / Claude API',   color: '#f97316', fill: '#431407' },
+};
+
+const CONN_TYPES = {
+  'data-flow':  { label: 'Data Flow',    color: '#3b82f6', dash: '' },
+  'hook-event': { label: 'Hook Event',   color: '#f59e0b', dash: '6,3' },
+  'llm-call':   { label: 'LLM Call',     color: '#f97316', dash: '4,4' },
+  'storage':    { label: 'Storage I/O',  color: '#6366f1', dash: '8,4' },
+  'injection':  { label: 'Injection',    color: '#10b981', dash: '3,6' },
+};
+
+const nodes = [
+  // Lifecycle Hooks (top row)
+  { id: 'turn-start',    label: 'TurnStart',        subtitle: 'lifecycle.go:257',         desc: 'UserPromptSubmit hook', x: 80,  y: 40, w: 145, h: 52, layer: 'hooks' },
+  { id: 'turn-end',      label: 'TurnEnd',          subtitle: 'lifecycle.go',              desc: 'Agent stop hook',       x: 310, y: 40, w: 145, h: 52, layer: 'hooks' },
+  { id: 'post-commit',   label: 'PostCommit',       subtitle: 'manual_commit_hooks.go',    desc: 'Git commit hook',       x: 540, y: 40, w: 145, h: 52, layer: 'hooks' },
+  { id: 'session-stop',  label: 'SessionStop',      subtitle: 'lifecycle.go',              desc: 'Session end hook',      x: 770, y: 40, w: 145, h: 52, layer: 'hooks' },
+
+  // Session State
+  { id: 'session-state', label: 'Session State',     subtitle: '.git/entire-sessions/',     desc: 'Phase machine: ACTIVE/IDLE/ENDED', x: 80,  y: 140, w: 175, h: 52, layer: 'session' },
+  { id: 'phase-machine', label: 'Phase Machine',     subtitle: 'session/phase.go',          desc: 'Events -> transitions -> actions', x: 310, y: 140, w: 175, h: 52, layer: 'session' },
+
+  // Checkpoint Layer
+  { id: 'shadow-branch', label: 'Shadow Branch',     subtitle: 'entire/<hash>-<wt>',        desc: 'Temporary intra-session checkpoints', x: 540, y: 140, w: 195, h: 52, layer: 'checkpoint' },
+  { id: 'condensation',  label: 'Condensation',      subtitle: 'manual_commit_condensation.go', desc: 'Shadow -> metadata branch', x: 770, y: 140, w: 175, h: 52, layer: 'checkpoint' },
+  { id: 'metadata-branch', label: 'Metadata Branch', subtitle: 'entire/checkpoints/v1',     desc: 'Permanent committed checkpoints', x: 770, y: 240, w: 195, h: 52, layer: 'checkpoint' },
+  { id: 'checkpoint-store', label: 'GitStore',       subtitle: 'checkpoint/store.go',        desc: 'Read/Write checkpoint interface', x: 540, y: 240, w: 175, h: 52, layer: 'checkpoint' },
+
+  // Insights Engine
+  { id: 'cache-refresh',  label: 'Cache Refresh',    subtitle: 'insights_cmd.go:118',       desc: 'Detects new checkpoints on branch tip', x: 310, y: 340, w: 185, h: 52, layer: 'insights' },
+  { id: 'insights-db',    label: 'insights.db',      subtitle: '.entire/insights.db',        desc: 'SQLite: sessions, friction, learnings', x: 80,  y: 340, w: 175, h: 52, layer: 'insights' },
+  { id: 'backfill-summary', label: 'Backfill Summaries', subtitle: 'insights_cmd.go:189',   desc: 'LLM-generated session summaries', x: 540, y: 340, w: 195, h: 52, layer: 'insights' },
+  { id: 'backfill-facets', label: 'Backfill Facets', subtitle: 'insights_cmd.go',            desc: 'Extract friction, learnings, signals', x: 770, y: 340, w: 185, h: 52, layer: 'insights' },
+
+  // Memory Loop
+  { id: 'pattern-analysis', label: 'Pattern Analysis', subtitle: 'improve/improve.go',      desc: 'Groups friction by theme', x: 80,  y: 450, w: 185, h: 52, layer: 'memory' },
+  { id: 'generator',      label: 'Memory Generator', subtitle: 'memoryloop/generator.go',    desc: 'LLM distills patterns -> records', x: 310, y: 450, w: 185, h: 52, layer: 'memory' },
+  { id: 'reconciliation', label: 'Reconciliation',   subtitle: 'memoryloop.go:324',          desc: 'Dedup by fingerprint + token overlap', x: 540, y: 450, w: 185, h: 52, layer: 'memory' },
+  { id: 'memory-store',   label: 'memory-loop.json', subtitle: '.entire/memory-loop.json',   desc: 'Unified store: records + injection logs', x: 770, y: 450, w: 185, h: 52, layer: 'memory' },
+  { id: 'injection',      label: 'Memory Injection', subtitle: 'lifecycle.go:264',           desc: 'SelectRelevant -> top 3 by score', x: 80,  y: 550, w: 185, h: 52, layer: 'memory' },
+  { id: 'outcome-track',  label: 'Outcome Tracking', subtitle: 'memoryloop.go:664',          desc: 'neutral / reinforced / ineffective', x: 540, y: 550, w: 185, h: 52, layer: 'memory' },
+  { id: 'pruning',        label: 'Pruning',          subtitle: 'memoryloop.go:841',           desc: 'Archive stale/ineffective records', x: 770, y: 550, w: 155, h: 52, layer: 'memory' },
+
+  // Skill Analytics
+  { id: 'skill-db',       label: 'skill-analytics.db', subtitle: '.entire/skill-analytics.db', desc: 'SQLite: skills, friction, improvements', x: 310, y: 550, w: 185, h: 52, layer: 'skill' },
+  { id: 'skill-discovery', label: 'Skill Discovery', subtitle: 'skill signals from insightsdb', desc: 'Cross-agent: Claude, Gemini, etc.', x: 310, y: 650, w: 185, h: 52, layer: 'skill' },
+  { id: 'skill-friction',  label: 'Friction Analysis', subtitle: 'improve/improve.go',        desc: 'SkillOpportunity with counts', x: 540, y: 650, w: 185, h: 52, layer: 'skill' },
+  { id: 'skill-improve',   label: 'Improvements',    subtitle: 'skill_improvements table',     desc: 'Prioritized suggestions + status', x: 770, y: 650, w: 165, h: 52, layer: 'skill' },
+
+  // LLM
+  { id: 'claude-api',     label: 'Claude API',       subtitle: 'llmcli',                      desc: 'Summarization + generation calls', x: 540, y: 750, w: 155, h: 48, layer: 'llm' },
+];
+
+const connections = [
+  // Hook -> Session state
+  { from: 'turn-start',    to: 'session-state',   type: 'hook-event', label: 'TurnStart' },
+  { from: 'turn-end',      to: 'phase-machine',   type: 'hook-event', label: 'TurnEnd' },
+  { from: 'post-commit',   to: 'condensation',    type: 'hook-event', label: 'GitCommit' },
+  { from: 'session-stop',  to: 'phase-machine',   type: 'hook-event', label: 'SessionStop' },
+
+  // Session state flow
+  { from: 'session-state', to: 'phase-machine',   type: 'data-flow',  label: 'state' },
+
+  // Checkpoint writes
+  { from: 'turn-end',      to: 'shadow-branch',   type: 'storage',    label: 'SaveStep' },
+  { from: 'condensation',  to: 'metadata-branch',  type: 'storage',    label: 'WriteCommitted' },
+  { from: 'shadow-branch', to: 'condensation',     type: 'data-flow',  label: 'extract' },
+  { from: 'checkpoint-store', to: 'metadata-branch', type: 'storage',  label: 'ReadCommitted' },
+  { from: 'checkpoint-store', to: 'shadow-branch',   type: 'storage',  label: 'ReadTemporary' },
+
+  // Insights reads checkpoints
+  { from: 'cache-refresh',  to: 'checkpoint-store', type: 'data-flow', label: 'ListCommitted' },
+  { from: 'cache-refresh',  to: 'insights-db',      type: 'storage',   label: 'InsertSession' },
+  { from: 'insights-db',    to: 'backfill-summary',  type: 'data-flow', label: 'unsummarized' },
+  { from: 'insights-db',    to: 'backfill-facets',   type: 'data-flow', label: 'unfaceted' },
+
+  // Memory loop flow
+  { from: 'insights-db',    to: 'pattern-analysis',  type: 'data-flow', label: 'sessions' },
+  { from: 'pattern-analysis', to: 'generator',       type: 'data-flow', label: 'patterns' },
+  { from: 'generator',      to: 'reconciliation',    type: 'data-flow', label: 'records' },
+  { from: 'reconciliation', to: 'memory-store',      type: 'storage',   label: 'SaveState' },
+  { from: 'memory-store',   to: 'injection',         type: 'data-flow', label: 'active records' },
+  { from: 'memory-store',   to: 'outcome-track',     type: 'data-flow', label: 'check outcomes' },
+  { from: 'outcome-track',  to: 'pruning',           type: 'data-flow', label: 'ineffective' },
+  { from: 'pruning',        to: 'memory-store',      type: 'storage',   label: 'archive' },
+
+  // Injection back to hook
+  { from: 'injection',      to: 'turn-start',        type: 'injection', label: 'inject into prompt' },
+
+  // Skill analytics
+  { from: 'insights-db',    to: 'skill-db',          type: 'data-flow', label: 'skill_signals' },
+  { from: 'skill-db',       to: 'skill-discovery',   type: 'data-flow', label: 'discover' },
+  { from: 'skill-discovery', to: 'skill-friction',   type: 'data-flow', label: 'analyze' },
+  { from: 'skill-friction', to: 'skill-improve',     type: 'data-flow', label: 'suggestions' },
+
+  // LLM calls
+  { from: 'backfill-summary', to: 'claude-api',      type: 'llm-call',  label: 'summarize' },
+  { from: 'backfill-facets',  to: 'claude-api',      type: 'llm-call',  label: 'extract facets' },
+  { from: 'generator',        to: 'claude-api',      type: 'llm-call',  label: 'generate records' },
+];
+
+const PRESETS = {
+  'full':            { label: 'Full System',     layers: Object.keys(LAYERS), desc: 'Everything' },
+  'checkpoint-flow': { label: 'Checkpoint Flow', layers: ['hooks', 'session', 'checkpoint'], desc: 'How data gets saved' },
+  'memory-loop':     { label: 'Memory Loop',     layers: ['insights', 'memory', 'llm'], desc: 'Pattern -> memory -> injection' },
+  'skill-improver':  { label: 'Skill Improver',  layers: ['insights', 'skill', 'llm'], desc: 'Skill analytics pipeline' },
+  'closed-loop':     { label: 'Closed Loop',     layers: ['hooks', 'checkpoint', 'insights', 'memory'], desc: 'Full feedback cycle' },
+};
+
+// ─── State ───
+
+const state = {
+  preset: 'full',
+  layers: {},
+  connTypes: {},
+  comments: [],
+  zoom: 1,
+  panX: 0, panY: 0,
+  modalNode: null,
+};
+
+Object.keys(LAYERS).forEach(function(k) { state.layers[k] = true; });
+Object.keys(CONN_TYPES).forEach(function(k) { state.connTypes[k] = true; });
+
+// ─── Safe DOM Helpers ───
+
+function el(tag, attrs, children) {
+  var e = document.createElement(tag);
+  if (attrs) {
+    Object.keys(attrs).forEach(function(k) {
+      if (k === 'className') e.className = attrs[k];
+      else if (k.indexOf('on') === 0) e.addEventListener(k.slice(2), attrs[k]);
+      else if (k === 'textContent') e.textContent = attrs[k];
+      else if (k === 'htmlFor') e.htmlFor = attrs[k];
+      else e.setAttribute(k, attrs[k]);
+    });
+  }
+  if (children) {
+    (Array.isArray(children) ? children : [children]).forEach(function(c) {
+      if (typeof c === 'string') e.appendChild(document.createTextNode(c));
+      else if (c) e.appendChild(c);
+    });
+  }
+  return e;
+}
+
+function svgEl(tag, attrs) {
+  var e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  if (attrs) {
+    Object.keys(attrs).forEach(function(k) {
+      if (k === 'textContent') e.textContent = attrs[k];
+      else e.setAttribute(k, attrs[k]);
+    });
+  }
+  return e;
+}
+
+function clearEl(e) { while (e.firstChild) e.removeChild(e.firstChild); }
+
+// ─── SVG Rendering ───
+
+var svgRoot = document.getElementById('svg');
+var isPanning = false, panStart = { x: 0, y: 0 };
+
+function renderDiagram() {
+  clearEl(svgRoot);
+
+  // Defs with arrowhead markers
+  var defs = svgEl('defs');
+  Object.keys(CONN_TYPES).forEach(function(k) {
+    var ct = CONN_TYPES[k];
+    var marker = svgEl('marker', { id: 'arrow-' + k, markerWidth: '8', markerHeight: '6', refX: '7', refY: '3', orient: 'auto' });
+    marker.appendChild(svgEl('polygon', { points: '0 0, 8 3, 0 6', fill: ct.color, opacity: '0.8' }));
+    defs.appendChild(marker);
+  });
+  svgRoot.appendChild(defs);
+
+  var g = svgEl('g', { transform: 'translate(' + state.panX + ',' + state.panY + ') scale(' + state.zoom + ')' });
+
+  var visibleNodes = nodes.filter(function(n) { return state.layers[n.layer]; });
+  var visibleIds = {};
+  visibleNodes.forEach(function(n) { visibleIds[n.id] = true; });
+
+  // Draw connections
+  connections.forEach(function(c) {
+    if (!state.connTypes[c.type] || !visibleIds[c.from] || !visibleIds[c.to]) return;
+    var from = nodes.find(function(n) { return n.id === c.from; });
+    var to = nodes.find(function(n) { return n.id === c.to; });
+    var ct = CONN_TYPES[c.type];
+    var x1 = from.x + from.w / 2, y1 = from.y + from.h / 2;
+    var x2 = to.x + to.w / 2, y2 = to.y + to.h / 2;
+    var dx = x2 - x1, dy = y2 - y1;
+    var pathD;
+    if (Math.abs(dy) > Math.abs(dx) * 0.5) {
+      var sy = dy > 0 ? from.y + from.h : from.y;
+      var ey = dy > 0 ? to.y : to.y + to.h;
+      pathD = 'M' + x1 + ',' + sy + ' C' + x1 + ',' + (sy + dy * 0.35) + ' ' + x2 + ',' + (ey - dy * 0.35) + ' ' + x2 + ',' + ey;
+    } else {
+      var sx = dx > 0 ? from.x + from.w : from.x;
+      var ex = dx > 0 ? to.x : to.x + to.w;
+      pathD = 'M' + sx + ',' + y1 + ' C' + (sx + dx * 0.4) + ',' + y1 + ' ' + (ex - dx * 0.4) + ',' + y2 + ' ' + ex + ',' + y2;
+    }
+    var connAttrs = { d: pathD, fill: 'none', stroke: ct.color, 'stroke-width': '1.5', 'marker-end': 'url(#arrow-' + c.type + ')', opacity: '0.6' };
+    if (ct.dash) connAttrs['stroke-dasharray'] = ct.dash;
+    var connG = svgEl('g');
+    connG.appendChild(svgEl('path', connAttrs));
+    if (c.label) {
+      connG.appendChild(svgEl('text', {
+        x: String((x1 + x2) / 2), y: String((y1 + y2) / 2 - 6),
+        'text-anchor': 'middle', 'font-size': '8', fill: ct.color,
+        opacity: '0.7', 'font-family': '-apple-system,system-ui,sans-serif',
+        textContent: c.label
+      }));
+    }
+    g.appendChild(connG);
+  });
+
+  // Draw nodes
+  visibleNodes.forEach(function(n) {
+    var layer = LAYERS[n.layer];
+    var hasComment = state.comments.some(function(c) { return c.target === n.id; });
+    var nodeG = svgEl('g', { class: 'node-group' + (hasComment ? ' commented' : ''), 'data-id': n.id });
+    nodeG.addEventListener('click', function() { openModal(n.id); });
+    nodeG.appendChild(svgEl('rect', {
+      x: String(n.x), y: String(n.y), width: String(n.w), height: String(n.h),
+      rx: '8', ry: '8', fill: layer.fill, stroke: layer.color,
+      'stroke-width': hasComment ? '2.5' : '1.2', opacity: '0.95'
+    }));
+    nodeG.appendChild(svgEl('text', { class: 'node-label', x: String(n.x + 10), y: String(n.y + 18), textContent: n.label }));
+    nodeG.appendChild(svgEl('text', { class: 'node-sub', x: String(n.x + 10), y: String(n.y + 30), textContent: n.subtitle }));
+    nodeG.appendChild(svgEl('text', { class: 'node-desc', x: String(n.x + 10), y: String(n.y + 43), textContent: n.desc }));
+    if (hasComment) {
+      nodeG.appendChild(svgEl('circle', { cx: String(n.x + n.w - 10), cy: String(n.y + 10), r: '5', fill: layer.color }));
+    }
+    g.appendChild(nodeG);
+  });
+
+  svgRoot.appendChild(g);
+}
+
+// ─── Controls ───
+
+function renderControls() {
+  var sidebar = document.getElementById('sidebar');
+  clearEl(sidebar);
+
+  // Presets section
+  sidebar.appendChild(el('h2', { textContent: 'Views' }));
+  var presetsDiv = el('div');
+  Object.keys(PRESETS).forEach(function(k) {
+    var p = PRESETS[k];
+    var btn = el('button', {
+      className: 'preset-btn' + (state.preset === k ? ' active' : ''),
+      onclick: function() { applyPreset(k); }
+    });
+    btn.appendChild(document.createTextNode(p.label));
+    btn.appendChild(el('br'));
+    btn.appendChild(el('span', { style: 'font-size:10px;color:#64748b', textContent: p.desc }));
+    presetsDiv.appendChild(btn);
+  });
+  sidebar.appendChild(presetsDiv);
+
+  // Layers section
+  sidebar.appendChild(el('h3', { textContent: 'Layers' }));
+  Object.keys(LAYERS).forEach(function(k) {
+    var v = LAYERS[k];
+    var cb = el('input', { type: 'checkbox' });
+    cb.checked = state.layers[k];
+    cb.addEventListener('change', function() { toggleLayer(k, this.checked); });
+    var label = el('label', { className: 'layer-toggle' }, [
+      cb,
+      el('span', { className: 'layer-dot', style: 'background:' + v.color }),
+      document.createTextNode(v.label)
+    ]);
+    sidebar.appendChild(label);
+  });
+
+  // Connection types section
+  sidebar.appendChild(el('h3', { textContent: 'Connections' }));
+  Object.keys(CONN_TYPES).forEach(function(k) {
+    var v = CONN_TYPES[k];
+    var cb = el('input', { type: 'checkbox' });
+    cb.checked = state.connTypes[k];
+    cb.addEventListener('change', function() { toggleConn(k, this.checked); });
+    var lineStyle = v.dash ? 'border-top:2px dashed ' + v.color + ';background:none' : 'background:' + v.color;
+    var label = el('label', { className: 'conn-toggle' }, [
+      cb,
+      el('span', { className: 'conn-line', style: lineStyle }),
+      document.createTextNode(v.label)
+    ]);
+    sidebar.appendChild(label);
+  });
+
+  // Comments section
+  var commentHeader = el('h3', {}, [
+    document.createTextNode('Comments '),
+    el('span', { textContent: '(' + state.comments.length + ')' })
+  ]);
+  sidebar.appendChild(commentHeader);
+
+  var commentsDiv = el('div', { className: 'comments-list' });
+  if (state.comments.length === 0) {
+    commentsDiv.appendChild(el('div', { style: 'font-size:11px;color:#475569', textContent: 'Click any component to add a comment' }));
+  } else {
+    state.comments.forEach(function(c, i) {
+      var item = el('div', { className: 'comment-item' }, [
+        el('button', { className: 'comment-del', textContent: '\u00D7', onclick: function() { deleteComment(i); } }),
+        el('div', { className: 'comment-target', textContent: c.targetLabel }),
+        el('div', { className: 'comment-text', textContent: c.text })
+      ]);
+      commentsDiv.appendChild(item);
+    });
+  }
+  sidebar.appendChild(commentsDiv);
+
+  // Legend
+  var legendDiv = document.getElementById('legend');
+  clearEl(legendDiv);
+  Object.keys(CONN_TYPES).forEach(function(k) {
+    var v = CONN_TYPES[k];
+    var lineStyle = v.dash ? 'border-top:2px dashed ' + v.color + ';background:none' : 'background:' + v.color;
+    legendDiv.appendChild(el('div', { className: 'legend-item' }, [
+      el('span', { className: 'legend-line', style: lineStyle }),
+      el('span', { textContent: v.label })
+    ]));
+  });
+
+  // Phase indicator
+  var visibleLayers = Object.keys(state.layers).filter(function(k) { return state.layers[k]; }).map(function(k) { return LAYERS[k].label; });
+  document.getElementById('phaseIndicator').textContent = 'Showing: ' + visibleLayers.join(', ');
+}
+
+function updatePrompt() {
+  var parts = [];
+  var visibleLayers = Object.keys(state.layers).filter(function(k) { return state.layers[k]; }).map(function(k) { return LAYERS[k].label; });
+  var allVisible = visibleLayers.length === Object.keys(LAYERS).length;
+
+  if (!allVisible) {
+    parts.push('I\'m looking at the ' + visibleLayers.join(', ') + ' layer' + (visibleLayers.length > 1 ? 's' : '') + ' of the Entire CLI architecture.');
+  } else {
+    parts.push('I\'m looking at the full Memory Loop & Skill Improver architecture in the Entire CLI.');
+  }
+
+  if (state.preset !== 'full') {
+    var p = PRESETS[state.preset];
+    parts.push('Focused on: ' + p.label + ' (' + p.desc + ').');
+  }
+
+  if (state.comments.length > 0) {
+    parts.push('\nQuestions about specific components:\n');
+    state.comments.forEach(function(c) {
+      parts.push('**' + c.targetLabel + '** (' + c.targetFile + '):\n' + c.text + '\n');
+    });
+  }
+
+  document.getElementById('promptText').textContent = parts.join('\n');
+}
+
+function updateAll() {
+  renderDiagram();
+  renderControls();
+  updatePrompt();
+}
+
+// ─── Actions ───
+
+function applyPreset(key) {
+  state.preset = key;
+  var p = PRESETS[key];
+  Object.keys(LAYERS).forEach(function(k) { state.layers[k] = p.layers.indexOf(k) !== -1; });
+  Object.keys(CONN_TYPES).forEach(function(k) { state.connTypes[k] = true; });
+  updateAll();
+}
+
+function toggleLayer(key, val) {
+  state.layers[key] = val;
+  state.preset = 'full';
+  Object.keys(PRESETS).forEach(function(pk) {
+    var pv = PRESETS[pk];
+    var match = Object.keys(LAYERS).every(function(k) { return state.layers[k] === (pv.layers.indexOf(k) !== -1); });
+    if (match) state.preset = pk;
+  });
+  updateAll();
+}
+
+function toggleConn(key, val) {
+  state.connTypes[key] = val;
+  updateAll();
+}
+
+function doZoom(delta) {
+  state.zoom = Math.max(0.3, Math.min(2.5, state.zoom + delta));
+  renderDiagram();
+}
+
+function resetView() {
+  state.zoom = 1; state.panX = 0; state.panY = 0;
+  renderDiagram();
+}
+
+// Zoom buttons
+document.getElementById('zoomIn').addEventListener('click', function() { doZoom(0.15); });
+document.getElementById('zoomOut').addEventListener('click', function() { doZoom(-0.15); });
+document.getElementById('zoomReset').addEventListener('click', resetView);
+
+// Pan
+var canvasArea = document.getElementById('canvasArea');
+canvasArea.addEventListener('mousedown', function(e) {
+  if (e.target.closest('.node-group') || e.target.closest('.zoom-btn')) return;
+  isPanning = true; panStart = { x: e.clientX - state.panX, y: e.clientY - state.panY };
+  canvasArea.style.cursor = 'grabbing';
+});
+canvasArea.addEventListener('mousemove', function(e) {
+  if (!isPanning) return;
+  state.panX = e.clientX - panStart.x;
+  state.panY = e.clientY - panStart.y;
+  renderDiagram();
+});
+canvasArea.addEventListener('mouseup', function() { isPanning = false; canvasArea.style.cursor = 'default'; });
+canvasArea.addEventListener('mouseleave', function() { isPanning = false; canvasArea.style.cursor = 'default'; });
+canvasArea.addEventListener('wheel', function(e) {
+  e.preventDefault();
+  doZoom(e.deltaY > 0 ? -0.08 : 0.08);
+}, { passive: false });
+
+// ─── Modal ───
+
+function openModal(nodeId) {
+  var n = nodes.find(function(nd) { return nd.id === nodeId; });
+  state.modalNode = n;
+  document.getElementById('modalTitle').textContent = n.label;
+  document.getElementById('modalFile').textContent = n.subtitle;
+  document.getElementById('modalInput').value = '';
+  document.getElementById('modal').classList.add('visible');
+  setTimeout(function() { document.getElementById('modalInput').focus(); }, 50);
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('visible');
+  state.modalNode = null;
+}
+
+function saveComment() {
+  var text = document.getElementById('modalInput').value.trim();
+  if (!text || !state.modalNode) return;
+  state.comments.push({
+    id: Date.now(),
+    target: state.modalNode.id,
+    targetLabel: state.modalNode.label,
+    targetFile: state.modalNode.subtitle,
+    text: text
+  });
+  closeModal();
+  updateAll();
+}
+
+function deleteComment(index) {
+  state.comments.splice(index, 1);
+  updateAll();
+}
+
+document.getElementById('modalCancel').addEventListener('click', closeModal);
+document.getElementById('modalSave').addEventListener('click', saveComment);
+document.getElementById('modal').addEventListener('click', function(e) {
+  if (e.target === document.getElementById('modal')) closeModal();
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeModal();
+  if (e.key === 'Enter' && !e.shiftKey && document.getElementById('modal').classList.contains('visible')) {
+    e.preventDefault(); saveComment();
+  }
+});
+
+// ─── Copy ───
+document.getElementById('copyBtn').addEventListener('click', function() {
+  var text = document.getElementById('promptText').textContent;
+  navigator.clipboard.writeText(text).then(function() {
+    var btn = document.getElementById('copyBtn');
+    btn.textContent = 'Copied!'; btn.classList.add('copied');
+    setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+  });
+});
+
+// ─── Init ───
+updateAll();
+</script>
+</body>
+</html>

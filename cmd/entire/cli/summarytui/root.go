@@ -138,7 +138,6 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.generating = false
 		m.genStatus = "Error: " + msg.err.Error()
 		return m, nil
-
 	}
 
 	return m, nil

@@ -1,0 +1,6 @@
+{"type":"server-started","port":51655,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:51655","screen_dir":"/Users/alisha/.superset/worktrees/cli/agent-improvements/.superpowers/brainstorm/38144-1775155875/content","state_dir":"/Users/alisha/.superset/worktrees/cli/agent-improvements/.superpowers/brainstorm/38144-1775155875/state"}
+{"type":"screen-added","file":"/Users/alisha/.superset/worktrees/cli/agent-improvements/.superpowers/brainstorm/38144-1775155875/content/split-pane-layout.html"}
+{"type":"screen-added","file":"/Users/alisha/.superset/worktrees/cli/agent-improvements/.superpowers/brainstorm/38144-1775155875/content/filter-bar.html"}
+{"type":"screen-added","file":"/Users/alisha/.superset/worktrees/cli/agent-improvements/.superpowers/brainstorm/38144-1775155875/content/full-mockup.html"}
+{"type":"screen-added","file":"/Users/alisha/.superset/worktrees/cli/agent-improvements/.superpowers/brainstorm/38144-1775155875/content/waiting.html"}
+{"type":"server-stopped","reason":"owner process exited"}

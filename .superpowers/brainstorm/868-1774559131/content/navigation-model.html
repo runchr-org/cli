@@ -1,0 +1,133 @@
+<h2>Navigation Model</h2>
+<p class="subtitle">How should the user move through the memory loop dashboard?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Tab-Based Panels</h3>
+      <p>Top-level tabs switch between views: <strong>Memories</strong> (filterable table), <strong>Injection Preview</strong> (test prompts), <strong>History</strong> (refresh &amp; injection logs), <strong>Settings</strong> (mode/policy). Arrow keys or number keys to switch tabs.</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-header">Preview</div>
+        <div class="mockup-body" style="font-family:monospace;font-size:13px;line-height:1.5;padding:16px;background:#1a1a2e;color:#e0e0e0">
+          <div style="display:flex;gap:24px;border-bottom:1px solid #444;padding-bottom:8px;margin-bottom:12px">
+            <span style="color:#7ecfff;border-bottom:2px solid #7ecfff;padding-bottom:6px"><strong>[1] Memories</strong></span>
+            <span style="color:#888">[2] Injection</span>
+            <span style="color:#888">[3] History</span>
+            <span style="color:#888">[4] Settings</span>
+          </div>
+          <div style="color:#888;font-size:11px;margin-bottom:8px">Filter: all &middot; 5 active &middot; 3 candidate &middot; 2 suppressed &middot; 1 archived</div>
+          <div style="border:1px solid #333;border-radius:4px;overflow:hidden">
+            <div style="display:flex;background:#252540;padding:6px 12px;color:#888;font-size:11px">
+              <span style="flex:2">TITLE</span>
+              <span style="flex:1">KIND</span>
+              <span style="flex:1">STATUS</span>
+              <span style="flex:0.5;text-align:right">SCORE</span>
+            </div>
+            <div style="display:flex;padding:6px 12px;background:#2a2a4a;color:#7ecfff">
+              <span style="flex:2">&#9654; Always run lint before commit</span>
+              <span style="flex:1;color:#a0d0a0">repo_rule</span>
+              <span style="flex:1;color:#50fa7b">active</span>
+              <span style="flex:0.5;text-align:right">92</span>
+            </div>
+            <div style="display:flex;padding:6px 12px;color:#ccc">
+              <span style="flex:2">&nbsp;&nbsp;Use structured logging</span>
+              <span style="flex:1;color:#a0d0a0">workflow_rule</span>
+              <span style="flex:1;color:#50fa7b">active</span>
+              <span style="flex:0.5;text-align:right">85</span>
+            </div>
+            <div style="display:flex;padding:6px 12px;background:#2a2a4a;color:#ccc">
+              <span style="flex:2">&nbsp;&nbsp;Prefer table-driven tests</span>
+              <span style="flex:1;color:#bd93f9">skill_patch</span>
+              <span style="flex:1;color:#f1fa8c">candidate</span>
+              <span style="flex:0.5;text-align:right">71</span>
+            </div>
+          </div>
+          <div style="color:#555;font-size:11px;margin-top:12px">j/k navigate &middot; enter detail &middot; a activate &middot; s suppress &middot; tab switch panel &middot; q quit</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Master-Detail Split</h3>
+      <p>Left panel shows the memory list (always visible). Right panel shows detail of the selected memory — body, evidence, history, injection stats. Actions apply to the focused memory. Filter/status tabs sit above the list.</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-header">Preview</div>
+        <div class="mockup-body" style="font-family:monospace;font-size:13px;line-height:1.5;padding:16px;background:#1a1a2e;color:#e0e0e0">
+          <div style="display:flex;gap:0;height:220px">
+            <div style="flex:1;border-right:1px solid #444;padding-right:12px;overflow:hidden">
+              <div style="color:#888;font-size:11px;margin-bottom:6px">MEMORIES &middot; active (5)</div>
+              <div style="padding:4px 8px;background:#2a2a4a;color:#7ecfff;border-left:2px solid #7ecfff;margin-bottom:2px">Always run lint before commit</div>
+              <div style="padding:4px 8px;color:#ccc;margin-bottom:2px">Use structured logging</div>
+              <div style="padding:4px 8px;color:#ccc;margin-bottom:2px">Prefer table-driven tests</div>
+              <div style="padding:4px 8px;color:#ccc;margin-bottom:2px">Check error returns</div>
+              <div style="padding:4px 8px;color:#666;margin-bottom:2px;font-size:11px">--- candidate (3) ---</div>
+              <div style="padding:4px 8px;color:#888;margin-bottom:2px">Add context to errors</div>
+              <div style="padding:4px 8px;color:#888;margin-bottom:2px">Use gomock for interfaces</div>
+            </div>
+            <div style="flex:1.2;padding-left:12px">
+              <div style="color:#7ecfff;font-size:14px;margin-bottom:8px"><strong>Always run lint before commit</strong></div>
+              <div style="color:#a0d0a0;font-size:11px;margin-bottom:12px">repo_rule &middot; active &middot; score 92 &middot; injected 14x</div>
+              <div style="color:#ccc;margin-bottom:12px;font-size:12px">Run <code>mise run lint</code> before every commit to catch formatting and lint errors that CI will reject.</div>
+              <div style="color:#888;font-size:11px;margin-bottom:4px">WHY</div>
+              <div style="color:#aaa;font-size:12px;margin-bottom:12px">CI failures from lint are the most common cause of blocked PRs in this repo.</div>
+              <div style="color:#888;font-size:11px;margin-bottom:4px">EVIDENCE</div>
+              <div style="color:#aaa;font-size:12px">Seen in 8 sessions. Last injected 2h ago.</div>
+            </div>
+          </div>
+          <div style="color:#555;font-size:11px;margin-top:8px;border-top:1px solid #333;padding-top:8px">j/k navigate &middot; a activate &middot; s suppress &middot; x archive &middot; / filter &middot; q quit</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Dashboard Overview + Drill-Down</h3>
+      <p>Landing page shows a summary dashboard (counts, recent activity, top memories). Select any section to drill into a full-screen view. Back key returns to dashboard. More like <code>htop</code> or <code>lazygit</code>.</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-header">Preview</div>
+        <div class="mockup-body" style="font-family:monospace;font-size:13px;line-height:1.5;padding:16px;background:#1a1a2e;color:#e0e0e0">
+          <div style="text-align:center;color:#7ecfff;margin-bottom:12px"><strong>Memory Loop Dashboard</strong></div>
+          <div style="display:flex;gap:16px;margin-bottom:16px">
+            <div style="flex:1;border:1px solid #333;border-radius:4px;padding:12px;text-align:center">
+              <div style="color:#50fa7b;font-size:24px"><strong>5</strong></div>
+              <div style="color:#888;font-size:11px">Active</div>
+            </div>
+            <div style="flex:1;border:1px solid #333;border-radius:4px;padding:12px;text-align:center">
+              <div style="color:#f1fa8c;font-size:24px"><strong>3</strong></div>
+              <div style="color:#888;font-size:11px">Candidate</div>
+            </div>
+            <div style="flex:1;border:1px solid #333;border-radius:4px;padding:12px;text-align:center">
+              <div style="color:#ff5555;font-size:24px"><strong>2</strong></div>
+              <div style="color:#888;font-size:11px">Suppressed</div>
+            </div>
+            <div style="flex:1;border:1px solid #333;border-radius:4px;padding:12px;text-align:center">
+              <div style="color:#888;font-size:24px"><strong>1</strong></div>
+              <div style="color:#888;font-size:11px">Archived</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:16px">
+            <div style="flex:1;border:1px solid #333;border-radius:4px;padding:12px">
+              <div style="color:#888;font-size:11px;margin-bottom:8px">TOP MEMORIES</div>
+              <div style="color:#ccc;font-size:12px;margin-bottom:4px">1. Always run lint before commit <span style="color:#50fa7b">(14x)</span></div>
+              <div style="color:#ccc;font-size:12px;margin-bottom:4px">2. Use structured logging <span style="color:#50fa7b">(9x)</span></div>
+              <div style="color:#ccc;font-size:12px">3. Check error returns <span style="color:#50fa7b">(7x)</span></div>
+            </div>
+            <div style="flex:1;border:1px solid #333;border-radius:4px;padding:12px">
+              <div style="color:#888;font-size:11px;margin-bottom:8px">RECENT ACTIVITY</div>
+              <div style="color:#aaa;font-size:12px;margin-bottom:4px">2h ago &middot; Injected 3 memories</div>
+              <div style="color:#aaa;font-size:12px;margin-bottom:4px">5h ago &middot; Refreshed (2 new)</div>
+              <div style="color:#aaa;font-size:12px">1d ago &middot; Activated "lint rule"</div>
+            </div>
+          </div>
+          <div style="color:#555;font-size:11px;margin-top:12px">enter drill into section &middot; r refresh &middot; m mode &middot; p policy &middot; q quit</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

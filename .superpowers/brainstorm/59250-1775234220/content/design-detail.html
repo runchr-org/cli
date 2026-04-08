@@ -1,0 +1,119 @@
+<h2>Enhanced Detail Pane — Final Design</h2>
+<p class="subtitle">Compact grouped layout with 4 boxes: Summary, Code, Learnings, Signals</p>
+
+<div class="mockup">
+  <div class="mockup-header">Full Detail Pane — Session View</div>
+  <div class="mockup-body" style="font-family:monospace;font-size:12px;line-height:1.6;background:#1a1a2e;color:#c8c8d0;padding:16px;max-height:none">
+
+    <!-- Existing metadata header (unchanged) -->
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <div style="border:1px solid #666;border-radius:6px;padding:8px 12px;flex:3;background:#1e1e32">
+        <div style="color:#e8a838;font-weight:bold;font-size:10px;margin-bottom:4px">SESSION</div>
+        <span style="color:#888">checkpoint:</span> a3b2c4d5e6f7 &nbsp; <span style="color:#888">agent:</span> Claude Code &nbsp; <span style="color:#888">author:</span> alisha<br>
+        <span style="color:#888">branch:</span> feature/fix-tests &nbsp; <span style="color:#888">model:</span> sonnet &nbsp; <span style="color:#888">turns:</span> 5
+      </div>
+      <div style="border:1px solid #666;border-radius:6px;padding:8px 12px;flex:1;background:#1e1e32">
+        <div style="color:#e8a838;font-weight:bold;font-size:10px;margin-bottom:4px">TOKENS</div>
+        65.6k
+      </div>
+    </div>
+
+    <!-- BOX 1: SUMMARY (intent, outcome, scores, stats) -->
+    <div style="border:1px solid #555;border-radius:6px;padding:10px 14px;margin-bottom:10px">
+      <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:6px">SUMMARY</div>
+      <span style="color:#888">Intent:</span> Fix flaky integration tests in manual_commit_test.go<br>
+      <span style="color:#888">Outcome:</span> Stabilized 3 failing tests by isolating git state<br>
+      <div style="margin-top:6px">
+        <span style="color:#888">Score:</span> <span style="color:#e8a838">7.2</span> <span style="color:#666">— tok:8.1 · 1st-pass:6.0 · friction:7.5 · focus:7.8</span>
+      </div>
+      <div style="margin-top:2px">
+        <span style="color:#888">Tokens:</span> 45.2k in · 12.1k cache · 8.3k out &nbsp;&nbsp; <span style="color:#888">API:</span> 23 calls &nbsp;&nbsp; <span style="color:#888">Time:</span> 4m 32s &nbsp;&nbsp; <span style="color:#888">Agent:</span> 82%
+      </div>
+    </div>
+
+    <!-- BOX 2: CODE (files, tools, rationale, tradeoffs, patterns) -->
+    <div style="border:1px solid #555;border-radius:6px;padding:10px 14px;margin-bottom:10px">
+      <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:6px">CODE</div>
+
+      <div style="color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px">Files Touched</div>
+      <span style="color:#888">•</span> cmd/entire/cli/strategy/manual_commit_test.go<br>
+      <span style="color:#888">•</span> cmd/entire/cli/strategy/common.go<br>
+      <span style="color:#888">•</span> cmd/entire/cli/lifecycle.go<br>
+
+      <div style="color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin:8px 0 3px">Tool Usage</div>
+      <span style="color:#888">•</span> Edit <span style="color:#666">(12)</span> · Read <span style="color:#666">(8)</span> · Bash <span style="color:#666">(5)</span> · Grep <span style="color:#666">(3)</span><br>
+
+      <div style="color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin:8px 0 3px">Implementation Rationale</div>
+      <span style="color:#888">•</span> Used testutil helpers to isolate git state from real repo<br>
+      <span style="color:#888">•</span> Chose t.TempDir over manual cleanup for reliability<br>
+
+      <div style="color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin:8px 0 3px">Tradeoffs</div>
+      <span style="color:#888">•</span> Slower test setup vs guaranteed isolation<br>
+
+      <div style="color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin:8px 0 3px">Codebase Patterns</div>
+      <span style="color:#888">•</span> Always use repo root for git-relative paths<br>
+      <span style="color:#888">•</span> Test helpers in testutil package, not inline
+    </div>
+
+    <!-- BOX 3: LEARNINGS -->
+    <div style="border:1px solid #555;border-radius:6px;padding:10px 14px;margin-bottom:10px">
+      <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:6px">LEARNINGS</div>
+      <span style="color:#888">•</span> Always use repo root for git-relative paths <span style="color:#666">(repo)</span><br>
+      <span style="color:#888">•</span> testutil.InitRepo configures user + disables GPG <span style="color:#666">(code)</span><br>
+      <span style="color:#888">•</span> Run mise run test:ci before committing <span style="color:#666">(workflow)</span>
+    </div>
+
+    <!-- BOX 4: SIGNALS (all facets with evidence) -->
+    <div style="border:1px solid #555;border-radius:6px;padding:10px 14px;margin-bottom:10px">
+      <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:6px">SIGNALS</div>
+
+      <div style="color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px">Friction</div>
+      <span style="color:#888">•</span> Fixture setup was duplicated across tests<br>
+      <span style="color:#888">•</span> Missing test helper for temp repos<br>
+
+      <div style="color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin:8px 0 3px">Failure Loops</div>
+      <span style="color:#888">•</span> Test kept failing on CI <span style="color:#666">(×3)</span><br>
+      <span style="color:#666;font-size:11px">&nbsp;&nbsp;↳ "linter passed locally but failed in CI environment"</span><br>
+      <span style="color:#666;font-size:11px">&nbsp;&nbsp;↳ "missing user.email in git config on CI runner"</span><br>
+
+      <div style="color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin:8px 0 3px">Repeated Instructions</div>
+      <span style="color:#888">•</span> Run tests before committing<br>
+      <span style="color:#666;font-size:11px">&nbsp;&nbsp;↳ "I already told you to run mise run test:ci"</span><br>
+
+      <div style="color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin:8px 0 3px">Missing Context</div>
+      <span style="color:#888">•</span> CI requires GPG signing disabled<br>
+      <span style="color:#666;font-size:11px">&nbsp;&nbsp;↳ "agent tried git commit without --no-gpg-sign"</span><br>
+
+      <div style="color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin:8px 0 3px">Skill Signals</div>
+      <span style="color:#888">•</span> <span style="color:#ccc">test-driven-development</span><br>
+      <span style="color:#666;font-size:11px">&nbsp;&nbsp;friction: "wrote implementation before tests"</span><br>
+      <span style="color:#666;font-size:11px">&nbsp;&nbsp;missing: "skill should enforce test-first for bug fixes"</span><br>
+
+      <div style="color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin:8px 0 3px">Review Rules</div>
+      <span style="color:#888">•</span> Always isolate git state in tests<br>
+      <span style="color:#666;font-size:11px">&nbsp;&nbsp;source: code-review · strength: strong</span><br>
+      <span style="color:#666;font-size:11px">&nbsp;&nbsp;↳ "reviewer flagged shared git state causing flaky tests"</span><br>
+      <span style="color:#666;font-size:11px">&nbsp;&nbsp;reusable: "applies to any test touching git operations"</span><br>
+
+      <div style="color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin:8px 0 3px">Repo Gotchas</div>
+      <span style="color:#888">•</span> go-git v5 deletes .gitignore'd dirs on reset<br>
+
+      <div style="color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin:8px 0 3px">Workflow Gaps</div>
+      <span style="color:#888">•</span> No pre-commit hook enforces test run
+    </div>
+
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>Design Decisions</h3>
+  <ul>
+    <li><strong>4 groups:</strong> SUMMARY (what + metrics), CODE (files + tools + decisions), LEARNINGS (kept separate — different from summary findings), SIGNALS (all facets with evidence)</li>
+    <li><strong>Sub-section headers:</strong> Dim uppercase labels inside each box — visually distinct from box titles</li>
+    <li><strong>Evidence rendering:</strong> Indented with <code>↳</code> prefix in dim style, directly below parent item</li>
+    <li><strong>Scores inline:</strong> Overall score in amber, sub-scores dim on same line</li>
+    <li><strong>Tool usage:</strong> Compact single-line with dot separators and counts in parens</li>
+    <li><strong>Empty sections omitted:</strong> If a session has no failure loops, that sub-section header doesn't appear. If an entire box would be empty, the box is omitted.</li>
+    <li><strong>Metadata header unchanged:</strong> SESSION + TOKENS boxes stay as-is (fixed, not scrolled)</li>
+  </ul>
+</div>

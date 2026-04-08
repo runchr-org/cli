@@ -1,0 +1,143 @@
+<h2>Full TUI Mockup — Session Summary</h2>
+<p class="subtitle">Complete split-pane layout with filters, list, and bordered detail sections. This is what it would look like in the terminal.</p>
+
+<div class="mockup">
+  <div class="mockup-header">entire summary</div>
+  <div class="mockup-body" style="background:#0d0d1a; padding:0; font-family:monospace; font-size:11.5px; line-height:1.5; color:#ccc; display:flex; flex-direction:column; min-height:420px;">
+
+    <!-- Filter bar -->
+    <div style="padding:6px 10px; border-bottom:1px solid #333;">
+      <div style="display:flex; gap:16px; align-items:center;">
+        <span style="color:#d4a017; font-weight:bold;">TIME:</span>
+        <span style="color:#d4a017; text-decoration:underline;">24h</span>
+        <span style="color:#555;">│</span>
+        <span style="color:#666;">7d</span>
+        <span style="color:#555;">│</span>
+        <span style="color:#666;">30d</span>
+        <span style="color:#555;">│</span>
+        <span style="color:#666;">all</span>
+        <span style="color:#333; margin:0 8px;">│</span>
+        <span style="color:#888;">BRANCH:</span>
+        <span style="color:#888;">repo</span>
+        <span style="color:#555;">│</span>
+        <span style="color:#888;">current</span>
+        <span style="color:#555;">│</span>
+        <span style="color:#888;">all</span>
+        <span style="color:#555; margin-left:auto; font-size:10px;">5 sessions</span>
+      </div>
+    </div>
+
+    <!-- Split pane -->
+    <div style="display:flex; flex:1;">
+
+      <!-- Left: session list -->
+      <div style="width:30%; border-right:1px solid #333; padding:6px 0;">
+        <div style="padding:0 8px 4px 8px; color:#d4a017; font-weight:bold; font-size:10px; letter-spacing:0.5px;">
+          TIME &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; CKPT &nbsp;&nbsp; AGENT
+        </div>
+        <div style="border-top:1px solid #333;"></div>
+
+        <div style="background:#1a1a3e; padding:3px 8px; color:#d4a017; border-left:2px solid #d4a017;">
+          04-02 11:43 &nbsp;a3b2c4 &nbsp;Claude
+        </div>
+        <div style="padding:3px 8px; color:#aaa;">
+          04-02 10:15 &nbsp;f7e8d9 &nbsp;Cursor
+        </div>
+        <div style="padding:3px 8px; color:#aaa;">
+          04-02 08:30 &nbsp;1b2c3d &nbsp;Claude
+        </div>
+        <div style="padding:3px 8px; color:#aaa;">
+          04-01 16:22 &nbsp;e5f6a7 &nbsp;Gemini
+        </div>
+        <div style="padding:3px 8px; color:#aaa;">
+          04-01 14:00 &nbsp;8c9d0e &nbsp;Claude
+        </div>
+
+        <div style="margin-top:auto; padding:6px 8px 2px; color:#555; font-size:10px; border-top:1px solid #222;">
+          j/k navigate · ←→ page · 1/3
+        </div>
+      </div>
+
+      <!-- Right: detail pane -->
+      <div style="width:70%; padding:8px 12px; display:flex; flex-direction:column; gap:6px;">
+
+        <!-- Metadata header -->
+        <div style="display:flex; gap:8px;">
+          <div style="flex:1; border:1px solid #444; border-radius:3px; padding:5px 8px;">
+            <div style="color:#d4a017; font-size:9px; font-weight:bold; letter-spacing:0.5px;">SESSION</div>
+            <div style="color:#ccc; font-size:10.5px; margin-top:2px;">
+              <span style="color:#888;">branch:</span> agent-improvements
+              <span style="color:#555; margin:0 4px;">·</span>
+              <span style="color:#888;">model:</span> opus
+              <span style="color:#555; margin:0 4px;">·</span>
+              <span style="color:#888;">turns:</span> 8
+            </div>
+          </div>
+          <div style="border:1px solid #444; border-radius:3px; padding:5px 8px; text-align:center;">
+            <div style="color:#d4a017; font-size:9px; font-weight:bold; letter-spacing:0.5px;">TOKENS</div>
+            <div style="color:#ccc; font-size:10.5px; margin-top:2px;">12.4k</div>
+          </div>
+        </div>
+
+        <!-- Summary box -->
+        <div style="border:1px solid #444; border-radius:3px; padding:6px 8px;">
+          <div style="color:#d4a017; font-size:9px; font-weight:bold; letter-spacing:0.5px; margin-bottom:4px;">SUMMARY</div>
+          <div style="font-size:10.5px;">
+            <div style="margin-bottom:4px;">
+              <span style="color:#888;">Intent:</span>
+              <span style="color:#ccc;"> Redesign session summary TUI with split-pane layout for easier browsing</span>
+            </div>
+            <div>
+              <span style="color:#888;">Outcome:</span>
+              <span style="color:#ccc;"> Implemented fzf-style list with instant preview pane and bordered detail sections</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Friction box -->
+        <div style="border:1px solid #444; border-radius:3px; padding:6px 8px;">
+          <div style="color:#d4a017; font-size:9px; font-weight:bold; letter-spacing:0.5px; margin-bottom:4px;">FRICTION</div>
+          <div style="font-size:10.5px; color:#ccc;">
+            <div><span style="color:#888;">•</span> Bubble Tea table widget has limited column width control</div>
+            <div><span style="color:#888;">•</span> Viewport scroll state resets when switching between sessions</div>
+          </div>
+        </div>
+
+        <!-- Learnings box -->
+        <div style="border:1px solid #444; border-radius:3px; padding:6px 8px;">
+          <div style="color:#d4a017; font-size:9px; font-weight:bold; letter-spacing:0.5px; margin-bottom:4px;">LEARNINGS</div>
+          <div style="font-size:10.5px; color:#ccc;">
+            <div><span style="color:#888;">•</span> Use lipgloss.JoinHorizontal for split panes <span style="color:#555;">(repo)</span></div>
+            <div><span style="color:#888;">•</span> Custom list renderer beats table widget for narrow layouts <span style="color:#555;">(repo)</span></div>
+          </div>
+        </div>
+
+        <!-- Facets box -->
+        <div style="border:1px solid #444; border-radius:3px; padding:6px 8px;">
+          <div style="color:#d4a017; font-size:9px; font-weight:bold; letter-spacing:0.5px; margin-bottom:4px;">INSIGHTS</div>
+          <div style="font-size:10.5px; color:#ccc;">
+            <div><span style="color:#888;">•</span> <span style="color:#888;">Repo Gotcha:</span> go-git v5 deletes ignored dirs on reset</div>
+            <div><span style="color:#888;">•</span> <span style="color:#888;">Workflow Gap:</span> No automated TUI snapshot testing</div>
+          </div>
+        </div>
+
+        <div style="margin-top:auto; color:#555; font-size:10px; border-top:1px solid #222; padding-top:4px;">
+          j/k scroll detail · g generate · q quit
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:20px;">
+  <h3>Key Behaviors</h3>
+  <ul style="font-size:14px; line-height:1.8; color:#bbb;">
+    <li><strong>No Enter required</strong> — detail pane updates instantly as you move through the list with j/k</li>
+    <li><strong>Filters:</strong> <code>1</code> cycles TIME (24h → 7d → 30d → all), <code>2</code> cycles BRANCH (repo → current → all)</li>
+    <li><strong>Selected row</strong> highlighted with amber background + left accent border</li>
+    <li><strong>Detail sections</strong> are bordered boxes: SESSION metadata, SUMMARY, FRICTION, LEARNINGS, INSIGHTS</li>
+    <li><strong>Detail scrolls</strong> with j/k when list isn't focused (or always scrolls if content overflows)</li>
+    <li><strong>g key</strong> generates summary/facets for sessions that don't have them yet</li>
+    <li><strong>Pagination</strong> still available with ←→ for the list</li>
+  </ul>
+</div>

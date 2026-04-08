@@ -1,0 +1,150 @@
+<h2>Detail Pane Layout Approaches</h2>
+<p class="subtitle">How to render 17 sections of session data in a scrollable detail pane</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Separate Boxes Per Section</h3>
+      <p>Each of the 17 sections gets its own bordered box with a title header, matching the current style (SUMMARY, FRICTION, LEARNINGS boxes). Empty sections are omitted entirely.</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-header">Detail Pane Preview</div>
+        <div class="mockup-body" style="font-family:monospace;font-size:12px;line-height:1.6;background:#1a1a2e;color:#c8c8d0;padding:16px">
+          <div style="border:1px solid #555;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+            <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:4px">SUMMARY</div>
+            <span style="color:#888">Intent:</span> Fix flaky integration tests<br>
+            <span style="color:#888">Outcome:</span> Stabilized 3 failing tests
+          </div>
+          <div style="border:1px solid #555;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+            <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:4px">SCORES</div>
+            <span style="color:#888">Overall:</span> 7.2 &nbsp; <span style="color:#888">Token Eff:</span> 8.1 &nbsp; <span style="color:#888">First Pass:</span> 6.0<br>
+            <span style="color:#888">Friction:</span> 7.5 &nbsp; <span style="color:#888">Focus:</span> 7.8
+          </div>
+          <div style="border:1px solid #555;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+            <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:4px">STATS</div>
+            <span style="color:#888">In:</span> 45.2k &nbsp; <span style="color:#888">Cache:</span> 12.1k &nbsp; <span style="color:#888">Out:</span> 8.3k &nbsp; <span style="color:#888">API Calls:</span> 23<br>
+            <span style="color:#888">Duration:</span> 4m 32s &nbsp; <span style="color:#888">Agent%:</span> 82%
+          </div>
+          <div style="border:1px solid #555;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+            <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:4px">FILES TOUCHED</div>
+            <span style="color:#888">•</span> cmd/entire/cli/strategy/manual_commit_test.go<br>
+            <span style="color:#888">•</span> cmd/entire/cli/strategy/common.go<br>
+            <span style="color:#888">•</span> cmd/entire/cli/lifecycle.go
+          </div>
+          <div style="border:1px solid #555;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+            <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:4px">FRICTION</div>
+            <span style="color:#888">•</span> Fixture setup was duplicated across tests<br>
+            <span style="color:#888">•</span> Missing test helper for temp repos
+          </div>
+          <div style="color:#555;text-align:center;padding:8px">↓ scroll for more sections ↓</div>
+        </div>
+      </div>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Consistent with current design</li><li>Clear visual boundaries</li><li>Easy to scan section titles</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Borders add vertical bulk — more scrolling</li><li>17 boxes may feel heavy</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Compact Grouped Layout</h3>
+      <p>Group related sections under shared headers. Scores & Stats become a dense 2-line block at top. Code context (files, tools, rationale, tradeoffs, patterns) share one box. Insights (all facets) share one box with labeled sub-sections. Only the top-level groups get bordered boxes.</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-header">Detail Pane Preview</div>
+        <div class="mockup-body" style="font-family:monospace;font-size:12px;line-height:1.6;background:#1a1a2e;color:#c8c8d0;padding:16px">
+          <div style="border:1px solid #555;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+            <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:4px">SUMMARY</div>
+            <span style="color:#888">Intent:</span> Fix flaky integration tests<br>
+            <span style="color:#888">Outcome:</span> Stabilized 3 failing tests<br>
+            <span style="color:#888">Score:</span> 7.2 &nbsp; <span style="color:#666">tok:8.1 · 1st:6.0 · fric:7.5 · foc:7.8</span><br>
+            <span style="color:#888">Tokens:</span> 45.2k in · 12.1k cache · 8.3k out &nbsp; <span style="color:#888">Calls:</span> 23 &nbsp; <span style="color:#888">Time:</span> 4m32s
+          </div>
+          <div style="border:1px solid #555;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+            <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:4px">CODE</div>
+            <div style="color:#aaa;font-size:10px;text-transform:uppercase;margin:4px 0 2px">Files</div>
+            <span style="color:#888">•</span> cmd/entire/cli/strategy/manual_commit_test.go<br>
+            <span style="color:#888">•</span> cmd/entire/cli/strategy/common.go<br>
+            <div style="color:#aaa;font-size:10px;text-transform:uppercase;margin:6px 0 2px">Tools</div>
+            <span style="color:#888">•</span> Edit (12) · Read (8) · Bash (5) · Grep (3)<br>
+            <div style="color:#aaa;font-size:10px;text-transform:uppercase;margin:6px 0 2px">Rationale</div>
+            <span style="color:#888">•</span> Used testutil helpers to isolate git state<br>
+            <div style="color:#aaa;font-size:10px;text-transform:uppercase;margin:6px 0 2px">Patterns</div>
+            <span style="color:#888">•</span> Always use repo root for git-relative paths
+          </div>
+          <div style="border:1px solid #555;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+            <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:4px">SIGNALS</div>
+            <div style="color:#aaa;font-size:10px;text-transform:uppercase;margin:4px 0 2px">Friction</div>
+            <span style="color:#888">•</span> Fixture setup was duplicated across tests<br>
+            <div style="color:#aaa;font-size:10px;text-transform:uppercase;margin:6px 0 2px">Failure Loops</div>
+            <span style="color:#888">•</span> Test kept failing on CI (×3)<br>
+            <div style="color:#aaa;font-size:10px;text-transform:uppercase;margin:6px 0 2px">Repeated Instructions</div>
+            <span style="color:#888">•</span> Run tests before committing<br>
+            <span style="color:#666;font-size:11px">&nbsp;&nbsp;↳ "I told you to run tests" (×2)</span>
+          </div>
+        </div>
+      </div>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Much less vertical space — fewer boxes</li><li>Related data co-located</li><li>Scores/stats visible without scrolling</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Boxes become tall with many sub-sections</li><li>Sub-section headers need distinct styling</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Hybrid: Dense Header + Separate Detail Boxes</h3>
+      <p>Merge scores and stats into the existing metadata header (always visible, not scrolled). Keep the scrollable area for content-heavy sections, each in its own box. Best of both: key stats are always visible, detail sections stay clean and scannable.</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-header">Detail Pane Preview</div>
+        <div class="mockup-body" style="font-family:monospace;font-size:12px;line-height:1.6;background:#1a1a2e;color:#c8c8d0;padding:16px">
+          <div style="border:1px solid #666;border-radius:6px;padding:8px 12px;margin-bottom:4px;background:#1e1e32">
+            <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:4px">SESSION</div>
+            <span style="color:#888">checkpoint:</span> a3b2c4d5e6f7 &nbsp; <span style="color:#888">agent:</span> Claude Code &nbsp; <span style="color:#888">author:</span> alisha<br>
+            <span style="color:#888">branch:</span> feature/fix-tests &nbsp; <span style="color:#888">model:</span> sonnet &nbsp; <span style="color:#888">turns:</span> 5
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:10px">
+            <div style="border:1px solid #666;border-radius:6px;padding:6px 10px;flex:1;background:#1e1e32">
+              <div style="color:#e8a838;font-weight:bold;font-size:10px">TOKENS</div>
+              <span style="color:#888">in:</span>45.2k <span style="color:#888">cache:</span>12.1k <span style="color:#888">out:</span>8.3k
+            </div>
+            <div style="border:1px solid #666;border-radius:6px;padding:6px 10px;flex:1;background:#1e1e32">
+              <div style="color:#e8a838;font-weight:bold;font-size:10px">PERF</div>
+              <span style="color:#888">calls:</span>23 <span style="color:#888">time:</span>4m32s <span style="color:#888">agent:</span>82%
+            </div>
+            <div style="border:1px solid #666;border-radius:6px;padding:6px 10px;flex:1;background:#1e1e32">
+              <div style="color:#e8a838;font-weight:bold;font-size:10px">SCORE</div>
+              7.2 <span style="color:#666;font-size:11px">tok:8.1 1st:6.0 fric:7.5 foc:7.8</span>
+            </div>
+          </div>
+          <div style="border-top:1px dashed #444;padding-top:8px;color:#666;font-size:10px;margin-bottom:6px">▼ scrollable ▼</div>
+          <div style="border:1px solid #555;border-radius:6px;padding:8px 12px;margin-bottom:8px">
+            <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:4px">SUMMARY</div>
+            <span style="color:#888">Intent:</span> Fix flaky integration tests<br>
+            <span style="color:#888">Outcome:</span> Stabilized 3 failing tests
+          </div>
+          <div style="border:1px solid #555;border-radius:6px;padding:8px 12px;margin-bottom:8px">
+            <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:4px">FILES TOUCHED</div>
+            <span style="color:#888">•</span> cmd/entire/cli/strategy/manual_commit_test.go<br>
+            <span style="color:#888">•</span> cmd/entire/cli/strategy/common.go
+          </div>
+          <div style="border:1px solid #555;border-radius:6px;padding:8px 12px;margin-bottom:8px">
+            <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:4px">TOOL USAGE</div>
+            <span style="color:#888">•</span> Edit (12) · Read (8) · Bash (5) · Grep (3)
+          </div>
+          <div style="border:1px solid #555;border-radius:6px;padding:8px 12px;margin-bottom:8px">
+            <div style="color:#e8a838;font-weight:bold;font-size:11px;margin-bottom:4px">FAILURE LOOPS</div>
+            <span style="color:#888">•</span> Test kept failing on CI (×3)<br>
+            <span style="color:#666;font-size:11px">&nbsp;&nbsp;↳ "linter passed locally but failed in CI"</span>
+          </div>
+        </div>
+      </div>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Key stats always visible (no scrolling needed)</li><li>Clean separation: metadata above, content below</li><li>Individual boxes keep sections scannable</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Fixed header takes more vertical space</li><li>Less room for scrollable content</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>
