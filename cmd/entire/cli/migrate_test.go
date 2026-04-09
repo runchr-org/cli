@@ -58,6 +58,10 @@ func newMigrateStores(repo *git.Repository) (*checkpoint.GitStore, *checkpoint.V
 	return checkpoint.NewGitStore(repo), checkpoint.NewV2GitStore(repo, migrateRemoteName)
 }
 
+func newGmetaMigrateStores(repo *git.Repository) (*checkpoint.GitStore, *checkpoint.GmetaStore) {
+	return checkpoint.NewGitStore(repo), checkpoint.NewGmetaStore(repo)
+}
+
 func buildTasksTreeHash(t *testing.T, repo *git.Repository, toolUseID string) plumbing.Hash {
 	t.Helper()
 
@@ -258,6 +262,98 @@ func TestMigrateCmd_InvalidFlag(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported checkpoints version")
+}
+
+func TestMigrateCheckpointsGmeta_Basic(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store, gmetaStore := newGmetaMigrateStores(repo)
+
+	cpID := id.MustCheckpointID("a1b2c3d4e5f6")
+	writeV1Checkpoint(t, v1Store, cpID, "session-001",
+		[]byte("{\"type\":\"assistant\",\"message\":\"hello\"}\n"),
+		[]string{"test prompt"},
+	)
+
+	var stdout bytes.Buffer
+
+	result, err := migrateCheckpointsGmeta(context.Background(), v1Store, gmetaStore, &stdout)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.migrated)
+	assert.Equal(t, 0, result.skipped)
+	assert.Equal(t, 0, result.failed)
+
+	summary, err := gmetaStore.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, err)
+	require.NotNil(t, summary, "checkpoint should exist in gmeta after migration")
+	assert.Equal(t, cpID, summary.CheckpointID)
+
+	content, err := gmetaStore.ReadSessionContent(context.Background(), cpID, "session-001")
+	require.NoError(t, err)
+	assert.Equal(t, "test prompt", content.Prompts)
+	assert.NotEmpty(t, content.Transcript)
+}
+
+func TestMigrateCheckpointsGmeta_Idempotent(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store, gmetaStore := newGmetaMigrateStores(repo)
+
+	cpID := id.MustCheckpointID("c3d4e5f6a1b2")
+	writeV1Checkpoint(t, v1Store, cpID, "session-idem",
+		[]byte("{\"type\":\"assistant\",\"message\":\"idempotent test\"}\n"),
+		[]string{"idem prompt"},
+	)
+
+	var stdout bytes.Buffer
+	result1, err := migrateCheckpointsGmeta(context.Background(), v1Store, gmetaStore, &stdout)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result1.migrated)
+
+	stdout.Reset()
+	result2, err := migrateCheckpointsGmeta(context.Background(), v1Store, gmetaStore, &stdout)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result2.migrated)
+	assert.Equal(t, 1, result2.skipped)
+}
+
+func TestMigrateCheckpointsGmeta_PreservesCombinedAttribution(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store, gmetaStore := newGmetaMigrateStores(repo)
+
+	cpID := id.MustCheckpointID("d4e5f6a1b2c3")
+	writeV1Checkpoint(t, v1Store, cpID, "session-001",
+		[]byte("{\"type\":\"assistant\",\"message\":\"hello\"}\n"),
+		[]string{"test prompt"},
+	)
+
+	combined := &checkpoint.InitialAttribution{
+		AgentLines:        10,
+		AgentRemoved:      2,
+		HumanAdded:        1,
+		HumanModified:     1,
+		HumanRemoved:      0,
+		TotalCommitted:    11,
+		TotalLinesChanged: 14,
+		AgentPercentage:   85.7,
+		MetricVersion:     2,
+	}
+	require.NoError(t, v1Store.UpdateCheckpointSummary(context.Background(), cpID, combined))
+
+	var stdout bytes.Buffer
+	result, err := migrateCheckpointsGmeta(context.Background(), v1Store, gmetaStore, &stdout)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.migrated)
+
+	summary, err := gmetaStore.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	require.NotNil(t, summary.CombinedAttribution)
+	assert.Equal(t, combined.AgentLines, summary.CombinedAttribution.AgentLines)
+	assert.Equal(t, combined.AgentRemoved, summary.CombinedAttribution.AgentRemoved)
+	assert.Equal(t, combined.TotalLinesChanged, summary.CombinedAttribution.TotalLinesChanged)
+	assert.Equal(t, combined.AgentPercentage, summary.CombinedAttribution.AgentPercentage)
 }
 
 func TestMigrateCheckpointsV2_CompactionSkipped(t *testing.T) {
