@@ -232,6 +232,11 @@ func (s *GmetaStore) writeSessionEntries(ctx context.Context, opts WriteCommitte
 		s.writeStringValue(sessionPath+"agent/model/__value", opts.Model, entries)
 	}
 
+	// Token usage — individual keys for gmeta queryability
+	if opts.TokenUsage != nil {
+		writeTokenUsageEntries(s, sessionPath+"token-usage/", opts.TokenUsage, entries)
+	}
+
 	// Prompt
 	if len(opts.Prompts) > 0 {
 		promptContent := redact.String(JoinPrompts(opts.Prompts))
@@ -262,6 +267,67 @@ func (s *GmetaStore) writeSessionEntries(ctx context.Context, opts WriteCommitte
 	}
 
 	return nil
+}
+
+// writeTokenUsageEntries writes token usage as individual gmeta string values.
+// Layout: <prefix>input/__value, <prefix>output/__value, etc.
+func writeTokenUsageEntries(s *GmetaStore, prefix string, usage *agent.TokenUsage, entries map[string]object.TreeEntry) {
+	if usage.InputTokens > 0 {
+		s.writeStringValue(prefix+"input/__value", strconv.Itoa(usage.InputTokens), entries)
+	}
+	if usage.OutputTokens > 0 {
+		s.writeStringValue(prefix+"output/__value", strconv.Itoa(usage.OutputTokens), entries)
+	}
+	if usage.CacheReadTokens > 0 {
+		s.writeStringValue(prefix+"cache-read/__value", strconv.Itoa(usage.CacheReadTokens), entries)
+	}
+	if usage.CacheCreationTokens > 0 {
+		s.writeStringValue(prefix+"cache-creation/__value", strconv.Itoa(usage.CacheCreationTokens), entries)
+	}
+	if usage.APICallCount > 0 {
+		s.writeStringValue(prefix+"api-calls/__value", strconv.Itoa(usage.APICallCount), entries)
+	}
+	// Total for convenient querying
+	total := usage.InputTokens + usage.OutputTokens + usage.CacheReadTokens + usage.CacheCreationTokens
+	if total > 0 {
+		s.writeStringValue(prefix+"total/__value", strconv.Itoa(total), entries)
+	}
+}
+
+// readTokenUsageFromTree reads token usage from gmeta string values in a tree.
+func readTokenUsageFromTree(repo *git.Repository, sessionTree *object.Tree) *agent.TokenUsage {
+	usageTree, err := sessionTree.Tree("token-usage")
+	if err != nil {
+		return nil
+	}
+
+	usage := &agent.TokenUsage{
+		InputTokens:         readGmetaIntValue(repo, usageTree, "input"),
+		OutputTokens:        readGmetaIntValue(repo, usageTree, "output"),
+		CacheReadTokens:     readGmetaIntValue(repo, usageTree, "cache-read"),
+		CacheCreationTokens: readGmetaIntValue(repo, usageTree, "cache-creation"),
+		APICallCount:        readGmetaIntValue(repo, usageTree, "api-calls"),
+	}
+
+	// Return nil if all zeros (no usage data)
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.CacheReadTokens == 0 && usage.CacheCreationTokens == 0 {
+		return nil
+	}
+	return usage
+}
+
+// readGmetaIntValue reads a string value from a tree and parses it as an int.
+// Returns 0 if the value doesn't exist or can't be parsed.
+func readGmetaIntValue(repo *git.Repository, tree *object.Tree, key string) int {
+	v := readGmetaStringValue(repo, tree, key)
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // writeTaskEntries writes task checkpoint entries under session/<id>/task/<tool-use-id>/.
@@ -592,13 +658,28 @@ func (s *GmetaStore) ReadCommitted(ctx context.Context, checkpointID id.Checkpoi
 	// Read session IDs from session/ids/__list/
 	sessionIDs := s.readSessionIDList(targetTree)
 
-	// Build sessions array
+	// Build sessions array and aggregate token usage
 	summary.Sessions = make([]SessionFilePaths, len(sessionIDs))
+	var aggregatedUsage *agent.TokenUsage
 	for i, sid := range sessionIDs {
 		summary.Sessions[i] = SessionFilePaths{
 			Metadata: "/" + targetPath + "/session/" + sid + "/",
 		}
+		// Read per-session token usage for aggregation
+		if sessionTree, sessionErr := targetTree.Tree("session/" + sid); sessionErr == nil {
+			if usage := readTokenUsageFromTree(s.repo, sessionTree); usage != nil {
+				if aggregatedUsage == nil {
+					aggregatedUsage = &agent.TokenUsage{}
+				}
+				aggregatedUsage.InputTokens += usage.InputTokens
+				aggregatedUsage.OutputTokens += usage.OutputTokens
+				aggregatedUsage.CacheReadTokens += usage.CacheReadTokens
+				aggregatedUsage.CacheCreationTokens += usage.CacheCreationTokens
+				aggregatedUsage.APICallCount += usage.APICallCount
+			}
+		}
 	}
+	summary.TokenUsage = aggregatedUsage
 
 	return summary, nil
 }
@@ -650,6 +731,9 @@ func (s *GmetaStore) ReadSessionContent(_ context.Context, checkpointID id.Check
 		result.Metadata.Agent = types.AgentType(agentName)
 		result.Metadata.Model = readGmetaStringValue(s.repo, agentTree, "model")
 	}
+
+	// Read token usage
+	result.Metadata.TokenUsage = readTokenUsageFromTree(s.repo, sessionTree)
 
 	// Read checkpoint-level fields into metadata
 	if entireTree, treeErr := targetTree.Tree("entire"); treeErr == nil {

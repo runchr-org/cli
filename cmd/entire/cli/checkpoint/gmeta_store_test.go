@@ -501,6 +501,113 @@ func TestGmetaStore_ReadSessionContent_RoundTrip(t *testing.T) {
 	assert.NotEmpty(t, content.Transcript, "transcript should be non-empty")
 }
 
+func TestGmetaStore_TokenUsage_RoundTrip(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewGmetaStore(repo)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
+
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-001",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"type":"text","content":"hello"}`),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+		Agent:        agent.AgentTypeClaudeCode,
+		TokenUsage: &agent.TokenUsage{
+			InputTokens:         8500,
+			OutputTokens:        3400,
+			CacheReadTokens:     2100,
+			CacheCreationTokens: 1200,
+			APICallCount:        15,
+		},
+	})
+	require.NoError(t, err)
+
+	// Read session content — token usage should be present
+	content, err := store.ReadSessionContent(ctx, cpID, "session-001")
+	require.NoError(t, err)
+	require.NotNil(t, content.Metadata.TokenUsage)
+	assert.Equal(t, 8500, content.Metadata.TokenUsage.InputTokens)
+	assert.Equal(t, 3400, content.Metadata.TokenUsage.OutputTokens)
+	assert.Equal(t, 2100, content.Metadata.TokenUsage.CacheReadTokens)
+	assert.Equal(t, 1200, content.Metadata.TokenUsage.CacheCreationTokens)
+	assert.Equal(t, 15, content.Metadata.TokenUsage.APICallCount)
+
+	// Read checkpoint summary — aggregated token usage
+	summary, err := store.ReadCommitted(ctx, cpID)
+	require.NoError(t, err)
+	require.NotNil(t, summary.TokenUsage)
+	assert.Equal(t, 8500, summary.TokenUsage.InputTokens)
+	assert.Equal(t, 3400, summary.TokenUsage.OutputTokens)
+}
+
+func TestGmetaStore_TokenUsage_MultiSession_Aggregated(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewGmetaStore(repo)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
+
+	// Two sessions with different token usage
+	for _, tc := range []struct {
+		sid   string
+		input int
+	}{
+		{"session-001", 5000},
+		{"session-002", 3000},
+	} {
+		err := store.WriteCommitted(ctx, WriteCommittedOptions{
+			CheckpointID: cpID,
+			SessionID:    tc.sid,
+			Strategy:     "manual-commit",
+			Transcript:   []byte(`{"type":"text"}`),
+			AuthorName:   "Test",
+			AuthorEmail:  "test@test.com",
+			TokenUsage:   &agent.TokenUsage{InputTokens: tc.input, OutputTokens: 1000},
+		})
+		require.NoError(t, err)
+	}
+
+	summary, err := store.ReadCommitted(ctx, cpID)
+	require.NoError(t, err)
+	require.NotNil(t, summary.TokenUsage)
+	assert.Equal(t, 8000, summary.TokenUsage.InputTokens, "input should be aggregated")
+	assert.Equal(t, 2000, summary.TokenUsage.OutputTokens, "output should be aggregated")
+}
+
+func TestGmetaStore_TokenUsage_Nil_WhenAbsent(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewGmetaStore(repo)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
+
+	// Write without token usage
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-001",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"type":"text"}`),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	content, err := store.ReadSessionContent(ctx, cpID, "session-001")
+	require.NoError(t, err)
+	assert.Nil(t, content.Metadata.TokenUsage, "should be nil when no usage written")
+
+	summary, err := store.ReadCommitted(ctx, cpID)
+	require.NoError(t, err)
+	assert.Nil(t, summary.TokenUsage, "should be nil when no usage written")
+}
+
 func TestGmetaStore_ReadSessionContent_NotFound(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
