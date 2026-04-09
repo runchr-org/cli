@@ -18,6 +18,9 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
+// checkpointRemoteDisplay is used in push progress messages when the target is a URL.
+const checkpointRemoteDisplay = "checkpoint remote"
+
 // pushBranchIfNeeded pushes a branch to the given target if it has unpushed changes.
 // The target can be a remote name (e.g., "origin") or a URL for direct push.
 // When pushing to a URL, the "has unpushed" optimization is skipped since there are
@@ -67,7 +70,7 @@ func hasUnpushedSessionsCommon(repo *git.Repository, remote string, localHash pl
 func doPushBranch(ctx context.Context, target, branchName string) error {
 	displayTarget := target
 	if isURL(target) {
-		displayTarget = "checkpoint remote"
+		displayTarget = checkpointRemoteDisplay
 	}
 
 	fmt.Fprintf(os.Stderr, "[entire] Pushing %s to %s...", branchName, displayTarget)

@@ -25,9 +25,14 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
-// GmetaRefName is the ref used for gmeta exchange format metadata.
+// GmetaRefName is the local ref for gmeta exchange format metadata.
 // Per gmeta spec, local metadata lives on refs/meta/local/main.
 const GmetaRefName = "refs/meta/local/main"
+
+// GmetaRemoteRefName is the ref name used on the remote server.
+// Per gmeta spec, the remote stores metadata at refs/meta/main (no local/ prefix).
+// Push refspec: refs/meta/local/main:refs/meta/main
+const GmetaRemoteRefName = "refs/meta/main"
 
 // GmetaStore provides checkpoint storage in gmeta exchange format.
 // It writes metadata to refs/meta/local/main using the gmeta tree layout

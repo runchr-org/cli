@@ -67,7 +67,7 @@ func tryPushRef(ctx context.Context, target string, refName plumbing.ReferenceNa
 func doPushRef(ctx context.Context, target string, refName plumbing.ReferenceName) error {
 	displayTarget := target
 	if isURL(target) {
-		displayTarget = "checkpoint remote"
+		displayTarget = checkpointRemoteDisplay
 	}
 
 	shortRef := shortRefName(refName)
@@ -418,6 +418,44 @@ func pushV2Refs(ctx context.Context, target string) {
 	}
 	latest := archived[len(archived)-1]
 	_ = pushRefIfNeeded(ctx, target, plumbing.ReferenceName(paths.V2FullRefPrefix+latest)) //nolint:errcheck // pushRefIfNeeded handles errors internally
+}
+
+// pushGmetaRef pushes the gmeta local ref to the remote as refs/meta/main.
+// Per gmeta spec, local metadata lives at refs/meta/local/main but is pushed
+// to refs/meta/main on the remote server.
+func pushGmetaRef(ctx context.Context, target string) {
+	localRef := plumbing.ReferenceName(checkpoint.GmetaRefName)
+
+	repo, err := OpenRepository(ctx)
+	if err != nil {
+		return
+	}
+	if _, err := repo.Reference(localRef, true); err != nil {
+		return // Ref doesn't exist locally, nothing to push
+	}
+
+	displayTarget := target
+	if isURL(target) {
+		displayTarget = checkpointRemoteDisplay
+	}
+
+	fmt.Fprintf(os.Stderr, "[entire] Pushing gmeta to %s...", displayTarget)
+	stop := startProgressDots(os.Stderr)
+
+	refSpec := fmt.Sprintf("%s:%s", checkpoint.GmetaRefName, checkpoint.GmetaRemoteRefName)
+	pushCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	cmd := CheckpointGitCommand(pushCtx, target, "push", "--no-verify", target, refSpec)
+	if output, pushErr := cmd.CombinedOutput(); pushErr != nil {
+		stop("")
+		logging.Warn(ctx, "gmeta push failed",
+			slog.String("error", pushErr.Error()),
+			slog.String("output", string(output)),
+		)
+	} else {
+		stop(" done")
+	}
 }
 
 // shortRefName returns a human-readable short form of a ref name for log output.
