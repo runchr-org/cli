@@ -178,6 +178,32 @@ These fields map 1:1 to what `WriteCommittedOptions` already carries: `AgentID`,
 
 Redaction applies to both: subagent transcripts via `redact.JSONLBytes()` (falling back to `redact.Bytes()`), incremental data via `redact.JSONLBytes()`.
 
+### Task Key Policy
+
+Task checkpoint keys are **Entire-specific gmeta data**. They are intentionally
+serialized in the gmeta exchange tree so they can be transported and materialized
+by generic gmeta tooling, but they are not expected to have any built-in
+meaning to the Rust `gmeta` CLI beyond normal key/value storage.
+
+Decision for the POC:
+- `session:<id>:task:<tool-use-id>:...` keys are treated as opaque vendor data
+- The Rust `gmeta` CLI only needs to preserve and expose them via normal
+  `get`/`inspect` behavior
+- Entire remains responsible for interpreting `agent-id`, `checkpoint-uuid`,
+  `transcript`, and `incremental` semantics
+
+Examples:
+
+```bash
+gmeta get change-id:<checkpoint-id> session:<session-id>:task:<tool-use-id>:agent-id
+gmeta get change-id:<checkpoint-id> session:<session-id>:task:<tool-use-id>:checkpoint-uuid
+gmeta get change-id:<checkpoint-id> session:<session-id>:task:<tool-use-id>:transcript
+gmeta get change-id:<checkpoint-id> session:<session-id>:task:<tool-use-id>:incremental
+```
+
+This keeps the exchange format interoperable without requiring the Rust CLI to
+understand Entire's subagent/task model.
+
 ### Entire Metrics Schema
 
 Token usage and attribution are Entire-specific, so they are namespaced under
@@ -302,7 +328,6 @@ Verify data round-trips correctly.
 
 - **Push/fetch**: gmeta uses `refs/meta/local/main` for push, `refs/meta/remotes/main` for fetch. Need to decide if this coexists with or replaces v2's push mechanism. Likely coexists for now.
 - **Read-side**: Not needed for POC. Future work to have `entire session list/show` read from gmeta format.
-- **Task checkpoints**: Included. Final tasks write `agent-id`, `checkpoint-uuid`, `transcript` under `session/<id>/task/<tool-use-id>/`. Incremental tasks append to `incremental/__list/`. Open question: should the gmeta Rust CLI understand these Entire-specific task keys, or are they opaque vendor-namespaced data?
 
 ## Estimated Scope
 
