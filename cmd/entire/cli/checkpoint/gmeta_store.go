@@ -233,7 +233,14 @@ func (s *GmetaStore) writeSessionEntries(ctx context.Context, opts WriteCommitte
 
 	// Token usage — individual keys for gmeta queryability
 	if opts.TokenUsage != nil {
-		writeTokenUsageEntries(s, sessionPath+"token-usage/", opts.TokenUsage, entries)
+		writeTokenUsageEntries(s, sessionPath+"entire/token-usage/", opts.TokenUsage, entries)
+	}
+
+	// Attribution — individual keys for gmeta queryability
+	if opts.InitialAttribution != nil {
+		if err := writeInitialAttributionEntries(s, sessionPath+"entire/attribution/", opts.InitialAttribution, entries); err != nil {
+			return err
+		}
 	}
 
 	// Prompt
@@ -294,12 +301,13 @@ func writeTokenUsageEntries(s *GmetaStore, prefix string, usage *agent.TokenUsag
 }
 
 // readTokenUsageFromTree reads token usage from gmeta string values in a tree.
+// It prefers the namespaced session/entire/token-usage layout and falls back to
+// the earlier session/token-usage layout for backward compatibility.
 func readTokenUsageFromTree(repo *git.Repository, sessionTree *object.Tree) *agent.TokenUsage {
-	usageTree, err := sessionTree.Tree("token-usage")
-	if err != nil {
+	usageTree, ok := readTreeFirstAvailable(sessionTree, "entire/token-usage", "token-usage")
+	if !ok {
 		return nil
 	}
-
 	usage := &agent.TokenUsage{
 		InputTokens:         readGmetaIntValue(repo, usageTree, "input"),
 		OutputTokens:        readGmetaIntValue(repo, usageTree, "output"),
@@ -313,6 +321,69 @@ func readTokenUsageFromTree(repo *git.Repository, sessionTree *object.Tree) *age
 		return nil
 	}
 	return usage
+}
+
+func writeInitialAttributionEntries(s *GmetaStore, prefix string, attr *InitialAttribution, entries map[string]object.TreeEntry) error {
+	if attr == nil {
+		return nil
+	}
+
+	if !attr.CalculatedAt.IsZero() {
+		s.writeStringValue(prefix+"calculated-at/__value", attr.CalculatedAt.UTC().Format(time.RFC3339Nano), entries)
+	}
+	s.writeStringValue(prefix+"agent-lines/__value", strconv.Itoa(attr.AgentLines), entries)
+	s.writeStringValue(prefix+"agent-removed/__value", strconv.Itoa(attr.AgentRemoved), entries)
+	s.writeStringValue(prefix+"human-added/__value", strconv.Itoa(attr.HumanAdded), entries)
+	s.writeStringValue(prefix+"human-modified/__value", strconv.Itoa(attr.HumanModified), entries)
+	s.writeStringValue(prefix+"human-removed/__value", strconv.Itoa(attr.HumanRemoved), entries)
+	s.writeStringValue(prefix+"total-committed/__value", strconv.Itoa(attr.TotalCommitted), entries)
+	s.writeStringValue(prefix+"total-lines-changed/__value", strconv.Itoa(attr.TotalLinesChanged), entries)
+	s.writeStringValue(prefix+"agent-percentage/__value", strconv.FormatFloat(attr.AgentPercentage, 'f', -1, 64), entries)
+	s.writeStringValue(prefix+"metric-version/__value", strconv.Itoa(attr.MetricVersion), entries)
+	return nil
+}
+
+func readInitialAttributionFromTree(repo *git.Repository, sessionTree *object.Tree) *InitialAttribution {
+	attrTree, err := sessionTree.Tree("entire/attribution")
+	if err != nil {
+		return nil
+	}
+
+	attr := &InitialAttribution{
+		AgentLines:        readGmetaIntValue(repo, attrTree, "agent-lines"),
+		AgentRemoved:      readGmetaIntValue(repo, attrTree, "agent-removed"),
+		HumanAdded:        readGmetaIntValue(repo, attrTree, "human-added"),
+		HumanModified:     readGmetaIntValue(repo, attrTree, "human-modified"),
+		HumanRemoved:      readGmetaIntValue(repo, attrTree, "human-removed"),
+		TotalCommitted:    readGmetaIntValue(repo, attrTree, "total-committed"),
+		TotalLinesChanged: readGmetaIntValue(repo, attrTree, "total-lines-changed"),
+		MetricVersion:     readGmetaIntValue(repo, attrTree, "metric-version"),
+	}
+
+	if ts := readGmetaStringValue(repo, attrTree, "calculated-at"); ts != "" {
+		if parsed, parseErr := time.Parse(time.RFC3339Nano, ts); parseErr == nil {
+			attr.CalculatedAt = parsed
+		}
+	}
+	if pct := readGmetaStringValue(repo, attrTree, "agent-percentage"); pct != "" {
+		if parsed, parseErr := strconv.ParseFloat(pct, 64); parseErr == nil {
+			attr.AgentPercentage = parsed
+		}
+	}
+
+	if attr.CalculatedAt.IsZero() &&
+		attr.AgentLines == 0 &&
+		attr.AgentRemoved == 0 &&
+		attr.HumanAdded == 0 &&
+		attr.HumanModified == 0 &&
+		attr.HumanRemoved == 0 &&
+		attr.TotalCommitted == 0 &&
+		attr.TotalLinesChanged == 0 &&
+		attr.AgentPercentage == 0 &&
+		attr.MetricVersion == 0 {
+		return nil
+	}
+	return attr
 }
 
 // readGmetaIntValue reads a string value from a tree and parses it as an int.
@@ -731,6 +802,7 @@ func (s *GmetaStore) ReadSessionContent(_ context.Context, checkpointID id.Check
 
 	// Read token usage
 	result.Metadata.TokenUsage = readTokenUsageFromTree(s.repo, sessionTree)
+	result.Metadata.InitialAttribution = readInitialAttributionFromTree(s.repo, sessionTree)
 
 	// Read checkpoint-level fields into metadata
 	if entireTree, treeErr := targetTree.Tree("entire"); treeErr == nil {
@@ -832,6 +904,15 @@ func readGmetaStringValue(_ *git.Repository, tree *object.Tree, key string) stri
 	return content
 }
 
+func readTreeFirstAvailable(tree *object.Tree, paths ...string) (*object.Tree, bool) {
+	for _, path := range paths {
+		if subtree, err := tree.Tree(path); err == nil {
+			return subtree, true
+		}
+	}
+	return nil, false
+}
+
 // readGmetaSetValues reads all values from <key>/__set/ in a tree.
 func readGmetaSetValues(repo *git.Repository, tree *object.Tree, key string) []string {
 	setPath := key + "/__set"
@@ -879,10 +960,10 @@ func readGmetaListValuesWithOrder(repo *git.Repository, tree *object.Tree, key s
 	}
 
 	type listValue struct {
-		value      string
-		entryName  string
-		treeIndex  int
-		timestamp  int64
+		value     string
+		entryName string
+		treeIndex int
+		timestamp int64
 	}
 
 	ordered := make([]listValue, 0, len(values))

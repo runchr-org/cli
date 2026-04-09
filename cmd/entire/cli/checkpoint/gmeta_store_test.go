@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -561,6 +562,52 @@ func TestGmetaStore_TokenUsage_RoundTrip(t *testing.T) {
 	require.NotNil(t, summary.TokenUsage)
 	assert.Equal(t, 8500, summary.TokenUsage.InputTokens)
 	assert.Equal(t, 3400, summary.TokenUsage.OutputTokens)
+}
+
+func TestGmetaStore_InitialAttribution_RoundTrip(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewGmetaStore(repo)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
+	calculatedAt := time.Date(2026, time.January, 13, 12, 0, 0, 0, time.UTC)
+
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-001",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"type":"text","content":"hello"}`),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+		InitialAttribution: &InitialAttribution{
+			CalculatedAt:      calculatedAt,
+			AgentLines:        12,
+			AgentRemoved:      3,
+			HumanAdded:        4,
+			HumanModified:     2,
+			HumanRemoved:      1,
+			TotalCommitted:    15,
+			TotalLinesChanged: 22,
+			AgentPercentage:   68.2,
+			MetricVersion:     2,
+		},
+	})
+	require.NoError(t, err)
+
+	content, err := store.ReadSessionContent(ctx, cpID, "session-001")
+	require.NoError(t, err)
+	require.NotNil(t, content.Metadata.InitialAttribution)
+	assert.Equal(t, calculatedAt, content.Metadata.InitialAttribution.CalculatedAt)
+	assert.Equal(t, 12, content.Metadata.InitialAttribution.AgentLines)
+	assert.Equal(t, 3, content.Metadata.InitialAttribution.AgentRemoved)
+	assert.Equal(t, 4, content.Metadata.InitialAttribution.HumanAdded)
+	assert.Equal(t, 2, content.Metadata.InitialAttribution.HumanModified)
+	assert.Equal(t, 1, content.Metadata.InitialAttribution.HumanRemoved)
+	assert.Equal(t, 15, content.Metadata.InitialAttribution.TotalCommitted)
+	assert.Equal(t, 22, content.Metadata.InitialAttribution.TotalLinesChanged)
+	assert.Equal(t, 68.2, content.Metadata.InitialAttribution.AgentPercentage)
+	assert.Equal(t, 2, content.Metadata.InitialAttribution.MetricVersion)
 }
 
 func TestGmetaStore_TokenUsage_MultiSession_Aggregated(t *testing.T) {

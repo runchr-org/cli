@@ -31,7 +31,7 @@ import (
 //   - List entries at <key>/__list/<timestamp-ms>-<hash5>
 //   - Set entries at <key>/__set/<sha1(value)[:10]>
 //   - Session structure under session/<session-id>/
-//   - Token usage under session/<id>/token-usage/
+//   - Token usage under session/<id>/entire/token-usage/
 func TestGmetaInterop_TreeLayout(t *testing.T) {
 	t.Parallel()
 
@@ -141,8 +141,8 @@ func TestGmetaInterop_TreeLayout(t *testing.T) {
 	transcriptEntries := filterPrefix(pathContent, "session/"+sessionID+"/transcript/__list/")
 	assert.NotEmpty(t, transcriptEntries, "transcript should have list entries")
 
-		// Validate list entry ID format: <timestamp-ms>-<5-hex-chars>
-		listEntryPattern := regexp.MustCompile(`^\d+-[0-9a-f]{5}$`)
+	// Validate list entry ID format: <timestamp-ms>-<5-hex-chars>
+	listEntryPattern := regexp.MustCompile(`^\d+-[0-9a-f]{5}$`)
 	for path := range transcriptEntries {
 		entryID := strings.TrimPrefix(path, "session/"+sessionID+"/transcript/__list/")
 		assert.Regexp(t, listEntryPattern, entryID,
@@ -157,12 +157,12 @@ func TestGmetaInterop_TreeLayout(t *testing.T) {
 	}
 
 	// --- Validate token usage ---
-	assert.Equal(t, "8500", pathContent["session/"+sessionID+"/token-usage/input/__value"])
-	assert.Equal(t, "3400", pathContent["session/"+sessionID+"/token-usage/output/__value"])
-	assert.Equal(t, "2100", pathContent["session/"+sessionID+"/token-usage/cache-read/__value"])
-	assert.Equal(t, "1200", pathContent["session/"+sessionID+"/token-usage/cache-creation/__value"])
-	assert.Equal(t, "15", pathContent["session/"+sessionID+"/token-usage/api-calls/__value"])
-	assert.Equal(t, "15200", pathContent["session/"+sessionID+"/token-usage/total/__value"])
+	assert.Equal(t, "8500", pathContent["session/"+sessionID+"/entire/token-usage/input/__value"])
+	assert.Equal(t, "3400", pathContent["session/"+sessionID+"/entire/token-usage/output/__value"])
+	assert.Equal(t, "2100", pathContent["session/"+sessionID+"/entire/token-usage/cache-read/__value"])
+	assert.Equal(t, "1200", pathContent["session/"+sessionID+"/entire/token-usage/cache-creation/__value"])
+	assert.Equal(t, "15", pathContent["session/"+sessionID+"/entire/token-usage/api-calls/__value"])
+	assert.Equal(t, "15200", pathContent["session/"+sessionID+"/entire/token-usage/total/__value"])
 }
 
 // TestGmetaInterop_MultiSession validates multi-session layout.
@@ -296,6 +296,9 @@ func TestGmetaInterop_RustCLI(t *testing.T) {
 		AuthorEmail:  "test@test.com",
 		Agent:        agent.AgentTypeClaudeCode,
 		Model:        "claude-opus-4-6",
+		TokenUsage: &agent.TokenUsage{
+			InputTokens: 8500,
+		},
 	})
 	require.NoError(t, err)
 
@@ -315,6 +318,10 @@ func TestGmetaInterop_RustCLI(t *testing.T) {
 	promptOutput := runCmdOutput(t, dstDir, gmetaBin, "get",
 		"change-id:a3b2c4d5e6f7", "session:"+sessionID+":prompt", "--json")
 	assert.Contains(t, promptOutput, "Test prompt", "gmeta get should return prompt")
+
+	usageOutput := runCmdOutput(t, dstDir, gmetaBin, "get",
+		"change-id:a3b2c4d5e6f7", "session:"+sessionID+":entire:token-usage:input", "--json")
+	assert.Contains(t, usageOutput, "8500", "gmeta get should return namespaced token usage")
 }
 
 // --- Git CLI helpers ---
