@@ -13,6 +13,29 @@ Spec: `gmeta/spec/README.md`
 
 Write Entire checkpoint metadata in gmeta exchange format alongside v1/v2, proving interop by reading it back with the Rust `gmeta` CLI.
 
+## Coexistence Policy
+
+For the current rollout, `v2` and `gmeta` are allowed to coexist, but only as
+an explicit opt-in via separate settings. There is no implicit dependency
+between them.
+
+- `strategy_options.checkpoints_v2 = true` enables v2 write/read/push behavior
+- `strategy_options.gmeta = true` enables gmeta write/push behavior
+- If both are true, parallel behavior is intentional and temporary
+- `gmeta` does not require `checkpoints_v2`, and `checkpoints_v2` does not
+  require `gmeta`
+- Read precedence remains unchanged unless a future explicit setting is added
+  (for example, `prefer_gmeta_reads`)
+
+Operationally:
+- `v2` remains the primary Entire-native storage format
+- `gmeta` is an exchange/interoperability format written and pushed separately
+- gmeta fetch/materialize is independent of v2 fetch logic
+- gmeta failures must remain non-fatal to the v1/v2 checkpoint flow
+- Current fallback reads from `gmeta` are compatibility behavior, not backend
+  selection policy. They exist to keep resume/log lookup working while the
+  rollout is in progress and should not be treated as a stable precedence model.
+
 ## Architecture
 
 No go-git changes needed. gmeta is just a tree layout convention — Entire already has all the plumbing:
