@@ -14,6 +14,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
 	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/stretchr/testify/require"
 )
 
@@ -78,6 +79,38 @@ func TestCommit_NoStagedChangesReturnsError(t *testing.T) {
 	require.ErrorIs(t, err, git.ErrEmptyCommit)
 }
 
+func TestCommit_DoesNotWriteCheckpointHeaderWithoutCheckpoint(t *testing.T) {
+	repoDir := t.TempDir()
+	testutil.InitRepo(t, repoDir)
+	testutil.WriteFile(t, repoDir, "hello.txt", "initial\n")
+	testutil.GitAdd(t, repoDir, "hello.txt")
+	testutil.GitCommit(t, repoDir, "initial")
+
+	t.Chdir(repoDir)
+	testutil.WriteFile(t, repoDir, "hello.txt", "regular change\n")
+	testutil.GitAdd(t, repoDir, "hello.txt")
+
+	cmd := newCommitCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"-m", "feat: regular commit"})
+
+	require.NoError(t, cmd.Execute())
+
+	repo, err := git.PlainOpen(repoDir)
+	require.NoError(t, err)
+
+	head, err := repo.Head()
+	require.NoError(t, err)
+
+	commit, err := repo.CommitObject(head.Hash())
+	require.NoError(t, err)
+
+	_, found := trailers.ParseCheckpoint(commit.Message)
+	require.False(t, found, "did not expect checkpoint trailer in commit message")
+	require.Empty(t, commit.ExtraHeaders, "did not expect checkpoint extra header")
+}
+
 func TestCommit_ForceLinksActiveSessionWithoutPreparedCheckpoint(t *testing.T) {
 	repoDir := t.TempDir()
 	testutil.InitRepo(t, repoDir)
@@ -118,6 +151,28 @@ func TestCommit_ForceLinksActiveSessionWithoutPreparedCheckpoint(t *testing.T) {
 	require.Equal(t, cpID.String(), commit.ExtraHeaders[0].Value)
 }
 
+func TestCommit_ReparsesCheckpointIDFromFinalMessageForHeader(t *testing.T) {
+	t.Parallel()
+
+	cpID := checkpointid.MustCheckpointID("abc123def456")
+	finalMessage := trailers.FormatCheckpoint("feat: parse final message", cpID)
+
+	resolved := resolveCommitCheckpointID(finalMessage, "")
+	require.Equal(t, cpID.String(), resolved)
+
+	commit := &object.Commit{Message: finalMessage}
+	checkpointID := resolveCommitCheckpointID(commit.Message, "")
+	if checkpointID != "" {
+		commit.ExtraHeaders = []object.ExtraHeader{
+			{Key: trailers.CheckpointHeaderKey, Value: checkpointID},
+		}
+	}
+
+	require.Len(t, commit.ExtraHeaders, 1)
+	require.Equal(t, trailers.CheckpointHeaderKey, commit.ExtraHeaders[0].Key)
+	require.Equal(t, cpID.String(), commit.ExtraHeaders[0].Value)
+}
+
 func TestResolveCommitCheckpointID_ParsesFinalMessage(t *testing.T) {
 	t.Parallel()
 
@@ -126,6 +181,12 @@ func TestResolveCommitCheckpointID_ParsesFinalMessage(t *testing.T) {
 
 	resolved := resolveCommitCheckpointID(message, "")
 	require.Equal(t, cpID.String(), resolved)
+}
+
+func TestCheckpointHeaderKey_IsLowercaseCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "checkpoint", trailers.CheckpointHeaderKey)
 }
 
 func setupCommitSession(ctx context.Context, repoDir, sessionID, filePath, content string) error {
