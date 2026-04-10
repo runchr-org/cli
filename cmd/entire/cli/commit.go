@@ -57,16 +57,6 @@ func runCommit(ctx context.Context, message string) (plumbing.Hash, error) {
 		return plumbing.ZeroHash, err
 	}
 	checkpointID = resolveCommitCheckpointID(finalMessage, checkpointID)
-	if checkpointID == "" {
-		forcedCheckpointID, forceErr := forceCheckpointIDForActiveSession(ctx)
-		if forceErr != nil {
-			return plumbing.ZeroHash, forceErr
-		}
-		if !forcedCheckpointID.IsEmpty() {
-			checkpointID = forcedCheckpointID.String()
-			finalMessage = trailers.FormatCheckpoint(finalMessage, forcedCheckpointID)
-		}
-	}
 
 	treeHash, err := buildCommitTreeFromIndex(ctx, repo)
 	if err != nil {
