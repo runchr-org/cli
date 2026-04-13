@@ -652,8 +652,8 @@ func (h *postCommitActionHandler) parentCommitHash() string {
 	return ""
 }
 
-// computeBaseLinkage computes commit-level linkage signals (tree hash, patch ID,
-// files-changed hash). These are identical across sessions since they depend on
+// computeBaseLinkage computes commit-level linkage signals (tree hash, patch ID).
+// These are identical across sessions since they depend on
 // the commit, not the session. Called once per PostCommit invocation and cached
 // on the handler's baseLinkage field.
 func (h *postCommitActionHandler) computeBaseLinkage(ctx context.Context) {
@@ -672,45 +672,14 @@ func (h *postCommitActionHandler) computeBaseLinkage(ctx context.Context) {
 	} else {
 		h.baseLinkage.PatchID = patchID
 	}
-
-	// Compute files-changed hash (committed files' blob hashes — survives rebase + other-file conflicts)
-	committedFiles := make([]string, 0, len(h.committedFileSet))
-	for f := range h.committedFileSet {
-		committedFiles = append(committedFiles, f)
-	}
-	fch, err := gitops.ComputeFilesChangedHash(ctx, h.repoDir, h.newHead, committedFiles)
-	if err != nil {
-		logging.Warn(logCtx, "failed to compute files-changed hash for linkage",
-			slog.String("commit", h.newHead),
-			slog.String("error", err.Error()),
-		)
-	} else {
-		h.baseLinkage.FilesChangedHash = fch
-	}
 }
 
-// linkageForSession returns linkage metadata for a specific session by copying
-// the commit-level base linkage and adding the session-specific SessionFilesHash.
-func (h *postCommitActionHandler) linkageForSession(ctx context.Context, sessionFilesTouched []string) *checkpoint.LinkageMetadata {
+// linkageForSession returns the cached commit-level linkage metadata.
+func (h *postCommitActionHandler) linkageForSession(ctx context.Context, _ []string) *checkpoint.LinkageMetadata {
 	if h.baseLinkage == nil {
 		h.computeBaseLinkage(ctx)
 	}
-
-	// Copy base linkage so each session gets its own SessionFilesHash
-	logCtx := logging.WithComponent(ctx, "checkpoint")
-	linkage := *h.baseLinkage
-	if len(sessionFilesTouched) > 0 {
-		sfh, err := gitops.ComputeFilesChangedHash(ctx, h.repoDir, h.newHead, sessionFilesTouched)
-		if err != nil {
-			logging.Warn(logCtx, "failed to compute session files hash for linkage",
-				slog.String("commit", h.newHead),
-				slog.String("error", err.Error()),
-			)
-		} else {
-			linkage.SessionFilesHash = sfh
-		}
-	}
-	return &linkage
+	return h.baseLinkage
 }
 
 func (h *postCommitActionHandler) HandleCondense(state *session.State) error {

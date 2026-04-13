@@ -3631,10 +3631,8 @@ func TestWriteCommitted_IncludesLinkage(t *testing.T) {
 	checkpointID := id.MustCheckpointID("a1b2c3d4e5f6")
 
 	linkage := &LinkageMetadata{
-		TreeHash:         "abc123def456abc123def456abc123def456abc1",
-		PatchID:          "def456abc123def456abc123def456abc123def4",
-		FilesChangedHash: "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
-		SessionFilesHash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+		TreeHash: "abc123def456abc123def456abc123def456abc1",
+		PatchID:  "def456abc123def456abc123def456abc123def4",
 	}
 
 	err := store.WriteCommitted(context.Background(), WriteCommittedOptions{
@@ -3666,12 +3664,6 @@ func TestWriteCommitted_IncludesLinkage(t *testing.T) {
 	}
 	if summary.Linkage.PatchID != linkage.PatchID {
 		t.Errorf("PatchID = %q, want %q", summary.Linkage.PatchID, linkage.PatchID)
-	}
-	if summary.Linkage.FilesChangedHash != linkage.FilesChangedHash {
-		t.Errorf("FilesChangedHash = %q, want %q", summary.Linkage.FilesChangedHash, linkage.FilesChangedHash)
-	}
-	if summary.Linkage.SessionFilesHash != linkage.SessionFilesHash {
-		t.Errorf("SessionFilesHash = %q, want %q", summary.Linkage.SessionFilesHash, linkage.SessionFilesHash)
 	}
 }
 

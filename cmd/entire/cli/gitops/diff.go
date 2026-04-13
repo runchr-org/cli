@@ -3,11 +3,8 @@ package gitops
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os/exec"
-	"sort"
 	"strings"
 )
 
@@ -176,66 +173,4 @@ func ComputePatchID(ctx context.Context, repoDir, parentHash, commitHash string)
 	// git patch-id outputs "<patch-id> <commit-id>"; we want the first field.
 	patchID, _, _ := strings.Cut(output, " ")
 	return patchID, nil
-}
-
-// ComputeFilesChangedHash computes a SHA256 hash of the given files' blob hashes
-// at the specified commit. The hash is computed from sorted "filepath:blobhash" pairs,
-// making it independent of input order and stable across rebases.
-//
-// Uses a single git ls-tree call for all files (O(1) subprocess, not O(N)).
-// Returns a 64-char hex SHA256 string, or empty string if no files.
-func ComputeFilesChangedHash(ctx context.Context, repoDir, commitHash string, filePaths []string) (string, error) {
-	if len(filePaths) == 0 {
-		return "", nil
-	}
-
-	args := []string{"ls-tree", commitHash, "--"}
-	args = append(args, filePaths...)
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = repoDir
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git ls-tree failed: %w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-
-	// Parse ls-tree output: "<mode> <type> <hash>\t<path>" per line
-	blobMap := make(map[string]string)
-	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
-		if line == "" {
-			continue
-		}
-		tabIdx := strings.IndexByte(line, '\t')
-		if tabIdx == -1 {
-			return "", fmt.Errorf("unexpected ls-tree output (no tab separator): %q", line)
-		}
-		meta := line[:tabIdx]
-		path := line[tabIdx+1:]
-		fields := strings.Fields(meta)
-		if len(fields) < 3 {
-			return "", fmt.Errorf("unexpected ls-tree output (incomplete metadata): %q", line)
-		}
-		blobMap[path] = fields[2]
-	}
-
-	sorted := make([]string, len(filePaths))
-	copy(sorted, filePaths)
-	sort.Strings(sorted)
-
-	var pairs []string
-	for _, fp := range sorted {
-		if blobHash, ok := blobMap[fp]; ok {
-			pairs = append(pairs, fp+":"+blobHash)
-		}
-	}
-
-	if len(pairs) == 0 {
-		return "", nil
-	}
-
-	h := sha256.Sum256([]byte(strings.Join(pairs, "\n")))
-	return hex.EncodeToString(h[:]), nil
 }
