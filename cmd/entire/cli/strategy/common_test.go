@@ -1729,6 +1729,45 @@ func TestIsPromisorRepo(t *testing.T) {
 		ctx := context.Background()
 		assert.True(t, IsPromisorRepo(ctx))
 	})
+
+	t.Run("CanceledContextDoesNotCacheFalse", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		cmd := exec.CommandContext(context.Background(), "git", "config", "extensions.partialClone", "origin")
+		cmd.Dir = tmpDir
+		require.NoError(t, cmd.Run())
+
+		t.Chdir(tmpDir)
+		resetPromisorCacheForTest()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		assert.True(t, IsPromisorRepo(ctx), "canceled context must not prevent detection")
+	})
+
+	t.Run("IgnoresGlobalConfig", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		// Set extensions.partialClone at --global level only (not --local).
+		globalCfg := filepath.Join(tmpDir, "fake-global-gitconfig")
+		cmd := exec.CommandContext(context.Background(), "git", "config", "--file", globalCfg, "extensions.partialClone", "origin")
+		cmd.Dir = tmpDir
+		require.NoError(t, cmd.Run())
+
+		t.Setenv("GIT_CONFIG_GLOBAL", globalCfg)
+		t.Chdir(tmpDir)
+		resetPromisorCacheForTest()
+
+		assert.False(t, IsPromisorRepo(context.Background()), "global-only partialClone must not mark repo as promisor")
+	})
 }
 
 func TestPartialCloneFilterArgs(t *testing.T) {

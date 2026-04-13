@@ -372,8 +372,8 @@ func FetchAndCheckoutRemoteBranch(ctx context.Context, branchName string) error 
 
 // FetchMetadataBranch fetches the entire/checkpoints/v1 branch from origin and creates/updates the local branch.
 // This is used when the metadata branch exists on remote but not locally.
-// The fetch is treeless (--filter=blob:none) because checkpoint metadata reads
-// support on-demand blob retrieval.
+// In promisor repos the fetch is treeless (--filter=blob:none); in non-promisor repos
+// it is shallow (--depth=1) to avoid creating promisor packs.
 // Uses git CLI instead of go-git for fetch because go-git doesn't use credential helpers,
 // which breaks HTTPS URLs that require authentication.
 func FetchMetadataBranch(ctx context.Context) error {
@@ -415,11 +415,11 @@ func FetchMetadataBranch(ctx context.Context) error {
 	return nil
 }
 
-// FetchMetadataTreeOnly fetches the tip of the entire/checkpoints/v1 branch
-// from origin with --depth=1 --filter=blob:none, downloading only the latest
-// commit and its tree objects (no blobs, no history).
-// After this call, tree navigation via go-git works but blob reads will fail
-// for objects that weren't previously fetched.
+// FetchMetadataTreeOnly fetches the tip of the entire/checkpoints/v1 branch from origin.
+// In promisor repos: --depth=1 --filter=blob:none (tree objects only, no blobs).
+// In non-promisor repos: --depth=1 (shallow fetch including blobs for the tip commit).
+// After this call, tree navigation via go-git works. In promisor repos, blob reads
+// will fail for objects that weren't previously fetched.
 // Uses git CLI for credential helper support.
 func FetchMetadataTreeOnly(ctx context.Context) error {
 	branchName := paths.MetadataBranchName
@@ -459,9 +459,9 @@ func FetchMetadataTreeOnly(ctx context.Context) error {
 	return nil
 }
 
-// FetchV2MainTreeOnly fetches the tip of the v2 /main ref from origin with
-// --depth=1 --filter=blob:none, downloading only the latest commit and its
-// tree objects (no blobs, no history).
+// FetchV2MainTreeOnly fetches the tip of the v2 /main ref from origin.
+// In promisor repos: --depth=1 --filter=blob:none (tree objects only, no blobs).
+// In non-promisor repos: --depth=1 (shallow fetch including blobs for the tip commit).
 // Uses explicit refspec since v2 refs are under refs/entire/, not refs/heads/.
 func FetchV2MainTreeOnly(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -483,8 +483,8 @@ func FetchV2MainTreeOnly(ctx context.Context) error {
 }
 
 // FetchV2MainRef fetches the v2 /main ref from origin.
-// The fetch is treeless (--filter=blob:none) because /main is metadata-only and
-// v2 checkpoint reads handle transcript retrieval separately.
+// In promisor repos: --filter=blob:none (treeless, consistent with partial clone).
+// In non-promisor repos: --depth=1 (shallow fetch to avoid creating promisor packs).
 // Uses explicit refspec since v2 refs are under refs/entire/, not refs/heads/.
 func FetchV2MainRef(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)

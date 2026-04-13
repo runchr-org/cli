@@ -61,7 +61,10 @@ var (
 // The result is cached for the lifetime of the process.
 func IsPromisorRepo(ctx context.Context) bool {
 	promisorOnce.Do(func() {
-		cmd := exec.CommandContext(ctx, "git", "config", "--get", "extensions.partialClone")
+		// Use a non-cancelable context so that a canceled/timed-out caller
+		// doesn't permanently cache false via sync.Once. The git-config
+		// call is local and fast, so it doesn't need cancellation support.
+		cmd := exec.CommandContext(context.WithoutCancel(ctx), "git", "config", "--local", "--get", "extensions.partialClone")
 		out, err := cmd.Output()
 		isPromisor = err == nil && strings.TrimSpace(string(out)) != ""
 	})
@@ -85,9 +88,9 @@ func PartialCloneFilterArgs(ctx context.Context) []string {
 	return []string{"--depth=1"}
 }
 
-// PartialCloneFilterArgsWithDepth returns fetch arguments for tree-only fetches.
-// Promisor repos: ["--depth=1", "--filter=blob:none"].
-// Non-promisor repos: ["--depth=1"] (filter omitted to avoid creating promisor packs).
+// PartialCloneFilterArgsWithDepth returns fetch arguments for shallow fetches.
+// Promisor repos: ["--depth=1", "--filter=blob:none"] (treeless: tree objects only, no blobs).
+// Non-promisor repos: ["--depth=1"] (shallow: tip commit with blobs, no filter to avoid creating promisor packs).
 func PartialCloneFilterArgsWithDepth(ctx context.Context) []string {
 	if IsPromisorRepo(ctx) {
 		return []string{"--depth=1", "--filter=blob:none"}
