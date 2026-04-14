@@ -11,10 +11,15 @@ Target: external beta, opt-in. Once enabled, beta defaults to `mode=auto` and `p
 ## 1. System Overview
 
 ```
-Sessions -> Analysis -> Memory Generation -> Storage -> Injection -> Sessions
-                                                            ^
-                                                 Outcome Tracking
+Sessions -> Checkpoints -> [entire.io API: CheckpointAnalysis] -> Local Cache
+                                                                      │
+                                                                      ▼
+                                              Memory Generation -> Storage -> Injection -> Sessions
+                                                                                  ^
+                                                                       Outcome Tracking
 ```
+
+CheckpointAnalysis is generated and stored by the entire.io API (see [RFD-014](https://github.com/entirehq/company-knowledge/pull/76)). The memory loop fetches analysis from the API and caches it in the local insights DB. Memory generation runs locally against the cached analysis.
 
 ### Memory Record
 
@@ -133,7 +138,7 @@ Generated candidate review is TUI-only in beta.
 
 ### Local Storage: SQLite
 
-All reads and writes go through a local SQLite database at `.entire/memory-loop.db`. Injection always reads from local storage, even when repo memories are shared remotely.
+All reads and writes go through a local SQLite database at `.entire/memory-loop.db`. Injection always reads from local storage, even when repo memories are shared remotely. The local insights DB caches CheckpointAnalysis fetched from the entire.io API for use during memory generation.
 
 ```
 Beta Storage Architecture
@@ -215,6 +220,19 @@ refresh_history (
   filtered_count INTEGER NOT NULL,
   deduped_count INTEGER NOT NULL
 )
+
+analysis_cache (
+  checkpoint_id TEXT NOT NULL,
+  repo_id TEXT NOT NULL,
+  analysis_json TEXT NOT NULL,
+  schema_version INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,       -- SHA-256 of analysis_json
+  fetched_at TEXT NOT NULL,
+  source TEXT NOT NULL,             -- 'api' or 'on-demand'
+  generator_version INTEGER,        -- local generation pipeline version at time of last processing
+  processed_at TEXT,                 -- when this entry was last used for memory generation
+  PRIMARY KEY (checkpoint_id, repo_id)
+)
 ```
 
 **Storage rules:**
@@ -222,7 +240,18 @@ refresh_history (
 - Versioned migrations, not `CREATE TABLE IF NOT EXISTS` only.
 - WAL mode and busy timeout for concurrent reads and writes.
 - Index `status`, `scope_kind + scope_value`, and `fingerprint`.
+- Index `analysis_cache` on `(repo_id, fetched_at)` for recency queries.
 - No hard cap in beta. Growth is monitored through local metrics instead.
+
+**Analysis cache rules:**
+
+- A cached entry is considered fresh if `fetched_at` is within the last 24 hours. Refresh re-fetches stale entries.
+- If the API returns an analysis with a different `content_hash` than the cached version, the cache row is replaced and memory generation runs against the new content.
+- If the API returns the same `content_hash` and the local `generator_version` matches the current pipeline version, `fetched_at` is updated but memory generation skips that checkpoint (already processed).
+- If the `content_hash` is unchanged but `generator_version` is older than the current pipeline version, memory generation re-runs against the cached analysis. This forces regeneration when local pattern analysis, LLM prompts, admission gates, or fingerprinting logic changes.
+- The `generator_version` is a monotonically increasing integer constant defined in the generation pipeline code. It must be bumped in any PR that changes generation semantics.
+- If the API is unreachable, stale cache entries older than 48 hours are skipped for memory generation (see degraded-mode rules below). Entries within 48 hours may still be used. Refresh output reports how many checkpoints were skipped due to staleness.
+- Cache rows for checkpoints older than 90 days are eligible for eviction during refresh.
 
 ### Remote Storage Questions
 
@@ -392,21 +421,36 @@ Scoring uses only structured fields. `summary` is excluded.
 Generation Pipeline
 ===================
 
-  Insights DB -> Pattern analysis -> LLM structured output
+  Identify recent checkpoints (synced + local)
+       │
+       ├── synced: fetch analysis by checkpoint_id + repo_id
+       │
+       └── unsynced: upload scoped transcript for on-demand analysis
+       │
+       ▼
+  Cache in analysis_cache (checkpoint_id, repo_id)
+       -> Skip unchanged (same content_hash)
+       -> Pattern analysis -> LLM structured output
        -> preset admission gate -> dedup fingerprint
        -> reconcile -> apply policy -> store
 ```
 
 Steps:
 
-1. Query recent sessions from insights DB.
-2. Analyze friction patterns, missing context, and failure loops.
-3. Ask the LLM for structured memories using the production schema.
-4. Apply preset admission gates.
-5. Reject generic records that lack concrete technical specificity.
-6. Compute primary fingerprint from normalized high-signal fields plus `kind`.
-7. Reconcile with existing generated memories.
-8. Apply activation policy and write results.
+1. Identify recent checkpoints (both synced and local-only).
+2. For synced checkpoints: fetch CheckpointAnalysis from the entire.io API by checkpoint ID + repo identity.
+3. For local unsynced checkpoints: upload scoped transcript material to the entire.io API for on-demand analysis (see [RFD-014 CLI Flow for Local Unsynced Checkpoints](https://github.com/entirehq/company-knowledge/pull/76)). The uploaded payload is minimal: checkpoint-scoped transcript, prompt, files touched, checkpoint ID, repo identity, and agent metadata.
+4. Cache all results in the local `analysis_cache` table keyed by `(checkpoint_id, repo_id)`.
+5. Skip checkpoints whose cached `content_hash` has not changed and whose `generator_version` matches the current pipeline version. Re-run generation if `generator_version` is stale.
+6. Analyze friction patterns, missing context, and failure loops from cached analysis.
+7. Ask the LLM for structured memories using the production schema.
+8. Apply preset admission gates.
+9. Reject generic records that lack concrete technical specificity.
+10. Compute primary fingerprint from normalized high-signal fields plus `kind`.
+11. Reconcile with existing generated memories.
+12. Apply activation policy and write results.
+
+**Future possibility:** Memory generation itself could move server-side to the entire.io API, eliminating the local LLM call. This is deferred until the local generation quality and the CheckpointAnalysis API are both stable.
 
 ### Admission Rules
 
@@ -462,7 +506,43 @@ Beta refresh is manual only:
 entire memory-loop refresh
 ```
 
+Refresh requires Entire auth and API availability to fetch CheckpointAnalysis.
+
+**Degraded-mode behavior (API unreachable):**
+
+- Cached entries within 48 hours of `fetched_at` may still be used for memory generation. These are recent enough that the analysis is unlikely to have been corrected server-side.
+- Cached entries older than 48 hours are skipped entirely. No memories are created, updated, or reactivated from stale analysis beyond this window.
+- Refresh output clearly reports degraded status: how many checkpoints were fetched fresh, how many used recent cache, and how many were skipped due to staleness.
+- If all checkpoints are skipped (full outage with only stale data), refresh completes with zero generation and a prominent warning rather than silently succeeding.
+
 Auto-refresh is intentionally deferred until generation quality and shared sync behavior are trusted.
+
+### API Authorization and Cache Binding
+
+**Server-side authorization:**
+
+- The entire.io API enforces repo membership on every request. The authenticated user must have access to the repo identified in the request. The CLI does not rely on client-side repo identity alone.
+- `GET /analysis` verifies the authenticated user has read access to the repo owning the checkpoint.
+- `POST /analysis` (unsynced upload) verifies the authenticated user has write access to the repo. The API resolves repo identity from its own records or the GitHub App installation, not from the client-supplied `owner/repo` string alone.
+- Requests for repos the user does not have access to return `403`. The CLI treats this as no analysis available for that checkpoint.
+
+**Fetch contract:**
+
+- The CLI authenticates with Entire auth (existing `entire auth` token).
+- Synced checkpoint fetches use `GET /analysis?checkpoint_id=<id>&repo_id=<id>`.
+- Unsynced checkpoint uploads use `POST /analysis` with the scoped payload.
+- The API response must include `checkpoint_id`, `repo_id`, and `schema_version` fields that match the request. The CLI rejects responses where any of these do not match. Echoed IDs are a client-side safety check, not a substitute for server-side authorization.
+
+**Cache binding:**
+
+- The local `analysis_cache` is keyed by `(checkpoint_id, repo_id)`. This prevents cross-repo cache collisions.
+- `repo_id` is the same identifier used for checkpoint sync (GitHub `owner/repo`).
+- Before using a cached entry for memory generation, the CLI verifies `repo_id` matches the current repository. Mismatched entries are skipped and logged as warnings.
+
+**Rejection behavior:**
+
+- If the API returns an analysis for a different `checkpoint_id` or `repo_id` than requested, the response is discarded and logged as a warning. The checkpoint is treated as having no analysis for this refresh cycle.
+- If the API returns `403`, the CLI logs the denied repo and continues to the next checkpoint without caching.
 
 ---
 
@@ -484,6 +564,8 @@ Auto-refresh is intentionally deferred until generation quality and shared sync 
 - Suppressed memories are kept indefinitely for now.
 - Manual memory lifecycle is warn-only, not auto-pruned.
 - Local-only health metrics are preferred in beta.
+- Memory generation consumes CheckpointAnalysis from the entire.io API ([RFD-014](https://github.com/entirehq/company-knowledge/pull/76)), cached locally in the insights DB. Refresh requires Entire auth and API availability; fallback to stale cache with a warning.
+- The CLI no longer generates CheckpointAnalysis locally. Analysis is generated and stored by the entire.io API using Entire's Claude key.
 
 ### Open Code-Owner Questions
 
@@ -562,12 +644,17 @@ PR Dependency Graph
 
 ### PR 3: Generation + Preset Gates
 
-- Pattern analysis from insights DB
-- LLM structured generation
+- Fetch CheckpointAnalysis from entire.io API for synced checkpoints
+- Upload scoped transcript for on-demand analysis of local unsynced checkpoints
+- `analysis_cache` table with freshness, content hash, and `(checkpoint_id, repo_id)` binding
+- Validate API responses match requested checkpoint and repo identity
+- Pattern analysis from cached CheckpointAnalysis
+- LLM structured generation (local)
 - `flexible`, `balanced`, `strict` admission behavior
 - Generic-memory rejection
 - Primary fingerprint generation
 - Generated memories obey activation policy
+- Graceful fallback to stale cache when API is unreachable
 
 ### PR 4: Injection + Scoring
 
@@ -616,4 +703,5 @@ Each PR includes its own targeted tests. Cross-cutting verification for the full
 - Branch cleanup safety: branch memories for branches active in another worktree are preserved
 - Shared repo sync: conflict behavior is explicit and deterministic
 - Outcome derivation: based on source friction signal, not text overlap
+- API availability: refresh degrades gracefully to stale cache when entire.io API is unreachable
 - Canary E2E: full flow exercised through Vogon where practical

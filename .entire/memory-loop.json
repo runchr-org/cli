@@ -28,10 +28,10 @@
         "created_at": "2026-04-03T01:29:01.829772Z",
         "updated_at": "2026-04-03T15:52:05.081458Z",
         "last_reviewed_at": "2026-04-03T15:52:05.081458Z",
-        "last_injected_at": "2026-04-03T17:40:11.99463Z",
-        "last_matched_at": "2026-04-03T17:40:11.99463Z",
-        "inject_count": 1,
-        "match_count": 1,
+        "last_injected_at": "2026-04-14T17:49:29.627652Z",
+        "last_matched_at": "2026-04-14T17:49:29.627652Z",
+        "inject_count": 4,
+        "match_count": 4,
         "outcome": "neutral",
         "history": [
           {
@@ -45,6 +45,30 @@
           {
             "type": "injected",
             "at": "2026-04-03T17:40:11.99463Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T19:18:54.047416Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T19:18:54.047416Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-09T15:49:11.406971Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-09T15:49:11.406971Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-14T17:49:29.627652Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-14T17:49:29.627652Z"
           }
         ]
       },
@@ -202,10 +226,10 @@
         "created_at": "2026-04-03T02:53:35.177345Z",
         "updated_at": "2026-04-03T15:52:29.137861Z",
         "last_reviewed_at": "2026-04-03T15:52:29.137861Z",
-        "last_injected_at": "2026-04-08T18:54:31.670629Z",
-        "last_matched_at": "2026-04-08T18:54:31.670629Z",
-        "inject_count": 3,
-        "match_count": 3,
+        "last_injected_at": "2026-04-14T17:54:17.653894Z",
+        "last_matched_at": "2026-04-14T17:54:17.653894Z",
+        "inject_count": 5,
+        "match_count": 5,
         "outcome": "neutral",
         "history": [
           {
@@ -235,6 +259,22 @@
           {
             "type": "injected",
             "at": "2026-04-08T18:54:31.670629Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T22:11:49.319594Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T22:11:49.319594Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-14T17:54:17.653894Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-14T17:54:17.653894Z"
           }
         ]
       },
@@ -369,10 +409,10 @@
         "created_at": "2026-04-03T15:46:03.25952Z",
         "updated_at": "2026-04-03T15:46:03.25952Z",
         "last_reviewed_at": "2026-04-03T15:46:03.25952Z",
-        "last_injected_at": "2026-04-08T01:27:47.199654Z",
-        "last_matched_at": "2026-04-08T01:27:47.199654Z",
-        "inject_count": 2,
-        "match_count": 2,
+        "last_injected_at": "2026-04-08T23:48:54.620282Z",
+        "last_matched_at": "2026-04-08T23:48:54.620282Z",
+        "inject_count": 5,
+        "match_count": 5,
         "outcome": "neutral",
         "history": [
           {
@@ -395,6 +435,30 @@
           {
             "type": "injected",
             "at": "2026-04-08T01:27:47.199654Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T19:18:54.047416Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T19:18:54.047416Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T23:39:19.39339Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T23:39:19.39339Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T23:48:54.620282Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T23:48:54.620282Z"
           }
         ]
       },
@@ -424,10 +488,10 @@
         "created_at": "2026-04-03T15:46:25.044472Z",
         "updated_at": "2026-04-03T15:46:25.044472Z",
         "last_reviewed_at": "2026-04-03T15:46:25.044472Z",
-        "last_injected_at": "2026-04-08T18:54:31.670629Z",
-        "last_matched_at": "2026-04-08T18:54:31.670629Z",
-        "inject_count": 5,
-        "match_count": 5,
+        "last_injected_at": "2026-04-14T17:56:33.196097Z",
+        "last_matched_at": "2026-04-14T17:56:33.196097Z",
+        "inject_count": 8,
+        "match_count": 8,
         "outcome": "neutral",
         "history": [
           {
@@ -474,6 +538,30 @@
           {
             "type": "injected",
             "at": "2026-04-08T18:54:31.670629Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-09T15:49:11.406971Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-09T15:49:11.406971Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-14T17:54:17.653894Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-14T17:54:17.653894Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-14T17:56:33.196097Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-14T17:56:33.196097Z"
           }
         ]
       },
@@ -491,10 +579,10 @@
         "created_at": "2026-04-03T08:57:18.800208-07:00",
         "updated_at": "2026-04-03T08:57:18.800208-07:00",
         "last_reviewed_at": "0001-01-01T00:00:00Z",
-        "last_injected_at": "2026-04-08T01:27:30.895315Z",
-        "last_matched_at": "2026-04-08T01:27:30.895315Z",
-        "inject_count": 2,
-        "match_count": 2,
+        "last_injected_at": "2026-04-14T17:49:29.627652Z",
+        "last_matched_at": "2026-04-14T17:49:29.627652Z",
+        "inject_count": 3,
+        "match_count": 3,
         "outcome": "neutral",
         "history": [
           {
@@ -516,6 +604,14 @@
           {
             "type": "injected",
             "at": "2026-04-08T01:27:30.895315Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-14T17:49:29.627652Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-14T17:49:29.627652Z"
           }
         ]
       },
@@ -594,10 +690,10 @@
         "created_at": "2026-04-03T09:46:42.168787-07:00",
         "updated_at": "2026-04-03T09:53:48.502899-07:00",
         "last_reviewed_at": "2026-04-03T09:53:48.502899-07:00",
-        "last_injected_at": "2026-04-08T18:48:59.257073Z",
-        "last_matched_at": "2026-04-08T18:48:59.257073Z",
-        "inject_count": 17,
-        "match_count": 17,
+        "last_injected_at": "2026-04-10T04:37:29.708125Z",
+        "last_matched_at": "2026-04-10T04:37:29.708125Z",
+        "inject_count": 29,
+        "match_count": 29,
         "outcome": "neutral",
         "history": [
           {
@@ -747,6 +843,102 @@
           {
             "type": "injected",
             "at": "2026-04-08T18:48:59.257073Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T20:54:48.523488Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T20:54:48.523488Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T20:57:51.42992Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T20:57:51.42992Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T21:01:00.128497Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T21:01:00.128497Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T22:17:42.201881Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T22:17:42.201881Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T23:23:11.469368Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T23:23:11.469368Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T23:23:21.68129Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T23:23:21.68129Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T23:27:45.145598Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T23:27:45.145598Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T23:38:56.91558Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T23:38:56.91558Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T23:39:19.39339Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T23:39:19.39339Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T23:48:19.100426Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T23:48:19.100426Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-08T23:48:54.620282Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-08T23:48:54.620282Z"
+          },
+          {
+            "type": "matched",
+            "at": "2026-04-10T04:37:29.708125Z"
+          },
+          {
+            "type": "injected",
+            "at": "2026-04-10T04:37:29.708125Z"
           }
         ]
       },
@@ -1409,6 +1601,174 @@
       ],
       "injected_at": "2026-04-08T18:54:31.670629Z",
       "reason": "title/body overlap, title/body overlap"
+    },
+    {
+      "session_id": "019d6e2e-e3ac-7961-b8b4-538e29a1ed3d",
+      "prompt_preview": "idk Im not sure how to fuse all the different systems together. on cli main the summary uses users claude account. new agent-improvement system should use entire claude api key. checkpoint summaries should always show up in entire.io even if user has not turned it on for repo locally. feels like cli summary function should hit entire.io summary api and then in entire.io if checkpoint doesnt already have summary it generates one? this would work nicely with the agent-improvement system correct?",
+      "injected_memory_ids": [
+        "repo-rule-agent-instruction-files-use-require-not-prefer-for-mandatory-flags-when-writing-agent-instruction-files-claude-agents-md-gemini-agents-md-codex-agents-toml-use-require-not-prefer-for-flags-that-must-always-be-passed-permissive-language-causes-subagents-to-omit-required-flags--me-b34b54007d5c755e",
+        "repo_rule-checkpoint-repo-go-git-test-packages-need-configloader-plugin"
+      ],
+      "injected_at": "2026-04-08T19:18:54.047416Z",
+      "reason": "title/body overlap, title/body overlap"
+    },
+    {
+      "session_id": "019d6e2e-e3ac-7961-b8b4-538e29a1ed3d",
+      "prompt_preview": "lets list option 1 and 2 in the design doc as open question for code owners add diagrams for clarity",
+      "injected_memory_ids": [
+        "agent_instruction-claude-codex-design-doc-spec"
+      ],
+      "injected_at": "2026-04-08T20:54:48.523488Z",
+      "reason": "title/body overlap"
+    },
+    {
+      "session_id": "019d6e2e-e3ac-7961-b8b4-538e29a1ed3d",
+      "prompt_preview": "no docs/plans/2026-04-08-session-analysis-cross-product-design.md needs to be updated the PRs I shared are what I will implement not what is alerady in entire.io. so update the doc whenever it says that its already implemented",
+      "injected_memory_ids": [
+        "agent_instruction-claude-codex-design-doc-spec"
+      ],
+      "injected_at": "2026-04-08T20:57:51.42992Z",
+      "reason": "title/body overlap"
+    },
+    {
+      "session_id": "019d6e2e-e3ac-7961-b8b4-538e29a1ed3d",
+      "prompt_preview": "no thats not what I meant. don't list PRS in the doc. those PRs were poc and how I want summaries to work in the website. the design should be added to the design doc",
+      "injected_memory_ids": [
+        "agent_instruction-claude-codex-design-doc-spec"
+      ],
+      "injected_at": "2026-04-08T21:01:00.128497Z",
+      "reason": "title/body overlap"
+    },
+    {
+      "session_id": "019d6e2e-e3ac-7961-b8b4-538e29a1ed3d",
+      "prompt_preview": "no show real data flow all in cli. so user creates checkpoint which then generates summary locally using their claude account then gets stored in checkpoint branch",
+      "injected_memory_ids": [
+        "workflow_rule-pr-review-yes-or-continue-means-next-finding-not-push"
+      ],
+      "injected_at": "2026-04-08T22:11:49.319594Z",
+      "reason": "title/body overlap"
+    },
+    {
+      "session_id": "6d9e8769-1cfd-4968-a717-be59fb1f5c9e",
+      "prompt_preview": "can you improve the system diagrams in docs/plans/2026-04-08-session-analysis-cross-product-design.md",
+      "injected_memory_ids": [
+        "agent_instruction-claude-codex-design-doc-spec"
+      ],
+      "injected_at": "2026-04-08T22:17:42.201881Z",
+      "reason": "title/body overlap"
+    },
+    {
+      "session_id": "6d9e8769-1cfd-4968-a717-be59fb1f5c9e",
+      "prompt_preview": "okay given the design in this rfd https://github.com/entirehq/company-knowledge/pull/76 please update the memory loop roll out design doc",
+      "injected_memory_ids": [
+        "agent_instruction-claude-codex-design-doc-spec"
+      ],
+      "injected_at": "2026-04-08T23:23:11.469368Z",
+      "reason": "title/body overlap"
+    },
+    {
+      "session_id": "6d9e8769-1cfd-4968-a717-be59fb1f5c9e",
+      "prompt_preview": "/brainstorming okay given the design in this rfd\n  https://github.com/entirehq/company-knowledge/pull/76 please update\n  the memory loop roll out design doc",
+      "injected_memory_ids": [
+        "agent_instruction-claude-codex-design-doc-spec"
+      ],
+      "injected_at": "2026-04-08T23:23:21.68129Z",
+      "reason": "title/body overlap"
+    },
+    {
+      "session_id": "6d9e8769-1cfd-4968-a717-be59fb1f5c9e",
+      "prompt_preview": "I don't see memory-loop-next-design give path",
+      "injected_memory_ids": [
+        "agent_instruction-claude-codex-design-doc-spec"
+      ],
+      "injected_at": "2026-04-08T23:27:45.145598Z",
+      "reason": "title/body overlap"
+    },
+    {
+      "session_id": "6d9e8769-1cfd-4968-a717-be59fb1f5c9e",
+      "prompt_preview": "/codex:adversarial-review of just this doc docs/superpowers/specs/2026-04-07-memory-loop-rollout-design.md",
+      "injected_memory_ids": [
+        "agent_instruction-claude-codex-design-doc-spec"
+      ],
+      "injected_at": "2026-04-08T23:38:56.91558Z",
+      "reason": "title/body overlap"
+    },
+    {
+      "session_id": "019d6f76-e101-7611-a690-d7e0898300ba",
+      "prompt_preview": "\u003crole\u003e\nYou are Codex performing an adversarial software review.\nYour job is to break confidence in the change, not to validate it.\n\u003c/role\u003e\n\n\u003ctask\u003e\nReview the provided repository context as if you are trying to find the strongest reasons this change should not ship yet.\nTarget: working tree diff\nUser focus: of just this doc docs/superpowers/specs/2026-04-07-memory-loop-rollout-design.md\n\u003c/task\u003e\n\n\u003coperating_stance\u003e\nDefault to skepticism.\nAssume the change can fail in subtle, high-cost, or user-vis...",
+      "injected_memory_ids": [
+        "repo-rule-agent-instruction-files-use-require-not-prefer-for-mandatory-flags-when-writing-agent-instruction-files-claude-agents-md-gemini-agents-md-codex-agents-toml-use-require-not-prefer-for-flags-that-must-always-be-passed-permissive-language-causes-subagents-to-omit-required-flags--me-b34b54007d5c755e",
+        "agent_instruction-claude-codex-design-doc-spec"
+      ],
+      "injected_at": "2026-04-08T23:39:19.39339Z",
+      "reason": "title/body overlap, title/body overlap"
+    },
+    {
+      "session_id": "6d9e8769-1cfd-4968-a717-be59fb1f5c9e",
+      "prompt_preview": "/codex:adversarial-review of just this updated doc docs/superpowers/specs/2026-04-07-memory-loop-rollout-design.md",
+      "injected_memory_ids": [
+        "agent_instruction-claude-codex-design-doc-spec"
+      ],
+      "injected_at": "2026-04-08T23:48:19.100426Z",
+      "reason": "title/body overlap"
+    },
+    {
+      "session_id": "019d6f7f-ae35-7021-9aa8-ca70ee919c7f",
+      "prompt_preview": "\u003crole\u003e\nYou are Codex performing an adversarial software review.\nYour job is to break confidence in the change, not to validate it.\n\u003c/role\u003e\n\n\u003ctask\u003e\nReview the provided repository context as if you are trying to find the strongest reasons this change should not ship yet.\nTarget: working tree diff\nUser focus: of just this updated doc docs/superpowers/specs/2026-04-07-memory-loop-rollout-design.md\n\u003c/task\u003e\n\n\u003coperating_stance\u003e\nDefault to skepticism.\nAssume the change can fail in subtle, high-cost, or ...",
+      "injected_memory_ids": [
+        "repo-rule-agent-instruction-files-use-require-not-prefer-for-mandatory-flags-when-writing-agent-instruction-files-claude-agents-md-gemini-agents-md-codex-agents-toml-use-require-not-prefer-for-flags-that-must-always-be-passed-permissive-language-causes-subagents-to-omit-required-flags--me-b34b54007d5c755e",
+        "agent_instruction-claude-codex-design-doc-spec"
+      ],
+      "injected_at": "2026-04-08T23:48:54.620282Z",
+      "reason": "title/body overlap, title/body overlap"
+    },
+    {
+      "session_id": "019d72ed-032b-7053-97de-6efdbed39499",
+      "prompt_preview": "I want to continue designing docs/superpowers/specs/2026-04-07-memory-loop-rollout-design.md Iwant to understand if we have checkpoint analysis for every checkpoint in the entire.io db and that its also indexed in turbopuffer is the insightdb necessary. is entire search sufficient for handling memory generation?",
+      "injected_memory_ids": [
+        "repo_rule-checkpoint-repo-go-git-test-packages-need-configloader-plugin",
+        "project-checkpoint-repo-bubbletea-tui-requires-tea-withaltscreen-every-tea-newprogram-call-in-this-repo-must-include-tea-withaltscreen-omitting-it-causes-the-tui-to-render-inline-below-the-shell-prompt-instead-of-taking-over-the-terminal--me-b34b54007d5c755e"
+      ],
+      "injected_at": "2026-04-09T15:49:11.406971Z",
+      "reason": "title/body overlap, title/body overlap"
+    },
+    {
+      "session_id": "019d75ac-6b0a-7ce1-8ab2-f18a2ebb34c7",
+      "prompt_preview": "no read the design roll out doc for it docs/superpowers/specs/2026-04-07-memory-loop-rollout-design.md",
+      "injected_memory_ids": [
+        "agent_instruction-claude-codex-design-doc-spec"
+      ],
+      "injected_at": "2026-04-10T04:37:29.708125Z",
+      "reason": "title/body overlap"
+    },
+    {
+      "session_id": "c2ef8f41-afdb-4fd8-87b3-f7be73bcac78",
+      "prompt_preview": "open up new worktree at /Users/alisha/Projects/wt and copy over the summary tui code. don't bring git history or commit history. make it clean",
+      "injected_memory_ids": [
+        "repo_rule-code-clean-up",
+        "repo_rule-checkpoint-repo-go-git-test-packages-need-configloader-plugin"
+      ],
+      "injected_at": "2026-04-14T17:49:29.627652Z",
+      "reason": "title/body overlap, title/body overlap"
+    },
+    {
+      "session_id": "c2ef8f41-afdb-4fd8-87b3-f7be73bcac78",
+      "prompt_preview": "no copy summary tui files over to the worktree. copy the code. I don't want the commit history from this branch",
+      "injected_memory_ids": [
+        "project-checkpoint-repo-bubbletea-tui-requires-tea-withaltscreen-every-tea-newprogram-call-in-this-repo-must-include-tea-withaltscreen-omitting-it-causes-the-tui-to-render-inline-below-the-shell-prompt-instead-of-taking-over-the-terminal--me-b34b54007d5c755e",
+        "workflow_rule-pr-review-yes-or-continue-means-next-finding-not-push"
+      ],
+      "injected_at": "2026-04-14T17:54:17.653894Z",
+      "reason": "title/body overlap, title/body overlap"
+    },
+    {
+      "session_id": "c2ef8f41-afdb-4fd8-87b3-f7be73bcac78",
+      "prompt_preview": "create git worktree off of main at /Users/alisha/Projects/wt then copy over summary tui code",
+      "injected_memory_ids": [
+        "project-checkpoint-repo-bubbletea-tui-requires-tea-withaltscreen-every-tea-newprogram-call-in-this-repo-must-include-tea-withaltscreen-omitting-it-causes-the-tui-to-render-inline-below-the-shell-prompt-instead-of-taking-over-the-terminal--me-b34b54007d5c755e"
+      ],
+      "injected_at": "2026-04-14T17:56:33.196097Z",
+      "reason": "title/body overlap"
     }
   ]
 }
