@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,7 @@ import (
 )
 
 const testTrailerCheckpointID id.CheckpointID = "a1b2c3d4e5f6"
+const testRevertCommitMessage = "Revert \"add feature\"\n"
 
 // testTranscriptPromptResponse is a minimal transcript used across strategy tests.
 const testTranscriptPromptResponse = "{\"type\":\"human\",\"message\":{\"content\":\"test prompt\"}}\n{\"type\":\"assistant\",\"message\":{\"content\":\"test response\"}}\n"
@@ -913,7 +915,7 @@ func TestShadowStrategy_PrepareCommitMsg_AgentRevertReusesLastCheckpointID(t *te
 
 	// PrepareCommitMsg should reuse the existing checkpoint trailer.
 	commitMsgFile := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
-	require.NoError(t, os.WriteFile(commitMsgFile, []byte("Revert \"add feature\"\n"), 0o644))
+	require.NoError(t, os.WriteFile(commitMsgFile, []byte(testRevertCommitMessage), 0o644))
 
 	err = s.PrepareCommitMsg(context.Background(), commitMsgFile, "")
 	require.NoError(t, err)
@@ -961,7 +963,7 @@ func TestShadowStrategy_PrepareCommitMsg_AgentRevertWithoutCheckpointIDSkipped(t
 	defer os.Remove(revertHeadPath)
 
 	commitMsgFile := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
-	originalMsg := "Revert \"add feature\"\n"
+	originalMsg := testRevertCommitMessage
 	require.NoError(t, os.WriteFile(commitMsgFile, []byte(originalMsg), 0o644))
 
 	err = s.PrepareCommitMsg(context.Background(), commitMsgFile, "")
@@ -972,6 +974,111 @@ func TestShadowStrategy_PrepareCommitMsg_AgentRevertWithoutCheckpointIDSkipped(t
 
 	_, found := trailers.ParseCheckpoint(string(content))
 	assert.False(t, found, "sequence operations without LastCheckpointID should not get a new trailer")
+	assert.Equal(t, originalMsg, string(content))
+}
+
+func TestShadowStrategy_PrepareCommitMsg_AgentRebaseSkipped(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+
+	s := &ManualCommitStrategy{}
+
+	err := s.InitializeSession(context.Background(), "agent-rebase-session", agent.AgentTypeClaudeCode, "", "rebase the branch", "")
+	require.NoError(t, err)
+
+	metaDir := filepath.Join(".entire", "metadata", "agent-rebase-session")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, metaDir), 0o755))
+	transcript := `{"type":"human","message":{"content":"rebase the branch"}}` + "\n" +
+		`{"type":"assistant","message":{"content":"I'll rebase that"}}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, metaDir, "full.jsonl"), []byte(transcript), 0o644))
+
+	err = s.SaveStep(context.Background(), StepContext{
+		SessionID:     "agent-rebase-session",
+		MetadataDir:   metaDir,
+		ModifiedFiles: []string{"test.txt"},
+		AgentType:     agent.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+
+	state, err := s.loadSessionState(context.Background(), "agent-rebase-session")
+	require.NoError(t, err)
+	state.LastCheckpointID = testTrailerCheckpointID
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	gitDir, err := GetGitDir(context.Background())
+	require.NoError(t, err)
+	rebaseDir := filepath.Join(gitDir, "rebase-merge")
+	require.NoError(t, os.MkdirAll(rebaseDir, 0o755))
+	defer os.RemoveAll(rebaseDir)
+
+	commitMsgFile := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+	originalMsg := "Reword commit during rebase\n"
+	require.NoError(t, os.WriteFile(commitMsgFile, []byte(originalMsg), 0o644))
+
+	err = s.PrepareCommitMsg(context.Background(), commitMsgFile, "")
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(commitMsgFile)
+	require.NoError(t, err)
+
+	_, found := trailers.ParseCheckpoint(string(content))
+	assert.False(t, found, "rebase commits should not reuse a checkpoint trailer")
+	assert.Equal(t, originalMsg, string(content))
+}
+
+func TestShadowStrategy_PrepareCommitMsg_AgentRevertAmbiguousCheckpointSkipped(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+
+	s := &ManualCommitStrategy{}
+
+	sessionIDs := []string{"agent-revert-session-a", "agent-revert-session-b"}
+	checkpointIDs := []id.CheckpointID{"a1b2c3d4e5f6", "f6e5d4c3b2a1"}
+	for i, sessionID := range sessionIDs {
+		err := s.InitializeSession(context.Background(), sessionID, agent.AgentTypeClaudeCode, "", "revert the change", "")
+		require.NoError(t, err)
+
+		metaDir := filepath.Join(".entire", "metadata", sessionID)
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, metaDir), 0o755))
+		transcript := `{"type":"human","message":{"content":"revert the change"}}` + "\n" +
+			`{"type":"assistant","message":{"content":"I'll revert that"}}` + "\n"
+		require.NoError(t, os.WriteFile(filepath.Join(dir, metaDir, "full.jsonl"), []byte(transcript), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf("test-%d.txt", i)), []byte(fmt.Sprintf("content-%d", i)), 0o644))
+
+		err = s.SaveStep(context.Background(), StepContext{
+			SessionID:     sessionID,
+			MetadataDir:   metaDir,
+			ModifiedFiles: []string{fmt.Sprintf("test-%d.txt", i)},
+			AgentType:     agent.AgentTypeClaudeCode,
+		})
+		require.NoError(t, err)
+
+		state, err := s.loadSessionState(context.Background(), sessionID)
+		require.NoError(t, err)
+		state.LastCheckpointID = checkpointIDs[i]
+		require.NoError(t, s.saveSessionState(context.Background(), state))
+	}
+
+	gitDir, err := GetGitDir(context.Background())
+	require.NoError(t, err)
+	revertHeadPath := filepath.Join(gitDir, "REVERT_HEAD")
+	require.NoError(t, os.WriteFile(revertHeadPath, []byte("fake-revert-head"), 0o644))
+	defer os.Remove(revertHeadPath)
+
+	commitMsgFile := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+	originalMsg := testRevertCommitMessage
+	require.NoError(t, os.WriteFile(commitMsgFile, []byte(originalMsg), 0o644))
+
+	err = s.PrepareCommitMsg(context.Background(), commitMsgFile, "")
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(commitMsgFile)
+	require.NoError(t, err)
+
+	_, found := trailers.ParseCheckpoint(string(content))
+	assert.False(t, found, "ambiguous sequence operations should not reuse a checkpoint trailer")
 	assert.Equal(t, originalMsg, string(content))
 }
 
@@ -1002,7 +1109,7 @@ func TestShadowStrategy_PrepareCommitMsg_UserRevertSkipped(t *testing.T) {
 
 	// PrepareCommitMsg should skip (no ACTIVE session = user doing the revert)
 	commitMsgFile := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
-	originalMsg := "Revert \"add feature\"\n"
+	originalMsg := testRevertCommitMessage
 	require.NoError(t, os.WriteFile(commitMsgFile, []byte(originalMsg), 0o644))
 
 	err = s.PrepareCommitMsg(context.Background(), commitMsgFile, "")

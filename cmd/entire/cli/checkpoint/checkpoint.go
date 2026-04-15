@@ -461,7 +461,8 @@ type SessionFilePaths struct {
 // after git history rewrites (rebase, reword, amend, filter-branch).
 // Stored at the checkpoint level (root metadata.json), not per-session.
 //
-// The web uses a fallback chain when a commit arrives without an Entire-Checkpoint trailer:
+// These signals are intended for limited fallback re-linking when a commit
+// arrives without an Entire-Checkpoint trailer:
 //  1. TreeHash match     - covers: reword, amend (msg-only), filter-branch (msg-only)
 //  2. PatchID match      - covers: clean rebase, cherry-pick to other branch
 type LinkageMetadata struct {

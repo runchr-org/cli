@@ -265,37 +265,86 @@ func stripCheckpointTrailer(message string) string {
 	return strings.Join(result, "\n")
 }
 
-// isGitSequenceOperation checks if git is currently in the middle of a rebase,
+type gitSequenceOperation int
+
+const (
+	gitSequenceOperationNone gitSequenceOperation = iota
+	gitSequenceOperationRebase
+	gitSequenceOperationCherryPick
+	gitSequenceOperationRevert
+)
+
+// getGitSequenceOperation checks if git is currently in the middle of a rebase,
 // cherry-pick, or revert operation. During these operations, commits are being
-// replayed and should not be linked to agent sessions.
-//
-// Detects:
-//   - rebase: .git/rebase-merge/ or .git/rebase-apply/ directories
-//   - cherry-pick: .git/CHERRY_PICK_HEAD file
-//   - revert: .git/REVERT_HEAD file
-func isGitSequenceOperation(ctx context.Context) bool {
+// replayed and should not generally be linked to agent sessions.
+func getGitSequenceOperation(ctx context.Context) gitSequenceOperation {
 	// Get git directory (handles worktrees and relative paths correctly)
 	gitDir, err := GetGitDir(ctx)
 	if err != nil {
-		return false // Can't determine, assume not in sequence operation
+		return gitSequenceOperationNone // Can't determine, assume not in sequence operation
 	}
 
 	// Check for rebase state directories
 	if _, err := os.Stat(filepath.Join(gitDir, "rebase-merge")); err == nil {
-		return true
+		return gitSequenceOperationRebase
 	}
 	if _, err := os.Stat(filepath.Join(gitDir, "rebase-apply")); err == nil {
-		return true
+		return gitSequenceOperationRebase
 	}
 
 	// Check for cherry-pick and revert state files
 	if _, err := os.Stat(filepath.Join(gitDir, "CHERRY_PICK_HEAD")); err == nil {
-		return true
+		return gitSequenceOperationCherryPick
 	}
 	if _, err := os.Stat(filepath.Join(gitDir, "REVERT_HEAD")); err == nil {
+		return gitSequenceOperationRevert
+	}
+
+	return gitSequenceOperationNone
+}
+
+func isGitSequenceOperation(ctx context.Context) bool {
+	return getGitSequenceOperation(ctx) != gitSequenceOperationNone
+}
+
+func (s *ManualCommitStrategy) shouldSkipPrepareCommitSequenceOp(
+	ctx context.Context,
+	logCtx context.Context,
+	sequenceOp gitSequenceOperation,
+	source string,
+) bool {
+	if sequenceOp == gitSequenceOperationNone {
+		return false
+	}
+
+	// Rebase is always skipped here. Replayed commits are not new checkpoints,
+	// and adding a trailer during rebase can stamp rewritten commits with an
+	// unrelated checkpoint ID from the current session.
+	if sequenceOp == gitSequenceOperationRebase {
+		logging.Debug(logCtx, "prepare-commit-msg: skipped during git rebase",
+			slog.String("strategy", "manual-commit"),
+			slog.String("source", source),
+		)
 		return true
 	}
 
+	// Revert/cherry-pick are skipped unless an agent session is ACTIVE. When an
+	// agent runs git revert/cherry-pick as part of its work, we only reuse an
+	// existing checkpoint ID. PostCommit still skips condensation while the
+	// sequence operation is in progress, so minting a new checkpoint ID here
+	// would leave a dangling trailer on the commit.
+	if !s.hasActiveSessionInWorktree(ctx) {
+		logging.Debug(logCtx, "prepare-commit-msg: skipped during git sequence operation (no active session)",
+			slog.String("strategy", "manual-commit"),
+			slog.String("source", source),
+		)
+		return true
+	}
+
+	logging.Debug(logCtx, "prepare-commit-msg: sequence operation with active session, proceeding",
+		slog.String("strategy", "manual-commit"),
+		slog.String("source", source),
+	)
 	return false
 }
 
@@ -315,25 +364,9 @@ func isGitSequenceOperation(ctx context.Context) bool {
 
 func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFile string, source string) error {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
-	isSequenceOp := isGitSequenceOperation(ctx)
-
-	// Skip during rebase, cherry-pick, or revert operations — UNLESS an agent
-	// session is ACTIVE. When an agent runs git revert/cherry-pick as part of
-	// its work, we only reuse an existing checkpoint ID. PostCommit still skips
-	// condensation while the sequence operation is in progress, so minting a new
-	// checkpoint ID here would leave a dangling trailer on the commit.
-	if isSequenceOp {
-		if !s.hasActiveSessionInWorktree(ctx) {
-			logging.Debug(logCtx, "prepare-commit-msg: skipped during git sequence operation (no active session)",
-				slog.String("strategy", "manual-commit"),
-				slog.String("source", source),
-			)
-			return nil
-		}
-		logging.Debug(logCtx, "prepare-commit-msg: sequence operation with active session, proceeding",
-			slog.String("strategy", "manual-commit"),
-			slog.String("source", source),
-		)
+	sequenceOp := getGitSequenceOperation(ctx)
+	if s.shouldSkipPrepareCommitSequenceOp(ctx, logCtx, sequenceOp, source) {
+		return nil
 	}
 
 	// Skip for merge and squash sources
@@ -450,7 +483,7 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 		commitLinking = stngs.GetCommitLinking()
 	}
 
-	checkpointID, shouldSkip, err := resolveCheckpointIDForPrepareCommit(logCtx, isSequenceOp, source, sessionsWithContent)
+	checkpointID, shouldSkip, err := resolveCheckpointIDForPrepareCommit(logCtx, sequenceOp, source, sessionsWithContent)
 	if err != nil {
 		resolveMetadataSpan.RecordError(err)
 		resolveMetadataSpan.End()
@@ -524,23 +557,29 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	return nil
 }
 
-func firstReusableCheckpointID(states []*SessionState) id.CheckpointID {
+func singleReusableCheckpointID(states []*SessionState) (id.CheckpointID, bool) {
+	var checkpointID id.CheckpointID
+	eligibleCount := 0
 	for _, state := range states {
 		if state.LastCheckpointID.IsEmpty() {
 			continue
 		}
-		return state.LastCheckpointID
+		eligibleCount++
+		checkpointID = state.LastCheckpointID
 	}
-	return ""
+	if eligibleCount != 1 {
+		return "", false
+	}
+	return checkpointID, true
 }
 
 func resolveCheckpointIDForPrepareCommit(
 	logCtx context.Context,
-	isSequenceOp bool,
+	sequenceOp gitSequenceOperation,
 	source string,
 	sessions []*SessionState,
 ) (id.CheckpointID, bool, error) {
-	if !isSequenceOp {
+	if sequenceOp == gitSequenceOperationNone {
 		checkpointID, err := id.Generate()
 		if err != nil {
 			return "", false, fmt.Errorf("generate checkpoint ID: %w", err)
@@ -548,9 +587,9 @@ func resolveCheckpointIDForPrepareCommit(
 		return checkpointID, false, nil
 	}
 
-	checkpointID := firstReusableCheckpointID(sessions)
-	if checkpointID.IsEmpty() {
-		logging.Debug(logCtx, "prepare-commit-msg: skipped sequence operation without reusable checkpoint ID",
+	checkpointID, ok := singleReusableCheckpointID(sessions)
+	if !ok {
+		logging.Debug(logCtx, "prepare-commit-msg: skipped sequence operation without a unique reusable checkpoint ID",
 			slog.String("strategy", "manual-commit"),
 			slog.String("source", source),
 		)
