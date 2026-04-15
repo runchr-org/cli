@@ -644,6 +644,10 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	return nil
 }
 
+// singleReusableCheckpointID returns a reusable checkpoint ID only when exactly
+// one session is eligible. Two sessions carrying the same LastCheckpointID are
+// still treated as ambiguous because the commit cannot be attributed to one
+// active session deterministically.
 func singleReusableCheckpointID(states []*SessionState) (id.CheckpointID, bool) {
 	var checkpointID id.CheckpointID
 	eligibleCount := 0
@@ -1095,12 +1099,12 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 	}
 
 	// Build transition context
-	isRebase := isGitSequenceOperation(ctx)
+	isSequenceOperation := isGitSequenceOperation(ctx)
 	transitionCtx := session.TransitionContext{
-		IsRebaseInProgress: isRebase,
+		IsSequenceOperationInProgress: isSequenceOperation,
 	}
 
-	if isRebase {
+	if isSequenceOperation {
 		logging.Debug(logCtx, "post-commit: rebase/sequence in progress, skipping phase transitions",
 			slog.String("strategy", "manual-commit"),
 		)

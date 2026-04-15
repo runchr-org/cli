@@ -471,7 +471,7 @@ type LinkageMetadata struct {
 	TreeHash string `json:"tree_hash,omitempty"`
 
 	// PatchID is the git patch-id of the commit's diff (parent->HEAD).
-	// Survives rebase (same diff replayed on different base).
+	// Survives clean rebases, but changes if conflict resolution changes the patch.
 	PatchID string `json:"patch_id,omitempty"`
 }
 

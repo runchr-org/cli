@@ -30,6 +30,7 @@ import (
 
 const testTrailerCheckpointID id.CheckpointID = "a1b2c3d4e5f6"
 const testRevertCommitMessage = "Revert \"add feature\"\n"
+const testCherryPickCommitMessage = "Cherry-pick \"add feature\"\n"
 
 // testTranscriptPromptResponse is a minimal transcript used across strategy tests.
 const testTranscriptPromptResponse = "{\"type\":\"human\",\"message\":{\"content\":\"test prompt\"}}\n{\"type\":\"assistant\",\"message\":{\"content\":\"test response\"}}\n"
@@ -925,6 +926,56 @@ func TestShadowStrategy_PrepareCommitMsg_AgentRevertReusesLastCheckpointID(t *te
 
 	cpID, found := trailers.ParseCheckpoint(string(content))
 	assert.True(t, found, "agent-initiated revert should reuse an existing checkpoint trailer")
+	assert.Equal(t, testTrailerCheckpointID, cpID)
+}
+
+func TestShadowStrategy_PrepareCommitMsg_AgentCherryPickReusesLastCheckpointID(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+
+	s := &ManualCommitStrategy{}
+
+	err := s.InitializeSession(context.Background(), "agent-cherry-pick-session", agent.AgentTypeClaudeCode, "", "cherry-pick the change", "")
+	require.NoError(t, err)
+
+	metaDir := filepath.Join(".entire", "metadata", "agent-cherry-pick-session")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, metaDir), 0o755))
+	transcript := `{"type":"human","message":{"content":"cherry-pick the change"}}` + "\n" +
+		`{"type":"assistant","message":{"content":"I'll cherry-pick that"}}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, metaDir, "full.jsonl"), []byte(transcript), 0o644))
+
+	err = s.SaveStep(context.Background(), StepContext{
+		SessionID:     "agent-cherry-pick-session",
+		MetadataDir:   metaDir,
+		ModifiedFiles: []string{"test.txt"},
+		NewFiles:      []string{},
+		AgentType:     agent.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+
+	state, err := s.loadSessionState(context.Background(), "agent-cherry-pick-session")
+	require.NoError(t, err)
+	state.LastCheckpointID = testTrailerCheckpointID
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	gitDir, err := GetGitDir(context.Background())
+	require.NoError(t, err)
+	cherryPickHeadPath := filepath.Join(gitDir, "CHERRY_PICK_HEAD")
+	require.NoError(t, os.WriteFile(cherryPickHeadPath, []byte("fake-cherry-pick-head"), 0o644))
+	defer os.Remove(cherryPickHeadPath)
+
+	commitMsgFile := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+	require.NoError(t, os.WriteFile(commitMsgFile, []byte(testCherryPickCommitMessage), 0o644))
+
+	err = s.PrepareCommitMsg(context.Background(), commitMsgFile, "")
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(commitMsgFile)
+	require.NoError(t, err)
+
+	cpID, found := trailers.ParseCheckpoint(string(content))
+	assert.True(t, found, "agent-initiated cherry-pick should reuse an existing checkpoint trailer")
 	assert.Equal(t, testTrailerCheckpointID, cpID)
 }
 

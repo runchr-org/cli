@@ -119,8 +119,8 @@ func (a Action) String() string {
 // TransitionContext provides read-only context for transitions that need
 // to inspect session state without mutating it.
 type TransitionContext struct {
-	HasFilesTouched    bool // len(FilesTouched) > 0
-	IsRebaseInProgress bool // .git/rebase-merge/ or .git/rebase-apply/ exists
+	HasFilesTouched               bool // len(FilesTouched) > 0
+	IsSequenceOperationInProgress bool // rebase/cherry-pick/revert is in progress
 }
 
 // TransitionResult holds the outcome of a state machine transition.
@@ -163,7 +163,7 @@ func transitionFromIdle(event Event, ctx TransitionContext) TransitionResult {
 		// Turn end while idle is a no-op (no active turn to end).
 		return TransitionResult{NewPhase: PhaseIdle}
 	case EventGitCommit:
-		if ctx.IsRebaseInProgress {
+		if ctx.IsSequenceOperationInProgress {
 			return TransitionResult{NewPhase: PhaseIdle}
 		}
 		return TransitionResult{
@@ -203,7 +203,7 @@ func transitionFromActive(event Event, ctx TransitionContext) TransitionResult {
 			Actions:  []Action{ActionUpdateLastInteraction},
 		}
 	case EventGitCommit:
-		if ctx.IsRebaseInProgress {
+		if ctx.IsSequenceOperationInProgress {
 			return TransitionResult{NewPhase: PhaseActive}
 		}
 		return TransitionResult{
@@ -243,7 +243,7 @@ func transitionFromEnded(event Event, ctx TransitionContext) TransitionResult {
 		// Turn end while ended is a no-op.
 		return TransitionResult{NewPhase: PhaseEnded}
 	case EventGitCommit:
-		if ctx.IsRebaseInProgress {
+		if ctx.IsSequenceOperationInProgress {
 			return TransitionResult{NewPhase: PhaseEnded}
 		}
 		if ctx.HasFilesTouched {
@@ -388,12 +388,12 @@ func MermaidDiagram() string {
 				variants = []contextVariant{
 					{"[files]", TransitionContext{HasFilesTouched: true}},
 					{"[no files]", TransitionContext{HasFilesTouched: false}},
-					{"[rebase]", TransitionContext{IsRebaseInProgress: true}},
+					{"[rebase]", TransitionContext{IsSequenceOperationInProgress: true}},
 				}
 			case event == EventGitCommit:
 				variants = []contextVariant{
 					{"", TransitionContext{}},
-					{"[rebase]", TransitionContext{IsRebaseInProgress: true}},
+					{"[rebase]", TransitionContext{IsSequenceOperationInProgress: true}},
 				}
 			default:
 				variants = []contextVariant{

@@ -6,8 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 // initTestRepo creates a temp git repo and returns its path.
@@ -84,44 +85,6 @@ func gitCommit(t *testing.T, dir, msg string) {
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git commit failed: %v\n%s", err, out)
-	}
-}
-
-func revParse(t *testing.T, dir, ref string) string {
-	t.Helper()
-	cmd := exec.CommandContext(context.Background(), "git", "rev-parse", ref)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("git rev-parse %s failed: %v", ref, err)
-	}
-	return strings.TrimSpace(string(out))
-}
-
-func gitCheckoutBranch(t *testing.T, dir, branchName string) {
-	t.Helper()
-	cmd := exec.CommandContext(context.Background(), "git", "checkout", "-b", branchName)
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git checkout -b %s failed: %v\n%s", branchName, err, out)
-	}
-}
-
-func gitCheckout(t *testing.T, dir, ref string) {
-	t.Helper()
-	cmd := exec.CommandContext(context.Background(), "git", "checkout", ref)
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git checkout %s failed: %v\n%s", ref, err, out)
-	}
-}
-
-func gitRebase(t *testing.T, dir, onto string) {
-	t.Helper()
-	cmd := exec.CommandContext(context.Background(), "git", "rebase", onto)
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git rebase %s failed: %v\n%s", onto, err, out)
 	}
 }
 
@@ -459,8 +422,8 @@ func TestComputePatchID(t *testing.T) {
 	gitAdd(t, dir, "file.txt")
 	gitCommit(t, dir, "modify file")
 
-	head := revParse(t, dir, "HEAD")
-	parent := revParse(t, dir, "HEAD~1")
+	head := testutil.GitRevParse(t, dir, "HEAD")
+	parent := testutil.GitRevParse(t, dir, "HEAD~1")
 
 	patchID, err := ComputePatchID(context.Background(), dir, parent, head)
 	if err != nil {
@@ -482,29 +445,29 @@ func TestComputePatchID_StableAcrossRebase(t *testing.T) {
 	gitAdd(t, dir, "base.txt")
 	gitCommit(t, dir, "base")
 
-	gitCheckoutBranch(t, dir, "feature")
+	testutil.GitCheckoutNewBranch(t, dir, "feature")
 	writeFile(t, dir, "feature.txt", "feature work")
 	gitAdd(t, dir, "feature.txt")
 	gitCommit(t, dir, "add feature")
 
-	featureHead := revParse(t, dir, "HEAD")
-	featureParent := revParse(t, dir, "HEAD~1")
+	featureHead := testutil.GitRevParse(t, dir, "HEAD")
+	featureParent := testutil.GitRevParse(t, dir, "HEAD~1")
 
 	patchIDBefore, err := ComputePatchID(context.Background(), dir, featureParent, featureHead)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	gitCheckout(t, dir, "main")
+	testutil.GitCheckout(t, dir, "main")
 	writeFile(t, dir, "other.txt", "other work")
 	gitAdd(t, dir, "other.txt")
 	gitCommit(t, dir, "unrelated work on main")
 
-	gitCheckout(t, dir, "feature")
-	gitRebase(t, dir, "main")
+	testutil.GitCheckout(t, dir, "feature")
+	testutil.GitRebase(t, dir, "main")
 
-	rebasedHead := revParse(t, dir, "HEAD")
-	rebasedParent := revParse(t, dir, "HEAD~1")
+	rebasedHead := testutil.GitRevParse(t, dir, "HEAD")
+	rebasedParent := testutil.GitRevParse(t, dir, "HEAD~1")
 
 	patchIDAfter, err := ComputePatchID(context.Background(), dir, rebasedParent, rebasedHead)
 	if err != nil {
@@ -524,7 +487,7 @@ func TestComputePatchID_InitialCommit(t *testing.T) {
 	gitAdd(t, dir, "file.txt")
 	gitCommit(t, dir, "initial")
 
-	head := revParse(t, dir, "HEAD")
+	head := testutil.GitRevParse(t, dir, "HEAD")
 
 	patchID, err := ComputePatchID(context.Background(), dir, "", head)
 	if err != nil {

@@ -146,7 +146,7 @@ func TestTransitionFromIdle(t *testing.T) {
 			name:        "GitCommit_rebase_skips_everything",
 			current:     PhaseIdle,
 			event:       EventGitCommit,
-			ctx:         TransitionContext{IsRebaseInProgress: true},
+			ctx:         TransitionContext{IsSequenceOperationInProgress: true},
 			wantPhase:   PhaseIdle,
 			wantActions: nil,
 		},
@@ -202,7 +202,7 @@ func TestTransitionFromActive(t *testing.T) {
 			name:        "GitCommit_rebase_skips_everything",
 			current:     PhaseActive,
 			event:       EventGitCommit,
-			ctx:         TransitionContext{IsRebaseInProgress: true},
+			ctx:         TransitionContext{IsSequenceOperationInProgress: true},
 			wantPhase:   PhaseActive,
 			wantActions: nil,
 		},
@@ -252,7 +252,7 @@ func TestTransitionFromEnded(t *testing.T) {
 			name:        "GitCommit_rebase_skips_everything",
 			current:     PhaseEnded,
 			event:       EventGitCommit,
-			ctx:         TransitionContext{IsRebaseInProgress: true},
+			ctx:         TransitionContext{IsSequenceOperationInProgress: true},
 			wantPhase:   PhaseEnded,
 			wantActions: nil,
 		},
@@ -331,7 +331,7 @@ func TestTransitionBackwardCompat(t *testing.T) {
 func TestTransition_rebase_GitCommit_is_noop_for_all_phases(t *testing.T) {
 	t.Parallel()
 
-	rebaseCtx := TransitionContext{IsRebaseInProgress: true}
+	rebaseCtx := TransitionContext{IsSequenceOperationInProgress: true}
 
 	for _, phase := range allPhases {
 		result := Transition(phase, EventGitCommit, rebaseCtx)
