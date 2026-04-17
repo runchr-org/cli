@@ -1013,6 +1013,13 @@ func (s *GitStore) ReadSessionContent(ctx context.Context, checkpointID id.Check
 		}
 	}
 
+	// Read commit log (auto-fetches blob if needed)
+	if file, fileErr := sessionTree.File(paths.CommitLogFileName); fileErr == nil {
+		if content, contentErr := file.Contents(); contentErr == nil {
+			result.CommitLog = []byte(content)
+		}
+	}
+
 	if len(result.Transcript) == 0 {
 		return nil, ErrNoTranscript
 	}

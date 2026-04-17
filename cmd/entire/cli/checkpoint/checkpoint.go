@@ -425,6 +425,11 @@ type SessionContent struct {
 
 	// Prompts contains user prompts from this session
 	Prompts string
+
+	// CommitLog is the session's accumulated commit timeline (commits.jsonl).
+	// Each line is a JSON object recording a condensed commit. May be empty
+	// for checkpoints created before this feature.
+	CommitLog []byte
 }
 
 // CommittedMetadata contains the metadata stored in metadata.json for each checkpoint.
