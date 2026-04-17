@@ -721,13 +721,26 @@ type postCommitActionHandler struct {
 	shadowRef     *plumbing.Reference // Per-session shadow branch ref (nil if branch doesn't exist)
 	shadowTree    *object.Tree        // Per-session shadow commit tree (nil if branch doesn't exist)
 	allAgentFiles map[string]struct{} // Union of all sessions' FilesTouched for cross-session attribution
-	commitLog     []byte              // Pre-built commit log bytes to include in checkpoint
 
 	// Output: set by handler methods, read by caller after TransitionAndLog.
 	// condensed is true only when CondenseSession wrote data to the metadata branch.
 	// Both failures and skips (no transcript/files) leave condensed=false, which
 	// correctly preserves shadow branches and defers FullyCondensed marking.
 	condensed bool
+}
+
+// buildCommitLogForSession builds commit log bytes for inclusion in a checkpoint.
+// Called only when condensation will proceed, to avoid unnecessary filesystem IO.
+func (h *postCommitActionHandler) buildCommitLogForSession(state *session.State) []byte {
+	entry := CommitLogEntry{
+		Hash:         h.commit.Hash.String(),
+		ShortHash:    h.commit.Hash.String()[:7],
+		Subject:      commitSubject(h.commit.Message),
+		Timestamp:    h.commit.Author.When.UTC(),
+		CheckpointID: h.checkpointID.String(),
+		SessionID:    state.SessionID,
+	}
+	return buildCommitLog(h.ctx, state.SessionID, entry)
 }
 
 // parentCommitHash returns the first parent's hash as a string, or empty for initial commits.
@@ -759,7 +772,7 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 			parentCommitHash: h.parentCommitHash(),
 			headCommitHash:   h.newHead,
 			allAgentFiles:    h.allAgentFiles,
-			commitLog:        h.commitLog,
+			commitLog:        h.buildCommitLogForSession(state),
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
@@ -789,7 +802,7 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 			parentCommitHash: h.parentCommitHash(),
 			headCommitHash:   h.newHead,
 			allAgentFiles:    h.allAgentFiles,
-			commitLog:        h.commitLog,
+			commitLog:        h.buildCommitLogForSession(state),
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
@@ -1289,18 +1302,6 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		slog.Any("files", filesTouchedBefore),
 	)
 
-	// Build commit log entry and full log bytes BEFORE condensation so they
-	// are included in the checkpoint tree written by CondenseSession.
-	newEntry := CommitLogEntry{
-		Hash:         commit.Hash.String(),
-		ShortHash:    commit.Hash.String()[:7],
-		Subject:      commitSubject(commit.Message),
-		Timestamp:    commit.Author.When.UTC(),
-		CheckpointID: checkpointID.String(),
-		SessionID:    state.SessionID,
-	}
-	commitLogBytes := buildCommitLog(ctx, state.SessionID, newEntry)
-
 	// Run the state machine transition with handler for strategy-specific actions.
 	_, transitionAndCondenseSpan := perf.Start(ctx, "transition_and_condense")
 	handler := &postCommitActionHandler{
@@ -1323,7 +1324,6 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		shadowTree:                 shadowTree,
 		allAgentFiles:              allAgentFiles,
 		sessionsWithCommittedFiles: sessionsWithCommittedFiles,
-		commitLog:                  commitLogBytes,
 	}
 
 	if err := TransitionAndLog(ctx, state, session.EventGitCommit, *transitionCtx, handler); err != nil {
@@ -1344,7 +1344,15 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	// Persist sidecar commit log entry to filesystem so future checkpoints
 	// in this session accumulate the full timeline.
 	if handler.condensed {
-		if err := appendCommitLogEntry(ctx, state.SessionID, newEntry); err != nil {
+		entry := CommitLogEntry{
+			Hash:         commit.Hash.String(),
+			ShortHash:    commit.Hash.String()[:7],
+			Subject:      commitSubject(commit.Message),
+			Timestamp:    commit.Author.When.UTC(),
+			CheckpointID: checkpointID.String(),
+			SessionID:    state.SessionID,
+		}
+		if err := appendCommitLogEntry(ctx, state.SessionID, entry); err != nil {
 			logging.Warn(logCtx, "failed to append commit log entry",
 				slog.String("session_id", state.SessionID),
 				slog.String("error", err.Error()),

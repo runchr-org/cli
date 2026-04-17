@@ -26,11 +26,16 @@ type CommitLogEntry struct {
 }
 
 // appendCommitLogEntry appends a single JSON line to the session's commit log.
+// Creates the session metadata directory if it does not exist.
 func appendCommitLogEntry(ctx context.Context, sessionID string, entry CommitLogEntry) error {
 	sessionDir := paths.SessionMetadataDirFromSessionID(sessionID)
 	sessionDirAbs, err := paths.AbsPath(ctx, sessionDir)
 	if err != nil {
 		return fmt.Errorf("resolving session dir: %w", err)
+	}
+
+	if err := os.MkdirAll(sessionDirAbs, 0o750); err != nil {
+		return fmt.Errorf("creating session dir: %w", err)
 	}
 
 	logPath := filepath.Join(sessionDirAbs, paths.CommitLogFileName)
@@ -54,7 +59,7 @@ func appendCommitLogEntry(ctx context.Context, sessionID string, entry CommitLog
 }
 
 // readCommitLog reads all entries from a session's commit log.
-// Returns an empty slice (not an error) if the file does not exist.
+// Returns nil (not an error) if the file does not exist.
 func readCommitLog(ctx context.Context, sessionID string) ([]CommitLogEntry, error) {
 	sessionDir := paths.SessionMetadataDirFromSessionID(sessionID)
 	sessionDirAbs, err := paths.AbsPath(ctx, sessionDir)
