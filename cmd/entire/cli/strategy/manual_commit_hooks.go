@@ -721,6 +721,7 @@ type postCommitActionHandler struct {
 	shadowRef     *plumbing.Reference // Per-session shadow branch ref (nil if branch doesn't exist)
 	shadowTree    *object.Tree        // Per-session shadow commit tree (nil if branch doesn't exist)
 	allAgentFiles map[string]struct{} // Union of all sessions' FilesTouched for cross-session attribution
+	commitLog     []byte              // Pre-built commit log bytes to include in checkpoint
 
 	// Output: set by handler methods, read by caller after TransitionAndLog.
 	// condensed is true only when CondenseSession wrote data to the metadata branch.
@@ -758,6 +759,7 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 			parentCommitHash: h.parentCommitHash(),
 			headCommitHash:   h.newHead,
 			allAgentFiles:    h.allAgentFiles,
+			commitLog:        h.commitLog,
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
@@ -787,6 +789,7 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 			parentCommitHash: h.parentCommitHash(),
 			headCommitHash:   h.newHead,
 			allAgentFiles:    h.allAgentFiles,
+			commitLog:        h.commitLog,
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
@@ -1286,6 +1289,18 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		slog.Any("files", filesTouchedBefore),
 	)
 
+	// Build commit log entry and full log bytes BEFORE condensation so they
+	// are included in the checkpoint tree written by CondenseSession.
+	newEntry := CommitLogEntry{
+		Hash:         commit.Hash.String(),
+		ShortHash:    commit.Hash.String()[:7],
+		Subject:      commitSubject(commit.Message),
+		Timestamp:    commit.Author.When.UTC(),
+		CheckpointID: checkpointID.String(),
+		SessionID:    state.SessionID,
+	}
+	commitLogBytes := buildCommitLog(ctx, state.SessionID, newEntry)
+
 	// Run the state machine transition with handler for strategy-specific actions.
 	_, transitionAndCondenseSpan := perf.Start(ctx, "transition_and_condense")
 	handler := &postCommitActionHandler{
@@ -1308,6 +1323,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		shadowTree:                 shadowTree,
 		allAgentFiles:              allAgentFiles,
 		sessionsWithCommittedFiles: sessionsWithCommittedFiles,
+		commitLog:                  commitLogBytes,
 	}
 
 	if err := TransitionAndLog(ctx, state, session.EventGitCommit, *transitionCtx, handler); err != nil {
@@ -1323,6 +1339,17 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	// transition ever changed, this guard would silently stop recording IDs.
 	if handler.condensed && state.Phase.IsActive() {
 		state.TurnCheckpointIDs = append(state.TurnCheckpointIDs, checkpointID.String())
+	}
+
+	// Persist sidecar commit log entry to filesystem so future checkpoints
+	// in this session accumulate the full timeline.
+	if handler.condensed {
+		if err := appendCommitLogEntry(ctx, state.SessionID, newEntry); err != nil {
+			logging.Warn(logCtx, "failed to append commit log entry",
+				slog.String("session_id", state.SessionID),
+				slog.String("error", err.Error()),
+			)
+		}
 	}
 
 	// Carry forward remaining uncommitted files so the next commit gets its

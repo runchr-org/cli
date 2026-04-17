@@ -308,6 +308,11 @@ type WriteCommittedOptions struct {
 	// Written to v2 /main ref alongside metadata. May be nil if compaction
 	// was not performed (unknown agent, compaction error, empty transcript).
 	CompactTranscript []byte
+
+	// CommitLog is the session's accumulated commit log (commits.jsonl) bytes.
+	// Each line is a JSON object recording a condensed commit in the session timeline.
+	// Nil means no commit log to write.
+	CommitLog []byte
 }
 
 // UpdateCommittedOptions contains options for updating an existing committed checkpoint.
