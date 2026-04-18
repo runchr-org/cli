@@ -171,6 +171,21 @@ func AsSessionBaseDirProvider(ag Agent) (SessionBaseDirProvider, bool) {
 	return sbp, true
 }
 
+// AsHookVersionSupport returns the agent as HookVersionSupport if it implements
+// the interface. This is a built-in-only capability (drift detection lives in
+// the host CLI, not in external agent protocols), so no CapabilityDeclarer gate
+// applies.
+func AsHookVersionSupport(ag Agent) (HookVersionSupport, bool) { //nolint:ireturn // type-assertion helper must return interface
+	if ag == nil {
+		return nil, false
+	}
+	hv, ok := ag.(HookVersionSupport)
+	if !ok {
+		return nil, false
+	}
+	return hv, true
+}
+
 // AsSubagentAwareExtractor returns the agent as SubagentAwareExtractor if it both
 // implements the interface and (for CapabilityDeclarer agents) has declared the capability.
 func AsSubagentAwareExtractor(ag Agent) (SubagentAwareExtractor, bool) {

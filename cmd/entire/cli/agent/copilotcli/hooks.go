@@ -80,6 +80,9 @@ func (c *CopilotCLIAgent) InstallHooks(ctx context.Context, localDev bool, force
 		rawHooks = make(map[string]json.RawMessage)
 	}
 
+	_, stampFound := agent.ReadJSONHookMeta(rawFile)
+	stampMissing := !stampFound
+
 	// Parse existing entries for each hook type we manage
 	hookEntries := make(map[string][]CopilotHookEntry)
 	for _, hookName := range c.HookNames() {
@@ -126,8 +129,12 @@ func (c *CopilotCLIAgent) InstallHooks(ctx context.Context, localDev bool, force
 		}
 	}
 
-	if count == 0 {
+	if count == 0 && !stampMissing {
 		return 0, nil
+	}
+
+	if err := agent.WriteJSONHookMeta(rawFile); err != nil {
+		return 0, err
 	}
 
 	// Marshal modified hook types back into rawHooks
@@ -227,6 +234,21 @@ func (c *CopilotCLIAgent) UninstallHooks(ctx context.Context) error {
 		return fmt.Errorf("failed to write %s: %w", HooksFileName, err)
 	}
 	return nil
+}
+
+// ReadHookMeta returns the CLI-version stamp recorded in Copilot CLI's entire.json.
+func (c *CopilotCLIAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, error) {
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		worktreeRoot = "."
+	}
+	hooksPath := filepath.Join(worktreeRoot, hooksDir, HooksFileName)
+	data, err := os.ReadFile(hooksPath) //nolint:gosec // path is constructed from repo root + fixed path
+	if err != nil {
+		return agent.HookMeta{}, false, nil
+	}
+	meta, ok := agent.ReadJSONHookMetaFromFile(data)
+	return meta, ok, nil
 }
 
 // AreHooksInstalled checks if Entire hooks are installed in the Copilot CLI config.

@@ -316,6 +316,14 @@ func runManageAgents(ctx context.Context, w io.Writer, opts EnableOptions, selec
 		fmt.Fprintf(w, "Enabled agents: %s\n\n", strings.Join(displayNames, ", "))
 	}
 
+	if drift := agent.CheckHookDrift(ctx); len(drift) > 0 {
+		names := make([]string, 0, len(drift))
+		for _, r := range drift {
+			names = append(names, string(r.Agent))
+		}
+		fmt.Fprintf(w, "Warning: hooks for %s were installed by an older CLI. Re-run `entire enable --force` to refresh.\n\n", strings.Join(names, ", "))
+	}
+
 	// Build pre-selection set from installed agents
 	installedSet := make(map[types.AgentName]struct{}, len(installedNames))
 	for _, name := range installedNames {

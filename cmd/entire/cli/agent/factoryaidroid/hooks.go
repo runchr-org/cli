@@ -96,6 +96,9 @@ func (f *FactoryAIDroidAgent) InstallHooks(ctx context.Context, localDev bool, f
 		rawPermissions = make(map[string]json.RawMessage)
 	}
 
+	_, stampFound := agent.ReadJSONHookMeta(rawSettings)
+	stampMissing := !stampFound
+
 	// Parse only the hook types we need to modify
 	var sessionStart, sessionEnd, stop, userPromptSubmit, preToolUse, postToolUse, preCompact []FactoryHookMatcher
 	parseHookType(rawHooks, "SessionStart", &sessionStart)
@@ -196,8 +199,12 @@ func (f *FactoryAIDroidAgent) InstallHooks(ctx context.Context, localDev bool, f
 		permissionsChanged = true
 	}
 
-	if count == 0 && !permissionsChanged {
-		return 0, nil // All hooks and permissions already installed
+	if count == 0 && !permissionsChanged && !stampMissing {
+		return 0, nil // All hooks, permissions, and stamp already in place
+	}
+
+	if err := agent.WriteJSONHookMeta(rawSettings); err != nil {
+		return 0, err
 	}
 
 	// Marshal modified hook types back to rawHooks
@@ -383,6 +390,21 @@ func (f *FactoryAIDroidAgent) UninstallHooks(ctx context.Context) error {
 		return fmt.Errorf("failed to write settings.json: %w", err)
 	}
 	return nil
+}
+
+// ReadHookMeta returns the CLI-version stamp recorded in .factory/settings.json.
+func (f *FactoryAIDroidAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, error) {
+	repoRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		repoRoot = "."
+	}
+	settingsPath := filepath.Join(repoRoot, ".factory", FactorySettingsFileName)
+	data, err := os.ReadFile(settingsPath) //nolint:gosec // path is constructed from repo root + fixed path
+	if err != nil {
+		return agent.HookMeta{}, false, nil
+	}
+	meta, ok := agent.ReadJSONHookMetaFromFile(data)
+	return meta, ok, nil
 }
 
 // AreHooksInstalled checks if Entire hooks are installed.

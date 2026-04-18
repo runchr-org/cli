@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -180,9 +181,26 @@ func formatSettingsStatusShort(ctx context.Context, s *EntireSettings, sty statu
 
 			b.WriteString(strings.Join(displayNames, ", "))
 		}
+
+		if drift := agent.CheckHookDrift(ctx); len(drift) > 0 {
+			b.WriteString("\n")
+			b.WriteString(sty.render(sty.yellow, "  Hooks · stale for "))
+			b.WriteString(sty.render(sty.yellow, formatDriftAgentList(drift)))
+			b.WriteString(sty.render(sty.dim, " — run `entire enable --force` to refresh"))
+		}
 	}
 
 	return b.String()
+}
+
+// formatDriftAgentList turns a DriftReport slice into a comma-separated agent
+// name list (e.g., "claude-code, cursor") suitable for a one-line status warning.
+func formatDriftAgentList(reports []agent.DriftReport) string {
+	names := make([]string, 0, len(reports))
+	for _, r := range reports {
+		names = append(names, string(r.Agent))
+	}
+	return strings.Join(names, ", ")
 }
 
 // formatSettingsStatus formats a settings status line with source prefix.

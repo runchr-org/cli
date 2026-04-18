@@ -34,15 +34,16 @@ func (c *CodexAgent) InstallHooks(ctx context.Context, localDev bool, force bool
 
 	hooksPath := filepath.Join(repoRoot, ".codex", HooksFileName)
 
-	// Read existing hooks.json if present
+	// Read existing hooks.json if present. topLevel preserves unknown keys
+	// (e.g., $schema) across round-trips and is also where we stamp entireMeta.
 	var rawHooks map[string]json.RawMessage
+	topLevel := make(map[string]json.RawMessage)
 	existingData, readErr := os.ReadFile(hooksPath) //nolint:gosec // path constructed from repo root
 	if readErr == nil {
-		var hooksFile map[string]json.RawMessage
-		if err := json.Unmarshal(existingData, &hooksFile); err != nil {
+		if err := json.Unmarshal(existingData, &topLevel); err != nil {
 			return 0, fmt.Errorf("failed to parse existing hooks.json: %w", err)
 		}
-		if hooksRaw, ok := hooksFile["hooks"]; ok {
+		if hooksRaw, ok := topLevel["hooks"]; ok {
 			if err := json.Unmarshal(hooksRaw, &rawHooks); err != nil {
 				return 0, fmt.Errorf("failed to parse hooks in hooks.json: %w", err)
 			}
@@ -52,6 +53,9 @@ func (c *CodexAgent) InstallHooks(ctx context.Context, localDev bool, force bool
 	if rawHooks == nil {
 		rawHooks = make(map[string]json.RawMessage)
 	}
+
+	_, stampFound := agent.ReadJSONHookMeta(topLevel)
+	stampMissing := !stampFound
 
 	// Parse event types we manage
 	var sessionStart, userPromptSubmit, stop []MatcherGroup
@@ -104,7 +108,7 @@ func (c *CodexAgent) InstallHooks(ctx context.Context, localDev bool, force bool
 		count++
 	}
 
-	if count == 0 {
+	if count == 0 && !stampMissing {
 		// Still ensure the feature flag is configured even if hooks
 		// were already present (e.g., manually installed).
 		if err := ensureProjectFeatureEnabled(repoRoot); err != nil {
@@ -118,12 +122,10 @@ func (c *CodexAgent) InstallHooks(ctx context.Context, localDev bool, force bool
 	marshalHookType(rawHooks, "UserPromptSubmit", userPromptSubmit)
 	marshalHookType(rawHooks, "Stop", stop)
 
-	// Preserve existing top-level keys (e.g., $schema) by reusing the parsed file
-	topLevel := make(map[string]json.RawMessage)
-	if readErr == nil {
-		// Re-parse the original file to preserve all top-level keys
-		_ = json.Unmarshal(existingData, &topLevel) //nolint:errcheck // best-effort preservation
+	if err := agent.WriteJSONHookMeta(topLevel); err != nil {
+		return 0, err
 	}
+
 	hooksJSON, err := jsonutil.MarshalWithNoHTMLEscape(rawHooks)
 	if err != nil {
 		return 0, fmt.Errorf("failed to marshal hooks: %w", err)
@@ -218,6 +220,21 @@ func (c *CodexAgent) UninstallHooks(ctx context.Context) error {
 		return fmt.Errorf("failed to write hooks.json: %w", err)
 	}
 	return nil
+}
+
+// ReadHookMeta returns the CLI-version stamp recorded in .codex/hooks.json.
+func (c *CodexAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, error) {
+	repoRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		repoRoot = "."
+	}
+	hooksPath := filepath.Join(repoRoot, ".codex", HooksFileName)
+	data, err := os.ReadFile(hooksPath) //nolint:gosec // path constructed from repo root
+	if err != nil {
+		return agent.HookMeta{}, false, nil
+	}
+	meta, ok := agent.ReadJSONHookMetaFromFile(data)
+	return meta, ok, nil
 }
 
 // AreHooksInstalled checks if Entire hooks are installed in Codex hooks.json.
