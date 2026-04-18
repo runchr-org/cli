@@ -80,8 +80,11 @@ func (c *CopilotCLIAgent) InstallHooks(ctx context.Context, localDev bool, force
 		rawHooks = make(map[string]json.RawMessage)
 	}
 
-	_, stampFound := agent.ReadJSONHookMeta(rawFile)
-	stampMissing := !stampFound
+	// Missing stamp predates version tracking — force a reinstall so the
+	// stamp lands with fresh hook commands, not on top of unknown old ones.
+	if _, stampFound := agent.ReadJSONHookMeta(rawFile); !stampFound {
+		force = true
+	}
 
 	// Parse existing entries for each hook type we manage
 	hookEntries := make(map[string][]CopilotHookEntry)
@@ -129,7 +132,7 @@ func (c *CopilotCLIAgent) InstallHooks(ctx context.Context, localDev bool, force
 		}
 	}
 
-	if count == 0 && !stampMissing {
+	if count == 0 {
 		return 0, nil
 	}
 

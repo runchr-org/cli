@@ -54,8 +54,11 @@ func (c *CodexAgent) InstallHooks(ctx context.Context, localDev bool, force bool
 		rawHooks = make(map[string]json.RawMessage)
 	}
 
-	_, stampFound := agent.ReadJSONHookMeta(topLevel)
-	stampMissing := !stampFound
+	// Missing stamp predates version tracking — force a reinstall so the
+	// stamp lands with fresh hook commands, not on top of unknown old ones.
+	if _, stampFound := agent.ReadJSONHookMeta(topLevel); !stampFound {
+		force = true
+	}
 
 	// Parse event types we manage
 	var sessionStart, userPromptSubmit, stop []MatcherGroup
@@ -108,7 +111,7 @@ func (c *CodexAgent) InstallHooks(ctx context.Context, localDev bool, force bool
 		count++
 	}
 
-	if count == 0 && !stampMissing {
+	if count == 0 {
 		// Still ensure the feature flag is configured even if hooks
 		// were already present (e.g., manually installed).
 		if err := ensureProjectFeatureEnabled(repoRoot); err != nil {

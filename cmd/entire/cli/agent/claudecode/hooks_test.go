@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	agentpkg "github.com/entireio/cli/cmd/entire/cli/agent"
@@ -98,6 +99,41 @@ func TestInstallHooks_StampsOnPreExistingInstall(t *testing.T) {
 	}
 	if meta.CLIVersion != agentpkg.HookMetaVersion() {
 		t.Fatalf("backfilled stamp = %q, want %q", meta.CLIVersion, agentpkg.HookMetaVersion())
+	}
+}
+
+// TestInstallHooks_MissingStampForcesReinstall pins the invariant that a plain
+// `entire enable` on a pre-stamp config cannot silently clear drift by writing
+// just the stamp: the hook payload itself must be rewritten. We seed a bogus
+// (but managed-looking) entire hook command that wouldn't match current
+// output, call InstallHooks with force=false, and verify the seeded command
+// is gone and the canonical one took its place.
+func TestInstallHooks_MissingStampForcesReinstall(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	// Settings with a managed-prefix hook but stale command shape, and no stamp.
+	writeSettingsFile(t, tempDir, `{
+  "hooks": {
+    "Stop": [{"matcher":"","hooks":[{"type":"command","command":"entire hooks claude-code stop --legacy-arg"}]}]
+  }
+}`)
+
+	ag := &ClaudeCodeAgent{}
+	if _, err := ag.InstallHooks(context.Background(), false, false); err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tempDir, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	content := string(data)
+	if strings.Contains(content, "--legacy-arg") {
+		t.Errorf("stale command should have been removed, still present in:\n%s", content)
+	}
+	if !strings.Contains(content, `"cli_version"`) {
+		t.Errorf("expected stamp to be written, not found in:\n%s", content)
 	}
 }
 

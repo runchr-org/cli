@@ -96,8 +96,11 @@ func (f *FactoryAIDroidAgent) InstallHooks(ctx context.Context, localDev bool, f
 		rawPermissions = make(map[string]json.RawMessage)
 	}
 
-	_, stampFound := agent.ReadJSONHookMeta(rawSettings)
-	stampMissing := !stampFound
+	// Missing stamp predates version tracking — force a reinstall so the
+	// stamp lands with fresh hook commands, not on top of unknown old ones.
+	if _, stampFound := agent.ReadJSONHookMeta(rawSettings); !stampFound {
+		force = true
+	}
 
 	// Parse only the hook types we need to modify
 	var sessionStart, sessionEnd, stop, userPromptSubmit, preToolUse, postToolUse, preCompact []FactoryHookMatcher
@@ -199,8 +202,8 @@ func (f *FactoryAIDroidAgent) InstallHooks(ctx context.Context, localDev bool, f
 		permissionsChanged = true
 	}
 
-	if count == 0 && !permissionsChanged && !stampMissing {
-		return 0, nil // All hooks, permissions, and stamp already in place
+	if count == 0 && !permissionsChanged {
+		return 0, nil // All hooks and permissions already installed
 	}
 
 	if err := agent.WriteJSONHookMeta(rawSettings); err != nil {

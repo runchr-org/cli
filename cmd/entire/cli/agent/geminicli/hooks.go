@@ -123,12 +123,17 @@ func (g *GeminiCLIAgent) InstallHooks(ctx context.Context, localDev bool, force 
 	parseGeminiHookType(rawHooks, "PreCompress", &preCompress)
 	parseGeminiHookType(rawHooks, "Notification", &notification)
 
+	// Missing stamp predates version tracking. Promote to force so the
+	// hook payload is fully rewritten — we never want to stamp "current"
+	// on top of old hook commands.
+	if _, stampFound := agent.ReadJSONHookMeta(rawSettings); !stampFound {
+		force = true
+	}
+
 	// Check for idempotency BEFORE removing hooks.
 	// If the exact same hook command already exists, hooks are already installed.
-	// When cleanupDone or the stamp is missing, we still need to write the file,
+	// When cleanupDone, we still need to write the file to persist the cleanup,
 	// but return 0 (not 12) so callers know no hooks were added.
-	_, stampFound := agent.ReadJSONHookMeta(rawSettings)
-	stampMissing := !stampFound
 	if !force {
 		existingCmd := getFirstEntireHookCommand(sessionStart)
 		expectedCmd := cmdPrefix + "session-start"
@@ -136,10 +141,11 @@ func (g *GeminiCLIAgent) InstallHooks(ctx context.Context, localDev bool, force 
 			expectedCmd = agent.WrapProductionJSONWarningHookCommand(expectedCmd, agent.WarningFormatSingleLine)
 		}
 		if existingCmd == expectedCmd {
-			if !cleanupDone && !stampMissing {
+			if !cleanupDone {
 				return 0, nil // Already installed with same mode and stamp present
 			}
-			// Cleanup or stamp refresh needed — write without running remove+add.
+			// Cleanup needed but hooks already installed — write cleaned rawHooks
+			// without running the full remove+add cycle.
 			return 0, writeGeminiSettingsFile(rawSettings, rawHooks, hooksConfig, settingsPath)
 		}
 	}
