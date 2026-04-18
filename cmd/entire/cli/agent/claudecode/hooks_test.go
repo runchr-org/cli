@@ -15,6 +15,100 @@ import (
 // metadataDenyRuleTest is the rule that blocks Claude from reading Entire metadata
 const metadataDenyRuleTest = "Read(./.entire/metadata/**)"
 
+// TestInstallHooks_StampsEntireMeta verifies that a fresh install writes an
+// entireMeta.cli_version field matching the running CLI version, and that
+// ReadHookMeta round-trips that stamp back out.
+func TestInstallHooks_StampsEntireMeta(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &ClaudeCodeAgent{}
+	if _, err := ag.InstallHooks(context.Background(), false, false); err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	settingsPath := filepath.Join(tempDir, ".claude", "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("parse settings: %v", err)
+	}
+	meta, ok := agentpkg.ReadJSONHookMeta(raw)
+	if !ok {
+		t.Fatalf("expected entireMeta stamp in %s, got keys %v", settingsPath, keysOf(raw))
+	}
+	if meta.CLIVersion != agentpkg.HookMetaVersion() {
+		t.Fatalf("stamp cli_version = %q, want %q", meta.CLIVersion, agentpkg.HookMetaVersion())
+	}
+
+	// ReadHookMeta must return the same stamp via the typed API.
+	readMeta, found, err := ag.ReadHookMeta(context.Background())
+	if err != nil {
+		t.Fatalf("ReadHookMeta: %v", err)
+	}
+	if !found {
+		t.Fatalf("ReadHookMeta reported no stamp")
+	}
+	if readMeta.CLIVersion != meta.CLIVersion {
+		t.Fatalf("ReadHookMeta cli_version = %q, want %q", readMeta.CLIVersion, meta.CLIVersion)
+	}
+}
+
+// TestInstallHooks_StampsOnPreExistingInstall makes sure an install that would
+// otherwise no-op (hooks already present, permissions present) still writes the
+// stamp if it is missing — this is how existing users' configs acquire an
+// entireMeta field on their next `entire enable` after upgrading.
+func TestInstallHooks_StampsOnPreExistingInstall(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	// Seed a settings.json that already has the Entire hooks and deny rule
+	// but no entireMeta stamp (simulating a pre-upgrade install).
+	writeSettingsFile(t, tempDir, `{
+  "permissions": {
+    "deny": ["Read(./.entire/metadata/**)"]
+  },
+  "hooks": {
+    "SessionStart": [{"matcher":"","hooks":[{"type":"command","command":"sh -c 'if ! command -v entire >/dev/null 2>&1; then printf \"%s\\n\" \"x\"; exit 0; fi; exec entire hooks claude-code session-start'"}]}],
+    "SessionEnd": [{"matcher":"","hooks":[{"type":"command","command":"sh -c 'if ! command -v entire >/dev/null 2>&1; then exit 0; fi; exec entire hooks claude-code session-end'"}]}],
+    "Stop": [{"matcher":"","hooks":[{"type":"command","command":"sh -c 'if ! command -v entire >/dev/null 2>&1; then exit 0; fi; exec entire hooks claude-code stop'"}]}],
+    "UserPromptSubmit": [{"matcher":"","hooks":[{"type":"command","command":"sh -c 'if ! command -v entire >/dev/null 2>&1; then exit 0; fi; exec entire hooks claude-code user-prompt-submit'"}]}],
+    "PreToolUse": [{"matcher":"Task","hooks":[{"type":"command","command":"sh -c 'if ! command -v entire >/dev/null 2>&1; then exit 0; fi; exec entire hooks claude-code pre-task'"}]}],
+    "PostToolUse": [
+      {"matcher":"Task","hooks":[{"type":"command","command":"sh -c 'if ! command -v entire >/dev/null 2>&1; then exit 0; fi; exec entire hooks claude-code post-task'"}]},
+      {"matcher":"TodoWrite","hooks":[{"type":"command","command":"sh -c 'if ! command -v entire >/dev/null 2>&1; then exit 0; fi; exec entire hooks claude-code post-todo'"}]}
+    ]
+  }
+}`)
+
+	ag := &ClaudeCodeAgent{}
+	if _, err := ag.InstallHooks(context.Background(), false, false); err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	meta, found, err := ag.ReadHookMeta(context.Background())
+	if err != nil {
+		t.Fatalf("ReadHookMeta: %v", err)
+	}
+	if !found {
+		t.Fatal("expected stamp to be backfilled on pre-existing install")
+	}
+	if meta.CLIVersion != agentpkg.HookMetaVersion() {
+		t.Fatalf("backfilled stamp = %q, want %q", meta.CLIVersion, agentpkg.HookMetaVersion())
+	}
+}
+
+func keysOf(m map[string]json.RawMessage) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
 func TestInstallHooks_PermissionsDeny_FreshInstall(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)

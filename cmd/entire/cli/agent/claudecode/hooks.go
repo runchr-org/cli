@@ -92,6 +92,11 @@ func (c *ClaudeCodeAgent) InstallHooks(ctx context.Context, localDev bool, force
 		rawPermissions = make(map[string]json.RawMessage)
 	}
 
+	// Stamp drift detection: if no entireMeta present, we still need to write
+	// so the stamp lands on existing installs that pre-date version tracking.
+	_, stampFound := agent.ReadJSONHookMeta(rawSettings)
+	stampMissing := !stampFound
+
 	// Parse only the hook types we need to modify
 	var sessionStart, sessionEnd, stop, userPromptSubmit, preToolUse, postToolUse []ClaudeHookMatcher
 	parseHookType(rawHooks, "SessionStart", &sessionStart)
@@ -181,8 +186,14 @@ func (c *ClaudeCodeAgent) InstallHooks(ctx context.Context, localDev bool, force
 		permissionsChanged = true
 	}
 
-	if count == 0 && !permissionsChanged {
-		return 0, nil // All hooks and permissions already installed
+	if count == 0 && !permissionsChanged && !stampMissing {
+		return 0, nil // All hooks, permissions, and stamp already in place
+	}
+
+	// Always refresh the CLI-version stamp so subsequent drift checks know
+	// which version last modified the config.
+	if err := agent.WriteJSONHookMeta(rawSettings); err != nil {
+		return 0, err
 	}
 
 	// Marshal modified hook types back to rawHooks
@@ -364,6 +375,22 @@ func (c *ClaudeCodeAgent) UninstallHooks(ctx context.Context) error {
 		return fmt.Errorf("failed to write settings.json: %w", err)
 	}
 	return nil
+}
+
+// ReadHookMeta returns the CLI-version stamp recorded in .claude/settings.json.
+// Missing or unparseable stamp returns ok=false so drift.go can flag it.
+func (c *ClaudeCodeAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, error) {
+	repoRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		repoRoot = "."
+	}
+	settingsPath := filepath.Join(repoRoot, ".claude", ClaudeSettingsFileName)
+	data, err := os.ReadFile(settingsPath) //nolint:gosec // path is constructed from repo root + fixed path
+	if err != nil {
+		return agent.HookMeta{}, false, nil
+	}
+	meta, ok := agent.ReadJSONHookMetaFromFile(data)
+	return meta, ok, nil
 }
 
 // AreHooksInstalled checks if Entire hooks are installed.

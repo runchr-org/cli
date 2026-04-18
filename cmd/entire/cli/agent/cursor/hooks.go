@@ -90,6 +90,9 @@ func (c *CursorAgent) InstallHooks(ctx context.Context, localDev bool, force boo
 		rawHooks = make(map[string]json.RawMessage)
 	}
 
+	_, stampFound := agent.ReadJSONHookMeta(rawFile)
+	stampMissing := !stampFound
+
 	// Parse only the hook types we manage
 	var sessionStart, sessionEnd, beforeSubmitPrompt, stop, preCompact, subagentStart, subagentStop []CursorHookEntry
 	parseCursorHookType(rawHooks, "sessionStart", &sessionStart)
@@ -168,8 +171,12 @@ func (c *CursorAgent) InstallHooks(ctx context.Context, localDev bool, force boo
 		count++
 	}
 
-	if count == 0 {
+	if count == 0 && !stampMissing {
 		return 0, nil
+	}
+
+	if err := agent.WriteJSONHookMeta(rawFile); err != nil {
+		return 0, err
 	}
 
 	// Marshal modified hook types back into rawHooks
@@ -283,6 +290,21 @@ func (c *CursorAgent) UninstallHooks(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// ReadHookMeta returns the CLI-version stamp recorded in .cursor/hooks.json.
+func (c *CursorAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, error) {
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		worktreeRoot = "."
+	}
+	hooksPath := filepath.Join(worktreeRoot, ".cursor", HooksFileName)
+	data, err := os.ReadFile(hooksPath) //nolint:gosec // path is constructed from repo root + fixed path
+	if err != nil {
+		return agent.HookMeta{}, false, nil
+	}
+	meta, ok := agent.ReadJSONHookMetaFromFile(data)
+	return meta, ok, nil
 }
 
 // AreHooksInstalled checks if Entire hooks are installed.

@@ -125,8 +125,10 @@ func (g *GeminiCLIAgent) InstallHooks(ctx context.Context, localDev bool, force 
 
 	// Check for idempotency BEFORE removing hooks.
 	// If the exact same hook command already exists, hooks are already installed.
-	// When cleanupDone, we still need to write the file to persist the cleanup,
-	// but we return 0 (not 12) so callers know no hooks were added.
+	// When cleanupDone or the stamp is missing, we still need to write the file,
+	// but return 0 (not 12) so callers know no hooks were added.
+	_, stampFound := agent.ReadJSONHookMeta(rawSettings)
+	stampMissing := !stampFound
 	if !force {
 		existingCmd := getFirstEntireHookCommand(sessionStart)
 		expectedCmd := cmdPrefix + "session-start"
@@ -134,11 +136,10 @@ func (g *GeminiCLIAgent) InstallHooks(ctx context.Context, localDev bool, force 
 			expectedCmd = agent.WrapProductionJSONWarningHookCommand(expectedCmd, agent.WarningFormatSingleLine)
 		}
 		if existingCmd == expectedCmd {
-			if !cleanupDone {
-				return 0, nil // Already installed with same mode, nothing to write
+			if !cleanupDone && !stampMissing {
+				return 0, nil // Already installed with same mode and stamp present
 			}
-			// Cleanup needed but hooks already installed — write cleaned rawHooks
-			// without running the full remove+add cycle.
+			// Cleanup or stamp refresh needed — write without running remove+add.
 			return 0, writeGeminiSettingsFile(rawSettings, rawHooks, hooksConfig, settingsPath)
 		}
 	}
@@ -260,7 +261,13 @@ func stripNonArrayHookFields(ctx context.Context, rawHooks map[string]json.RawMe
 }
 
 // writeGeminiSettingsFile marshals rawHooks and hooksConfig back into rawSettings and writes to disk.
+// Also stamps the current CLI version into rawSettings["entireMeta"] so drift
+// detection knows which binary last touched the file.
 func writeGeminiSettingsFile(rawSettings map[string]json.RawMessage, rawHooks map[string]json.RawMessage, hooksConfig GeminiHooksConfig, settingsPath string) error {
+	if err := agent.WriteJSONHookMeta(rawSettings); err != nil {
+		return err
+	}
+
 	hooksConfigJSON, err := jsonutil.MarshalWithNoHTMLEscape(hooksConfig)
 	if err != nil {
 		return fmt.Errorf("failed to marshal hooksConfig: %w", err)
@@ -406,6 +413,21 @@ func (g *GeminiCLIAgent) UninstallHooks(ctx context.Context) error {
 		return fmt.Errorf("failed to write settings.json: %w", err)
 	}
 	return nil
+}
+
+// ReadHookMeta returns the CLI-version stamp recorded in .gemini/settings.json.
+func (g *GeminiCLIAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, error) {
+	repoRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		repoRoot = "."
+	}
+	settingsPath := filepath.Join(repoRoot, ".gemini", GeminiSettingsFileName)
+	data, err := os.ReadFile(settingsPath) //nolint:gosec // path is constructed from repo root + fixed path
+	if err != nil {
+		return agent.HookMeta{}, false, nil
+	}
+	meta, ok := agent.ReadJSONHookMetaFromFile(data)
+	return meta, ok, nil
 }
 
 // AreHooksInstalled checks if Entire hooks are installed.

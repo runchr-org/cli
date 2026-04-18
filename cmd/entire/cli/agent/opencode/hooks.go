@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
@@ -57,7 +58,12 @@ func (a *OpenCodeAgent) InstallHooks(ctx context.Context, localDev bool, force b
 	}
 
 	// Generate plugin content from template
+	metaJSON, err := marshalHookMetaJSON()
+	if err != nil {
+		return 0, err
+	}
 	content := strings.ReplaceAll(pluginTemplate, entireCmdPlaceholder, cmdPrefix)
+	content = strings.ReplaceAll(content, entireMetaJSONPlaceholder, metaJSON)
 
 	// Check if already installed with identical content (idempotent) unless force
 	if !force {
@@ -96,6 +102,32 @@ func (a *OpenCodeAgent) UninstallHooks(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// ReadHookMeta scans .opencode/plugins/entire.ts for the `// entireMeta: {...}`
+// comment and returns the parsed stamp.
+func (a *OpenCodeAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, error) {
+	pluginPath, err := getPluginPath(ctx)
+	if err != nil {
+		return agent.HookMeta{}, false, nil //nolint:nilerr // path errors upstream of file reads are surfaced elsewhere
+	}
+	data, err := os.ReadFile(pluginPath) //nolint:gosec // Path constructed from repo root
+	if err != nil {
+		return agent.HookMeta{}, false, nil
+	}
+	meta, ok := agent.ReadTSHookMeta(string(data))
+	return meta, ok, nil
+}
+
+// marshalHookMetaJSON returns a minified JSON encoding of the current HookMeta
+// (e.g., `{"cli_version":"0.5.3"}`) suitable for substitution into the TS plugin
+// template's `// entireMeta: __ENTIRE_META_JSON__` line.
+func marshalHookMetaJSON() (string, error) {
+	data, err := jsonutil.MarshalWithNoHTMLEscape(agent.HookMeta{CLIVersion: agent.HookMetaVersion()})
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal entireMeta for opencode: %w", err)
+	}
+	return string(data), nil
 }
 
 // AreHooksInstalled checks if the Entire plugin file exists and contains the marker.
