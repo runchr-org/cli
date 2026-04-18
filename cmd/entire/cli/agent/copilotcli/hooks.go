@@ -248,7 +248,7 @@ func (c *CopilotCLIAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, boo
 	hooksPath := filepath.Join(worktreeRoot, hooksDir, HooksFileName)
 	data, err := os.ReadFile(hooksPath) //nolint:gosec // path is constructed from repo root + fixed path
 	if err != nil {
-		return agent.HookMeta{}, false, nil
+		return agent.HookMeta{}, false, nil //nolint:nilerr // missing file means "no stamp", not a drift-check error
 	}
 	meta, ok := agent.ReadJSONHookMetaFromFile(data)
 	return meta, ok, nil

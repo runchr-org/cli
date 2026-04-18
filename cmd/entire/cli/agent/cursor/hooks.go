@@ -304,7 +304,7 @@ func (c *CursorAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, e
 	hooksPath := filepath.Join(worktreeRoot, ".cursor", HooksFileName)
 	data, err := os.ReadFile(hooksPath) //nolint:gosec // path is constructed from repo root + fixed path
 	if err != nil {
-		return agent.HookMeta{}, false, nil
+		return agent.HookMeta{}, false, nil //nolint:nilerr // missing file means "no stamp", not a drift-check error
 	}
 	meta, ok := agent.ReadJSONHookMetaFromFile(data)
 	return meta, ok, nil

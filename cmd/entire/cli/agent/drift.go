@@ -10,6 +10,14 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 )
 
+// devVersion is the sentinel versioninfo.Version value for local/unreleased
+// builds — never produce drift warnings when running one of these.
+const devVersion = "dev"
+
+// zeroSemver is the default compatibility floor — when MinCompatibleCLIVersion
+// normalizes to this value, drift detection is globally disabled.
+const zeroSemver = "v0.0.0"
+
 // DriftReport describes a single agent whose installed hook config was stamped
 // by a CLI version older than the agent's declared MinCompatibleCLIVersion
 // (or is missing a stamp entirely).
@@ -34,7 +42,7 @@ type DriftReport struct {
 // agent — so `entire status` and `entire enable` can call it on every run
 // without concern.
 func CheckHookDrift(ctx context.Context) []DriftReport {
-	if versioninfo.Version == "dev" {
+	if versioninfo.Version == devVersion {
 		return nil
 	}
 
@@ -57,7 +65,7 @@ func CheckHookDrift(ctx context.Context) []DriftReport {
 		// globally: we've shipped the stamp mechanism but not yet raised
 		// the bar on any agent. Bail before the per-agent file read.
 		required := MinCompatibleCLIVersion
-		if normalizeSemver(required) == "v0.0.0" {
+		if normalizeSemver(required) == zeroSemver {
 			continue
 		}
 
@@ -84,17 +92,17 @@ func CheckHookDrift(ctx context.Context) []DriftReport {
 
 // normalizeSemver coerces a version string into the form expected by
 // golang.org/x/mod/semver (leading "v", valid semver). Empty/"dev" becomes
-// "v0.0.0"; unparseable strings also degrade to "v0.0.0" so they sort lowest.
+// zeroSemver; unparseable strings also degrade to zeroSemver so they sort lowest.
 func normalizeSemver(v string) string {
 	v = strings.TrimSpace(v)
-	if v == "" || v == "dev" {
-		return "v0.0.0"
+	if v == "" || v == devVersion {
+		return zeroSemver
 	}
 	if !strings.HasPrefix(v, "v") {
 		v = "v" + v
 	}
 	if !semver.IsValid(v) {
-		return "v0.0.0"
+		return zeroSemver
 	}
 	return v
 }
