@@ -92,10 +92,13 @@ func (c *ClaudeCodeAgent) InstallHooks(ctx context.Context, localDev bool, force
 		rawPermissions = make(map[string]json.RawMessage)
 	}
 
-	// Stamp drift detection: if no entireMeta present, we still need to write
-	// so the stamp lands on existing installs that pre-date version tracking.
-	_, stampFound := agent.ReadJSONHookMeta(rawSettings)
-	stampMissing := !stampFound
+	// A missing entireMeta stamp on an existing install predates version
+	// tracking: the hook payload on disk could be anything. Treat it like
+	// --force so the stamp is only written alongside a fresh hook install,
+	// never over stale commands.
+	if _, stampFound := agent.ReadJSONHookMeta(rawSettings); !stampFound {
+		force = true
+	}
 
 	// Parse only the hook types we need to modify
 	var sessionStart, sessionEnd, stop, userPromptSubmit, preToolUse, postToolUse []ClaudeHookMatcher
@@ -186,8 +189,8 @@ func (c *ClaudeCodeAgent) InstallHooks(ctx context.Context, localDev bool, force
 		permissionsChanged = true
 	}
 
-	if count == 0 && !permissionsChanged && !stampMissing {
-		return 0, nil // All hooks, permissions, and stamp already in place
+	if count == 0 && !permissionsChanged {
+		return 0, nil // All hooks and permissions already installed
 	}
 
 	// Always refresh the CLI-version stamp so subsequent drift checks know

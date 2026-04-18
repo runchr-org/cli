@@ -552,8 +552,12 @@ func TestInstallHooks_RemovesLegacyEnabledField_WhenAlreadyInstalled(t *testing.
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)
 
-	// Hooks already installed but legacy "enabled": true is also present
+	// Hooks already installed (with a current entireMeta stamp) but legacy
+	// "enabled": true is also present. Seeding the stamp keeps this test
+	// focused on the legacy-cleanup path — a missing stamp would now force
+	// a full reinstall, which is covered by other tests.
 	writeGeminiSettings(t, tempDir, fmt.Sprintf(`{
+  "entireMeta": {"cli_version": %q},
   "hooks": {
     "enabled": true,
     "SessionStart": [
@@ -562,7 +566,7 @@ func TestInstallHooks_RemovesLegacyEnabledField_WhenAlreadyInstalled(t *testing.
       }
     ]
   }
-}`, agentpkg.WrapProductionJSONWarningHookCommand("entire hooks gemini session-start", agentpkg.WarningFormatSingleLine)))
+}`, agentpkg.HookMetaVersion(), agentpkg.WrapProductionJSONWarningHookCommand("entire hooks gemini session-start", agentpkg.WarningFormatSingleLine)))
 
 	agent := &GeminiCLIAgent{}
 	n, err := agent.InstallHooks(context.Background(), false, false)
