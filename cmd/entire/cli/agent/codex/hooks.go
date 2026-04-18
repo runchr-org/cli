@@ -234,7 +234,7 @@ func (c *CodexAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, er
 	hooksPath := filepath.Join(repoRoot, ".codex", HooksFileName)
 	data, err := os.ReadFile(hooksPath) //nolint:gosec // path constructed from repo root
 	if err != nil {
-		return agent.HookMeta{}, false, nil
+		return agent.HookMeta{}, false, nil //nolint:nilerr // missing file means "no stamp", not a drift-check error
 	}
 	meta, ok := agent.ReadJSONHookMetaFromFile(data)
 	return meta, ok, nil

@@ -43,6 +43,8 @@ var entireHookPrefixes = []string{
 // InstallHooks installs Claude Code hooks in .claude/settings.json.
 // If force is true, removes existing Entire hooks before installing.
 // Returns the number of hooks installed.
+//
+//nolint:maintidx // Hook installation is intentionally centralized here; splitting it further would add churn for a config-assembly path.
 func (c *ClaudeCodeAgent) InstallHooks(ctx context.Context, localDev bool, force bool) (int, error) {
 	// Use repo root instead of CWD to find .claude directory
 	// This ensures hooks are installed correctly when run from a subdirectory
@@ -390,7 +392,7 @@ func (c *ClaudeCodeAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, boo
 	settingsPath := filepath.Join(repoRoot, ".claude", ClaudeSettingsFileName)
 	data, err := os.ReadFile(settingsPath) //nolint:gosec // path is constructed from repo root + fixed path
 	if err != nil {
-		return agent.HookMeta{}, false, nil
+		return agent.HookMeta{}, false, nil //nolint:nilerr // missing file means "no stamp", not a drift-check error
 	}
 	meta, ok := agent.ReadJSONHookMetaFromFile(data)
 	return meta, ok, nil

@@ -113,7 +113,7 @@ func (a *OpenCodeAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool,
 	}
 	data, err := os.ReadFile(pluginPath) //nolint:gosec // Path constructed from repo root
 	if err != nil {
-		return agent.HookMeta{}, false, nil
+		return agent.HookMeta{}, false, nil //nolint:nilerr // missing file means "no stamp", not a drift-check error
 	}
 	meta, ok := agent.ReadTSHookMeta(string(data))
 	return meta, ok, nil
