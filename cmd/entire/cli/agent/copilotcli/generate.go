@@ -2,7 +2,7 @@ package copilotcli
 
 import (
 	"context"
-	"fmt"
+	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
@@ -18,10 +18,17 @@ func (c *CopilotCLIAgent) GenerateText(ctx context.Context, prompt string, model
 	if model != "" {
 		args = append(args, "--model", model)
 	}
-
-	result, err := agent.RunIsolatedTextGeneratorCLI(ctx, c.CommandRunner, "copilot", "copilot", args, prompt)
-	if err != nil {
-		return "", fmt.Errorf("copilot text generation failed: %w", err)
+	res, runErr := agent.RunIsolatedTextGeneratorCLIRaw(ctx, c.CommandRunner, "copilot", args, prompt)
+	if err := Classifier.Classify(ctx, res, runErr); err != nil {
+		return "", err //nolint:wrapcheck // preserve *agent.TextGenError / ctx sentinel for errors.As at the explain layer
 	}
-	return result, nil
+	out := strings.TrimSpace(string(res.Stdout))
+	if out == "" {
+		return "", &agent.TextGenError{
+			Kind:     agent.TextGenErrorUnknown,
+			Provider: agent.AgentNameCopilotCLI,
+			Message:  "copilot CLI returned empty output",
+		}
+	}
+	return out, nil
 }
