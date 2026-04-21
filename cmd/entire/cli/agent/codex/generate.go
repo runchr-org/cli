@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -16,8 +17,28 @@ func (c *CodexAgent) GenerateText(ctx context.Context, prompt, model string) (st
 	args = append(args, "-")
 
 	res, runErr := agent.RunIsolatedTextGeneratorCLIRaw(ctx, c.CommandRunner, "codex", args, prompt)
-	if err := Classifier.Classify(ctx, res, runErr); err != nil {
-		return "", err //nolint:wrapcheck // preserve *agent.TextGenError / ctx sentinel for errors.As at the explain layer
+	if runErr != nil {
+		if errors.Is(runErr, context.Canceled) {
+			return "", context.Canceled
+		}
+		if errors.Is(runErr, context.DeadlineExceeded) {
+			return "", context.DeadlineExceeded
+		}
+		if agent.IsExecNotFoundErr(runErr) {
+			return "", &agent.TextGenError{
+				Kind:     agent.TextGenErrorCLIMissing,
+				Provider: agent.AgentNameCodex,
+				Cause:    runErr,
+			}
+		}
+		stderr := agent.TruncateStderr(string(res.Stderr))
+		return "", &agent.TextGenError{
+			Kind:     agent.ClassifyStderrHTTPStatus(stderr),
+			Provider: agent.AgentNameCodex,
+			Message:  stderr,
+			ExitCode: res.ExitCode,
+			Cause:    runErr,
+		}
 	}
 	out := strings.TrimSpace(string(res.Stdout))
 	if out == "" {

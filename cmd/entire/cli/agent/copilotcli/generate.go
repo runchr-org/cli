@@ -2,6 +2,7 @@ package copilotcli
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -19,8 +20,28 @@ func (c *CopilotCLIAgent) GenerateText(ctx context.Context, prompt string, model
 		args = append(args, "--model", model)
 	}
 	res, runErr := agent.RunIsolatedTextGeneratorCLIRaw(ctx, c.CommandRunner, "copilot", args, prompt)
-	if err := Classifier.Classify(ctx, res, runErr); err != nil {
-		return "", err //nolint:wrapcheck // preserve *agent.TextGenError / ctx sentinel for errors.As at the explain layer
+	if runErr != nil {
+		if errors.Is(runErr, context.Canceled) {
+			return "", context.Canceled
+		}
+		if errors.Is(runErr, context.DeadlineExceeded) {
+			return "", context.DeadlineExceeded
+		}
+		if agent.IsExecNotFoundErr(runErr) {
+			return "", &agent.TextGenError{
+				Kind:     agent.TextGenErrorCLIMissing,
+				Provider: agent.AgentNameCopilotCLI,
+				Cause:    runErr,
+			}
+		}
+		stderr := agent.TruncateStderr(string(res.Stderr))
+		return "", &agent.TextGenError{
+			Kind:     agent.ClassifyStderrHTTPStatus(stderr),
+			Provider: agent.AgentNameCopilotCLI,
+			Message:  stderr,
+			ExitCode: res.ExitCode,
+			Cause:    runErr,
+		}
 	}
 	out := strings.TrimSpace(string(res.Stdout))
 	if out == "" {

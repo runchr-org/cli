@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -11,9 +12,16 @@ import (
 // Implements the agent.TextGenerator interface.
 //
 // Model defaults to "haiku" for fast, cheap generation (the summarize package
-// overrides to "sonnet" via ResolveModel for quality). Classification is
-// delegated to the shared engine via Classifier; Claude's envelope-based
-// semantics are expressed through the ParseEnvelope hook.
+// overrides to "sonnet" via ResolveModel for quality).
+//
+// Classification order:
+//  1. Envelope on stdout — checked first because Claude's primary failure mode
+//     is exit 0 with is_error:true; the structured envelope wins over stderr
+//     and ctx sentinels.
+//  2. Context sentinels (ctx canceled/deadline) — passthrough, not typed.
+//  3. CLIMissing — typed error for "install the binary" remediation.
+//  4. Any other run error — stderr classified by HTTP status.
+//  5. Empty stdout on exit 0 — typed Unknown with "empty output" message.
 func (c *ClaudeCodeAgent) GenerateText(ctx context.Context, prompt string, model string) (string, error) {
 	if model == "" {
 		model = "haiku"
@@ -23,14 +31,46 @@ func (c *ClaudeCodeAgent) GenerateText(ctx context.Context, prompt string, model
 		"--model", model, "--setting-sources", "",
 	}
 	res, runErr := agent.RunIsolatedTextGeneratorCLIRaw(ctx, c.CommandRunner, "claude", args, prompt)
-	if err := Classifier.Classify(ctx, res, runErr); err != nil {
-		return "", err //nolint:wrapcheck // preserve *agent.TextGenError / ctx sentinel for errors.As at the explain layer
+
+	if env := classifyClaudeEnvelope(res.Stdout); env != nil {
+		env.ExitCode = res.ExitCode
+		env.Cause = runErr
+		return "", env
 	}
-	// Empty stdout on exit 0: parseClaudeEnvelope has a len(stdout)==0 carveout
-	// that lets empty stdout fall through to stderr/CLIMissing classification.
-	// When runErr is also nil (clean exit 0, no stderr), Classify returns nil
-	// and we land here with nothing to parse. Return the same typed error the
-	// other four summary providers return in this shape.
+
+	if runErr != nil {
+		if errors.Is(runErr, context.Canceled) {
+			return "", context.Canceled
+		}
+		if errors.Is(runErr, context.DeadlineExceeded) {
+			return "", context.DeadlineExceeded
+		}
+		if agent.IsExecNotFoundErr(runErr) {
+			return "", &agent.TextGenError{
+				Kind:     agent.TextGenErrorCLIMissing,
+				Provider: agent.AgentNameClaudeCode,
+				Cause:    runErr,
+			}
+		}
+		stderr := agent.TruncateStderr(string(res.Stderr))
+		kind := agent.ClassifyStderrHTTPStatus(stderr)
+		if kind == agent.TextGenErrorUnknown && containsAuthPhrase(stderr) {
+			// Claude's CLI sometimes exits non-zero with auth failure text on
+			// stderr before any envelope is produced (e.g. "Invalid API key"
+			// with exit 2). The phrase list matches envelopeAuthPhrases in
+			// envelope_parser.go; both are from 963.
+			kind = agent.TextGenErrorAuth
+		}
+		return "", &agent.TextGenError{
+			Kind:     kind,
+			Provider: agent.AgentNameClaudeCode,
+			Message:  stderr,
+			ExitCode: res.ExitCode,
+			Cause:    runErr,
+		}
+	}
+
+	// Success path. Envelope was nil (stdout empty) or envelope.IsError was false.
 	if len(res.Stdout) == 0 {
 		return "", &agent.TextGenError{
 			Kind:     agent.TextGenErrorUnknown,
@@ -38,15 +78,8 @@ func (c *ClaudeCodeAgent) GenerateText(ctx context.Context, prompt string, model
 			Message:  "claude CLI returned empty output",
 		}
 	}
-	// Success path: envelope parsed cleanly with is_error:false. Result is
-	// extracted inside parseGenerateTextResponse; caller wants the payload.
 	result, _, parseErr := parseGenerateTextResponse(res.Stdout)
 	if parseErr != nil {
-		// Defensive: non-empty stdout whose envelope parser said "success"
-		// (envelope==nil || !IsError) but which fails to re-parse here would
-		// mean parseClaudeEnvelope's and parseGenerateTextResponse's notions
-		// of "valid" disagree. Return a typed error so callers can still use
-		// errors.As uniformly.
 		return "", &agent.TextGenError{
 			Kind:     agent.TextGenErrorUnknown,
 			Provider: agent.AgentNameClaudeCode,

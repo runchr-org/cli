@@ -8,21 +8,27 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
 
-func TestParseClaudeEnvelope_NonErrorReturnsNoStructuredError(t *testing.T) {
+func TestClassifyClaudeEnvelope_NonErrorReturnsNil(t *testing.T) {
 	t.Parallel()
 	stdout := []byte(`{"type":"result","subtype":"success","is_error":false,"result":"ok"}`)
-	env, ok := parseClaudeEnvelope(stdout)
-	if ok {
-		t.Errorf("want (nil, false); got (%#v, true)", env)
+	if env := classifyClaudeEnvelope(stdout); env != nil {
+		t.Errorf("want nil on success envelope; got %#v", env)
 	}
 }
 
-func TestParseClaudeEnvelope_IsErrorWithHTTP401MapsToAuth(t *testing.T) {
+func TestClassifyClaudeEnvelope_EmptyStdoutReturnsNil(t *testing.T) {
+	t.Parallel()
+	if env := classifyClaudeEnvelope(nil); env != nil {
+		t.Errorf("want nil on empty stdout (caller handles via CLIMissing/stderr path); got %#v", env)
+	}
+}
+
+func TestClassifyClaudeEnvelope_IsErrorWithHTTP401MapsToAuth(t *testing.T) {
 	t.Parallel()
 	stdout := []byte(`{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"result":"Auth required"}`)
-	env, ok := parseClaudeEnvelope(stdout)
-	if !ok {
-		t.Fatal("want (result, true)")
+	env := classifyClaudeEnvelope(stdout)
+	if env == nil {
+		t.Fatal("want typed error")
 	}
 	if env.Kind != agent.TextGenErrorAuth {
 		t.Errorf("Kind = %q; want auth", env.Kind)
@@ -33,26 +39,29 @@ func TestParseClaudeEnvelope_IsErrorWithHTTP401MapsToAuth(t *testing.T) {
 	if env.APIStatus != 401 {
 		t.Errorf("APIStatus = %d; want 401", env.APIStatus)
 	}
+	if env.Provider != agent.AgentNameClaudeCode {
+		t.Errorf("Provider = %q; want claude-code", env.Provider)
+	}
 }
 
-func TestParseClaudeEnvelope_AuthFromResultWhenStatusMissing(t *testing.T) {
+func TestClassifyClaudeEnvelope_AuthFromResultWhenStatusMissing(t *testing.T) {
 	t.Parallel()
 	stdout := []byte(`{"type":"result","is_error":true,"result":"Invalid API key provided"}`)
-	env, ok := parseClaudeEnvelope(stdout)
-	if !ok {
-		t.Fatal("want (result, true)")
+	env := classifyClaudeEnvelope(stdout)
+	if env == nil {
+		t.Fatal("want typed error")
 	}
 	if env.Kind != agent.TextGenErrorAuth {
 		t.Errorf("Kind = %q; want auth via phrase heuristic", env.Kind)
 	}
 }
 
-func TestParseClaudeEnvelope_MalformedJSONAtExit0Preserves963Wording(t *testing.T) {
+func TestClassifyClaudeEnvelope_MalformedJSONPreserves963Wording(t *testing.T) {
 	t.Parallel()
 	stdout := []byte(`garbage not json`)
-	env, ok := parseClaudeEnvelope(stdout)
-	if !ok {
-		t.Fatal("want (result, true) on malformed JSON — caller at exit 0 needs a non-nil error")
+	env := classifyClaudeEnvelope(stdout)
+	if env == nil {
+		t.Fatal("want typed error on malformed JSON — caller at exit 0 needs a non-nil error")
 	}
 	if env.Kind != agent.TextGenErrorUnknown {
 		t.Errorf("Kind = %q; want unknown for malformed JSON", env.Kind)
@@ -62,7 +71,7 @@ func TestParseClaudeEnvelope_MalformedJSONAtExit0Preserves963Wording(t *testing.
 	}
 }
 
-func TestParseClaudeEnvelope_HTTPStatusMapping(t *testing.T) {
+func TestClassifyClaudeEnvelope_HTTPStatusMapping(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
@@ -82,9 +91,9 @@ func TestParseClaudeEnvelope_HTTPStatusMapping(t *testing.T) {
 			stdout := []byte(
 				`{"type":"result","is_error":true,"api_error_status":` + strconv.Itoa(tc.status) + `,"result":"err"}`,
 			)
-			env, ok := parseClaudeEnvelope(stdout)
-			if !ok {
-				t.Fatal("want (result, true)")
+			env := classifyClaudeEnvelope(stdout)
+			if env == nil {
+				t.Fatal("want typed error")
 			}
 			if env.Kind != tc.wantKind {
 				t.Errorf("status=%d Kind = %q; want %q", tc.status, env.Kind, tc.wantKind)
