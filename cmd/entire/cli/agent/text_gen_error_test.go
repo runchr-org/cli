@@ -108,6 +108,63 @@ func TestClassify_CLIMissingFromExecNotFound(t *testing.T) {
 	}
 }
 
+func TestClassify_EnvelopeWinsOverStderr(t *testing.T) {
+	t.Parallel()
+	// Fake envelope parser simulates Claude's is_error:true with HTTP 401.
+	parseEnv := func(_ []byte) (*EnvelopeResult, bool) {
+		return &EnvelopeResult{Kind: TextGenErrorAuth, Message: "auth from envelope", APIStatus: 401}, true
+	}
+	c := &Classifier{Provider: AgentNameClaudeCode, ParseEnvelope: parseEnv}
+	err := c.Classify(context.Background(), ExecResult{Stderr: []byte("401 Unauthorized in stderr")}, errors.New("exit 1"))
+	var tge *TextGenError
+	if !errors.As(err, &tge) {
+		t.Fatalf("want *TextGenError; got %v", err)
+	}
+	if tge.Kind != TextGenErrorAuth {
+		t.Errorf("Kind = %q; want auth (from envelope)", tge.Kind)
+	}
+	if tge.Message != "auth from envelope" {
+		t.Errorf("Message = %q; want envelope message to win over stderr", tge.Message)
+	}
+	if tge.APIStatus != 401 {
+		t.Errorf("APIStatus = %d; want 401", tge.APIStatus)
+	}
+}
+
+func TestClassify_EnvelopeParserReportsNoStructuredError(t *testing.T) {
+	t.Parallel()
+	parseEnv := func(_ []byte) (*EnvelopeResult, bool) { return nil, false }
+	c := &Classifier{Provider: AgentNameClaudeCode, ParseEnvelope: parseEnv}
+	// runErr == nil AND parser says no structured error → nil.
+	if err := c.Classify(context.Background(), ExecResult{}, nil); err != nil {
+		t.Errorf("Classify(nil, nil) with no-structured-error envelope = %v; want nil", err)
+	}
+}
+
+func TestClassify_HTTPBaseline401MapsToAuth(t *testing.T) {
+	t.Parallel()
+	c := &Classifier{Provider: AgentNameCodex}
+	err := c.Classify(context.Background(),
+		ExecResult{Stderr: []byte("ERROR: unexpected status 401 Unauthorized"), ExitCode: 1},
+		errors.New("exit 1"))
+	var tge *TextGenError
+	if !errors.As(err, &tge) || tge.Kind != TextGenErrorAuth {
+		t.Errorf("want Auth; got %#v", tge)
+	}
+}
+
+func TestClassify_HTTPBaseline429MapsToRateLimit(t *testing.T) {
+	t.Parallel()
+	c := &Classifier{Provider: AgentNameGemini}
+	err := c.Classify(context.Background(),
+		ExecResult{Stderr: []byte("429 Too Many Requests"), ExitCode: 1},
+		errors.New("exit 1"))
+	var tge *TextGenError
+	if !errors.As(err, &tge) || tge.Kind != TextGenErrorRateLimit {
+		t.Errorf("want RateLimit; got %#v", tge)
+	}
+}
+
 func TestIsExecNotFoundErr(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

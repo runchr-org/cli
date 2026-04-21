@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 )
@@ -106,6 +107,17 @@ func isExecNotFoundErr(err error) bool {
 	return errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist)
 }
 
+// httpStatusBaseline is a provider-agnostic first pass: most CLIs pass through
+// the underlying API's HTTP status in stderr. Checked before per-agent phrases
+// so behavior is consistent across providers when the status is visible.
+var httpStatusBaseline = []PhraseRule{
+	{Kind: TextGenErrorAuth, Phrase: "401"},
+	{Kind: TextGenErrorAuth, Phrase: "403"},
+	{Kind: TextGenErrorRateLimit, Phrase: "429"},
+	{Kind: TextGenErrorConfig, Phrase: "400"},
+	{Kind: TextGenErrorConfig, Phrase: "404"},
+}
+
 // Classify converts raw subprocess signals into *TextGenError. Callers invoke
 // Classify *unconditionally* — both on exit 0 and on non-nil runErr — because
 // Claude's primary failure mode is exit 0 with is_error:true in the envelope.
@@ -137,11 +149,73 @@ func (c *Classifier) Classify(_ context.Context, res ExecResult, runErr error) e
 			}
 		}
 	}
-	// Further branches land in Task 1.5 (envelope), 1.6 (HTTP baseline + phrases).
-	// For now, success is the only remaining path.
+
+	// Envelope parser (Claude only) runs regardless of runErr so an is_error
+	// envelope on stdout is preferred over stderr classification — matches
+	// 963's behavior at claudecode/generate.go:57-69.
+	if c.ParseEnvelope != nil {
+		if env, ok := c.ParseEnvelope(res.Stdout); ok && env != nil {
+			return &TextGenError{
+				Kind:      env.Kind,
+				Provider:  c.Provider,
+				Message:   env.Message,
+				APIStatus: env.APIStatus,
+				ExitCode:  res.ExitCode,
+				Cause:     runErr,
+			}
+		}
+	}
+
 	if runErr == nil {
 		return nil
 	}
-	// Temporary fallthrough to Unknown until phrases land. Preserve ExitCode.
-	return &TextGenError{Kind: TextGenErrorUnknown, Provider: c.Provider, ExitCode: res.ExitCode, Cause: runErr}
+
+	stderrStr := truncateStderr(string(res.Stderr))
+
+	// HTTP-status baseline before per-agent phrases: any CLI that passes
+	// through an HTTP status in stderr gets uniform treatment.
+	if rule := matchPhrase(stderrStr, httpStatusBaseline); rule != nil {
+		return &TextGenError{
+			Kind:     rule.Kind,
+			Provider: c.Provider,
+			Message:  stderrStr,
+			ExitCode: res.ExitCode,
+			Cause:    runErr,
+		}
+	}
+	if rule := matchPhrase(stderrStr, c.Phrases); rule != nil {
+		return &TextGenError{
+			Kind:     rule.Kind,
+			Provider: c.Provider,
+			Message:  stderrStr,
+			ExitCode: res.ExitCode,
+			Cause:    runErr,
+		}
+	}
+
+	return &TextGenError{
+		Kind:     TextGenErrorUnknown,
+		Provider: c.Provider,
+		Message:  stderrStr,
+		ExitCode: res.ExitCode,
+		Cause:    runErr,
+	}
+}
+
+func matchPhrase(s string, rules []PhraseRule) *PhraseRule {
+	lower := strings.ToLower(s)
+	for i := range rules {
+		if strings.Contains(lower, strings.ToLower(rules[i].Phrase)) {
+			return &rules[i]
+		}
+	}
+	return nil
+}
+
+func truncateStderr(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > stderrMessageMaxLen {
+		s = s[:stderrMessageMaxLen]
+	}
+	return s
 }
