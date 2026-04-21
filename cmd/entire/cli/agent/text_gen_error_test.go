@@ -3,6 +3,8 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -66,3 +68,28 @@ var (
 	}
 	_ = stderrMessageMaxLen
 )
+
+func TestIsExecNotFoundErr(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"exec.Error wrapping ErrNotFound", &exec.Error{Name: "codex", Err: exec.ErrNotFound}, true},
+		{"top-level exec.ErrNotFound", exec.ErrNotFound, true},
+		{"os.ErrNotExist", os.ErrNotExist, true},
+		{"wrapped exec.ErrNotFound via fmt.Errorf", fmt.Errorf("spawn failed: %w", exec.ErrNotFound), true},
+		{"permission denied is NOT CLI-missing", &exec.Error{Name: "x", Err: os.ErrPermission}, false},
+		{"nil is NOT CLI-missing", nil, false},
+		{"arbitrary error is NOT CLI-missing", errors.New("some other failure"), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isExecNotFoundErr(tc.err); got != tc.want {
+				t.Errorf("isExecNotFoundErr(%v) = %v; want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}

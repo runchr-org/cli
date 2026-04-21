@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 )
@@ -84,3 +87,20 @@ type ExecResult struct {
 // stderrMessageMaxLen caps the Message field size when derived from stderr.
 // Matches 963's claudecode cap exactly; see spec Risk #3 for rationale.
 const stderrMessageMaxLen = 500
+
+// isExecNotFoundErr returns true when err indicates the CLI binary was not
+// found on PATH. Mirrors 963's claudecode.isExecNotFound exactly: it
+// intentionally excludes other *exec.Error causes (permission denied,
+// invalid executable format), which should surface as a generic failure so
+// operators aren't misdirected to a reinstall when the real problem is a
+// broken/inaccessible binary.
+func isExecNotFoundErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var execErr *exec.Error
+	if errors.As(err, &execErr) && errors.Is(execErr.Err, exec.ErrNotFound) {
+		return true
+	}
+	return errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist)
+}
