@@ -18,6 +18,11 @@ type TextCommandRunner func(ctx context.Context, name string, args ...string) *e
 // RunIsolatedTextGeneratorCLI executes a text-generation CLI in an isolated temp
 // directory with all GIT_* environment variables removed. This avoids recursive
 // hook triggers and repo side effects while preserving provider-specific flags.
+//
+// Deprecated: use RunIsolatedTextGeneratorCLIRaw, which returns stdout/stderr/exit
+// as separate values so callers can feed them into agent.Classifier.Classify.
+// This helper is scheduled for removal once all summary-capable providers
+// migrate off it.
 func RunIsolatedTextGeneratorCLI(ctx context.Context, runner TextCommandRunner, binary, displayName string, args []string, stdin string) (string, error) {
 	if runner == nil {
 		runner = exec.CommandContext
