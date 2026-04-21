@@ -53,23 +53,6 @@ func TestTextGenError_ErrorsAsIntegration(t *testing.T) {
 	}
 }
 
-// Compile-time coverage for the declarative types introduced alongside
-// TextGenError. No behavior assertions yet; the Classify engine and its
-// tests land in a follow-up task.
-var (
-	_ = PhraseRule{Kind: TextGenErrorAuth, Phrase: "invalid api key"}
-	_ = EnvelopeResult{Kind: TextGenErrorRateLimit, Message: "slow down", APIStatus: 429}
-	_ = ExecResult{Stdout: []byte("o"), Stderr: []byte("e"), ExitCode: 1}
-	_ = &Classifier{
-		Provider: AgentNameClaudeCode,
-		Phrases:  []PhraseRule{{Kind: TextGenErrorAuth, Phrase: "unauthorized"}},
-		ParseEnvelope: func(_ []byte) (*EnvelopeResult, bool) {
-			return nil, false
-		},
-	}
-	_ = stderrMessageMaxLen
-)
-
 func TestClassify_ContextDeadline(t *testing.T) {
 	t.Parallel()
 	c := &Classifier{Provider: AgentNameCodex}
@@ -193,6 +176,109 @@ func TestClassify_EnvelopeWinsOverContextSentinel(t *testing.T) {
 	// debugging, but the outer error type must be *TextGenError.)
 	if err == context.DeadlineExceeded { //nolint:errorlint // must check identity, not unwrap chain
 		t.Error("returned error must be *TextGenError from envelope, not bare context.DeadlineExceeded")
+	}
+}
+
+func TestClassify_PerAgentPhraseMatches(t *testing.T) {
+	t.Parallel()
+	c := &Classifier{
+		Provider: AgentNameCursor,
+		Phrases: []PhraseRule{
+			{Kind: TextGenErrorAuth, Phrase: "Authentication required"},
+		},
+	}
+	err := c.Classify(context.Background(),
+		ExecResult{Stderr: []byte("Error: Authentication required."), ExitCode: 1},
+		errors.New("exit 1"))
+	var tge *TextGenError
+	if !errors.As(err, &tge) || tge.Kind != TextGenErrorAuth {
+		t.Errorf("want Auth from phrase match; got %#v", tge)
+	}
+	if !strings.Contains(tge.Message, "Authentication required") {
+		t.Errorf("Message = %q; want to contain the CLI's verbatim stderr", tge.Message)
+	}
+}
+
+func TestClassify_PhraseMatchCaseInsensitive(t *testing.T) {
+	t.Parallel()
+	c := &Classifier{
+		Provider: AgentNameClaudeCode,
+		Phrases:  []PhraseRule{{Kind: TextGenErrorAuth, Phrase: "invalid api key"}},
+	}
+	err := c.Classify(context.Background(),
+		ExecResult{Stderr: []byte("INVALID API KEY"), ExitCode: 1},
+		errors.New("exit 1"))
+	var tge *TextGenError
+	if !errors.As(err, &tge) || tge.Kind != TextGenErrorAuth {
+		t.Errorf("want Auth (case-insensitive); got %#v", tge)
+	}
+}
+
+func TestClassify_FirstMatchWinsInPhraseOrder(t *testing.T) {
+	t.Parallel()
+	c := &Classifier{
+		Provider: AgentNameCodex,
+		Phrases: []PhraseRule{
+			{Kind: TextGenErrorAuth, Phrase: "specific auth phrase"},
+			{Kind: TextGenErrorConfig, Phrase: "auth"}, // would also match, but Auth wins by order
+		},
+	}
+	err := c.Classify(context.Background(),
+		ExecResult{Stderr: []byte("specific auth phrase triggered"), ExitCode: 1},
+		errors.New("exit 1"))
+	var tge *TextGenError
+	if !errors.As(err, &tge) || tge.Kind != TextGenErrorAuth {
+		t.Errorf("want Auth (first match wins); got %#v", tge)
+	}
+}
+
+func TestClassify_FallthroughToUnknownPreservesStderr(t *testing.T) {
+	t.Parallel()
+	c := &Classifier{Provider: AgentNameCopilotCLI}
+	err := c.Classify(context.Background(),
+		ExecResult{Stderr: []byte("something weird and unclassifiable"), ExitCode: 2},
+		errors.New("exit 2"))
+	var tge *TextGenError
+	if !errors.As(err, &tge) || tge.Kind != TextGenErrorUnknown {
+		t.Errorf("want Unknown; got %#v", tge)
+	}
+	if tge.Message != "something weird and unclassifiable" {
+		t.Errorf("Message = %q; want trimmed stderr verbatim", tge.Message)
+	}
+	if tge.ExitCode != 2 {
+		t.Errorf("ExitCode = %d; want 2", tge.ExitCode)
+	}
+}
+
+func TestClassify_EmptyStderrStillConstructsError(t *testing.T) {
+	t.Parallel()
+	c := &Classifier{Provider: AgentNameCodex}
+	err := c.Classify(context.Background(), ExecResult{ExitCode: 137}, errors.New("killed"))
+	var tge *TextGenError
+	if !errors.As(err, &tge) {
+		t.Fatal("want non-nil *TextGenError even with empty stderr")
+	}
+	if tge.Message != "" {
+		t.Errorf("Message = %q; want empty (formatter fills from ExitCode)", tge.Message)
+	}
+	if tge.ExitCode != 137 {
+		t.Errorf("ExitCode = %d; want 137", tge.ExitCode)
+	}
+}
+
+func TestClassify_StderrTruncatedTo500Bytes(t *testing.T) {
+	t.Parallel()
+	c := &Classifier{Provider: AgentNameCodex}
+	long := strings.Repeat("x", 800)
+	err := c.Classify(context.Background(),
+		ExecResult{Stderr: []byte(long), ExitCode: 1},
+		errors.New("exit 1"))
+	var tge *TextGenError
+	if !errors.As(err, &tge) {
+		t.Fatal("want *TextGenError")
+	}
+	if len(tge.Message) > 500 {
+		t.Errorf("len(Message) = %d; want <= 500", len(tge.Message))
 	}
 }
 
