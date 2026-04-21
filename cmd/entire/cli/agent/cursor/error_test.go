@@ -9,13 +9,11 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
 
-// fixtureCursor401Stderr is a representative 401 passthrough pattern Cursor's
-// `agent` CLI surfaces when the upstream model provider rejects credentials.
-// No verbatim fixture has been captured for Cursor yet; once one is, replace
-// this with the real stderr from a 2026-xx-xx research pass and update this
-// comment accordingly. The HTTP-status baseline (shared across all providers)
-// is what makes this test pass — the Classifier has no cursor-specific auth
-// phrases yet.
+// fixtureCursor401Stderr exercises the shared HTTP-status baseline — Cursor's
+// Classifier has no per-agent phrases, so this test is what proves auth still
+// classifies correctly when the upstream provider returns 401. The exact
+// wording is illustrative, not verbatim; classification depends on the "401"
+// substring regardless of the surrounding text.
 const fixtureCursor401Stderr = `ERROR: upstream request failed: 401 Unauthorized`
 
 func TestClassifier_AuthViaHTTPStatusBaseline(t *testing.T) {

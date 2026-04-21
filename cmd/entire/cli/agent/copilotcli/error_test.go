@@ -9,13 +9,11 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
 
-// fixtureCopilot401Stderr is a representative 401 passthrough pattern the
-// Copilot CLI surfaces when the upstream (GitHub/OpenAI) rejects credentials.
-// No verbatim fixture has been captured for Copilot yet; once one is, replace
-// this with the real stderr from a 2026-xx-xx research pass and update this
-// comment accordingly. The HTTP-status baseline (shared across all providers)
-// is what makes this test pass — the Classifier has no copilot-specific auth
-// phrases yet.
+// fixtureCopilot401Stderr exercises the shared HTTP-status baseline — Copilot's
+// Classifier has no per-agent phrases, so this test is what proves auth still
+// classifies correctly when the upstream (GitHub/OpenAI) returns 401. The
+// exact wording is illustrative, not verbatim; classification depends on the
+// "401" substring regardless of the surrounding text.
 const fixtureCopilot401Stderr = `error: request failed with status 401 Unauthorized`
 
 func TestClassifier_AuthViaHTTPStatusBaseline(t *testing.T) {
