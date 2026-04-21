@@ -49,3 +49,20 @@ func TestTextGenError_ErrorsAsIntegration(t *testing.T) {
 		t.Error("errors.Is did not find cause through TextGenError.Unwrap()")
 	}
 }
+
+// Compile-time coverage for the declarative types introduced alongside
+// TextGenError. No behavior assertions yet; the Classify engine and its
+// tests land in a follow-up task.
+var (
+	_ = PhraseRule{Kind: TextGenErrorAuth, Phrase: "invalid api key"}
+	_ = EnvelopeResult{Kind: TextGenErrorRateLimit, Message: "slow down", APIStatus: 429}
+	_ = ExecResult{Stdout: []byte("o"), Stderr: []byte("e"), ExitCode: 1}
+	_ = &Classifier{
+		Provider: AgentNameClaudeCode,
+		Phrases:  []PhraseRule{{Kind: TextGenErrorAuth, Phrase: "unauthorized"}},
+		ParseEnvelope: func(_ []byte) (*EnvelopeResult, bool) {
+			return nil, false
+		},
+	}
+	_ = stderrMessageMaxLen
+)

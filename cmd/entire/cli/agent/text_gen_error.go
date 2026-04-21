@@ -48,3 +48,39 @@ func (e *TextGenError) Error() string {
 }
 
 func (e *TextGenError) Unwrap() error { return e.Cause }
+
+// PhraseRule is a substring→Kind mapping used by Classifier. Matching is
+// case-insensitive; the first matching rule wins.
+type PhraseRule struct {
+	Kind   TextGenErrorKind
+	Phrase string
+}
+
+// EnvelopeResult is what a provider's ParseEnvelope reports when it
+// recognizes a structured CLI error (currently Claude only).
+type EnvelopeResult struct {
+	Kind      TextGenErrorKind
+	Message   string
+	APIStatus int
+}
+
+// Classifier is declarative per-agent configuration. The shared engine
+// consumes it; each provider package declares one package-level
+// `var Classifier = &agent.Classifier{...}`.
+type Classifier struct {
+	Provider      types.AgentName
+	Phrases       []PhraseRule                                // per-CLI, ordered
+	ParseEnvelope func(stdout []byte) (*EnvelopeResult, bool) // optional — Claude only
+}
+
+// ExecResult is what RunIsolatedTextGeneratorCLIRaw returns: the raw pieces
+// the Classifier consumes.
+type ExecResult struct {
+	Stdout   []byte
+	Stderr   []byte
+	ExitCode int
+}
+
+// stderrMessageMaxLen caps the Message field size when derived from stderr.
+// Matches 963's claudecode cap exactly; see spec Risk #3 for rationale.
+const stderrMessageMaxLen = 500
