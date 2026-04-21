@@ -93,7 +93,7 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, input Input) (*checkpoin
 
 	resultJSON, err := textGenerator.GenerateText(ctx, prompt, model)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // preserve *ClaudeError for errors.As at the explain layer
+		return nil, err //nolint:wrapcheck // preserve *agent.TextGenError for errors.As at the explain layer
 	}
 
 	return parseSummaryText(resultJSON)

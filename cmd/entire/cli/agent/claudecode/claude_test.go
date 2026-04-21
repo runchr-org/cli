@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os/exec"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
 
 func TestResolveSessionFile(t *testing.T) {
@@ -45,7 +47,7 @@ func TestGenerateText_ArrayResponse(t *testing.T) {
 	}
 }
 
-func TestGenerateText_EnvelopeErrorReturnsClaudeError(t *testing.T) {
+func TestGenerateText_EnvelopeErrorReturnsTextGenError(t *testing.T) {
 	t.Parallel()
 	ag := &ClaudeCodeAgent{
 		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
@@ -54,12 +56,12 @@ func TestGenerateText_EnvelopeErrorReturnsClaudeError(t *testing.T) {
 		},
 	}
 	_, err := ag.GenerateText(context.Background(), "prompt", "")
-	var ce *ClaudeError
-	if !errors.As(err, &ce) {
-		t.Fatalf("err = %v; want *ClaudeError", err)
+	var tge *agent.TextGenError
+	if !errors.As(err, &tge) {
+		t.Fatalf("err = %v; want *agent.TextGenError", err)
 	}
-	if ce.Kind != ClaudeErrorAuth {
-		t.Fatalf("Kind = %v; want %v", ce.Kind, ClaudeErrorAuth)
+	if tge.Kind != agent.TextGenErrorAuth {
+		t.Fatalf("Kind = %v; want %v", tge.Kind, agent.TextGenErrorAuth)
 	}
 }
 
@@ -71,12 +73,12 @@ func TestGenerateText_CLIMissing(t *testing.T) {
 		},
 	}
 	_, err := ag.GenerateText(context.Background(), "prompt", "")
-	var ce *ClaudeError
-	if !errors.As(err, &ce) {
-		t.Fatalf("err = %v; want *ClaudeError", err)
+	var tge *agent.TextGenError
+	if !errors.As(err, &tge) {
+		t.Fatalf("err = %v; want *agent.TextGenError", err)
 	}
-	if ce.Kind != ClaudeErrorCLIMissing {
-		t.Fatalf("Kind = %v; want %v", ce.Kind, ClaudeErrorCLIMissing)
+	if tge.Kind != agent.TextGenErrorCLIMissing {
+		t.Fatalf("Kind = %v; want %v", tge.Kind, agent.TextGenErrorCLIMissing)
 	}
 }
 
@@ -88,11 +90,11 @@ func TestGenerateText_StderrAuthFallback(t *testing.T) {
 		},
 	}
 	_, err := ag.GenerateText(context.Background(), "prompt", "")
-	var ce *ClaudeError
-	if !errors.As(err, &ce) {
-		t.Fatalf("err = %v; want *ClaudeError", err)
+	var tge *agent.TextGenError
+	if !errors.As(err, &tge) {
+		t.Fatalf("err = %v; want *agent.TextGenError", err)
 	}
-	if ce.Kind != ClaudeErrorAuth {
-		t.Fatalf("Kind = %v; want %v", ce.Kind, ClaudeErrorAuth)
+	if tge.Kind != agent.TextGenErrorAuth {
+		t.Fatalf("Kind = %v; want %v", tge.Kind, agent.TextGenErrorAuth)
 	}
 }

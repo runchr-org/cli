@@ -100,8 +100,8 @@ var providersNeedingSynthesizedRemediation = map[types.AgentName]bool{
 }
 
 // formatTextGenErrorSuffix builds a non-empty diagnostic suffix for the
-// Unknown fallthrough path. Mirrors 963's formatClaudeErrorSuffix — prefers
-// the envelope Message, then HTTP status, then a real exit code, then the
+// Unknown fallthrough path. Mirrors 963's Claude-specific suffix helper —
+// prefers the envelope Message, then HTTP status, then a real exit code, then the
 // "abnormal termination" branch for ExitCode < 0, and finally a sentinel so
 // the user never sees "<Display> failed to generate the summary" followed
 // by nothing.

@@ -31,6 +31,15 @@ func TestTextGenError_UnwrapReturnsCause(t *testing.T) {
 	}
 }
 
+func TestTextGenError_ErrorEmptyMessageIncludesExitCode(t *testing.T) {
+	t.Parallel()
+	e := &TextGenError{Kind: TextGenErrorUnknown, Provider: AgentNameClaudeCode, ExitCode: 137}
+	want := "claude-code CLI error (kind=unknown, exit=137)"
+	if got := e.Error(); got != want {
+		t.Errorf("Error() = %q; want %q", got, want)
+	}
+}
+
 func TestTextGenError_ErrorsAsIntegration(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("timeout")

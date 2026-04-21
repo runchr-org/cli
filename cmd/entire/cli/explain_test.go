@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
-	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -73,7 +72,7 @@ func TestExplainCmd_SearchAllFlag(t *testing.T) {
 
 func TestFormatCheckpointSummaryError_Auth(t *testing.T) {
 	t.Parallel()
-	err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: claudecode.ClaudeErrorAuth, Message: "Invalid API key"}, 0)
+	err := formatCheckpointSummaryError(&agent.TextGenError{Kind: agent.TextGenErrorAuth, Provider: agent.AgentNameClaudeCode, Message: "Invalid API key"}, 0)
 	msg := err.Error()
 	if !strings.Contains(strings.ToLower(msg), "authentication failed") {
 		t.Errorf("missing 'authentication failed' in %q", msg)
@@ -85,7 +84,7 @@ func TestFormatCheckpointSummaryError_Auth(t *testing.T) {
 
 func TestFormatCheckpointSummaryError_RateLimit(t *testing.T) {
 	t.Parallel()
-	err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: claudecode.ClaudeErrorRateLimit, Message: "429"}, 0)
+	err := formatCheckpointSummaryError(&agent.TextGenError{Kind: agent.TextGenErrorRateLimit, Provider: agent.AgentNameClaudeCode, Message: "429"}, 0)
 	if !strings.Contains(err.Error(), "rate limit") {
 		t.Errorf("missing rate-limit phrasing: %q", err)
 	}
@@ -93,7 +92,7 @@ func TestFormatCheckpointSummaryError_RateLimit(t *testing.T) {
 
 func TestFormatCheckpointSummaryError_Config(t *testing.T) {
 	t.Parallel()
-	err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: claudecode.ClaudeErrorConfig, Message: "model not found"}, 0)
+	err := formatCheckpointSummaryError(&agent.TextGenError{Kind: agent.TextGenErrorConfig, Provider: agent.AgentNameClaudeCode, Message: "model not found"}, 0)
 	if !strings.Contains(err.Error(), "model not found") {
 		t.Errorf("envelope message not surfaced: %q", err)
 	}
@@ -101,7 +100,7 @@ func TestFormatCheckpointSummaryError_Config(t *testing.T) {
 
 func TestFormatCheckpointSummaryError_CLIMissing(t *testing.T) {
 	t.Parallel()
-	err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: claudecode.ClaudeErrorCLIMissing}, 0)
+	err := formatCheckpointSummaryError(&agent.TextGenError{Kind: agent.TextGenErrorCLIMissing, Provider: agent.AgentNameClaudeCode}, 0)
 	if !strings.Contains(err.Error(), "not installed") {
 		t.Errorf("missing cli-missing phrasing: %q", err)
 	}
@@ -109,19 +108,19 @@ func TestFormatCheckpointSummaryError_CLIMissing(t *testing.T) {
 
 // TestFormatCheckpointSummaryError_TypedBranchesHandleEmptyMessage guards against
 // the null-result-envelope regression: Claude can emit is_error:true with a real
-// HTTP status (401/429/4xx) but result:null, producing a ClaudeError with Message="".
+// HTTP status (401/429/4xx) but result:null, producing a TextGenError with Message="".
 // The Auth/RateLimit/Config branches must not render a bare colon in that case.
 func TestFormatCheckpointSummaryError_TypedBranchesHandleEmptyMessage(t *testing.T) {
 	t.Parallel()
-	kinds := []claudecode.ClaudeErrorKind{
-		claudecode.ClaudeErrorAuth,
-		claudecode.ClaudeErrorRateLimit,
-		claudecode.ClaudeErrorConfig,
+	kinds := []agent.TextGenErrorKind{
+		agent.TextGenErrorAuth,
+		agent.TextGenErrorRateLimit,
+		agent.TextGenErrorConfig,
 	}
 	for _, kind := range kinds {
 		t.Run(string(kind), func(t *testing.T) {
 			t.Parallel()
-			err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: kind}, 0)
+			err := formatCheckpointSummaryError(&agent.TextGenError{Kind: kind, Provider: agent.AgentNameClaudeCode}, 0)
 			msg := err.Error()
 			// Must not end any line with a bare colon (the classic regression
 			// of rendering "...: " with nothing after it).
@@ -179,14 +178,14 @@ func TestFormatCheckpointSummaryError_Unknown(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
-		err  *claudecode.ClaudeError
+		err  *agent.TextGenError
 		want string // substring that must appear in the rendered message
 	}{
-		{"APIStatus when Message empty", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown, APIStatus: 500}, "500"},
-		{"ExitCode when Message empty", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown, ExitCode: 137}, "137"},
-		{"Negative ExitCode renders as abnormal, not -1", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown, ExitCode: -1}, "abnormal"},
-		{"All-zero fields render a diagnostic sentinel, not empty", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown}, "no diagnostic detail"},
-		{"Message takes precedence", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown, Message: "something weird"}, "something weird"},
+		{"APIStatus when Message empty", &agent.TextGenError{Kind: agent.TextGenErrorUnknown, Provider: agent.AgentNameClaudeCode, APIStatus: 500}, "500"},
+		{"ExitCode when Message empty", &agent.TextGenError{Kind: agent.TextGenErrorUnknown, Provider: agent.AgentNameClaudeCode, ExitCode: 137}, "137"},
+		{"Negative ExitCode renders as abnormal, not -1", &agent.TextGenError{Kind: agent.TextGenErrorUnknown, Provider: agent.AgentNameClaudeCode, ExitCode: -1}, "abnormal"},
+		{"All-zero fields render a diagnostic sentinel, not empty", &agent.TextGenError{Kind: agent.TextGenErrorUnknown, Provider: agent.AgentNameClaudeCode}, "no diagnostic detail"},
+		{"Message takes precedence", &agent.TextGenError{Kind: agent.TextGenErrorUnknown, Provider: agent.AgentNameClaudeCode, Message: "something weird"}, "something weird"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -330,13 +329,13 @@ func TestGenerateCheckpointAISummary_UsesParentDeadlineAndWrapsSentinel(t *testi
 	}
 }
 
-// TestGenerateCheckpointAISummary_PreservesClaudeErrorWhenCtxIsDone guards
+// TestGenerateCheckpointAISummary_PreservesTextGenErrorWhenCtxIsDone guards
 // against the race where the underlying summarizer returns a typed
-// *ClaudeError AND the context happens to be done. Prior code checked
+// *agent.TextGenError AND the context happens to be done. Prior code checked
 // timeoutCtx.Err() and unconditionally wrapped with %w context.DeadlineExceeded,
 // which discarded the typed error and routed the user to the wrong
 // "safety deadline" guidance instead of the auth/rate-limit message.
-func TestGenerateCheckpointAISummary_PreservesClaudeErrorWhenCtxIsDone(t *testing.T) {
+func TestGenerateCheckpointAISummary_PreservesTextGenErrorWhenCtxIsDone(t *testing.T) {
 	tmpTimeout := checkpointSummaryTimeout
 	tmpGenerator := generateTranscriptSummary
 	t.Cleanup(func() {
@@ -350,7 +349,7 @@ func TestGenerateCheckpointAISummary_PreservesClaudeErrorWhenCtxIsDone(t *testin
 	parentCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	claudeErr := &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorAuth, Message: "Invalid API key"}
+	tgeErr := &agent.TextGenError{Kind: agent.TextGenErrorAuth, Provider: agent.AgentNameClaudeCode, Message: "Invalid API key"}
 	generateTranscriptSummary = func(
 		context.Context,
 		redact.RedactedBytes,
@@ -358,16 +357,16 @@ func TestGenerateCheckpointAISummary_PreservesClaudeErrorWhenCtxIsDone(t *testin
 		types.AgentType,
 		summarize.Generator,
 	) (*checkpoint.Summary, error) {
-		return nil, claudeErr
+		return nil, tgeErr
 	}
 
 	_, _, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
-	var ce *claudecode.ClaudeError
-	if !errors.As(err, &ce) {
-		t.Fatalf("errors.As did not recover *ClaudeError; got %v", err)
+	var tge *agent.TextGenError
+	if !errors.As(err, &tge) {
+		t.Fatalf("errors.As did not recover *agent.TextGenError; got %v", err)
 	}
-	if ce.Kind != claudecode.ClaudeErrorAuth {
-		t.Errorf("Kind = %v; want auth", ce.Kind)
+	if tge.Kind != agent.TextGenErrorAuth {
+		t.Errorf("Kind = %v; want auth", tge.Kind)
 	}
 }
 

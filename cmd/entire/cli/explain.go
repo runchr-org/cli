@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
-	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/agent/opencode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
@@ -575,7 +574,7 @@ func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, f
 	if err != nil {
 		// Only classify as ctx cancel/deadline when the error chain actually
 		// contains the sentinel. Relying on timeoutCtx.Err() here loses typed
-		// errors (e.g. *ClaudeError) when the subprocess returned a real
+		// errors (e.g. *agent.TextGenError) when the subprocess returned a real
 		// structured failure while timeoutCtx.Err() is non-nil for any reason
 		// (parent cancelled, deadline already elapsed, etc.).
 		if errors.Is(err, context.Canceled) {
@@ -590,24 +589,13 @@ func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, f
 	return summary, timeoutDuration, nil
 }
 
-// formatCheckpointSummaryError maps typed Claude CLI errors and context
+// formatCheckpointSummaryError maps typed text-generation errors and context
 // sentinels to user-facing messages.
 func formatCheckpointSummaryError(err error, deadline time.Duration) error {
-	var claudeErr *claudecode.ClaudeError
+	var tgErr *agent.TextGenError
 	switch {
-	case errors.As(err, &claudeErr):
-		switch claudeErr.Kind { //nolint:exhaustive // ClaudeErrorUnknown handled by default
-		case claudecode.ClaudeErrorAuth:
-			return fmt.Errorf("Claude authentication failed%s\nRun `claude login` and retry", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005: capitalized because Claude is a proper noun
-		case claudecode.ClaudeErrorRateLimit:
-			return fmt.Errorf("Claude rejected the summary request due to rate limits or quota%s\nWait and retry", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005
-		case claudecode.ClaudeErrorConfig:
-			return fmt.Errorf("Claude rejected the summary request%s\nCheck your Claude CLI config and selected model", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005
-		case claudecode.ClaudeErrorCLIMissing:
-			return errors.New("Claude CLI is not installed or not on PATH") //nolint:staticcheck // ST1005
-		default:
-			return fmt.Errorf("Claude failed to generate the summary%s", formatClaudeErrorSuffix(claudeErr)) //nolint:staticcheck // ST1005
-		}
+	case errors.As(err, &tgErr):
+		return renderTextGenError(tgErr)
 	case errors.Is(err, context.DeadlineExceeded):
 		// Deliberately provider-neutral: explain --generate supports multiple
 		// summary providers (claude-code, codex, gemini, ...), so hardcoding
@@ -624,42 +612,6 @@ func formatCheckpointSummaryError(err error, deadline time.Duration) error {
 		return errors.New("summary generation canceled")
 	default:
 		return fmt.Errorf("failed to generate summary: %w", err)
-	}
-}
-
-// formatMessageSuffix formats ": <msg>" when msg is non-empty and "" otherwise.
-// Used by the Auth / RateLimit / Config branches of formatCheckpointSummaryError
-// to avoid rendering a bare colon when ClaudeError.Message is empty (reachable
-// when the CLI envelope is is_error:true with result:null but a real status).
-func formatMessageSuffix(msg string) string {
-	if msg == "" {
-		return ""
-	}
-	return ": " + msg
-}
-
-// formatClaudeErrorSuffix builds a diagnostic suffix for user-facing output
-// when we fall through to the default "failed to generate the summary" path.
-// Prefers the envelope Message, falls back to HTTP status, then exit code,
-// so the user never sees a bare "Claude failed to generate the summary:"
-// with nothing after the colon (which happens when Claude returns
-// is_error:true with result:null, or when the subprocess crashes with no
-// stderr output). ExitCode < 0 means the subprocess did not produce a real
-// exit code (e.g. launch failure) — render that as "abnormal termination"
-// rather than the misleading "exited with code -1".
-func formatClaudeErrorSuffix(e *claudecode.ClaudeError) string {
-	if e.Message != "" {
-		return ": " + e.Message
-	}
-	switch {
-	case e.APIStatus != 0:
-		return fmt.Sprintf(" (Anthropic API returned HTTP %d)", e.APIStatus)
-	case e.ExitCode > 0:
-		return fmt.Sprintf(" (claude CLI exited with code %d)", e.ExitCode)
-	case e.ExitCode < 0:
-		return " (claude CLI terminated abnormally — no exit code captured)"
-	default:
-		return " (no diagnostic detail available from Claude CLI)"
 	}
 }
 
