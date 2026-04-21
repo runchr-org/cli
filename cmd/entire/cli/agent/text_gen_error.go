@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -103,4 +104,44 @@ func isExecNotFoundErr(err error) bool {
 		return true
 	}
 	return errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist)
+}
+
+// Classify converts raw subprocess signals into *TextGenError. Callers invoke
+// Classify *unconditionally* — both on exit 0 and on non-nil runErr — because
+// Claude's primary failure mode is exit 0 with is_error:true in the envelope.
+//
+// Returns nil only when runErr is nil AND (ParseEnvelope is unset OR
+// ParseEnvelope reports no structured error). Otherwise returns *TextGenError.
+//
+// Classification order (first match wins):
+//  1. ctx sentinels on runErr (DeadlineExceeded / Canceled) — passthrough,
+//     not wrapped in TextGenError.
+//  2. CLIMissing detection via isExecNotFoundErr.
+//  3. ParseEnvelope(res.Stdout) if set — used for Claude's structured envelope.
+//  4. If runErr != nil: HTTP-status baseline substrings in stderr.
+//  5. If runErr != nil: per-agent Phrases in stderr, case-insensitive, first-match-wins.
+//  6. If runErr != nil: Unknown with Message = trimmed+truncated stderr.
+func (c *Classifier) Classify(_ context.Context, res ExecResult, runErr error) error {
+	if runErr != nil {
+		if errors.Is(runErr, context.DeadlineExceeded) {
+			return context.DeadlineExceeded
+		}
+		if errors.Is(runErr, context.Canceled) {
+			return context.Canceled
+		}
+		if isExecNotFoundErr(runErr) {
+			return &TextGenError{
+				Kind:     TextGenErrorCLIMissing,
+				Provider: c.Provider,
+				Cause:    runErr,
+			}
+		}
+	}
+	// Further branches land in Task 1.5 (envelope), 1.6 (HTTP baseline + phrases).
+	// For now, success is the only remaining path.
+	if runErr == nil {
+		return nil
+	}
+	// Temporary fallthrough to Unknown until phrases land. Preserve ExitCode.
+	return &TextGenError{Kind: TextGenErrorUnknown, Provider: c.Provider, ExitCode: res.ExitCode, Cause: runErr}
 }

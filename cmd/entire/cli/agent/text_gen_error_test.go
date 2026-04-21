@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -68,6 +69,44 @@ var (
 	}
 	_ = stderrMessageMaxLen
 )
+
+func TestClassify_ContextDeadline(t *testing.T) {
+	t.Parallel()
+	c := &Classifier{Provider: AgentNameCodex}
+	err := c.Classify(context.Background(), ExecResult{}, context.DeadlineExceeded)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Classify(DeadlineExceeded) = %v; want sentinel passthrough", err)
+	}
+	var tge *TextGenError
+	if errors.As(err, &tge) {
+		t.Errorf("ctx sentinel must not be wrapped in TextGenError; got %#v", tge)
+	}
+}
+
+func TestClassify_ContextCanceled(t *testing.T) {
+	t.Parallel()
+	c := &Classifier{Provider: AgentNameCodex}
+	err := c.Classify(context.Background(), ExecResult{}, context.Canceled)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Classify(Canceled) = %v; want sentinel passthrough", err)
+	}
+}
+
+func TestClassify_CLIMissingFromExecNotFound(t *testing.T) {
+	t.Parallel()
+	c := &Classifier{Provider: AgentNameGemini}
+	err := c.Classify(context.Background(), ExecResult{}, &exec.Error{Name: "gemini", Err: exec.ErrNotFound})
+	var tge *TextGenError
+	if !errors.As(err, &tge) {
+		t.Fatalf("want *TextGenError; got %v", err)
+	}
+	if tge.Kind != TextGenErrorCLIMissing {
+		t.Errorf("Kind = %q; want %q", tge.Kind, TextGenErrorCLIMissing)
+	}
+	if tge.Provider != AgentNameGemini {
+		t.Errorf("Provider = %q; want %q", tge.Provider, AgentNameGemini)
+	}
+}
 
 func TestIsExecNotFoundErr(t *testing.T) {
 	t.Parallel()
