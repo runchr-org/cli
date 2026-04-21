@@ -105,6 +105,12 @@ var providersNeedingSynthesizedRemediation = map[types.AgentName]bool{
 // "abnormal termination" branch for ExitCode < 0, and finally a sentinel so
 // the user never sees "<Display> failed to generate the summary" followed
 // by nothing.
+//
+// Note: parameterizing on displayName produces "Claude API returned HTTP N"
+// where 963 used "Anthropic API" and lowercase "claude CLI". This
+// normalization is intentional and pinned exactly by
+// explain_summary_error_test.go. The load-bearing 963 messages
+// (auth/rate-limit/config/CLI-missing) remain byte-identical.
 func formatTextGenErrorSuffix(e *agent.TextGenError, displayName string) string {
 	if e.Message != "" {
 		return ": " + e.Message

@@ -10,9 +10,10 @@ import (
 func TestRenderTextGenError_ClaudeWordingMatches963(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name string
-		in   *agent.TextGenError
-		want string // substring the output must contain exactly
+		name  string
+		in    *agent.TextGenError
+		want  string // substring (Contains) or exact match when exact=true
+		exact bool   // if true, assert ==; else assert Contains
 	}{
 		{
 			name: "claude auth, envelope provides message",
@@ -39,33 +40,47 @@ func TestRenderTextGenError_ClaudeWordingMatches963(t *testing.T) {
 			in:   &agent.TextGenError{Kind: agent.TextGenErrorCLIMissing, Provider: agent.AgentNameClaudeCode},
 			want: "Claude CLI is not installed or not on PATH",
 		},
+		// Unknown-branch outputs are pinned exactly — the new wording ("Claude API
+		// returned HTTP N", "Claude CLI exited with code N") is a minor evolution
+		// from 963 ("Anthropic API", lowercase "claude CLI"). Accepting this drift
+		// normalizes capitalization with the other Claude-prefixed branches.
 		{
-			name: "claude unknown with APIStatus falls back to HTTP status",
-			in:   &agent.TextGenError{Kind: agent.TextGenErrorUnknown, Provider: agent.AgentNameClaudeCode, APIStatus: 500},
-			want: "500",
+			name:  "claude unknown with APIStatus renders HTTP status (exact)",
+			in:    &agent.TextGenError{Kind: agent.TextGenErrorUnknown, Provider: agent.AgentNameClaudeCode, APIStatus: 500},
+			want:  "Claude failed to generate the summary (Claude API returned HTTP 500)",
+			exact: true,
 		},
 		{
-			name: "claude unknown with ExitCode falls back to exit code",
-			in:   &agent.TextGenError{Kind: agent.TextGenErrorUnknown, Provider: agent.AgentNameClaudeCode, ExitCode: 137},
-			want: "137",
+			name:  "claude unknown with ExitCode renders exit code (exact)",
+			in:    &agent.TextGenError{Kind: agent.TextGenErrorUnknown, Provider: agent.AgentNameClaudeCode, ExitCode: 137},
+			want:  "Claude failed to generate the summary (Claude CLI exited with code 137)",
+			exact: true,
 		},
 		{
-			name: "claude unknown with negative ExitCode renders abnormal",
-			in:   &agent.TextGenError{Kind: agent.TextGenErrorUnknown, Provider: agent.AgentNameClaudeCode, ExitCode: -1},
-			want: "abnormal",
+			name:  "claude unknown with negative ExitCode renders abnormal (exact)",
+			in:    &agent.TextGenError{Kind: agent.TextGenErrorUnknown, Provider: agent.AgentNameClaudeCode, ExitCode: -1},
+			want:  "Claude failed to generate the summary (Claude CLI terminated abnormally — no exit code captured)",
+			exact: true,
 		},
 		{
-			name: "claude all-zero unknown renders diagnostic sentinel, not empty",
-			in:   &agent.TextGenError{Kind: agent.TextGenErrorUnknown, Provider: agent.AgentNameClaudeCode},
-			want: "no diagnostic detail",
+			name:  "claude all-zero unknown renders diagnostic sentinel (exact)",
+			in:    &agent.TextGenError{Kind: agent.TextGenErrorUnknown, Provider: agent.AgentNameClaudeCode},
+			want:  "Claude failed to generate the summary (no diagnostic detail available from Claude CLI)",
+			exact: true,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := renderTextGenError(tc.in)
-			if !strings.Contains(got.Error(), tc.want) {
-				t.Errorf("renderTextGenError() = %q\nwant to contain: %q", got.Error(), tc.want)
+			if tc.exact {
+				if got.Error() != tc.want {
+					t.Errorf("renderTextGenError() =\n  %q\nwant exactly:\n  %q", got.Error(), tc.want)
+				}
+			} else {
+				if !strings.Contains(got.Error(), tc.want) {
+					t.Errorf("renderTextGenError() = %q\nwant to contain: %q", got.Error(), tc.want)
+				}
 			}
 		})
 	}
