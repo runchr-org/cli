@@ -174,7 +174,7 @@ copilot --allow-all-tools --disable-builtin-mcps   # prompt piped to stdin
 
 This matches the pattern used by every other summary-capable agent in the
 repo (Claude, Codex, Gemini, Cursor), which all converge on one transport
-through the shared `agent.RunIsolatedTextGeneratorCLI` helper. It also
+through the shared `agent.RunIsolatedTextGeneratorCLIRaw` helper. It also
 sidesteps the OS `ARG_MAX` limit on long transcripts — and while Copilot's
 `--help` does not explicitly document stdin input, Copilot's own error
 output does (`"provide a prompt with -p or via standard in."`), and end-to-end
