@@ -165,6 +165,37 @@ func TestClassify_HTTPBaseline429MapsToRateLimit(t *testing.T) {
 	}
 }
 
+func TestClassify_EnvelopeWinsOverContextSentinel(t *testing.T) {
+	t.Parallel()
+	// A Claude subprocess that both hits a context deadline AND emits an
+	// is_error envelope on stdout — the envelope wins. Matches 963 at
+	// claudecode/generate.go:52-77.
+	parseEnv := func(_ []byte) (*EnvelopeResult, bool) {
+		return &EnvelopeResult{Kind: TextGenErrorAuth, Message: "auth despite ctx", APIStatus: 401}, true
+	}
+	c := &Classifier{Provider: AgentNameClaudeCode, ParseEnvelope: parseEnv}
+	err := c.Classify(context.Background(),
+		ExecResult{Stdout: []byte(`{"is_error":true}`), Stderr: nil, ExitCode: 0},
+		context.DeadlineExceeded)
+	var tge *TextGenError
+	if !errors.As(err, &tge) {
+		t.Fatalf("want *TextGenError from envelope; got %v", err)
+	}
+	if tge.Kind != TextGenErrorAuth {
+		t.Errorf("Kind = %q; want auth (envelope should win over ctx sentinel)", tge.Kind)
+	}
+	if tge.Message != "auth despite ctx" {
+		t.Errorf("Message = %q; want envelope's message", tge.Message)
+	}
+	// The returned error is the structured TextGenError, not a bare ctx
+	// sentinel passthrough — that is 963's entire point. (The ctx sentinel
+	// may still be reachable via Unwrap through TextGenError.Cause for
+	// debugging, but the outer error type must be *TextGenError.)
+	if err == context.DeadlineExceeded { //nolint:errorlint // must check identity, not unwrap chain
+		t.Error("returned error must be *TextGenError from envelope, not bare context.DeadlineExceeded")
+	}
+}
+
 func TestIsExecNotFoundErr(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

@@ -126,14 +126,37 @@ var httpStatusBaseline = []PhraseRule{
 // ParseEnvelope reports no structured error). Otherwise returns *TextGenError.
 //
 // Classification order (first match wins):
-//  1. ctx sentinels on runErr (DeadlineExceeded / Canceled) — passthrough,
+//  1. ParseEnvelope(res.Stdout) if set — used for Claude's structured
+//     envelope. Runs FIRST regardless of runErr so the CLI's structured
+//     diagnostic wins over bare ctx sentinels (mirrors 963 at
+//     claudecode/generate.go:52-77).
+//  2. ctx sentinels on runErr (DeadlineExceeded / Canceled) — passthrough,
 //     not wrapped in TextGenError.
-//  2. CLIMissing detection via isExecNotFoundErr.
-//  3. ParseEnvelope(res.Stdout) if set — used for Claude's structured envelope.
-//  4. If runErr != nil: HTTP-status baseline substrings in stderr.
-//  5. If runErr != nil: per-agent Phrases in stderr, case-insensitive, first-match-wins.
-//  6. If runErr != nil: Unknown with Message = trimmed+truncated stderr.
+//  3. CLIMissing detection via isExecNotFoundErr.
+//  4. If runErr == nil: return nil.
+//  5. HTTP-status baseline substrings in stderr (401/403/429/400/404).
+//  6. Per-agent Phrases in stderr, case-insensitive, first-match-wins.
+//  7. Unknown with Message = trimmed+truncated stderr.
 func (c *Classifier) Classify(_ context.Context, res ExecResult, runErr error) error {
+	// Envelope parser (Claude only) runs first — 963's rationale: if the CLI
+	// emitted an is_error envelope on stdout, surface that even when runErr
+	// happens to be a ctx sentinel or other failure. Otherwise the user
+	// loses actionable auth/rate-limit/config diagnostics when ctx and the
+	// subprocess both fail at roughly the same time. Matches 963 at
+	// claudecode/generate.go:52-77.
+	if c.ParseEnvelope != nil {
+		if env, ok := c.ParseEnvelope(res.Stdout); ok && env != nil {
+			return &TextGenError{
+				Kind:      env.Kind,
+				Provider:  c.Provider,
+				Message:   env.Message,
+				APIStatus: env.APIStatus,
+				ExitCode:  res.ExitCode,
+				Cause:     runErr,
+			}
+		}
+	}
+
 	if runErr != nil {
 		if errors.Is(runErr, context.DeadlineExceeded) {
 			return context.DeadlineExceeded
@@ -150,23 +173,9 @@ func (c *Classifier) Classify(_ context.Context, res ExecResult, runErr error) e
 		}
 	}
 
-	// Envelope parser (Claude only) runs regardless of runErr so an is_error
-	// envelope on stdout is preferred over stderr classification — matches
-	// 963's behavior at claudecode/generate.go:57-69.
-	if c.ParseEnvelope != nil {
-		if env, ok := c.ParseEnvelope(res.Stdout); ok && env != nil {
-			return &TextGenError{
-				Kind:      env.Kind,
-				Provider:  c.Provider,
-				Message:   env.Message,
-				APIStatus: env.APIStatus,
-				ExitCode:  res.ExitCode,
-				Cause:     runErr,
-			}
-		}
-	}
-
 	if runErr == nil {
+		// Exit-0 success: envelope above was the only path that could produce
+		// a non-nil error; everything below requires runErr != nil.
 		return nil
 	}
 
@@ -174,18 +183,18 @@ func (c *Classifier) Classify(_ context.Context, res ExecResult, runErr error) e
 
 	// HTTP-status baseline before per-agent phrases: any CLI that passes
 	// through an HTTP status in stderr gets uniform treatment.
-	if rule := matchPhrase(stderrStr, httpStatusBaseline); rule != nil {
+	if kind, ok := matchPhrase(stderrStr, httpStatusBaseline); ok {
 		return &TextGenError{
-			Kind:     rule.Kind,
+			Kind:     kind,
 			Provider: c.Provider,
 			Message:  stderrStr,
 			ExitCode: res.ExitCode,
 			Cause:    runErr,
 		}
 	}
-	if rule := matchPhrase(stderrStr, c.Phrases); rule != nil {
+	if kind, ok := matchPhrase(stderrStr, c.Phrases); ok {
 		return &TextGenError{
-			Kind:     rule.Kind,
+			Kind:     kind,
 			Provider: c.Provider,
 			Message:  stderrStr,
 			ExitCode: res.ExitCode,
@@ -202,14 +211,18 @@ func (c *Classifier) Classify(_ context.Context, res ExecResult, runErr error) e
 	}
 }
 
-func matchPhrase(s string, rules []PhraseRule) *PhraseRule {
+// matchPhrase returns the Kind of the first rule whose Phrase appears in s
+// (case-insensitive). Returns false if no rule matches. Returns the Kind by
+// value rather than a pointer into rules so callers cannot accidentally
+// mutate the shared httpStatusBaseline slice.
+func matchPhrase(s string, rules []PhraseRule) (TextGenErrorKind, bool) {
 	lower := strings.ToLower(s)
-	for i := range rules {
-		if strings.Contains(lower, strings.ToLower(rules[i].Phrase)) {
-			return &rules[i]
+	for _, rule := range rules {
+		if strings.Contains(lower, strings.ToLower(rule.Phrase)) {
+			return rule.Kind, true
 		}
 	}
-	return nil
+	return "", false
 }
 
 func truncateStderr(s string) string {
