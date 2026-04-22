@@ -9,10 +9,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
+
+// installHooksForTest installs the given agent's hooks into CWD-relative
+// repo paths, so tests that exercise code paths gated on hook presence can
+// proceed past agent selection.
+func installHooksForTest(t *testing.T, agentName types.AgentName) {
+	t.Helper()
+	ag, err := agent.Get(agentName)
+	if err != nil {
+		t.Fatalf("agent.Get(%q): %v", agentName, err)
+	}
+	hs, ok := agent.AsHookSupport(ag)
+	if !ok {
+		t.Fatalf("agent %q does not support hooks", agentName)
+	}
+	if _, err := hs.InstallHooks(context.Background(), false, false); err != nil {
+		t.Fatalf("InstallHooks(%q): %v", agentName, err)
+	}
+}
 
 const (
 	testReviewSkill = "/pr-review-toolkit:review-pr"
@@ -138,6 +158,62 @@ func TestRunReview_TrackOnlyWritesMarker(t *testing.T) {
 	}
 	if len(m.Skills) != 1 || m.Skills[0] != testReviewSkill {
 		t.Errorf("Skills = %v", m.Skills)
+	}
+}
+
+// Regression: non-launchable agents must preserve the pending marker so the
+// manually-started agent can adopt it. Previously the cleanup defer was
+// registered before the LauncherFor check, so the !ok fallback printed
+// "falling back to --track-only" but then wiped the marker on return.
+//
+// Uses cursor because it has HookSupport but no Launcher, triggering the
+// !ok fallback.
+func TestRunReview_FallbackToTrackOnlyPreservesMarker(t *testing.T) {
+	tmp := t.TempDir()
+	testutil.InitRepo(t, tmp)
+	testutil.WriteFile(t, tmp, "f.txt", "x")
+	testutil.GitAdd(t, tmp, "f.txt")
+	testutil.GitCommit(t, tmp, "init")
+	t.Chdir(tmp)
+
+	const nonLaunchableAgent = "cursor"
+	installHooksForTest(t, types.AgentName(nonLaunchableAgent))
+
+	// Confirm the precondition: cursor really has no Launcher. If a future
+	// change adds one, this test's premise is invalid and needs a different
+	// agent.
+	if _, hasLauncher := agent.LauncherFor(types.AgentName(nonLaunchableAgent)); hasLauncher {
+		t.Skipf("%s now implements Launcher; pick another non-launchable agent for this regression test", nonLaunchableAgent)
+	}
+
+	if err := saveReviewConfig(context.Background(), map[string][]string{
+		nonLaunchableAgent: {testReviewSkill},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rootCmd := NewRootCmd()
+	buf := &bytes.Buffer{}
+	rootCmd.SetOut(buf)
+	rootCmd.SetArgs([]string{"review"}) // not --track-only; rely on the fallback
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Falling back to --track-only") {
+		t.Errorf("expected fallback message, got: %s", out)
+	}
+
+	m, ok, err := ReadPendingReviewMarker(context.Background())
+	if err != nil {
+		t.Fatalf("ReadPendingReviewMarker: %v", err)
+	}
+	if !ok {
+		t.Fatal("marker was cleared by defer on !ok fallback — the 'falling back to --track-only' message is a lie")
+	}
+	if m.AgentName != nonLaunchableAgent {
+		t.Errorf("AgentName = %q, want %s", m.AgentName, nonLaunchableAgent)
 	}
 }
 

@@ -405,6 +405,19 @@ func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool) error {
 		return nil
 	}
 
+	// 7. Resolve launcher BEFORE installing the cleanup defer. Non-launchable
+	// agents fall back to the same persist-marker behavior as --track-only:
+	// the user starts the agent manually and its UserPromptSubmit hook adopts
+	// the marker. If we registered the defer first, it would wipe the marker
+	// on this return path, silently breaking the fallback the message
+	// promises the user.
+	launcher, ok := agent.LauncherFor(types.AgentName(agentName))
+	if !ok {
+		fmt.Fprintf(out, "%s does not support subprocess launch yet. Falling back to --track-only.\n", agentName)
+		fmt.Fprintf(out, "Start %s manually and run: %s\n", agentName, strings.Join(skills, ", "))
+		return nil
+	}
+
 	// From this point on, the marker lives on disk until either (a) the
 	// spawned agent's hook adopts and clears it, or (b) we clear it here
 	// as a fallback. The defer covers every spawn/launch/run failure path,
@@ -420,14 +433,6 @@ func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool) error {
 			logging.Debug(ctx, "cleanup unadopted review marker", slog.String("error", clearErr.Error()))
 		}
 	}()
-
-	// 7. Spawn agent with the composed initial prompt.
-	launcher, ok := agent.LauncherFor(types.AgentName(agentName))
-	if !ok {
-		fmt.Fprintf(out, "%s does not support subprocess launch yet. Falling back to --track-only.\n", agentName)
-		fmt.Fprintf(out, "Start %s manually and run: %s\n", agentName, strings.Join(skills, ", "))
-		return nil
-	}
 	// Best-effort: show the user what's in scope so they can tell whether
 	// the review target is what they expected. Failures are silent — scope
 	// is informational, not load-bearing.
