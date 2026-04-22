@@ -5,16 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -49,7 +52,8 @@ the session started, or to attach a research session.
 If the last commit already has a checkpoint, the session is added to it.
 Otherwise a new checkpoint is created.
 
-Supported agents: claude-code, gemini, opencode, codex, cursor, copilot-cli, factoryai-droid`,
+Works with any registered agent, including external agents enabled via
+external_agents in settings. Run 'entire configure' to see the full list.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 {
 				return cmd.Help()
@@ -57,12 +61,15 @@ Supported agents: claude-code, gemini, opencode, codex, cursor, copilot-cli, fac
 			if checkDisabledGuard(cmd.Context(), cmd.OutOrStdout()) {
 				return nil
 			}
+			// Discover external agents so --agent <external-name> is recognized
+			// and so auto-detection can find transcripts from external agents.
+			external.DiscoverAndRegister(cmd.Context())
 			agentName := types.AgentName(agentFlag)
 			return runAttach(cmd.Context(), cmd.OutOrStdout(), args[0], agentName, force)
 		},
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation and amend the last commit with the checkpoint trailer")
-	cmd.Flags().StringVarP(&agentFlag, "agent", "a", string(agent.DefaultAgentName), "Agent that created the session (claude-code, gemini, opencode, codex, cursor, copilot-cli, factoryai-droid)")
+	cmd.Flags().StringVarP(&agentFlag, "agent", "a", string(agent.DefaultAgentName), "Agent that created the session (see 'entire configure' for registered agents, including external)")
 	return cmd
 }
 
@@ -170,11 +177,22 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 		writeOpts.CompactTranscript = compacted
 	}
 
-	if err := store.WriteCommitted(ctx, writeOpts); err != nil {
-		return fmt.Errorf("failed to write checkpoint: %w", err)
+	v2 := settings.CheckpointsVersion(logCtx) == 2
+	if !v2 {
+		if err := store.WriteCommitted(ctx, writeOpts); err != nil {
+			return fmt.Errorf("failed to write checkpoint: %w", err)
+		}
 	}
+	// IsCheckpointsV2Enabled is true whenever v2 writes are enabled, including
+	// both v2-only mode (checkpoints_version == 2) and dual-write mode. Only
+	// v2-only mode propagates the error.
 	if settings.IsCheckpointsV2Enabled(logCtx) {
-		writeAttachCheckpointV2(logCtx, repo, writeOpts)
+		if err := writeAttachCheckpointV2(logCtx, repo, writeOpts); err != nil {
+			if v2 {
+				return fmt.Errorf("failed to write checkpoint to v2: %w", err)
+			}
+			logging.Warn(logCtx, "attach v2 dual-write failed", "error", err)
+		}
 	}
 
 	// Create or update session state.
@@ -198,17 +216,19 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	return nil
 }
 
-// writeAttachCheckpointV2 mirrors attach-created checkpoints into the v2 refs.
-// The caller is responsible for checking whether checkpoints_v2 is enabled.
-// v2 failures are logged and do not fail attach.
-func writeAttachCheckpointV2(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) {
-	v2Store := cpkg.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
-	if err := v2Store.WriteCommitted(ctx, opts); err != nil {
-		logging.Warn(ctx, "attach v2 dual-write failed",
-			"checkpoint_id", opts.CheckpointID.String(),
-			"error", err,
+// writeAttachCheckpointV2 writes attach-created checkpoints into the v2 refs.
+func writeAttachCheckpointV2(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) error {
+	v2URL, err := remote.FetchURL(ctx)
+	if err != nil {
+		logging.Debug(ctx, "attach: using origin for v2 store fetch remote",
+			slog.String("error", err.Error()),
 		)
 	}
+	v2Store := cpkg.NewV2GitStore(repo, v2URL)
+	if err := v2Store.WriteCommitted(ctx, opts); err != nil {
+		return fmt.Errorf("v2 write committed: %w", err)
+	}
+	return nil
 }
 
 // getHeadCommit returns the HEAD commit object.

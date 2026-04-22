@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -14,11 +15,13 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/agent/opencode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -33,6 +36,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/plumbing/storer"
+	"github.com/go-git/go-git/v6/storage/filesystem"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -42,6 +46,125 @@ const defaultCheckpointSummaryTimeout = 30 * time.Second
 var checkpointSummaryTimeout = defaultCheckpointSummaryTimeout
 
 var generateTranscriptSummary = summarize.GenerateFromTranscript
+
+// errCannotGenerateTemporaryCheckpoint is returned by runExplainCheckpoint when
+// --generate is requested for a target that does not match any committed
+// checkpoint. runExplainAuto uses errors.Is to detect this case and fall back
+// to resolving the target as a git commit ref.
+var errCannotGenerateTemporaryCheckpoint = errors.New("cannot generate summary for temporary checkpoint")
+
+type explainCheckpointLookup struct {
+	repo                *git.Repository
+	v1Store             *checkpoint.GitStore
+	v2Store             *checkpoint.V2GitStore
+	preferCheckpointsV2 bool
+	committed           []checkpoint.CommittedInfo
+}
+
+// generateOrRawLabel returns the user-facing verb for the action the user
+// requested, used in error messages when a commit target has no trailer.
+func generateOrRawLabel(generate bool) string {
+	if generate {
+		return "generate summary"
+	}
+	return "show raw transcript"
+}
+
+// printNoTrailerMessage renders the friendly message shown when a resolved
+// commit has no Entire-Checkpoint trailer in read-only modes. Takes the
+// repo so the hash can be abbreviated to the minimum unique length for
+// this repo's object set (matching git's --abbrev behavior).
+func printNoTrailerMessage(w io.Writer, repo *git.Repository, hash plumbing.Hash) {
+	fmt.Fprintln(w, "No associated Entire checkpoint")
+	fmt.Fprintf(w, "\nCommit %s does not have an Entire-Checkpoint trailer.\n", abbreviateCommitHash(repo, hash))
+	fmt.Fprintln(w, "This commit was not created during an Entire session, or the trailer was removed.")
+}
+
+// errAmbiguousCommitPrefix is returned by resolveCommitUnambiguous when a
+// hex prefix matches more than one commit. Callers use errors.Is to detect
+// this case and surface the full wrapped message verbatim.
+var errAmbiguousCommitPrefix = errors.New("ambiguous commit prefix")
+
+// commitHashesWithPrefix enumerates all commit hashes in the repo whose
+// SHA starts with the given hex prefix. Returns nil when the storer is not
+// a *filesystem.Storage or the prefix isn't decodable as hex.
+//
+// Per PR review (discussion_r3113804961): the reviewer specifically
+// suggested repo.Storer.(*filesystem.Storage).HashesWithPrefix followed by
+// commit filtering. Using this primitive both in resolution (detect
+// ambiguous user input) and in display (dynamically abbreviate shown
+// hashes to the minimum unique length).
+func commitHashesWithPrefix(repo *git.Repository, prefix string) []plumbing.Hash {
+	s, ok := repo.Storer.(*filesystem.Storage)
+	if !ok {
+		return nil
+	}
+	// Truncate to even length for byte-aligned hex decoding.
+	evenHex := prefix[:len(prefix)&^1]
+	decoded, err := hex.DecodeString(evenHex)
+	if err != nil || len(decoded) == 0 {
+		return nil
+	}
+	candidates, err := s.HashesWithPrefix(decoded)
+	if err != nil {
+		return nil
+	}
+	var commits []plumbing.Hash
+	for _, h := range candidates {
+		// HashesWithPrefix matches on even byte boundaries; filter the
+		// dangling nybble for odd-length prefixes.
+		if len(evenHex) != len(prefix) && !strings.HasPrefix(h.String(), prefix) {
+			continue
+		}
+		if _, err := repo.CommitObject(h); err != nil {
+			continue
+		}
+		commits = append(commits, h)
+	}
+	return commits
+}
+
+// resolveCommitUnambiguous resolves a ref to a commit hash, returning
+// errAmbiguousCommitPrefix (wrapped) when a hex-prefix input matches more
+// than one commit. go-git v6's ResolveRevision silently picks the first
+// candidate in ambiguous cases (its source explicitly says "for speed
+// purposes don't bother to detect the ambiguity"), which could pick the
+// wrong commit. Non-hex refs (HEAD, branch names, HEAD~1) bypass the
+// ambiguity check via commitHashesWithPrefix returning nil.
+func resolveCommitUnambiguous(repo *git.Repository, ref string) (plumbing.Hash, error) {
+	hash, err := repo.ResolveRevision(plumbing.Revision(ref))
+	if err != nil {
+		return plumbing.ZeroHash, err //nolint:wrapcheck // caller contextualizes
+	}
+	matches := commitHashesWithPrefix(repo, ref)
+	if len(matches) <= 1 {
+		return *hash, nil
+	}
+	examples := make([]string, 0, 5)
+	for i := 0; i < len(matches) && i < 5; i++ {
+		examples = append(examples, abbreviateCommitHash(repo, matches[i]))
+	}
+	return plumbing.ZeroHash, fmt.Errorf("%w: %q matches %d commits: %s\nUse a longer prefix or a full SHA", errAmbiguousCommitPrefix, ref, len(matches), strings.Join(examples, ", "))
+}
+
+// abbreviateCommitHash returns the shortest prefix of hash unique among
+// commit objects in the repo, matching git's --abbrev-commit auto-growth
+// so displayed short SHAs stay unambiguous as the repo grows. Falls back
+// to a fixed 12-char prefix if the storer doesn't support fast prefix
+// lookup, or to the full hash if somehow never unique.
+func abbreviateCommitHash(repo *git.Repository, hash plumbing.Hash) string {
+	full := hash.String()
+	for length := 7; length < len(full); length++ {
+		matches := commitHashesWithPrefix(repo, full[:length])
+		if matches == nil {
+			return full[:12]
+		}
+		if len(matches) <= 1 {
+			return full[:length]
+		}
+	}
+	return full
+}
 
 // interaction holds a single prompt and its responses for display.
 type interaction struct {
@@ -87,30 +210,31 @@ func newExplainCmd() *cobra.Command {
 	var searchAllFlag bool
 
 	cmd := &cobra.Command{
-		Use:   "explain",
+		Use:   "explain [checkpoint-id | commit-sha]",
 		Short: "Explain a session, commit, or checkpoint",
 		Long: `Explain provides human-readable context about sessions, commits, and checkpoints.
 
 Use this command to understand what happened during agent-driven development,
 either for self-review or to understand a teammate's work.
 
-By default, shows checkpoints on the current branch. Use flags to filter or
-explain specific items.
+By default, shows checkpoints on the current branch. Pass a checkpoint ID or
+commit SHA as a positional argument to explain a specific item, or use flags.
+
+Viewing specific items:
+  entire explain <id-or-sha>           Auto-detects checkpoint ID or commit SHA
+  entire explain --checkpoint <id>     Force interpretation as checkpoint ID
+  entire explain --commit <ref>        Force interpretation as commit ref
 
 Filtering the list view:
   --session      Filter checkpoints by session ID (or prefix)
 
-Viewing specific items:
-  --commit       Explain a specific commit (shows its associated checkpoint)
-  --checkpoint   Explain a specific checkpoint by ID
-
-Output verbosity levels (for --checkpoint):
+Output verbosity levels (when explaining a specific item):
   Default:         Detailed view with scoped prompts (ID, session, tokens, intent, prompts, files)
   --short          Summary only (ID, session, timestamp, tokens, intent)
   --full           Parsed full transcript (all prompts/responses from entire session)
   --raw-transcript Raw transcript file (JSONL format)
 
-Summary generation (for --checkpoint):
+Summary generation:
   --generate    Generate an AI summary for the checkpoint
   --force       Regenerate even if a summary already exists (requires --generate)
 
@@ -122,14 +246,14 @@ Checkpoint detail view shows:
   - Associated git commits that reference the checkpoint
   - Prompts and responses from the session
 
-Note: --session filters the list view; --commit and --checkpoint are mutually exclusive.`,
+Note: --session filters the list view; the positional arg, --commit, and --checkpoint are mutually exclusive.`,
 		Args: func(_ *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				return fmt.Errorf("unexpected argument %q\nHint: use --checkpoint, --session, or --commit to specify what to explain", args[0])
+			if len(args) > 1 {
+				return fmt.Errorf("accepts at most 1 argument (checkpoint ID or commit SHA), received %d\nHint: use --session to filter the list view, or pass a single checkpoint ID / commit SHA", len(args))
 			}
 			return nil
 		},
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			// Check if Entire is disabled
 			if checkDisabledGuard(cmd.Context(), cmd.OutOrStdout()) {
 				return nil
@@ -144,20 +268,32 @@ Note: --session filters the list view; --commit and --checkpoint are mutually ex
 				}
 			}
 
-			// Validate flag dependencies
-			if generateFlag && checkpointFlag == "" {
-				return errors.New("--generate requires --checkpoint/-c flag")
+			// Positional arg is mutually exclusive with --checkpoint, --commit, --session
+			var positional string
+			if len(args) > 0 {
+				positional = args[0]
+				if checkpointFlag != "" || commitFlag != "" || sessionFlag != "" {
+					return errors.New("cannot combine positional argument with --checkpoint, --commit, or --session")
+				}
+			}
+
+			// --generate and --raw-transcript need a specific target — either the
+			// positional arg, --checkpoint/-c, or --commit (which forwards to
+			// the checkpoint path via the commit's Entire-Checkpoint trailer).
+			hasCheckpointTarget := checkpointFlag != "" || commitFlag != "" || positional != ""
+			if generateFlag && !hasCheckpointTarget {
+				return errors.New("--generate requires a checkpoint ID or commit SHA (positional), --checkpoint/-c, or --commit flag")
 			}
 			if forceFlag && !generateFlag {
 				return errors.New("--force requires --generate flag")
 			}
-			if rawTranscriptFlag && checkpointFlag == "" {
-				return errors.New("--raw-transcript requires --checkpoint/-c flag")
+			if rawTranscriptFlag && !hasCheckpointTarget {
+				return errors.New("--raw-transcript requires a checkpoint ID or commit SHA (positional), --checkpoint/-c, or --commit flag")
 			}
 
 			// Convert short flag to verbose (verbose = !short)
 			verbose := !shortFlag
-			return runExplain(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), sessionFlag, commitFlag, checkpointFlag, noPagerFlag, verbose, fullFlag, rawTranscriptFlag, generateFlag, forceFlag, searchAllFlag)
+			return runExplain(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), sessionFlag, commitFlag, checkpointFlag, positional, noPagerFlag, verbose, fullFlag, rawTranscriptFlag, generateFlag, forceFlag, searchAllFlag)
 		},
 	}
 
@@ -180,8 +316,9 @@ Note: --session filters the list view; --commit and --checkpoint are mutually ex
 	return cmd
 }
 
-// runExplain routes to the appropriate explain function based on flags.
-func runExplain(ctx context.Context, w, errW io.Writer, sessionID, commitRef, checkpointID string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool) error {
+// runExplain routes to the appropriate explain function based on flags and the
+// optional positional target.
+func runExplain(ctx context.Context, w, errW io.Writer, sessionID, commitRef, checkpointID, target string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool) error {
 	// Count mutually exclusive flags (--commit and --checkpoint are mutually exclusive)
 	// --session is now a filter for the list view, not a separate mode
 	flagCount := 0
@@ -200,8 +337,11 @@ func runExplain(ctx context.Context, w, errW io.Writer, sessionID, commitRef, ch
 	}
 
 	// Route to appropriate handler
+	if target != "" {
+		return runExplainAuto(ctx, w, errW, target, noPager, verbose, full, rawTranscript, generate, force, searchAll)
+	}
 	if commitRef != "" {
-		return runExplainCommit(ctx, w, commitRef, noPager, verbose, full, searchAll)
+		return runExplainCommit(ctx, w, errW, commitRef, noPager, verbose, full, rawTranscript, generate, force, searchAll)
 	}
 	if checkpointID != "" {
 		return runExplainCheckpoint(ctx, w, errW, checkpointID, noPager, verbose, full, rawTranscript, generate, force, searchAll)
@@ -211,6 +351,113 @@ func runExplain(ctx context.Context, w, errW io.Writer, sessionID, commitRef, ch
 	return runExplainBranchWithFilter(ctx, w, noPager, sessionID)
 }
 
+// runExplainAuto resolves a positional target as either a checkpoint ID
+// (or prefix) or a git commit ref. Ordering: checkpoint path first (which
+// also handles shadow-branch temp checkpoints), falling back to commit
+// resolution only on checkpoint.ErrCheckpointNotFound. --generate runs
+// an ambiguity pre-check to avoid writing a summary to the wrong
+// checkpoint on short-prefix collisions.
+func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool) error {
+	lookup, lookupErr := newExplainCheckpointLookup(ctx, nil)
+	if generate {
+		if err := runExplainAutoAmbiguityGuard(ctx, target, lookup, lookupErr); err != nil {
+			return err
+		}
+	}
+	checkpointErr := runExplainCheckpointWithLookup(ctx, w, errW, target, noPager, verbose, full, rawTranscript, generate, force, searchAll, lookup, lookupErr)
+	if checkpointErr == nil {
+		return nil
+	}
+	// Fall back to commit resolution ONLY when nothing (committed or temp)
+	// matched the target. errCannotGenerateTemporaryCheckpoint signals that
+	// we DID match a temp checkpoint but --generate is unsupported for it;
+	// falling back to commit in that case would produce a misleading
+	// "no trailer" error for the shadow-branch commit.
+	if !errors.Is(checkpointErr, checkpoint.ErrCheckpointNotFound) {
+		return checkpointErr
+	}
+	logging.Debug(ctx, "explain auto: checkpoint lookup failed, trying commit fallback",
+		slog.String("target", target),
+		slog.String("checkpoint_error", checkpointErr.Error()))
+
+	if lookupErr != nil {
+		// Composed message beats errors.Join here — the latter renders
+		// two lines (one per error) and users act on the first/stale one.
+		return fmt.Errorf("no checkpoint matched %q, and commit fallback failed: %w", target, lookupErr)
+	}
+	hash, resolveErr := resolveCommitUnambiguous(lookup.repo, target)
+	if resolveErr != nil {
+		if errors.Is(resolveErr, errAmbiguousCommitPrefix) {
+			return resolveErr
+		}
+		logging.Debug(ctx, "explain auto: git ref resolution failed",
+			slog.String("target", target),
+			slog.String("error", resolveErr.Error()))
+		return fmt.Errorf("no checkpoint or commit found matching %q", target)
+	}
+	commit, commitErr := lookup.repo.CommitObject(hash)
+	if commitErr != nil {
+		return fmt.Errorf("failed to get commit %s: %w", abbreviateCommitHash(lookup.repo, hash), commitErr)
+	}
+	cpID, hasCheckpoint := trailers.ParseCheckpoint(commit.Message)
+	if !hasCheckpoint {
+		// Side-effect modes must error — silently succeeding would leave
+		// scripts unable to distinguish "done" from "didn't happen".
+		if generate || rawTranscript {
+			return fmt.Errorf("cannot %s: commit %s has no Entire-Checkpoint trailer", generateOrRawLabel(generate), abbreviateCommitHash(lookup.repo, hash))
+		}
+		printNoTrailerMessage(w, lookup.repo, hash)
+		return nil
+	}
+	logging.Debug(ctx, "explain auto: resolved commit to checkpoint via trailer",
+		slog.String("target", target),
+		slog.String("commit", abbreviateCommitHash(lookup.repo, hash)),
+		slog.String("checkpoint_id", cpID.String()))
+	return runExplainCheckpointWithLookup(ctx, w, errW, cpID.String(), noPager, verbose, full, rawTranscript, generate, force, searchAll, lookup, nil)
+}
+
+// runExplainAutoAmbiguityGuard refuses --generate when the positional
+// target resolves as both a git revision and a committed-checkpoint prefix.
+// Writing a summary to the wrong checkpoint is destructive; read-only flows
+// tolerate the same ambiguity by preferring the checkpoint path.
+//
+// Best-effort: on repo/list failures we return nil so the main flow
+// surfaces the real error instead of double-reporting.
+func runExplainAutoAmbiguityGuard(ctx context.Context, target string, lookup *explainCheckpointLookup, lookupErr error) error {
+	// Targets longer than a checkpoint ID can't prefix-match one.
+	// This is coupled to checkpoint IDs being fixed-width; longer targets
+	// cannot be prefixes of committed checkpoint IDs.
+	if len(target) > id.ShortIDLength {
+		return nil
+	}
+	if lookupErr != nil {
+		logging.Warn(ctx, "explain ambiguity guard degraded: failed to prepare checkpoint lookup",
+			"target", target,
+			"error", lookupErr)
+		return nil
+	}
+	hash, err := lookup.repo.ResolveRevision(plumbing.Revision(target))
+	if err != nil {
+		return nil //nolint:nilerr // target isn't a git ref
+	}
+	if lookup == nil {
+		logging.Warn(ctx, "explain ambiguity guard degraded: checkpoint lookup unavailable",
+			"target", target)
+		return nil
+	}
+	if lookup.committed == nil {
+		logging.Warn(ctx, "explain ambiguity guard degraded: committed checkpoint list unavailable",
+			"target", target)
+		return nil
+	}
+	for _, info := range lookup.committed {
+		if strings.HasPrefix(info.CheckpointID.String(), target) {
+			return fmt.Errorf("ambiguous target %q with --generate: matches both git revision %s and checkpoint prefix (e.g. %s)\nUse --commit <ref> or --checkpoint <id> to disambiguate", target, abbreviateCommitHash(lookup.repo, *hash), info.CheckpointID)
+		}
+	}
+	return nil
+}
+
 // runExplainCheckpoint explains a specific checkpoint.
 // Supports both committed checkpoints (by checkpoint ID) and temporary checkpoints (by git SHA).
 // First tries to match committed checkpoints, then falls back to temporary checkpoints.
@@ -218,25 +465,26 @@ func runExplain(ctx context.Context, w, errW io.Writer, sessionID, commitRef, ch
 // When force is true, regenerates even if a summary already exists.
 // When rawTranscript is true, outputs only the raw transcript file (JSONL format).
 // When searchAll is true, searches all commits without branch/depth limits (used for finding associated commits).
+//
+
 func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPrefix string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool) error {
-	repo, err := openRepository(ctx)
-	if err != nil {
-		return fmt.Errorf("not a git repository: %w", err)
-	}
+	return runExplainCheckpointWithLookup(ctx, w, errW, checkpointIDPrefix, noPager, verbose, full, rawTranscript, generate, force, searchAll, nil, nil)
+}
 
-	v1Store := checkpoint.NewGitStore(repo)
-	v2Store := checkpoint.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
-	preferCheckpointsV2 := settings.IsCheckpointsV2Enabled(ctx)
-
-	// First, try to find in committed checkpoints by checkpoint ID prefix
-	committed, err := listCommittedForExplain(ctx, v1Store, v2Store, preferCheckpointsV2)
-	if err != nil {
-		return fmt.Errorf("failed to list checkpoints: %w", err)
+func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, checkpointIDPrefix string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool, lookup *explainCheckpointLookup, lookupErr error) error {
+	if lookup == nil {
+		var err error
+		lookup, err = newExplainCheckpointLookup(ctx, nil)
+		if err != nil {
+			return err
+		}
+	} else if lookupErr != nil {
+		return lookupErr
 	}
 
 	// Collect all matching checkpoint IDs to detect ambiguity
 	var matches []id.CheckpointID
-	for _, info := range committed {
+	for _, info := range lookup.committed {
 		if strings.HasPrefix(info.CheckpointID.String(), checkpointIDPrefix) {
 			matches = append(matches, info.CheckpointID)
 		}
@@ -252,7 +500,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 		if !anyFetched {
 			anyFetched = FetchMetadataFromCheckpointRemote(ctx) == nil
 		}
-		if preferCheckpointsV2 {
+		if lookup.preferCheckpointsV2 {
 			v2Fetched := FetchV2MainTreeOnly(ctx) == nil
 			if !v2Fetched {
 				v2Fetched = FetchV2MetadataFromCheckpointRemote(ctx) == nil
@@ -260,11 +508,9 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 			anyFetched = anyFetched || v2Fetched
 		}
 		if anyFetched {
-			if freshRepo, repoErr := openRepository(ctx); repoErr == nil {
-				repo = freshRepo
-				v1Store = checkpoint.NewGitStore(repo)
-				v2Store = checkpoint.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
-				if freshCommitted, listErr := listCommittedForExplain(ctx, v1Store, v2Store, preferCheckpointsV2); listErr == nil {
+			if freshLookup, freshErr := newExplainCheckpointLookup(ctx, nil); freshErr == nil {
+				lookup = freshLookup
+				if freshCommitted := lookup.committed; freshCommitted != nil {
 					for _, info := range freshCommitted {
 						if strings.HasPrefix(info.CheckpointID.String(), checkpointIDPrefix) {
 							matches = append(matches, info.CheckpointID)
@@ -278,12 +524,23 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 	var fullCheckpointID id.CheckpointID
 	switch len(matches) {
 	case 0:
-		// Not found in committed, try temporary checkpoints by git SHA
-		if generate {
-			return fmt.Errorf("cannot generate summary for temporary checkpoint %s (only committed checkpoints supported)", checkpointIDPrefix)
-		}
-		output, found := explainTemporaryCheckpoint(ctx, w, repo, v1Store, checkpointIDPrefix, verbose, full, rawTranscript)
+		// Check temp checkpoints BEFORE returning errCannotGenerateTemporaryCheckpoint
+		// so runExplainAuto can distinguish:
+		//   - target matched a real temp checkpoint (sentinel returned, no fallback)
+		//   - target matched nothing (ErrCheckpointNotFound, safe to fall back to commit)
+		// Previously the --generate path bailed before checking temp checkpoints,
+		// which made runExplainAuto fall back to commit resolution for temp
+		// checkpoint SHAs and produce a misleading "no trailer" error.
+		//
+		// --generate and --raw-transcript are mutually exclusive at the flag
+		// layer, so rawTranscript is always false when generate is true; the
+		// direct-to-w write path inside explainTemporaryCheckpoint is not
+		// reachable here and won't leak partial output on error.
+		output, found := explainTemporaryCheckpoint(ctx, w, lookup.repo, lookup.v1Store, checkpointIDPrefix, verbose, full, rawTranscript)
 		if found {
+			if generate {
+				return fmt.Errorf("%w %s (only committed checkpoints supported)", errCannotGenerateTemporaryCheckpoint, checkpointIDPrefix)
+			}
 			outputExplainContent(w, output, noPager)
 			return nil
 		}
@@ -291,7 +548,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 		if output != "" {
 			return errors.New(output)
 		}
-		return fmt.Errorf("checkpoint not found: %s", checkpointIDPrefix)
+		return fmt.Errorf("%w: %s", checkpoint.ErrCheckpointNotFound, checkpointIDPrefix)
 	case 1:
 		fullCheckpointID = matches[0]
 	default:
@@ -304,7 +561,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 	}
 
 	// Resolve store and load checkpoint summary with v2 -> v1 fallback.
-	resolvedReader, summary, err := checkpoint.ResolveCommittedReaderForCheckpoint(ctx, fullCheckpointID, v1Store, v2Store, preferCheckpointsV2)
+	resolvedReader, summary, err := checkpoint.ResolveCommittedReaderForCheckpoint(ctx, fullCheckpointID, lookup.v1Store, lookup.v2Store, lookup.preferCheckpointsV2)
 	if err != nil {
 		return fmt.Errorf("failed to read checkpoint: %w", err)
 	}
@@ -331,7 +588,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 
 	// Handle summary generation — uses raw transcript.
 	if generate {
-		if err := generateCheckpointSummary(ctx, w, errW, v1Store, v2Store, fullCheckpointID, summary, content, force); err != nil {
+		if err := generateCheckpointSummary(ctx, w, errW, lookup.v1Store, lookup.v2Store, fullCheckpointID, summary, content, force); err != nil {
 			return err
 		}
 		// Reload to get the updated summary. After generation we only need
@@ -348,7 +605,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 
 	// Handle raw transcript output
 	if rawTranscript {
-		rawLog, _, rawErr := checkpoint.ResolveRawSessionLogForCheckpoint(ctx, fullCheckpointID, v1Store, v2Store, preferCheckpointsV2)
+		rawLog, _, rawErr := checkpoint.ResolveRawSessionLogForCheckpoint(ctx, fullCheckpointID, lookup.v1Store, lookup.v2Store, lookup.preferCheckpointsV2)
 		if rawErr != nil {
 			return fmt.Errorf("failed to read raw transcript: %w", rawErr)
 		}
@@ -363,7 +620,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 	}
 
 	// Find associated commits (git commits with matching Entire-Checkpoint trailer)
-	associatedCommits, _ := getAssociatedCommits(ctx, repo, fullCheckpointID, searchAll) //nolint:errcheck // Best-effort
+	associatedCommits, _ := getAssociatedCommits(ctx, lookup.repo, fullCheckpointID, searchAll) //nolint:errcheck // Best-effort
 
 	// Derive author from the first associated commit (the user who made the commit).
 	// Fall back to GetCheckpointAuthor (walks entire/checkpoints/v1) for checkpoints
@@ -375,13 +632,45 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 			Email: associatedCommits[0].Email,
 		}
 	} else {
-		author, _ = v1Store.GetCheckpointAuthor(ctx, fullCheckpointID) //nolint:errcheck // Author is optional
+		author, _ = lookup.v1Store.GetCheckpointAuthor(ctx, fullCheckpointID) //nolint:errcheck // Author is optional
 	}
 
 	// Format and output
 	output := formatCheckpointOutput(summary, content, fullCheckpointID, associatedCommits, author, verbose, full)
 	outputExplainContent(w, output, noPager)
 	return nil
+}
+
+func newExplainCheckpointLookup(ctx context.Context, repo *git.Repository) (*explainCheckpointLookup, error) {
+	if repo == nil {
+		var err error
+		repo, err = openRepository(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("not a git repository: %w", err)
+		}
+	}
+
+	v2URL, err := remote.FetchURL(ctx)
+	if err != nil {
+		logging.Debug(ctx, "explain: using origin for v2 store fetch remote",
+			slog.String("error", err.Error()),
+		)
+		v2URL = ""
+	}
+
+	lookup := &explainCheckpointLookup{
+		repo:                repo,
+		v1Store:             checkpoint.NewGitStore(repo),
+		v2Store:             checkpoint.NewV2GitStore(repo, v2URL),
+		preferCheckpointsV2: settings.IsCheckpointsV2Enabled(ctx),
+	}
+
+	committed, err := listCommittedForExplain(ctx, lookup.v1Store, lookup.v2Store, lookup.preferCheckpointsV2)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list checkpoints: %w", err)
+	}
+	lookup.committed = committed
+	return lookup, nil
 }
 
 func listCommittedForExplain(ctx context.Context, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, preferCheckpointsV2 bool) ([]checkpoint.CommittedInfo, error) {
@@ -519,9 +808,9 @@ func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, v1Store *
 		fmt.Fprintln(errW, "Generating checkpoint summary...")
 	}
 
-	summary, err := generateCheckpointAISummary(ctx, scopedTranscript, cpSummary.FilesTouched, content.Metadata.Agent, provider.Generator)
+	summary, appliedDeadline, err := generateCheckpointAISummary(ctx, scopedTranscript, cpSummary.FilesTouched, content.Metadata.Agent, provider.Generator)
 	if err != nil {
-		return fmt.Errorf("failed to generate summary: %w", err)
+		return formatCheckpointSummaryError(err, appliedDeadline)
 	}
 
 	// Persist to both stores; at least one must succeed.
@@ -555,7 +844,13 @@ func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, v1Store *
 	return nil
 }
 
-func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, filesTouched []string, agentType types.AgentType, generator summarize.Generator) (*checkpoint.Summary, error) {
+// generateCheckpointAISummary returns the generated summary, the effective
+// deadline applied to the underlying call (which may be shorter than
+// checkpointSummaryTimeout if the parent context had an earlier deadline),
+// and any error. The effective deadline is returned so the caller can render
+// the true timeout value in user-facing error messages instead of always
+// showing the package default.
+func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, filesTouched []string, agentType types.AgentType, generator summarize.Generator) (*checkpoint.Summary, time.Duration, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, checkpointSummaryTimeout)
 	timeoutDuration := checkpointSummaryTimeout
 	if deadline, ok := timeoutCtx.Deadline(); ok {
@@ -566,16 +861,94 @@ func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, f
 	// scopedTranscript is read from checkpoint storage, which redacts on write.
 	summary, err := generateTranscriptSummary(timeoutCtx, redact.AlreadyRedacted(scopedTranscript), filesTouched, agentType, generator)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(timeoutCtx.Err(), context.Canceled) {
-			return nil, fmt.Errorf("summary generation canceled: %w", context.Canceled)
+		// Only classify as ctx cancel/deadline when the error chain actually
+		// contains the sentinel. Relying on timeoutCtx.Err() here loses typed
+		// errors (e.g. *ClaudeError) when the subprocess returned a real
+		// structured failure while timeoutCtx.Err() is non-nil for any reason
+		// (parent cancelled, deadline already elapsed, etc.).
+		if errors.Is(err, context.Canceled) {
+			return nil, timeoutDuration, fmt.Errorf("summary generation canceled: %w", err)
 		}
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("summary generation timed out after %s: %w", formatSummaryTimeout(timeoutDuration), context.DeadlineExceeded)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, timeoutDuration, fmt.Errorf("summary generation timed out after %s: %w", formatSummaryTimeout(timeoutDuration), err)
 		}
-		return nil, err
+		return nil, timeoutDuration, err
 	}
 
-	return summary, nil
+	return summary, timeoutDuration, nil
+}
+
+// formatCheckpointSummaryError maps typed Claude CLI errors and context
+// sentinels to user-facing messages.
+func formatCheckpointSummaryError(err error, deadline time.Duration) error {
+	var claudeErr *claudecode.ClaudeError
+	switch {
+	case errors.As(err, &claudeErr):
+		switch claudeErr.Kind { //nolint:exhaustive // ClaudeErrorUnknown handled by default
+		case claudecode.ClaudeErrorAuth:
+			return fmt.Errorf("Claude authentication failed%s\nRun `claude login` and retry", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005: capitalized because Claude is a proper noun
+		case claudecode.ClaudeErrorRateLimit:
+			return fmt.Errorf("Claude rejected the summary request due to rate limits or quota%s\nWait and retry", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005
+		case claudecode.ClaudeErrorConfig:
+			return fmt.Errorf("Claude rejected the summary request%s\nCheck your Claude CLI config and selected model", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005
+		case claudecode.ClaudeErrorCLIMissing:
+			return errors.New("Claude CLI is not installed or not on PATH") //nolint:staticcheck // ST1005
+		default:
+			return fmt.Errorf("Claude failed to generate the summary%s", formatClaudeErrorSuffix(claudeErr)) //nolint:staticcheck // ST1005
+		}
+	case errors.Is(err, context.DeadlineExceeded):
+		// Deliberately provider-neutral: explain --generate supports multiple
+		// summary providers (claude-code, codex, gemini, ...), so hardcoding
+		// "Claude" / "sonnet" / "Anthropic" here would misdirect users who
+		// selected a different provider in .entire/settings.json.
+		return fmt.Errorf(
+			"summary generation did not return within the %s safety deadline. This usually means one of:\n"+
+				"  - the selected model is taking longer than expected on a large transcript\n"+
+				"  - the summary provider's CLI cannot reach its API (network, VPN, firewall)\n"+
+				"    Try: run the provider CLI directly to confirm it works\n"+
+				"  - the provider's API is degraded",
+			formatSummaryTimeout(deadline))
+	case errors.Is(err, context.Canceled):
+		return errors.New("summary generation canceled")
+	default:
+		return fmt.Errorf("failed to generate summary: %w", err)
+	}
+}
+
+// formatMessageSuffix formats ": <msg>" when msg is non-empty and "" otherwise.
+// Used by the Auth / RateLimit / Config branches of formatCheckpointSummaryError
+// to avoid rendering a bare colon when ClaudeError.Message is empty (reachable
+// when the CLI envelope is is_error:true with result:null but a real status).
+func formatMessageSuffix(msg string) string {
+	if msg == "" {
+		return ""
+	}
+	return ": " + msg
+}
+
+// formatClaudeErrorSuffix builds a diagnostic suffix for user-facing output
+// when we fall through to the default "failed to generate the summary" path.
+// Prefers the envelope Message, falls back to HTTP status, then exit code,
+// so the user never sees a bare "Claude failed to generate the summary:"
+// with nothing after the colon (which happens when Claude returns
+// is_error:true with result:null, or when the subprocess crashes with no
+// stderr output). ExitCode < 0 means the subprocess did not produce a real
+// exit code (e.g. launch failure) — render that as "abnormal termination"
+// rather than the misleading "exited with code -1".
+func formatClaudeErrorSuffix(e *claudecode.ClaudeError) string {
+	if e.Message != "" {
+		return ": " + e.Message
+	}
+	switch {
+	case e.APIStatus != 0:
+		return fmt.Sprintf(" (Anthropic API returned HTTP %d)", e.APIStatus)
+	case e.ExitCode > 0:
+		return fmt.Sprintf(" (claude CLI exited with code %d)", e.ExitCode)
+	case e.ExitCode < 0:
+		return " (claude CLI terminated abnormally — no exit code captured)"
+	default:
+		return " (no diagnostic detail available from Claude CLI)"
+	}
 }
 
 func formatSummaryTimeout(d time.Duration) string {
@@ -1184,7 +1557,14 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 	strategy.WarnIfMetadataDisconnected()
 
 	v1Store := checkpoint.NewGitStore(repo)
-	v2Store := checkpoint.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
+	v2URL, err := remote.FetchURL(ctx)
+	if err != nil {
+		logging.Debug(ctx, "explain: using origin for branch checkpoint v2 store fetch remote",
+			slog.String("error", err.Error()),
+		)
+		v2URL = ""
+	}
+	v2Store := checkpoint.NewV2GitStore(repo, v2URL)
 	preferCheckpointsV2 := settings.IsCheckpointsV2Enabled(ctx)
 
 	// Get all committed checkpoints for lookup (v2-aware with v1 fallback).
@@ -1477,19 +1857,23 @@ func outputExplainContent(w io.Writer, content string, noPager bool) {
 // runExplainCommit looks up the checkpoint associated with a commit.
 // Extracts the Entire-Checkpoint trailer and delegates to checkpoint detail view.
 // If no trailer found, shows a message indicating no associated checkpoint.
-func runExplainCommit(ctx context.Context, w io.Writer, commitRef string, noPager, verbose, full, searchAll bool) error {
+func runExplainCommit(ctx context.Context, w, errW io.Writer, commitRef string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool) error {
 	repo, err := openRepository(ctx)
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
 	}
 
-	// Resolve the commit reference
-	hash, err := repo.ResolveRevision(plumbing.Revision(commitRef))
+	// Resolve the commit reference, erroring on hex-prefix ambiguity
+	// instead of silently picking the first matching commit.
+	hash, err := resolveCommitUnambiguous(repo, commitRef)
 	if err != nil {
+		if errors.Is(err, errAmbiguousCommitPrefix) {
+			return err
+		}
 		return fmt.Errorf("commit not found: %s", commitRef)
 	}
 
-	commit, err := repo.CommitObject(*hash)
+	commit, err := repo.CommitObject(hash)
 	if err != nil {
 		return fmt.Errorf("failed to get commit: %w", err)
 	}
@@ -1497,15 +1881,18 @@ func runExplainCommit(ctx context.Context, w io.Writer, commitRef string, noPage
 	// Extract Entire-Checkpoint trailer
 	checkpointID, hasCheckpoint := trailers.ParseCheckpoint(commit.Message)
 	if !hasCheckpoint {
-		fmt.Fprintln(w, "No associated Entire checkpoint")
-		fmt.Fprintf(w, "\nCommit %s does not have an Entire-Checkpoint trailer.\n", hash.String()[:7])
-		fmt.Fprintln(w, "This commit was not created during an Entire session, or the trailer was removed.")
+		// Side-effect modes must error so scripts can distinguish "done"
+		// from "didn't happen"; read-only modes print a friendly message.
+		if generate || rawTranscript {
+			return fmt.Errorf("cannot %s: commit %s has no Entire-Checkpoint trailer", generateOrRawLabel(generate), abbreviateCommitHash(repo, hash))
+		}
+		printNoTrailerMessage(w, repo, hash)
 		return nil
 	}
 
-	// Delegate to checkpoint detail view
-	// Note: errW is only used for generate mode, but we pass w for safety
-	return runExplainCheckpoint(ctx, w, w, checkpointID.String(), noPager, verbose, full, false, false, false, searchAll)
+	// Delegate to checkpoint detail view, forwarding the full flag set so
+	// --generate / --raw-transcript / --force work via --commit as well.
+	return runExplainCheckpoint(ctx, w, errW, checkpointID.String(), noPager, verbose, full, rawTranscript, generate, force, searchAll)
 }
 
 // formatSessionInfo formats session information for display.

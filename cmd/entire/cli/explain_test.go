@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -31,8 +33,11 @@ import (
 func TestNewExplainCmd(t *testing.T) {
 	cmd := newExplainCmd()
 
-	if cmd.Use != "explain" {
-		t.Errorf("expected Use to be 'explain', got %s", cmd.Use)
+	if cmd.Name() != "explain" {
+		t.Errorf("expected command name to be 'explain', got %s", cmd.Name())
+	}
+	if cmd.Use != "explain [checkpoint-id | commit-sha]" {
+		t.Errorf("expected Use %q, got %q", "explain [checkpoint-id | commit-sha]", cmd.Use)
 	}
 
 	// Verify flags exist
@@ -69,18 +74,156 @@ func TestExplainCmd_SearchAllFlag(t *testing.T) {
 	}
 }
 
-func TestExplainCmd_RejectsPositionalArgs(t *testing.T) {
+func TestFormatCheckpointSummaryError_Auth(t *testing.T) {
+	t.Parallel()
+	err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: claudecode.ClaudeErrorAuth, Message: "Invalid API key"}, 0)
+	msg := err.Error()
+	if !strings.Contains(strings.ToLower(msg), "authentication failed") {
+		t.Errorf("missing 'authentication failed' in %q", msg)
+	}
+	if !strings.Contains(msg, "Invalid API key") {
+		t.Errorf("missing envelope message in %q", msg)
+	}
+}
+
+func TestFormatCheckpointSummaryError_RateLimit(t *testing.T) {
+	t.Parallel()
+	err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: claudecode.ClaudeErrorRateLimit, Message: "429"}, 0)
+	if !strings.Contains(err.Error(), "rate limit") {
+		t.Errorf("missing rate-limit phrasing: %q", err)
+	}
+}
+
+func TestFormatCheckpointSummaryError_Config(t *testing.T) {
+	t.Parallel()
+	err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: claudecode.ClaudeErrorConfig, Message: "model not found"}, 0)
+	if !strings.Contains(err.Error(), "model not found") {
+		t.Errorf("envelope message not surfaced: %q", err)
+	}
+}
+
+func TestFormatCheckpointSummaryError_CLIMissing(t *testing.T) {
+	t.Parallel()
+	err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: claudecode.ClaudeErrorCLIMissing}, 0)
+	if !strings.Contains(err.Error(), "not installed") {
+		t.Errorf("missing cli-missing phrasing: %q", err)
+	}
+}
+
+// TestFormatCheckpointSummaryError_TypedBranchesHandleEmptyMessage guards against
+// the null-result-envelope regression: Claude can emit is_error:true with a real
+// HTTP status (401/429/4xx) but result:null, producing a ClaudeError with Message="".
+// The Auth/RateLimit/Config branches must not render a bare colon in that case.
+func TestFormatCheckpointSummaryError_TypedBranchesHandleEmptyMessage(t *testing.T) {
+	t.Parallel()
+	kinds := []claudecode.ClaudeErrorKind{
+		claudecode.ClaudeErrorAuth,
+		claudecode.ClaudeErrorRateLimit,
+		claudecode.ClaudeErrorConfig,
+	}
+	for _, kind := range kinds {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: kind}, 0)
+			msg := err.Error()
+			// Must not end any line with a bare colon (the classic regression
+			// of rendering "...: " with nothing after it).
+			for _, line := range strings.Split(msg, "\n") {
+				if strings.HasSuffix(strings.TrimSpace(line), ":") {
+					t.Errorf("line ends with bare colon: %q (full: %q)", line, msg)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatCheckpointSummaryError_DeadlineExceeded(t *testing.T) {
+	t.Parallel()
+	err := formatCheckpointSummaryError(fmt.Errorf("wrapped: %w", context.DeadlineExceeded), 5*time.Minute)
+	msg := err.Error()
+	for _, want := range []string{"5m", "safety deadline"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("missing %q in %q", want, msg)
+		}
+	}
+	// Negative guards against regressions:
+	//   - summary_timeout_seconds advice was removed because the setting is
+	//     not wired yet (follow-up PR). Reintroducing it would re-mislead users.
+	//   - Hardcoded "Claude" / "sonnet" / "Anthropic" would misdirect users of
+	//     alternate summary providers (codex, gemini).
+	for _, unwanted := range []string{"summary_timeout_seconds", "Claude", "sonnet", "Anthropic", "anthropic.com"} {
+		if strings.Contains(msg, unwanted) {
+			t.Errorf("unexpected %q in provider-neutral timeout message: %q", unwanted, msg)
+		}
+	}
+}
+
+func TestFormatCheckpointSummaryError_Canceled(t *testing.T) {
+	t.Parallel()
+	err := formatCheckpointSummaryError(fmt.Errorf("wrapped: %w", context.Canceled), 0)
+	if !strings.Contains(err.Error(), "canceled") {
+		t.Errorf("missing canceled: %q", err)
+	}
+}
+
+func TestFormatCheckpointSummaryError_Passthrough(t *testing.T) {
+	t.Parallel()
+	err := formatCheckpointSummaryError(errors.New("something else"), 0)
+	if !strings.Contains(err.Error(), "something else") {
+		t.Errorf("original error not preserved: %q", err)
+	}
+}
+
+// TestFormatCheckpointSummaryError_Unknown covers the three branches of the
+// default-case suffix builder. Guards against users seeing
+// "Claude failed to generate the summary:" with nothing after the colon
+// (the null-result and no-stderr-OOM scenarios).
+func TestFormatCheckpointSummaryError_Unknown(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		err  *claudecode.ClaudeError
+		want string // substring that must appear in the rendered message
+	}{
+		{"APIStatus when Message empty", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown, APIStatus: 500}, "500"},
+		{"ExitCode when Message empty", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown, ExitCode: 137}, "137"},
+		{"Negative ExitCode renders as abnormal, not -1", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown, ExitCode: -1}, "abnormal"},
+		{"All-zero fields render a diagnostic sentinel, not empty", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown}, "no diagnostic detail"},
+		{"Message takes precedence", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown, Message: "something weird"}, "something weird"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			msg := formatCheckpointSummaryError(tc.err, 0).Error()
+			if strings.HasSuffix(strings.TrimSpace(msg), ":") {
+				t.Errorf("user-facing message ends with bare colon: %q", msg)
+			}
+			if !strings.Contains(msg, tc.want) {
+				t.Errorf("missing %q in %q", tc.want, msg)
+			}
+		})
+	}
+}
+
+// TestExplainCmd_PositionalArgConflictsWithFlags verifies that combining a
+// positional target with --checkpoint, --commit, or --session is rejected.
+// The bare-positional happy path (auto-resolution to a checkpoint ID or commit
+// ref) is covered by the TestRunExplainAuto_* tests in this file.
+func TestExplainCmd_PositionalArgConflictsWithFlags(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		args []string
 	}{
-		{"positional arg without flags", []string{"abc123"}},
-		{"positional arg with checkpoint flag", []string{"abc123", "--checkpoint", "def456"}},
-		{"positional arg after flags", []string{"--checkpoint", "def456", "abc123"}},
+		{"positional arg with --checkpoint", []string{"abc123", "--checkpoint", "def456"}},
+		{"positional arg with -c", []string{"abc123", "-c", "def456"}},
+		{"positional arg with --commit", []string{"abc123", "--commit", "HEAD"}},
+		{"positional arg with --session", []string{"abc123", "--session", "sess-1"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			cmd := newExplainCmd()
 			var stdout, stderr bytes.Buffer
 			cmd.SetOut(&stdout)
@@ -89,17 +232,345 @@ func TestExplainCmd_RejectsPositionalArgs(t *testing.T) {
 
 			err := cmd.Execute()
 			if err == nil {
-				t.Fatalf("expected error for positional args, got nil")
+				t.Fatalf("expected error when combining positional arg with flags, got nil")
 			}
-
-			// Should show helpful error with hint
-			if !strings.Contains(err.Error(), "unexpected argument") {
-				t.Errorf("expected 'unexpected argument' error, got: %v", err)
-			}
-			if !strings.Contains(err.Error(), "Hint:") {
-				t.Errorf("expected hint in error message, got: %v", err)
+			if !strings.Contains(err.Error(), "cannot combine positional argument") {
+				t.Errorf("expected 'cannot combine positional argument' error, got: %v", err)
 			}
 		})
+	}
+}
+
+// runExplainAutoTestRepo seeds a git repo and returns the initial commit's hash.
+func runExplainAutoTestRepo(t *testing.T) (repo *git.Repository, initialCommit plumbing.Hash) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "seed.txt", "seed")
+	testutil.GitAdd(t, tmpDir, "seed.txt")
+	testutil.GitCommit(t, tmpDir, "seed commit")
+
+	opened, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+	head, err := opened.Head()
+	require.NoError(t, err)
+	return opened, head.Hash()
+}
+
+// TestRunExplainAuto_NoMatchReturnsCompositeError verifies that a target
+// that's neither a checkpoint ID/prefix nor a resolvable git ref returns
+// the composite "no checkpoint or commit found" error — proving the
+// checkpoint-first → commit-fallback routing chains correctly all the way
+// to the final error.
+func TestRunExplainAuto_NoMatchReturnsCompositeError(t *testing.T) {
+	runExplainAutoTestRepo(t)
+
+	var out, errOut bytes.Buffer
+	err := runExplainAuto(context.Background(), &out, &errOut, "abababababab", false, false, false, false, false, false, false)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, `no checkpoint or commit found matching "abababababab"`)
+}
+
+// TestRunExplainAuto_CommitRefWithCheckpointTrailer verifies that a commit
+// SHA passed positionally falls through to commit resolution and delegates
+// to the checkpoint path with the ID from the Entire-Checkpoint trailer.
+func TestRunExplainAuto_CommitRefWithCheckpointTrailer(t *testing.T) {
+	repo, _ := runExplainAutoTestRepo(t)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("deadbeefcafe")
+	require.NoError(t, checkpoint.NewGitStore(repo).WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-auto",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n")),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}))
+
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	tmpDir := wt.Filesystem.Root()
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "feature.txt"), []byte("feature"), 0o644))
+	_, err = wt.Add("feature.txt")
+	require.NoError(t, err)
+	commitHash, err := wt.Commit(trailers.AppendCheckpointTrailer("Implement feature", cpID.String()), &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	var out, errOut bytes.Buffer
+	err = runExplainAuto(ctx, &out, &errOut, commitHash.String(), true, false, false, false, false, false, false)
+	require.NoError(t, err)
+	require.Contains(t, out.String(), cpID.String(), "expected checkpoint header resolved via trailer")
+}
+
+// TestRunExplainAuto_CommitWithoutTrailer covers the trailer-less commit
+// dispatch: read-only modes print a friendly message and exit 0, while
+// --generate / --raw-transcript must error so scripts can distinguish
+// "done" from "didn't happen" (Cursor Bugbot finding on PR #990).
+func TestRunExplainAuto_CommitWithoutTrailer(t *testing.T) {
+	_, initial := runExplainAutoTestRepo(t)
+	shortSHA := initial.String()[:7]
+
+	tests := []struct {
+		name        string
+		rawTrans    bool
+		generate    bool
+		wantErr     bool
+		wantContain string // substring required in err (if wantErr) or out (if !wantErr)
+	}{
+		{"read-only prints friendly message", false, false, false, "No associated Entire checkpoint"},
+		{"--generate errors", false, true, true, "cannot generate summary"},
+		{"--raw-transcript errors", true, false, true, "cannot show raw transcript"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			err := runExplainAuto(context.Background(), &out, &errOut, initial.String(), true, false, false, tc.rawTrans, tc.generate, false, false)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.ErrorContains(t, err, tc.wantContain)
+				require.ErrorContains(t, err, shortSHA)
+			} else {
+				require.NoError(t, err)
+				require.Contains(t, out.String(), tc.wantContain)
+				require.Contains(t, out.String(), shortSHA)
+			}
+		})
+	}
+}
+
+// TestRunExplainCheckpoint_NotFoundSentinels verifies the typed-error
+// contract runExplainAuto depends on: non-matching targets return an error
+// wrapping checkpoint.ErrCheckpointNotFound (for errors.Is detection),
+// regardless of --generate. The old code returned the temp-checkpoint
+// sentinel speculatively for --generate, breaking fallback routing.
+func TestRunExplainCheckpoint_NotFoundSentinels(t *testing.T) {
+	runExplainAutoTestRepo(t)
+
+	for _, generate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("generate=%v", generate), func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			err := runExplainCheckpoint(context.Background(), &out, &errOut, "abababababab", false, false, false, false, generate, false, false)
+
+			require.Error(t, err)
+			require.ErrorIs(t, err, checkpoint.ErrCheckpointNotFound)
+			require.NotErrorIs(t, err, errCannotGenerateTemporaryCheckpoint,
+				"sentinel must not fire unless a real temp checkpoint was matched")
+		})
+	}
+}
+
+func writeTemporaryCheckpointForExplainTest(t *testing.T) string {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+
+	testFile := filepath.Join(tmpDir, "temp.txt")
+	require.NoError(t, os.WriteFile(testFile, []byte("initial content"), 0o644))
+	_, err = wt.Add("temp.txt")
+	require.NoError(t, err)
+	initialCommit, err := wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	sessionID := "2026-01-27-temp-session"
+	metadataDir := filepath.Join(tmpDir, ".entire", "metadata", sessionID)
+	require.NoError(t, os.MkdirAll(metadataDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(metadataDir, paths.PromptFileName), []byte("temporary checkpoint prompt"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(metadataDir, "full.jsonl"), []byte(`{"type":"user","message":{"content":[{"type":"text","text":"temporary checkpoint"}]}}`+"\n"), 0o644))
+
+	require.NoError(t, os.WriteFile(testFile, []byte("updated content"), 0o644))
+
+	result, err := checkpoint.NewGitStore(repo).WriteTemporary(context.Background(), checkpoint.WriteTemporaryOptions{
+		SessionID:         sessionID,
+		BaseCommit:        initialCommit.String()[:7],
+		ModifiedFiles:     []string{"temp.txt"},
+		MetadataDir:       ".entire/metadata/" + sessionID,
+		MetadataDirAbs:    metadataDir,
+		CommitMessage:     "temporary checkpoint with code changes",
+		AuthorName:        "Test",
+		AuthorEmail:       "test@example.com",
+		IsFirstCheckpoint: false,
+	})
+	require.NoError(t, err)
+	require.False(t, result.Skipped)
+
+	return result.CommitHash.String()
+}
+
+func TestRunExplainAuto_GenerateTemporaryCheckpointDoesNotFallBackToCommit(t *testing.T) {
+	tempCheckpointSHA := writeTemporaryCheckpointForExplainTest(t)
+
+	var out, errOut bytes.Buffer
+	err := runExplainAuto(context.Background(), &out, &errOut, tempCheckpointSHA, true, false, false, false, true, false, false)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, errCannotGenerateTemporaryCheckpoint)
+	require.NotErrorIs(t, err, checkpoint.ErrCheckpointNotFound)
+	require.NotContains(t, err.Error(), "no Entire-Checkpoint trailer")
+}
+
+// collidingShaPrefix creates commits until two share a 2-char SHA prefix
+// and returns that prefix. 2 chars is the smallest even-byte boundary
+// HashesWithPrefix uses, so a collision at this length reliably exercises
+// the ambiguity detection path without SHA mining.
+func collidingShaPrefix(t *testing.T, repo *git.Repository, tmpDir string) string {
+	t.Helper()
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+
+	seen := make(map[string]int)
+	for i := range 300 {
+		testutil.WriteFile(t, tmpDir, "f.txt", fmt.Sprintf("content-%d", i))
+		_, err = wt.Add("f.txt")
+		require.NoError(t, err)
+		h, err := wt.Commit(fmt.Sprintf("commit %d", i), &git.CommitOptions{
+			Author: &object.Signature{Name: "Test", Email: "t@e.com", When: time.Now().Add(time.Duration(i) * time.Second)},
+		})
+		require.NoError(t, err)
+		p := h.String()[:2]
+		seen[p]++
+		if seen[p] >= 2 {
+			return p
+		}
+	}
+	t.Skip("could not produce colliding 2-char SHA prefix in 300 iterations")
+	return ""
+}
+
+// TestResolveCommitUnambiguous_MultipleCommitMatches verifies the reviewer-
+// flagged bug: go-git v6's ResolveRevision silently returns the first
+// candidate when a hex prefix matches multiple commits. With the helper
+// wrapping it, ambiguity must surface as errAmbiguousCommitPrefix.
+func TestResolveCommitUnambiguous_MultipleCommitMatches(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+
+	prefix := collidingShaPrefix(t, repo, tmpDir)
+
+	_, err = resolveCommitUnambiguous(repo, prefix)
+	require.Error(t, err)
+	require.ErrorIs(t, err, errAmbiguousCommitPrefix)
+	require.ErrorContains(t, err, prefix)
+}
+
+// TestResolveCommitUnambiguous_UniquePrefixSucceeds verifies a full SHA
+// resolves to the expected hash without triggering ambiguity detection.
+func TestResolveCommitUnambiguous_UniquePrefixSucceeds(t *testing.T) {
+	_, initial := runExplainAutoTestRepo(t)
+	repo, err := git.PlainOpen(".")
+	require.NoError(t, err)
+
+	got, err := resolveCommitUnambiguous(repo, initial.String())
+	require.NoError(t, err)
+	require.Equal(t, initial, got)
+}
+
+// TestAbbreviateCommitHash_GrowsOnCollision verifies the helper grows past
+// the default 7 chars when necessary — matching git's --abbrev auto-growth.
+// The same 2-char SHA collision we construct for resolution is enough to
+// force abbreviation beyond 2 chars (though in practice 7 still tends to
+// be unique for ~300 commits).
+func TestAbbreviateCommitHash_GrowsOnCollision(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+
+	prefix := collidingShaPrefix(t, repo, tmpDir)
+
+	// Find a hash whose SHA starts with the colliding prefix.
+	hashes := commitHashesWithPrefix(repo, prefix)
+	require.GreaterOrEqual(t, len(hashes), 2)
+
+	abbrev := abbreviateCommitHash(repo, hashes[0])
+	require.True(t, strings.HasPrefix(hashes[0].String(), abbrev), "abbreviation must be a prefix of the full hash")
+	require.GreaterOrEqual(t, len(abbrev), 7, "abbreviation must be at least git's default of 7 chars")
+	require.LessOrEqual(t, len(abbrev), 40, "abbreviation cannot exceed full hash length")
+}
+
+// TestAbbreviateCommitHash_UsesSevenByDefault verifies the helper returns
+// the 7-char default when there's no collision, matching git's behavior.
+func TestAbbreviateCommitHash_UsesSevenByDefault(t *testing.T) {
+	_, initial := runExplainAutoTestRepo(t)
+	repo, err := git.PlainOpen(".")
+	require.NoError(t, err)
+
+	abbrev := abbreviateCommitHash(repo, initial)
+	require.Equal(t, initial.String()[:7], abbrev)
+}
+
+// TestRunExplainAuto_GenerateAmbiguousPrefixRefused guards the Codex finding
+// that a short positional arg matching both a committed-checkpoint prefix
+// and a git revision must not silently write a summary to the wrong
+// checkpoint. SHA mining isn't practical, so we construct the collision by
+// picking a checkpoint ID that starts with the seed commit's abbreviation.
+func TestRunExplainAuto_GenerateAmbiguousPrefixRefused(t *testing.T) {
+	repo, _ := runExplainAutoTestRepo(t)
+	ctx := context.Background()
+
+	head, err := repo.Head()
+	require.NoError(t, err)
+	commitPrefix := head.Hash().String()[:7]
+	collisionID := id.MustCheckpointID(commitPrefix + "aaaaa")
+
+	require.NoError(t, checkpoint.NewGitStore(repo).WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID: collisionID,
+		SessionID:    "session-collision",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"hi"}]}}` + "\n")),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}))
+
+	var out, errOut bytes.Buffer
+	err = runExplainAuto(ctx, &out, &errOut, commitPrefix, true, false, false, false, true, false, false)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "ambiguous target")
+	require.ErrorContains(t, err, "--commit")
+	require.ErrorContains(t, err, "--checkpoint")
+}
+
+// TestExplainCmd_CommitFlagWithGenerateValidates verifies --commit +
+// --generate passes flag validation (previously hasCheckpointTarget
+// excluded commitFlag, so the explicit form couldn't invoke generate).
+func TestExplainCmd_CommitFlagWithGenerateValidates(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "f.txt", "x")
+	testutil.GitAdd(t, tmpDir, "f.txt")
+	testutil.GitCommit(t, tmpDir, "seed")
+
+	cmd := newExplainCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--commit", "HEAD", "--generate"})
+
+	// Command will fail downstream (no trailer on seed commit), but must
+	// not fail at flag validation.
+	if err := cmd.Execute(); err != nil {
+		require.NotContains(t, err.Error(), "--generate requires")
 	}
 }
 
@@ -130,7 +601,7 @@ func TestGenerateCheckpointAISummary_AddsDefaultTimeoutWithoutParentDeadline(t *
 	}
 
 	start := time.Now()
-	summary, err := generateCheckpointAISummary(context.Background(), []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	summary, _, err := generateCheckpointAISummary(context.Background(), []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err != nil {
 		t.Fatalf("generateCheckpointAISummary() error = %v", err)
 	}
@@ -172,7 +643,7 @@ func TestGenerateCheckpointAISummary_UsesParentDeadlineAndWrapsSentinel(t *testi
 		return nil, ctx.Err()
 	}
 
-	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	_, appliedDeadline, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -182,11 +653,59 @@ func TestGenerateCheckpointAISummary_UsesParentDeadlineAndWrapsSentinel(t *testi
 	if gotDeadline.IsZero() {
 		t.Fatal("expected deadline to be captured")
 	}
+	// The applied deadline must reflect the shorter parent-ctx deadline,
+	// not the package-default checkpointSummaryTimeout. Otherwise
+	// formatCheckpointSummaryError would report the wrong timeout to users.
+	if appliedDeadline >= checkpointSummaryTimeout {
+		t.Fatalf("appliedDeadline = %s; want shorter than %s (parent had tighter deadline)",
+			appliedDeadline, checkpointSummaryTimeout)
+	}
 	if delta := gotDeadline.Sub(parentDeadline); delta < -5*time.Millisecond || delta > 5*time.Millisecond {
 		t.Fatalf("deadline delta = %s, want near 0", delta)
 	}
 	if strings.Contains(err.Error(), "30s") {
 		t.Fatalf("timeout error should not report default timeout when parent deadline fired: %v", err)
+	}
+}
+
+// TestGenerateCheckpointAISummary_PreservesClaudeErrorWhenCtxIsDone guards
+// against the race where the underlying summarizer returns a typed
+// *ClaudeError AND the context happens to be done. Prior code checked
+// timeoutCtx.Err() and unconditionally wrapped with %w context.DeadlineExceeded,
+// which discarded the typed error and routed the user to the wrong
+// "safety deadline" guidance instead of the auth/rate-limit message.
+func TestGenerateCheckpointAISummary_PreservesClaudeErrorWhenCtxIsDone(t *testing.T) {
+	tmpTimeout := checkpointSummaryTimeout
+	tmpGenerator := generateTranscriptSummary
+	t.Cleanup(func() {
+		checkpointSummaryTimeout = tmpTimeout
+		generateTranscriptSummary = tmpGenerator
+	})
+
+	checkpointSummaryTimeout = 30 * time.Second
+
+	// Cancel the parent before we even call — ctx.Err() will be non-nil.
+	parentCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	claudeErr := &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorAuth, Message: "Invalid API key"}
+	generateTranscriptSummary = func(
+		context.Context,
+		redact.RedactedBytes,
+		[]string,
+		types.AgentType,
+		summarize.Generator,
+	) (*checkpoint.Summary, error) {
+		return nil, claudeErr
+	}
+
+	_, _, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	var ce *claudecode.ClaudeError
+	if !errors.As(err, &ce) {
+		t.Fatalf("errors.As did not recover *ClaudeError; got %v", err)
+	}
+	if ce.Kind != claudecode.ClaudeErrorAuth {
+		t.Errorf("Kind = %v; want auth", ce.Kind)
 	}
 }
 
@@ -220,7 +739,7 @@ func TestGenerateCheckpointAISummary_ClampsLongParentDeadlineToDefaultTimeout(t 
 	}
 
 	start := time.Now()
-	summary, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	summary, _, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err != nil {
 		t.Fatalf("generateCheckpointAISummary() error = %v", err)
 	}
@@ -257,7 +776,7 @@ func TestGenerateCheckpointAISummary_UsesCancellationSentinel(t *testing.T) {
 		return nil, ctx.Err()
 	}
 
-	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	_, _, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err == nil {
 		t.Fatal("expected cancellation error")
 	}
@@ -274,12 +793,10 @@ func TestExplainCommit_NotFound(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	if _, err := git.PlainInit(tmpDir, false); err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 
 	var stdout bytes.Buffer
-	err := runExplainCommit(context.Background(), &stdout, "nonexistent", false, false, false, false)
+	err := runExplainCommit(context.Background(), &stdout, &stdout, "nonexistent", false, false, false, false, false, false, false)
 
 	if err == nil {
 		t.Error("expected error for nonexistent commit, got nil")
@@ -294,10 +811,9 @@ func TestExplainCommit_NoEntireData(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -323,7 +839,7 @@ func TestExplainCommit_NoEntireData(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	err = runExplainCommit(context.Background(), &stdout, commitHash.String(), false, false, false, false)
+	err = runExplainCommit(context.Background(), &stdout, &stdout, commitHash.String(), false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("runExplainCommit() should not error for non-Entire commits, got: %v", err)
 	}
@@ -347,10 +863,9 @@ func TestExplainCommit_WithMetadataTrailerButNoCheckpoint(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -393,7 +908,7 @@ func TestExplainCommit_WithMetadataTrailerButNoCheckpoint(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	err = runExplainCommit(context.Background(), &stdout, commitHash.String(), false, false, false, false)
+	err = runExplainCommit(context.Background(), &stdout, &stdout, commitHash.String(), false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("runExplainCommit() error = %v", err)
 	}
@@ -415,10 +930,9 @@ func TestExplainDefault_ShowsBranchView(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	// Create initial commit so HEAD exists (required for branch view)
 	w, err := repo.Worktree()
@@ -471,10 +985,9 @@ func TestExplainDefault_NoCheckpoints_ShowsHelpfulMessage(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	// Create initial commit so HEAD exists (required for branch view)
 	w, err := repo.Worktree()
@@ -525,7 +1038,7 @@ func TestExplainDefault_NoCheckpoints_ShowsHelpfulMessage(t *testing.T) {
 func TestExplainBothFlagsError(t *testing.T) {
 	// Test that providing both --session and --commit returns an error
 	var stdout, stderr bytes.Buffer
-	err := runExplain(context.Background(), &stdout, &stderr, "session-id", "commit-sha", "", false, false, false, false, false, false, false)
+	err := runExplain(context.Background(), &stdout, &stderr, "session-id", "commit-sha", "", "", false, false, false, false, false, false, false)
 
 	if err == nil {
 		t.Error("expected error when both flags provided, got nil")
@@ -978,7 +1491,7 @@ func TestRunExplain_MutualExclusivityError(t *testing.T) {
 	var buf, errBuf bytes.Buffer
 
 	// Providing both --session and --checkpoint should error
-	err := runExplain(context.Background(), &buf, &errBuf, "session-id", "", "checkpoint-id", false, false, false, false, false, false, false)
+	err := runExplain(context.Background(), &buf, &errBuf, "session-id", "", "checkpoint-id", "", false, false, false, false, false, false, false)
 
 	if err == nil {
 		t.Error("expected error when multiple flags provided")
@@ -993,10 +1506,9 @@ func TestRunExplainCheckpoint_NotFound(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo with an initial commit (required for checkpoint lookup)
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -1309,6 +1821,7 @@ func TestRunExplainCheckpoint_V2UsesCompactTranscriptForIntent(t *testing.T) {
 func TestRunExplainCheckpoint_V2PreferredGenerateWritesBothStores(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
+	t.Setenv("ENTIRE_TEST_TTY", "0") // prevent interactive summary provider prompt
 
 	testutil.InitRepo(t, tmpDir)
 	repo, err := git.PlainOpen(tmpDir)
@@ -1370,6 +1883,7 @@ func TestRunExplainCheckpoint_V2PreferredGenerateWritesBothStores(t *testing.T) 
 func TestRunExplainCheckpoint_V2OnlyGenerateSucceedsViaV2Store(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
+	t.Setenv("ENTIRE_TEST_TTY", "0") // prevent interactive summary provider prompt
 
 	testutil.InitRepo(t, tmpDir)
 	repo, err := git.PlainOpen(tmpDir)
@@ -1481,6 +1995,7 @@ func TestRunExplainCheckpoint_V2FallsBackToFullWhenCompactMissing(t *testing.T) 
 func TestRunExplainCheckpoint_V2CompactTranscriptNotUsedForGenerate(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
+	t.Setenv("ENTIRE_TEST_TTY", "0") // prevent interactive summary provider prompt
 
 	testutil.InitRepo(t, tmpDir)
 	repo, err := git.PlainOpen(tmpDir)
@@ -2240,10 +2755,9 @@ func TestGetBranchCheckpoints_ReadsPromptFromShadowBranch(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo with an initial commit
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2354,9 +2868,7 @@ func TestGetCurrentWorktreeHash_MainWorktree(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	if _, err := git.PlainInit(tmpDir, false); err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 
 	hash := getCurrentWorktreeHash(context.Background())
 	expected := checkpoint.HashWorktreeID("") // Main worktree has empty ID
@@ -2371,10 +2883,9 @@ func TestGetReachableTemporaryCheckpoints_FiltersByWorktree(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2474,10 +2985,9 @@ func TestRunExplainBranchDefault_DetachedHead(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo with a commit
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2531,10 +3041,9 @@ func TestIsAncestorOf(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2597,10 +3106,9 @@ func TestGetBranchCheckpoints_OnFeatureBranch(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2645,10 +3153,9 @@ func TestHasCodeChanges_FirstCommitReturnsTrue(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2685,10 +3192,9 @@ func TestHasCodeChanges_OnlyMetadataChanges(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2743,10 +3249,9 @@ func TestHasCodeChanges_WithCodeChanges(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2797,10 +3302,9 @@ func TestHasCodeChanges_MixedChanges(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2862,10 +3366,9 @@ func TestGetBranchCheckpoints_FiltersMainCommits(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -3144,10 +3647,9 @@ func TestRunExplainCommit_NoCheckpointTrailer(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	// Create a commit without checkpoint trailer
 	w, err := repo.Worktree()
@@ -3169,7 +3671,7 @@ func TestRunExplainCommit_NoCheckpointTrailer(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err = runExplainCommit(context.Background(), &buf, hash.String()[:7], false, false, false, false)
+	err = runExplainCommit(context.Background(), &buf, &buf, hash.String()[:7], false, false, false, false, false, false, false)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -3186,10 +3688,9 @@ func TestRunExplainCommit_WithCheckpointTrailer(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	// Create a commit with checkpoint trailer
 	w, err := repo.Worktree()
@@ -3217,7 +3718,7 @@ func TestRunExplainCommit_WithCheckpointTrailer(t *testing.T) {
 	var buf bytes.Buffer
 	// This should try to look up the checkpoint and fail (checkpoint doesn't exist in store)
 	// but it should still attempt the lookup rather than showing commit details
-	err = runExplainCommit(context.Background(), &buf, hash.String()[:7], false, false, false, false)
+	err = runExplainCommit(context.Background(), &buf, &buf, hash.String()[:7], false, false, false, false, false, false, false)
 
 	// Should error because the checkpoint doesn't exist in the store
 	if err == nil {
@@ -3346,7 +3847,7 @@ func TestRunExplain_SessionFlagFiltersListView(t *testing.T) {
 	// When session is specified alone, it should NOT error for mutual exclusivity
 	// It should route to the list view with a filter (which may fail for other reasons
 	// like not being in a git repo, but not for mutual exclusivity)
-	err := runExplain(context.Background(), &buf, &errBuf, "some-session", "", "", false, false, false, false, false, false, false)
+	err := runExplain(context.Background(), &buf, &errBuf, "some-session", "", "", "", false, false, false, false, false, false, false)
 
 	// Should NOT be a mutual exclusivity error
 	if err != nil && strings.Contains(err.Error(), "cannot specify multiple") {
@@ -3358,7 +3859,7 @@ func TestRunExplain_SessionWithCheckpointStillMutuallyExclusive(t *testing.T) {
 	// Test that --session with --checkpoint is still an error
 	var buf, errBuf bytes.Buffer
 
-	err := runExplain(context.Background(), &buf, &errBuf, "some-session", "", "some-checkpoint", false, false, false, false, false, false, false)
+	err := runExplain(context.Background(), &buf, &errBuf, "some-session", "", "some-checkpoint", "", false, false, false, false, false, false, false)
 
 	if err == nil {
 		t.Error("expected error when --session and --checkpoint both specified")
@@ -3372,7 +3873,7 @@ func TestRunExplain_SessionWithCommitStillMutuallyExclusive(t *testing.T) {
 	// Test that --session with --commit is still an error
 	var buf, errBuf bytes.Buffer
 
-	err := runExplain(context.Background(), &buf, &errBuf, "some-session", "some-commit", "", false, false, false, false, false, false, false)
+	err := runExplain(context.Background(), &buf, &errBuf, "some-session", "some-commit", "", "", false, false, false, false, false, false, false)
 
 	if err == nil {
 		t.Error("expected error when --session and --commit both specified")
@@ -3445,10 +3946,9 @@ func TestGetAssociatedCommits(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -3543,10 +4043,9 @@ func TestGetAssociatedCommits_NoMatches(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -3588,10 +4087,9 @@ func TestGetAssociatedCommits_MultipleMatches(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -4410,10 +4908,9 @@ func TestGetBranchCheckpoints_ReadsPromptFromCommittedCheckpoint(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -4667,10 +5164,9 @@ func TestHasAnyChanges_FirstCommitReturnsTrue(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -4708,10 +5204,9 @@ func TestHasAnyChanges_MetadataOnlyChangeReturnsTrue(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {

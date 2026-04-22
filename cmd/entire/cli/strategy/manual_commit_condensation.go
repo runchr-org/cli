@@ -21,6 +21,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -251,22 +252,40 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		Summary:                     summary,
 	}
 
-	compactTranscriptDuration := buildCompactTranscript(ctx, ag, redactedTranscript, state, &writeOpts)
+	compactResult := buildExternalCompactTranscript(ctx, ag, state)
+	if compactResult == nil {
+		internalResult := buildInternalCompactTranscript(ctx, ag, redactedTranscript, state)
+		compactResult = &internalResult
+	}
+	writeOpts.CompactTranscript = compactResult.Transcript
+	writeOpts.CompactTranscriptStart = compactResult.StartLine
 
-	// Write checkpoint metadata to v1 branch
+	v2 := settings.CheckpointsVersion(ctx) == 2
+
+	// Write checkpoint metadata to the primary store.
 	writeV1Start := time.Now()
 	writeCtx, writeCommittedSpan := perf.Start(ctx, "write_committed_v1")
-	if err := store.WriteCommitted(writeCtx, writeOpts); err != nil {
-		writeCommittedSpan.RecordError(err)
-		writeCommittedSpan.End()
-		return nil, fmt.Errorf("failed to write checkpoint metadata: %w", err)
+	if !v2 {
+		if err := store.WriteCommitted(writeCtx, writeOpts); err != nil {
+			writeCommittedSpan.RecordError(err)
+			writeCommittedSpan.End()
+			return nil, fmt.Errorf("failed to write checkpoint metadata: %w", err)
+		}
 	}
 	writeCommittedSpan.End()
 	writeV1Duration := time.Since(writeV1Start)
 
 	writeV2Start := time.Now()
 	writeV2Ctx, writeCommittedV2Span := perf.Start(ctx, "write_committed_v2")
-	writeCommittedV2IfEnabled(writeV2Ctx, repo, writeOpts)
+	if v2 {
+		if err := writeCommittedV2(writeV2Ctx, repo, writeOpts); err != nil {
+			writeCommittedV2Span.RecordError(err)
+			writeCommittedV2Span.End()
+			return nil, fmt.Errorf("failed to write checkpoint metadata to v2: %w", err)
+		}
+	} else {
+		writeCommittedV2IfEnabled(writeV2Ctx, repo, writeOpts)
+	}
 	writeTaskMetadataV2IfEnabled(writeV2Ctx, repo, checkpointID, state.SessionID, ref)
 	writeCommittedV2Span.End()
 	writeV2Duration := time.Since(writeV2Start)
@@ -277,7 +296,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		slog.Int64("extract_session_data_ms", extractDuration.Milliseconds()),
 		slog.Int64("calculate_session_attribution_ms", attributionDuration.Milliseconds()),
 		slog.Int64("redact_transcript_ms", redactDuration.Milliseconds()),
-		slog.Int64("compact_transcript_v2_ms", compactTranscriptDuration.Milliseconds()),
+		slog.Int64("compact_transcript_v2_ms", compactResult.Duration.Milliseconds()),
 		slog.Int64("write_committed_v1_ms", writeV1Duration.Milliseconds()),
 		slog.Int64("write_committed_v2_ms", writeV2Duration.Milliseconds()),
 		slog.Int64("total_ms", time.Since(condenseStart).Milliseconds()),
@@ -288,9 +307,9 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 	// Count scoped (new-only) compact lines, not full compact lines,
 	// so state.CompactTranscriptStart accumulates correctly.
 	compactLines := 0
-	if writeOpts.CompactTranscript != nil {
-		fullLines := countCompactLines(writeOpts.CompactTranscript)
-		compactLines = fullLines - writeOpts.CompactTranscriptStart
+	if compactResult.Transcript != nil {
+		fullLines := countCompactLines(compactResult.Transcript)
+		compactLines = fullLines - compactResult.StartLine
 	}
 
 	return &CondenseResult{
@@ -403,23 +422,160 @@ func (s *ManualCommitStrategy) extractOrCreateSessionData(ctx context.Context, r
 	}
 }
 
-// buildCompactTranscript produces compact (v2) transcript forms when v2
-// checkpoints are enabled. The transcript must be pre-redacted. Returns
-// the compaction duration for timing logs.
-func buildCompactTranscript(ctx context.Context, ag agent.Agent, redacted redact.RedactedBytes, state *SessionState, writeOpts *cpkg.WriteCommittedOptions) time.Duration {
+// compactTranscriptResult holds the output of compact transcript generation.
+type compactTranscriptResult struct {
+	Transcript []byte        // Entire Transcript Format (JSONL), redacted. Nil means "skip".
+	StartLine  int           // Compact transcript line offset at checkpoint start.
+	Duration   time.Duration // Time spent producing the compact transcript.
+}
+
+// compactAndRedactExternalTranscript calls the external agent's compact-transcript
+// subcommand and redacts the result. Returns (nil, false) if the agent is not
+// external. Returns (nil, true) if the agent is external but compaction failed.
+func compactAndRedactExternalTranscript(ctx context.Context, ag agent.Agent, state *SessionState) (transcript []byte, isExternal bool) {
+	compactor, ok := agent.AsTranscriptCompactor(ag)
+	if !ok {
+		if _, isCap := ag.(agent.CapabilityDeclarer); isCap {
+			logging.Warn(ctx, "external transcript compaction unavailable, skipping transcript.jsonl",
+				slog.String("session_id", state.SessionID),
+				slog.String("agent", string(ag.Name())),
+			)
+			return nil, true
+		}
+		return nil, false
+	}
+
+	compacted := compactTranscriptForExternalAgent(ctx, compactor, state.SessionID, state.TranscriptPath)
+	if compacted == nil {
+		return nil, true
+	}
+
+	redacted, err := redactSessionJSONLBytes(compacted.Transcript)
+	if err != nil {
+		logging.Warn(ctx, "failed to redact external compact transcript, dropping",
+			slog.String("session_id", state.SessionID),
+			slog.String("agent", string(compactor.Name())),
+			slog.String("error", err.Error()),
+		)
+		return nil, true
+	}
+	return redacted.Bytes(), true
+}
+
+// buildExternalCompactTranscript produces the compact transcript for external
+// agents by calling the agent's compact-transcript subcommand and redacting
+// the result. Returns nil if the agent is not external (caller should use
+// buildInternalCompactTranscript instead).
+func buildExternalCompactTranscript(ctx context.Context, ag agent.Agent, state *SessionState) *compactTranscriptResult {
+	if !settings.IsCheckpointsV2Enabled(ctx) {
+		return nil
+	}
+
 	compactStart := time.Now()
 	compactCtx, compactSpan := perf.Start(ctx, "compact_transcript_v2")
-	if settings.IsCheckpointsV2Enabled(ctx) {
-		// Generate scoped compact (only new content) for line counting and offset calculation.
-		scopedCompact := compactTranscriptForV2(compactCtx, ag, redacted, state.CheckpointTranscriptStart)
-		// Generate full compact (cumulative) for storage — v2 /main replaces
-		// the session's transcript.jsonl on each write, so we must include all
-		// prior content, not just the new portion.
-		writeOpts.CompactTranscript = compactTranscriptForV2(compactCtx, ag, redacted, 0)
-		writeOpts.CompactTranscriptStart = computeCompactTranscriptStart(compactCtx, ag, state, redacted.Bytes(), scopedCompact)
+	defer compactSpan.End()
+
+	transcript, isExternal := compactAndRedactExternalTranscript(compactCtx, ag, state)
+	if !isExternal {
+		return nil
 	}
-	compactSpan.End()
-	return time.Since(compactStart)
+	if transcript == nil {
+		return &compactTranscriptResult{Duration: time.Since(compactStart)}
+	}
+
+	startLine := state.CompactTranscriptStart
+	fullLines := countCompactLines(transcript)
+	if fullLines < startLine {
+		logging.Warn(compactCtx, "external compact transcript shorter than previous compact transcript start; resetting compact transcript start",
+			slog.String("session_id", state.SessionID),
+			slog.String("agent", string(ag.Name())),
+			slog.Int("compact_transcript_lines", fullLines),
+			slog.Int("previous_compact_transcript_start", startLine),
+		)
+		startLine = 0
+	}
+
+	return &compactTranscriptResult{
+		Transcript: transcript,
+		StartLine:  startLine,
+		Duration:   time.Since(compactStart),
+	}
+}
+
+// buildInternalCompactTranscript produces the compact transcript for built-in
+// agents from already-redacted transcript bytes.
+func buildInternalCompactTranscript(ctx context.Context, ag agent.Agent, redacted redact.RedactedBytes, state *SessionState) compactTranscriptResult {
+	if !settings.IsCheckpointsV2Enabled(ctx) {
+		return compactTranscriptResult{}
+	}
+
+	compactStart := time.Now()
+	compactCtx, compactSpan := perf.Start(ctx, "compact_transcript_v2")
+	defer compactSpan.End()
+
+	// Generate scoped compact (only new content) for line counting and offset calculation.
+	scopedCompact := compactTranscriptForV2(compactCtx, ag, redacted, state.CheckpointTranscriptStart)
+	// Generate full compact (cumulative) for storage — v2 /main replaces
+	// the session's transcript.jsonl on each write, so we must include all
+	// prior content, not just the new portion.
+	fullCompact := compactTranscriptForV2(compactCtx, ag, redacted, 0)
+	startLine := computeCompactTranscriptStart(compactCtx, ag, state, redacted.Bytes(), scopedCompact)
+
+	return compactTranscriptResult{
+		Transcript: fullCompact,
+		StartLine:  startLine,
+		Duration:   time.Since(compactStart),
+	}
+}
+
+func compactTranscriptForExternalAgent(
+	ctx context.Context,
+	compactor agent.TranscriptCompactor,
+	sessionID string,
+	transcriptPath string,
+) *agent.CompactedTranscript {
+	if transcriptPath == "" {
+		logging.Warn(ctx, "external transcript compaction skipped: missing session transcript path",
+			slog.String("session_id", sessionID),
+			slog.String("agent", string(compactor.Name())),
+		)
+		return nil
+	}
+
+	compacted, err := compactor.CompactTranscript(ctx, transcriptPath)
+	if err != nil {
+		logging.Warn(ctx, "external transcript compaction failed, skipping transcript.jsonl on /main",
+			slog.String("session_id", sessionID),
+			slog.String("agent", string(compactor.Name())),
+			slog.String("error", err.Error()),
+		)
+		return nil
+	}
+	if compacted == nil {
+		logging.Warn(ctx, "external transcript compaction returned nil transcript",
+			slog.String("session_id", sessionID),
+			slog.String("agent", string(compactor.Name())),
+		)
+		return nil
+	}
+	if len(bytes.TrimSpace(compacted.Transcript)) == 0 {
+		logging.Warn(ctx, "external transcript compaction returned empty transcript",
+			slog.String("session_id", sessionID),
+			slog.String("agent", string(compactor.Name())),
+		)
+		return nil
+	}
+	if !bytes.HasSuffix(compacted.Transcript, []byte{'\n'}) {
+		compacted.Transcript = append(compacted.Transcript, '\n')
+	}
+	if len(compacted.Assets) > 0 {
+		logging.Warn(ctx, "external transcript compaction returned assets that are not yet persisted",
+			slog.String("session_id", sessionID),
+			slog.String("agent", string(compactor.Name())),
+			slog.Int("asset_count", len(compacted.Assets)),
+		)
+	}
+	return compacted
 }
 
 // generateSummary produces an LLM-generated summary of the session transcript.
@@ -475,7 +631,7 @@ func generateSummary(ctx context.Context, redactedTranscript redact.RedactedByte
 // The return type is the summarize.Generator interface rather than the concrete
 // adapter pointer so callers can't accidentally hold a non-nil interface that
 // wraps a nil pointer (the classic Go nil-interface footgun).
-func buildSummaryGenerator(ctx context.Context) summarize.Generator { //nolint:ireturn // intentional: nil interface avoids nil-pointer-wrapped-in-interface bug
+func buildSummaryGenerator(ctx context.Context) summarize.Generator { //nolint:ireturn // interface return is intentional for provider abstraction and nil-safety
 	s, err := settings.Load(ctx)
 	if err != nil {
 		// Warn (not Debug): this is the auto-summarize hot path on every commit.
@@ -1158,7 +1314,8 @@ func (s *ManualCommitStrategy) CondenseSessionByID(ctx context.Context, sessionI
 	state.CheckpointTranscriptSize = int64(len(result.Transcript))
 	state.Phase = session.PhaseIdle
 	state.LastCheckpointID = checkpointID
-	state.AttributionBaseCommit = state.BaseCommit
+	state.LastCheckpointCommitHash = state.BaseCommit
+	state.RealignAttributionBase(state.BaseCommit)
 	state.PromptAttributions = nil
 	state.PendingPromptAttribution = nil
 
@@ -1275,7 +1432,8 @@ func (s *ManualCommitStrategy) CondenseAndMarkFullyCondensed(ctx context.Context
 	state.CheckpointTranscriptStart = result.TotalTranscriptLines
 	state.CompactTranscriptStart += result.CompactTranscriptLines
 	state.LastCheckpointID = checkpointID
-	state.AttributionBaseCommit = state.BaseCommit
+	state.LastCheckpointCommitHash = state.BaseCommit
+	state.RealignAttributionBase(state.BaseCommit)
 	state.PromptAttributions = nil
 	state.PendingPromptAttribution = nil
 	state.FullyCondensed = true // FilesTouched is already empty (checked above)
@@ -1397,16 +1555,31 @@ func computeCompactTranscriptStart(ctx context.Context, ag agent.Agent, state *S
 	return offset
 }
 
+// writeCommittedV2 writes checkpoint data to v2 refs unconditionally.
+// Callers decide whether to propagate or swallow the error (v2-only vs dual-write).
+func writeCommittedV2(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) error {
+	v2URL, err := remote.FetchURL(ctx)
+	if err != nil {
+		logging.Debug(ctx, "manual-commit condensation: using origin for v2 write fetch remote",
+			slog.String("error", err.Error()),
+		)
+		v2URL = originRemote
+	}
+	v2Store := cpkg.NewV2GitStore(repo, v2URL)
+	if err := v2Store.WriteCommitted(ctx, opts); err != nil {
+		return fmt.Errorf("v2 write committed: %w", err)
+	}
+	return nil
+}
+
 // writeCommittedV2IfEnabled writes checkpoint data to v2 refs when checkpoints_v2
-// is enabled in settings. Failures are logged as warnings — v2 writes are
-// best-effort during the dual-write period and must not block the v1 path.
+// is enabled. Failures are logged as warnings — in dual-write mode v2 writes are
+// best-effort and must not block the v1 path.
 func writeCommittedV2IfEnabled(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) {
 	if !settings.IsCheckpointsV2Enabled(ctx) {
 		return
 	}
-
-	v2Store := cpkg.NewV2GitStore(repo, ResolveCheckpointURL(ctx, "origin"))
-	if err := v2Store.WriteCommitted(ctx, opts); err != nil {
+	if err := writeCommittedV2(ctx, repo, opts); err != nil {
 		logging.Warn(ctx, "v2 dual-write failed",
 			slog.String("checkpoint_id", opts.CheckpointID.String()),
 			slog.String("error", err.Error()),
@@ -1457,7 +1630,14 @@ func writeTaskMetadataV2IfEnabled(
 		return
 	}
 
-	v2Store := cpkg.NewV2GitStore(repo, ResolveCheckpointURL(ctx, "origin"))
+	v2URL, err := remote.FetchURL(ctx)
+	if err != nil {
+		logging.Debug(ctx, "manual-commit condensation: using origin for v2 task metadata fetch remote",
+			slog.String("error", err.Error()),
+		)
+		v2URL = originRemote
+	}
+	v2Store := cpkg.NewV2GitStore(repo, v2URL)
 	sessionIndex, err := resolveV2SessionIndexForCheckpoint(repo, checkpointID, sessionID)
 	if err != nil {
 		logging.Warn(ctx, "v2 dual-write task metadata copy skipped: failed to resolve session index",
@@ -1468,7 +1648,7 @@ func writeTaskMetadataV2IfEnabled(
 		return
 	}
 
-	if err := spliceTaskTreeToV2FullCurrent(repo, v2Store, checkpointID, sessionIndex, tasksTree.Hash); err != nil {
+	if err := spliceTaskTreeToV2FullCurrent(ctx, repo, v2Store, checkpointID, sessionIndex, tasksTree.Hash); err != nil {
 		logging.Warn(ctx, "v2 dual-write task metadata copy failed",
 			slog.String("checkpoint_id", checkpointID.String()),
 			slog.String("session_id", sessionID),
@@ -1537,6 +1717,7 @@ func resolveV2SessionIndexForCheckpoint(repo *git.Repository, checkpointID id.Ch
 }
 
 func spliceTaskTreeToV2FullCurrent(
+	ctx context.Context,
 	repo *git.Repository,
 	v2Store *cpkg.V2GitStore,
 	checkpointID id.CheckpointID,
@@ -1567,7 +1748,7 @@ func spliceTaskTreeToV2FullCurrent(
 	}
 
 	authorName, authorEmail := cpkg.GetGitAuthorFromRepo(repo)
-	commitHash, err := cpkg.CreateCommit(repo, newRootHash, parentHash,
+	commitHash, err := cpkg.CreateCommit(ctx, repo, newRootHash, parentHash,
 		fmt.Sprintf("Checkpoint: %s (task metadata)\n", checkpointID),
 		authorName, authorEmail)
 	if err != nil {

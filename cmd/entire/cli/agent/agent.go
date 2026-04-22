@@ -123,6 +123,17 @@ type FileWatcher interface {
 	OnFileChange(path string) (*SessionChange, error)
 }
 
+// ProtectedFilesProvider is implemented by agents that need to exclude
+// repo-root-relative files owned by the agent integration itself from session
+// tracking or destructive operations.
+type ProtectedFilesProvider interface {
+	Agent
+
+	// ProtectedFiles returns repo-root-relative files that belong to the
+	// agent's own config/state and should be excluded from tracking.
+	ProtectedFiles() []string
+}
+
 // TranscriptAnalyzer provides format-specific transcript parsing.
 // Agents that implement this get richer checkpoints (transcript-derived file lists,
 // prompts, summaries). Agents that don't still participate in the checkpoint lifecycle
@@ -185,6 +196,31 @@ type TextGenerator interface {
 	// GenerateText sends a prompt to the agent's CLI and returns the raw text response.
 	// model is a hint (e.g., "haiku", "sonnet"). Implementations may ignore if not applicable.
 	GenerateText(ctx context.Context, prompt string, model string) (string, error)
+}
+
+// CompactedTranscript contains the result of transcript compaction into Entire
+// Transcript Format. Assets are accepted in the protocol shape for forward
+// compatibility but may not yet be persisted by all call sites.
+type CompactedTranscript struct {
+	Transcript []byte
+	Assets     []CompactedTranscriptAsset
+}
+
+// CompactedTranscriptAsset is binary data extracted during transcript compaction.
+type CompactedTranscriptAsset struct {
+	Name      string
+	MediaType string
+	Data      []byte
+}
+
+// TranscriptCompactor is implemented by agents that can produce Entire
+// Transcript Format directly from their native transcript representation.
+type TranscriptCompactor interface {
+	Agent
+
+	// CompactTranscript converts the transcript referenced by sessionRef into
+	// Entire Transcript Format and returns the compact transcript bytes.
+	CompactTranscript(ctx context.Context, sessionRef string) (*CompactedTranscript, error)
 }
 
 // HookResponseWriter is implemented by agents that support structured hook responses.

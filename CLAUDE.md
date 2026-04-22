@@ -132,6 +132,8 @@ t.Chdir(tmpDir)                                 // redirect CWD-based git resolu
 
 `testutil.InitRepo` configures `user.name`, `user.email`, and disables GPG signing — safe for CI environments without global git config.
 
+**Prefer `testutil.InitRepo()` over direct `git.PlainInit()` in tests.** When a test in this repo needs an initialized repository, use `testutil.InitRepo(t, dir)` unless the test specifically needs lower-level initialization behavior that the helper cannot provide. Do not call `git.PlainInit()` directly and then create commits or run CLI git operations without also reproducing the helper's repo-local config.
+
 **Do NOT** shell out to `git init`/`git commit` directly without setting user config and `--no-gpg-sign`, and **do NOT** run lifecycle/strategy handlers from the real repo CWD in tests.
 
 ### Linting and Formatting
@@ -161,6 +163,10 @@ mise run test:ci  # Run all tests (unit + integration)
 `mise run check` runs the three commands above.
 
 Safety note: do not treat a clean `mise run lint` result as final unless it was run after the most recent `mise run fmt` pass.
+
+### Before Any Push Or Remote Code Update (REQUIRED)
+
+Before pushing commits or otherwise sending code changes to any remote, run `mise run lint` on the current tree and ensure it passes. If `mise run fmt` changed files, rerun `mise run lint` on the formatted tree before pushing.
 
 **Common CI failures from skipping this:**
 

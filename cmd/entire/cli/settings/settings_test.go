@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -95,7 +96,8 @@ func TestLoad_AcceptsValidKeys(t *testing.T) {
 		"telemetry": true,
 		"redaction": {"pii": {"enabled": true, "email": true, "phone": false}},
 		"external_agents": true,
-		"vercel": true
+		"vercel": true,
+		"sign_checkpoint_commits": false
 	}`
 	if err := os.WriteFile(settingsFile, []byte(settingsContent), 0644); err != nil {
 		t.Fatalf("failed to write settings file: %v", err)
@@ -151,6 +153,9 @@ func TestLoad_AcceptsValidKeys(t *testing.T) {
 	}
 	if !settings.Vercel {
 		t.Error("expected vercel to be true")
+	}
+	if settings.SignCheckpointCommits == nil || *settings.SignCheckpointCommits {
+		t.Error("expected sign_checkpoint_commits to be false")
 	}
 }
 
@@ -687,6 +692,17 @@ func TestIsCheckpointsV2Enabled_True(t *testing.T) {
 	}
 }
 
+func TestIsCheckpointsV2Enabled_CheckpointsVersion2(t *testing.T) {
+	t.Parallel()
+	s := &EntireSettings{
+		Enabled:         true,
+		StrategyOptions: map[string]any{"checkpoints_version": 2},
+	}
+	if !s.IsCheckpointsV2Enabled() {
+		t.Error("expected IsCheckpointsV2Enabled to be true when checkpoints_version is 2")
+	}
+}
+
 func TestIsCheckpointsV2Enabled_ExplicitlyFalse(t *testing.T) {
 	t.Parallel()
 	s := &EntireSettings{
@@ -772,6 +788,37 @@ func TestIsCheckpointsV2Enabled_LocalOverride(t *testing.T) {
 	}
 }
 
+func TestCheckpointsVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opts map[string]any
+		want int
+	}{
+		{"unset defaults to one", nil, 1},
+		{"empty options defaults to one", map[string]any{}, 1},
+		{"integer 2", map[string]any{"checkpoints_version": 2}, 2},
+		{"float 2 from json", map[string]any{"checkpoints_version": float64(2)}, 2},
+		{"integer 3 falls back to default", map[string]any{"checkpoints_version": 3}, 1},
+		{"zero falls back to default", map[string]any{"checkpoints_version": 0}, 1},
+		{"negative falls back to default", map[string]any{"checkpoints_version": -1}, 1},
+		{"non-integer float falls back to default", map[string]any{"checkpoints_version": 2.5}, 1},
+		{"string 2", map[string]any{"checkpoints_version": "2"}, 2},
+		{"bool falls back to default", map[string]any{"checkpoints_version": true}, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := &EntireSettings{StrategyOptions: tt.opts}
+			if got := s.CheckpointsVersion(); got != tt.want {
+				t.Errorf("CheckpointsVersion() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsPushV2RefsEnabled_DefaultsFalse(t *testing.T) {
 	t.Parallel()
 	s := &EntireSettings{Enabled: true}
@@ -788,6 +835,7 @@ func TestIsPushV2RefsEnabled_RequiresBothFlags(t *testing.T) {
 		opts     map[string]any
 		expected bool
 	}{
+		{"checkpoints_version 2 supersedes both", map[string]any{"checkpoints_v2": false, "push_v2_refs": false, "checkpoints_version": 2}, true},
 		{"both true", map[string]any{"checkpoints_v2": true, "push_v2_refs": true}, true},
 		{"only checkpoints_v2", map[string]any{"checkpoints_v2": true}, false},
 		{"only push_v2_refs", map[string]any{"push_v2_refs": true}, false},
@@ -805,6 +853,63 @@ func TestIsPushV2RefsEnabled_RequiresBothFlags(t *testing.T) {
 			}
 			if got := s.IsPushV2RefsEnabled(); got != tt.expected {
 				t.Errorf("IsPushV2RefsEnabled() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetFullTranscriptGenerationRetentionDays(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opts map[string]any
+		want int
+	}{
+		{
+			name: "defaults to sixty when missing",
+			opts: nil,
+			want: 60,
+		},
+		{
+			name: "returns configured integer",
+			opts: map[string]any{"full_transcript_generation_retention_days": 30},
+			want: 30,
+		},
+		{
+			name: "returns configured float from json decode",
+			opts: map[string]any{"full_transcript_generation_retention_days": float64(21)},
+			want: 21,
+		},
+		{
+			name: "returns default for wrong type",
+			opts: map[string]any{"full_transcript_generation_retention_days": "30"},
+			want: 60,
+		},
+		{
+			name: "returns default for zero",
+			opts: map[string]any{"full_transcript_generation_retention_days": 0},
+			want: 60,
+		},
+		{
+			name: "returns default for negative",
+			opts: map[string]any{"full_transcript_generation_retention_days": -5},
+			want: 60,
+		},
+		{
+			name: "returns default for non integral float",
+			opts: map[string]any{"full_transcript_generation_retention_days": 1.5},
+			want: 60,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := &EntireSettings{StrategyOptions: tt.opts}
+			if got := s.GetFullTranscriptGenerationRetentionDays(); got != tt.want {
+				t.Fatalf("GetFullTranscriptGenerationRetentionDays() = %d, want %d", got, tt.want)
 			}
 		})
 	}
@@ -837,6 +942,28 @@ func TestIsFilteredFetchesEnabled_WrongType(t *testing.T) {
 	}
 	if s.IsFilteredFetchesEnabled() {
 		t.Error("expected IsFilteredFetchesEnabled to be false for non-bool value")
+	}
+}
+
+func TestSummaryTimeoutValue(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		seconds int
+		want    time.Duration
+	}{
+		{"Unset", 0, 0},
+		{"Negative", -5, 0},
+		{"Positive", 90, 90 * time.Second},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := &EntireSettings{SummaryTimeoutSeconds: tc.seconds}
+			if got := s.SummaryTimeoutValue(); got != tc.want {
+				t.Errorf("SummaryTimeoutValue() = %v; want %v", got, tc.want)
+			}
+		})
 	}
 }
 
