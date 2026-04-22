@@ -298,6 +298,7 @@ func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string][]str
 func newReviewCmd() *cobra.Command {
 	var edit bool
 	var trackOnly bool
+	var agentOverride string
 
 	cmd := &cobra.Command{
 		Use:   "review",
@@ -306,22 +307,30 @@ func newReviewCmd() *cobra.Command {
 the current branch. On first run, an interactive picker writes the config.
 
 The review session is recorded as part of the next checkpoint, so the
-review metadata is permanently attached to the commit it covers.`,
+review metadata is permanently attached to the commit it covers.
+
+Flags:
+  --edit         re-open the review config picker
+  --track-only   write the pending marker without spawning the agent (you
+                 start the agent manually; its hook adopts the marker)
+  --agent NAME   select a specific configured agent when more than one is
+                 configured (default: alphabetically first)`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			if edit {
 				_, err := runReviewConfigPicker(ctx, cmd.OutOrStdout())
 				return err
 			}
-			return runReview(ctx, cmd, trackOnly)
+			return runReview(ctx, cmd, trackOnly, agentOverride)
 		},
 	}
 	cmd.Flags().BoolVar(&edit, "edit", false, "re-open the review config picker")
 	cmd.Flags().BoolVar(&trackOnly, "track-only", false, "write pending marker without spawning agent")
+	cmd.Flags().StringVar(&agentOverride, "agent", "", "select a specific configured agent (default: alphabetically first)")
 	return cmd
 }
 
-func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool) error {
+func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool, agentOverride string) error {
 	out := cmd.OutOrStdout()
 
 	// 1. Pre-flight: must be in a git repo.
@@ -355,9 +364,11 @@ func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool) error {
 	}
 
 	// 3. Pick agent.
-	agentName, skills, err := selectReviewAgent(s.Review)
+	agentName, skills, err := selectReviewAgent(s.Review, agentOverride)
 	if err != nil {
-		return err
+		cmd.SilenceUsage = true
+		fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
+		return NewSilentError(err)
 	}
 
 	// 3.5. Verify hooks are installed for the selected agent. Without the
@@ -473,14 +484,15 @@ func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool) error {
 	return nil
 }
 
-// selectReviewAgent picks an agent from the configured review map. v1: single
-// agent. If multiple are configured, returns the one that sorts first by name
-// (deterministic default). Returns an error if the map is empty.
-func selectReviewAgent(review map[string][]string) (string, []string, error) {
+// selectReviewAgent picks an agent from the configured review map.
+//
+// If override is non-empty, returns the skills for that agent or an error
+// listing the configured alternatives. Otherwise returns the alphabetically
+// first configured agent — deterministic but user-overridable via --agent.
+func selectReviewAgent(review map[string][]string, override string) (string, []string, error) {
 	if len(review) == 0 {
 		return "", nil, errors.New("no review skills configured")
 	}
-	// Deterministic pick: alphabetical by agent name.
 	var names []string
 	for name, skills := range review {
 		if len(skills) > 0 {
@@ -491,6 +503,17 @@ func selectReviewAgent(review map[string][]string) (string, []string, error) {
 		return "", nil, errors.New("no review skills configured")
 	}
 	sort.Strings(names)
+	if override != "" {
+		for _, name := range names {
+			if name == override {
+				return override, review[override], nil
+			}
+		}
+		return "", nil, fmt.Errorf(
+			"agent %q is not configured for review; configured agents: %s",
+			override, strings.Join(names, ", "),
+		)
+	}
 	pick := names[0]
 	return pick, review[pick], nil
 }

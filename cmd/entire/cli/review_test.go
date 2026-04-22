@@ -267,6 +267,46 @@ func TestComposeReviewPrompt_NoFinishSkill(t *testing.T) {
 	}
 }
 
+// --agent flag resolves a non-default configured agent when the map has
+// multiple entries. Previously the alphabetically-first agent always won
+// silently.
+func TestSelectReviewAgent_OverrideResolvesSpecificAgent(t *testing.T) {
+	t.Parallel()
+	const codexAgent = "codex"
+	review := map[string][]string{
+		testAgentName: {"/a"},
+		codexAgent:    {"/b"},
+	}
+
+	name, skills, err := selectReviewAgent(review, codexAgent)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if name != codexAgent || len(skills) != 1 || skills[0] != "/b" {
+		t.Errorf("override=%s returned name=%q skills=%v", codexAgent, name, skills)
+	}
+
+	// Default (no override) must remain the alphabetically-first agent for
+	// backwards compatibility.
+	name, _, err = selectReviewAgent(review, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if name != testAgentName {
+		t.Errorf("default pick = %q, want %s", name, testAgentName)
+	}
+
+	// Unknown override must surface a helpful error listing the configured
+	// agents instead of silently falling back.
+	_, _, err = selectReviewAgent(review, "gemini")
+	if err == nil {
+		t.Fatal("expected error for unconfigured --agent value")
+	}
+	if !strings.Contains(err.Error(), testAgentName) || !strings.Contains(err.Error(), codexAgent) {
+		t.Errorf("error should list configured agents; got: %v", err)
+	}
+}
+
 func TestNewReviewCmd_NoHiddenFlags(t *testing.T) {
 	t.Parallel()
 	cmd := newReviewCmd()
