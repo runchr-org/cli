@@ -103,17 +103,14 @@ func FindFile(pattern string) (string, error) {
 }
 
 // ExportDB reads all data from a Cursor store.db file.
+// Opens the DB read-only so a live Cursor process holding the file is not
+// disturbed (no WAL checkpoint, no lock contention).
 func ExportDB(ctx context.Context, dbPath string) (StoreData, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro")
 	if err != nil {
 		return StoreData{}, fmt.Errorf("opening database: %w", err)
 	}
 	defer db.Close()
-
-	// Flush WAL to main database file
-	if _, err := db.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)"); err != nil {
-		return StoreData{}, fmt.Errorf("WAL checkpoint: %w", err)
-	}
 
 	meta := make(map[string]string)
 	metaRows, err := db.QueryContext(ctx, "SELECT key, value FROM meta")
