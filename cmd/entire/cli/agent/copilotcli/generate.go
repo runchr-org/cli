@@ -2,8 +2,6 @@ package copilotcli
 
 import (
 	"context"
-	"errors"
-	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
@@ -20,36 +18,5 @@ func (c *CopilotCLIAgent) GenerateText(ctx context.Context, prompt string, model
 		args = append(args, "--model", model)
 	}
 	res, runErr := agent.RunIsolatedTextGeneratorCLIRaw(ctx, c.CommandRunner, "copilot", args, prompt)
-	if runErr != nil {
-		if errors.Is(runErr, context.Canceled) {
-			return "", context.Canceled
-		}
-		if errors.Is(runErr, context.DeadlineExceeded) {
-			return "", context.DeadlineExceeded
-		}
-		if agent.IsExecNotFoundErr(runErr) {
-			return "", &agent.TextGenError{
-				Kind:     agent.TextGenErrorCLIMissing,
-				Provider: agent.AgentNameCopilotCLI,
-				Cause:    runErr,
-			}
-		}
-		stderr := agent.TruncateStderr(string(res.Stderr))
-		return "", &agent.TextGenError{
-			Kind:     agent.ClassifyStderrHTTPStatus(stderr),
-			Provider: agent.AgentNameCopilotCLI,
-			Message:  stderr,
-			ExitCode: res.ExitCode,
-			Cause:    runErr,
-		}
-	}
-	out := strings.TrimSpace(string(res.Stdout))
-	if out == "" {
-		return "", &agent.TextGenError{
-			Kind:     agent.TextGenErrorUnknown,
-			Provider: agent.AgentNameCopilotCLI,
-			Message:  "copilot CLI returned empty output",
-		}
-	}
-	return out, nil
+	return agent.HandleTextGenResult(res, runErr, agent.AgentNameCopilotCLI, "copilot CLI returned empty output", nil) //nolint:wrapcheck // preserve *agent.TextGenError / ctx sentinel for errors.As at the explain layer
 }

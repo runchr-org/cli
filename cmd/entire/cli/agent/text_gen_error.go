@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -104,4 +105,55 @@ func ClassifyStderrHTTPStatus(stderr string) TextGenErrorKind {
 		return TextGenErrorConfig
 	}
 	return TextGenErrorUnknown
+}
+
+// HandleTextGenResult converts the outcome of a RunIsolatedTextGeneratorCLIRaw
+// call into (trimmed stdout, err). On success returns (output, nil). On
+// failure returns ("", *TextGenError) or ("", ctx sentinel).
+//
+// extraClassify is an optional per-agent hook invoked only when the shared
+// HTTP-status baseline returned Unknown — used by agents whose stderr carries
+// auth/rate-limit signals without an HTTP status (e.g. gemini). Pass nil to
+// skip.
+//
+// emptyMsg populates TextGenError.Message when the subprocess exits 0 with no
+// stdout.
+//
+// Claude does not use this helper — its envelope-first classification order
+// differs and is inlined in claudecode.GenerateText.
+func HandleTextGenResult(res ExecResult, runErr error, provider types.AgentName, emptyMsg string, extraClassify func(stderr string) TextGenErrorKind) (string, error) {
+	if runErr != nil {
+		if errors.Is(runErr, context.Canceled) {
+			return "", context.Canceled
+		}
+		if errors.Is(runErr, context.DeadlineExceeded) {
+			return "", context.DeadlineExceeded
+		}
+		if IsExecNotFoundErr(runErr) {
+			return "", &TextGenError{Kind: TextGenErrorCLIMissing, Provider: provider, Cause: runErr}
+		}
+		stderr := TruncateStderr(string(res.Stderr))
+		kind := ClassifyStderrHTTPStatus(stderr)
+		if kind == TextGenErrorUnknown && extraClassify != nil {
+			if k := extraClassify(stderr); k != TextGenErrorUnknown {
+				kind = k
+			}
+		}
+		return "", &TextGenError{
+			Kind:     kind,
+			Provider: provider,
+			Message:  stderr,
+			ExitCode: res.ExitCode,
+			Cause:    runErr,
+		}
+	}
+	out := strings.TrimSpace(string(res.Stdout))
+	if out == "" {
+		return "", &TextGenError{
+			Kind:     TextGenErrorUnknown,
+			Provider: provider,
+			Message:  emptyMsg,
+		}
+	}
+	return out, nil
 }

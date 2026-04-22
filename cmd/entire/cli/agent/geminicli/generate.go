@@ -2,7 +2,6 @@ package geminicli
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -20,47 +19,17 @@ func (g *GeminiCLIAgent) GenerateText(ctx context.Context, prompt, model string)
 		args = append(args, "--model", model)
 	}
 	res, runErr := agent.RunIsolatedTextGeneratorCLIRaw(ctx, g.CommandRunner, "gemini", args, prompt)
-	if runErr != nil {
-		if errors.Is(runErr, context.Canceled) {
-			return "", context.Canceled
-		}
-		if errors.Is(runErr, context.DeadlineExceeded) {
-			return "", context.DeadlineExceeded
-		}
-		if agent.IsExecNotFoundErr(runErr) {
-			return "", &agent.TextGenError{
-				Kind:     agent.TextGenErrorCLIMissing,
-				Provider: agent.AgentNameGemini,
-				Cause:    runErr,
-			}
-		}
-		stderr := agent.TruncateStderr(string(res.Stderr))
-		kind := agent.ClassifyStderrHTTPStatus(stderr)
-		if kind == agent.TextGenErrorUnknown {
-			// Inline phrase heuristic — gemini-cli's auth-failure stderr
-			// (captured from the 2026-04-20 research pass) does NOT contain
-			// an HTTP status, so the shared baseline misses it. These two
-			// phrases are verbatim from the captured fixture.
-			lower := strings.ToLower(stderr)
-			if strings.Contains(lower, "please set an auth method") || strings.Contains(lower, "gemini_api_key") {
-				kind = agent.TextGenErrorAuth
-			}
-		}
-		return "", &agent.TextGenError{
-			Kind:     kind,
-			Provider: agent.AgentNameGemini,
-			Message:  stderr,
-			ExitCode: res.ExitCode,
-			Cause:    runErr,
-		}
+	return agent.HandleTextGenResult(res, runErr, agent.AgentNameGemini, "gemini CLI returned empty output", classifyGeminiAuthPhrase) //nolint:wrapcheck // preserve *agent.TextGenError / ctx sentinel for errors.As at the explain layer
+}
+
+// classifyGeminiAuthPhrase is the extraClassify hook for gemini-cli: its
+// auth-failure stderr (from the 2026-04-20 research pass) does NOT contain an
+// HTTP status, so the shared baseline misses it. These phrases are verbatim
+// from the captured fixture.
+func classifyGeminiAuthPhrase(stderr string) agent.TextGenErrorKind {
+	lower := strings.ToLower(stderr)
+	if strings.Contains(lower, "please set an auth method") || strings.Contains(lower, "gemini_api_key") {
+		return agent.TextGenErrorAuth
 	}
-	out := strings.TrimSpace(string(res.Stdout))
-	if out == "" {
-		return "", &agent.TextGenError{
-			Kind:     agent.TextGenErrorUnknown,
-			Provider: agent.AgentNameGemini,
-			Message:  "gemini CLI returned empty output",
-		}
-	}
-	return out, nil
+	return agent.TextGenErrorUnknown
 }

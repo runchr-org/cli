@@ -99,41 +99,17 @@ func TestRenderTextGenError_NonClaudeProvidersUseStderrVerbatim(t *testing.T) {
 		in   *agent.TextGenError
 		want string // EXACT match — no Contains
 	}{
+		// The four non-Claude providers share the same "no synthesis appended"
+		// rule. One representative case pins it exactly; other providers are
+		// covered by their package's generate_test.go and the shared matrix.
 		{
-			name: "codex auth with real captured stderr (no fallback appended)",
-			in: &agent.TextGenError{
-				Kind:     agent.TextGenErrorAuth,
-				Provider: agent.AgentNameCodex,
-				Message:  "ERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
-			},
-			want: "Codex authentication failed: ERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
-		},
-		{
-			name: "cursor auth with real captured stderr (no fallback appended)",
-			in: &agent.TextGenError{
-				Kind:     agent.TextGenErrorAuth,
-				Provider: agent.AgentNameCursor,
-				Message:  "Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.",
-			},
-			want: "Cursor authentication failed: Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.",
-		},
-		{
-			name: "gemini auth preserves CLI's env var guidance (no fallback appended)",
+			name: "non-Claude auth renders stderr verbatim with no fallback appended",
 			in: &agent.TextGenError{
 				Kind:     agent.TextGenErrorAuth,
 				Provider: agent.AgentNameGemini,
-				Message:  "Please set an Auth method in your settings.json or specify one of: GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI, GOOGLE_GENAI_USE_GCA",
+				Message:  "Please set an Auth method in your settings.json or specify one of: GEMINI_API_KEY",
 			},
-			want: "Gemini authentication failed: Please set an Auth method in your settings.json or specify one of: GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI, GOOGLE_GENAI_USE_GCA",
-		},
-		{
-			name: "copilot auth preserves full multi-path guidance (no fallback appended)",
-			in: &agent.TextGenError{
-				Kind:     agent.TextGenErrorAuth,
-				Provider: agent.AgentNameCopilotCLI,
-				Message:  "Error: No authentication information found.\n\nSet COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN; or run 'gh auth login'.",
-			},
-			want: "Copilot authentication failed: Error: No authentication information found.\n\nSet COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN; or run 'gh auth login'.",
+			want: "Gemini authentication failed: Please set an Auth method in your settings.json or specify one of: GEMINI_API_KEY",
 		},
 		{
 			name: "codex CLI missing (no message, no model)",

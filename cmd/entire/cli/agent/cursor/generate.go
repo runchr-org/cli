@@ -2,9 +2,7 @@ package cursor
 
 import (
 	"context"
-	"errors"
 	"os"
-	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
@@ -20,36 +18,5 @@ func (c *CursorAgent) GenerateText(ctx context.Context, prompt string, model str
 		args = append(args, "--model", model)
 	}
 	res, runErr := agent.RunIsolatedTextGeneratorCLIRaw(ctx, c.CommandRunner, "agent", args, prompt)
-	if runErr != nil {
-		if errors.Is(runErr, context.Canceled) {
-			return "", context.Canceled
-		}
-		if errors.Is(runErr, context.DeadlineExceeded) {
-			return "", context.DeadlineExceeded
-		}
-		if agent.IsExecNotFoundErr(runErr) {
-			return "", &agent.TextGenError{
-				Kind:     agent.TextGenErrorCLIMissing,
-				Provider: agent.AgentNameCursor,
-				Cause:    runErr,
-			}
-		}
-		stderr := agent.TruncateStderr(string(res.Stderr))
-		return "", &agent.TextGenError{
-			Kind:     agent.ClassifyStderrHTTPStatus(stderr),
-			Provider: agent.AgentNameCursor,
-			Message:  stderr,
-			ExitCode: res.ExitCode,
-			Cause:    runErr,
-		}
-	}
-	out := strings.TrimSpace(string(res.Stdout))
-	if out == "" {
-		return "", &agent.TextGenError{
-			Kind:     agent.TextGenErrorUnknown,
-			Provider: agent.AgentNameCursor,
-			Message:  "cursor CLI returned empty output",
-		}
-	}
-	return out, nil
+	return agent.HandleTextGenResult(res, runErr, agent.AgentNameCursor, "cursor CLI returned empty output", nil) //nolint:wrapcheck // preserve *agent.TextGenError / ctx sentinel for errors.As at the explain layer
 }

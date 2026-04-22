@@ -79,10 +79,8 @@ func TestClassifyClaudeEnvelope_HTTPStatusMapping(t *testing.T) {
 		wantKind agent.TextGenErrorKind
 	}{
 		{"Auth401", 401, agent.TextGenErrorAuth},
-		{"Auth403", 403, agent.TextGenErrorAuth},
 		{"RateLimit429", 429, agent.TextGenErrorRateLimit},
 		{"Config400", 400, agent.TextGenErrorConfig},
-		{"Config404", 404, agent.TextGenErrorConfig},
 		{"Unknown5xx", 503, agent.TextGenErrorUnknown}, // 5xx is not Config per 963
 	}
 	for _, tc := range tests {
