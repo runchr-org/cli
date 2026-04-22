@@ -836,23 +836,44 @@ func TestReviewAttachCmd_TagsSession(t *testing.T) {
 // TestAttachCmd_ReviewWithoutSkillsOrConfigErrors: the --review flag
 // requires either a --skills override or configured skills. Otherwise we
 // error rather than tagging a review with an empty skills list.
-func TestAttachCmd_ReviewWithoutSkillsOrConfigErrors(t *testing.T) {
+// TestAttachCmd_ReviewWithoutSkillsOrConfigSucceeds: --review must not
+// block attach when neither --skills nor configured skills exist. The
+// review is still tagged via Kind + ReviewPrompt (the session's first
+// user prompt); ReviewSkills is the queryable convenience, not the
+// source of truth, and is allowed to be empty.
+func TestAttachCmd_ReviewWithoutSkillsOrConfigSucceeds(t *testing.T) {
 	setupAttachTestRepo(t)
 
 	sessionID := "test-attach-review-no-skills"
-	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"x"},"uuid":"uuid-1"}
+	firstPrompt := "please review this change end-to-end"
+	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"`+firstPrompt+`"},"uuid":"uuid-1"}
 `)
 
 	rootCmd := NewRootCmd()
-	var errBuf bytes.Buffer
-	rootCmd.SetErr(&errBuf)
 	rootCmd.SetArgs([]string{"attach", "--force", "--review", sessionID})
-	err := rootCmd.Execute()
-	if err == nil {
-		t.Fatal("expected error when --review is set but no skills are configured or passed")
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("attach --review without skills config should succeed; got error: %v", err)
 	}
-	if !strings.Contains(errBuf.String(), "no review skills configured") {
-		t.Errorf("expected helpful error text in stderr; got: %s", errBuf.String())
+
+	store, err := session.NewStateStore(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Load(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil {
+		t.Fatal("expected session state to be created")
+	}
+	if state.Kind != session.KindAgentReview {
+		t.Errorf("Kind = %q, want %q", state.Kind, session.KindAgentReview)
+	}
+	if state.ReviewPrompt != firstPrompt {
+		t.Errorf("ReviewPrompt = %q, want %q", state.ReviewPrompt, firstPrompt)
+	}
+	if len(state.ReviewSkills) != 0 {
+		t.Errorf("ReviewSkills = %v, want empty (no --skills, no config)", state.ReviewSkills)
 	}
 }
 

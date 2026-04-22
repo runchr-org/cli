@@ -71,9 +71,11 @@ the session started, or to attach a research session.
 If the last commit already has a checkpoint, the session is added to it.
 Otherwise a new checkpoint is created.
 
-Use --review to tag the attached session as an agent review. The skills
-list defaults to whatever is configured under review.<agent> in
-.entire/settings.json; pass --skills to override.
+Use --review to tag the attached session as an agent review. The
+first user prompt in the transcript is recorded as the review prompt.
+The skills list defaults to whatever is configured under review.<agent>
+in .entire/settings.json; pass --skills to override, or leave both
+empty to attach a review without a declared skills list.
 
 Works with any registered agent, including external agents enabled via
 external_agents in settings. Run 'entire configure' to see the full list.`,
@@ -99,14 +101,18 @@ external_agents in settings. Run 'entire configure' to see the full list.`,
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation and amend the last commit with the checkpoint trailer")
 	cmd.Flags().StringVarP(&agentFlag, "agent", "a", string(agent.DefaultAgentName), "Agent that created the session (see 'entire configure' for registered agents, including external)")
 	cmd.Flags().BoolVar(&reviewFlag, "review", false, "Tag the attached session as an agent review")
-	cmd.Flags().StringSliceVar(&skillsFlag, "skills", nil, "Review skills that were run (default: configured skills for the agent). Only used with --review")
+	cmd.Flags().StringSliceVar(&skillsFlag, "skills", nil, "Optional review skills that were run. Default: configured skills for the agent; empty is allowed. Only used with --review")
 	return cmd
 }
 
 // resolveReviewSkills returns the skills list to record on an attach-as-review.
-// If flagSkills is non-empty, it wins. Otherwise the configured review skills
-// for the agent are used; if none are configured, returns an error pointing
-// the user at `entire review --edit`.
+// Precedence: --skills flag > settings.Review[agent] > empty.
+//
+// Empty is a valid result — the attach still tags the session as a review
+// via Kind + ReviewPrompt (the session's first user prompt). The skills
+// list is a queryable convenience, not the source of truth for "was this
+// a review". Blocking attach just because the user hasn't run
+// `entire review --edit` would force unrelated setup onto the manual flow.
 func resolveReviewSkills(ctx context.Context, agentName types.AgentName, flagSkills []string) ([]string, error) {
 	if len(flagSkills) > 0 {
 		return flagSkills, nil
@@ -120,10 +126,7 @@ func resolveReviewSkills(ctx context.Context, agentName types.AgentName, flagSki
 			return skills, nil
 		}
 	}
-	return nil, fmt.Errorf(
-		"no review skills configured for agent %q and --skills not provided; run `entire review --edit`",
-		agentName,
-	)
+	return nil, nil
 }
 
 // runAttachSurfaceReviewErrors wraps runAttach so review-mode errors reach

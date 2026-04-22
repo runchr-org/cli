@@ -441,8 +441,10 @@ the current commit's checkpoint. Use this when you ran a review manually
 (without 'entire review') and want the review metadata attached after
 the fact.
 
-The skills list defaults to whatever is configured under review.<agent>
-in .entire/settings.json; pass --skills to override.
+The first user prompt in the transcript is recorded as the review
+prompt. The skills list defaults to whatever is configured under
+review.<agent> in .entire/settings.json; pass --skills to override, or
+leave both empty to attach a review without a declared skills list.
 
 Equivalent to 'entire attach --review <session-id>' — provided here for
 discoverability alongside the other review subcommands.`,
@@ -467,7 +469,7 @@ discoverability alongside the other review subcommands.`,
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation and amend the last commit with the checkpoint trailer")
 	cmd.Flags().StringVarP(&agentFlag, "agent", "a", string(agent.DefaultAgentName), "Agent that created the session")
-	cmd.Flags().StringSliceVar(&skillsFlag, "skills", nil, "Review skills that were run (default: configured skills for the agent)")
+	cmd.Flags().StringSliceVar(&skillsFlag, "skills", nil, "Optional review skills that were run. Default: configured skills for the agent; empty is allowed")
 	return cmd
 }
 
