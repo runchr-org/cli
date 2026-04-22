@@ -73,9 +73,8 @@ Otherwise a new checkpoint is created.
 
 Use --review to tag the attached session as an agent review. The
 first user prompt in the transcript is recorded as the review prompt.
-The skills list defaults to whatever is configured under review.<agent>
-in .entire/settings.json; pass --skills to override, or leave both
-empty to attach a review without a declared skills list.
+Pass --skills to declare which skills were actually run; omit to
+attach a review without a declared skills list.
 
 Works with any registered agent, including external agents enabled via
 external_agents in settings. Run 'entire configure' to see the full list.`,
@@ -101,32 +100,25 @@ external_agents in settings. Run 'entire configure' to see the full list.`,
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation and amend the last commit with the checkpoint trailer")
 	cmd.Flags().StringVarP(&agentFlag, "agent", "a", string(agent.DefaultAgentName), "Agent that created the session (see 'entire configure' for registered agents, including external)")
 	cmd.Flags().BoolVar(&reviewFlag, "review", false, "Tag the attached session as an agent review")
-	cmd.Flags().StringSliceVar(&skillsFlag, "skills", nil, "Optional review skills that were run. Default: configured skills for the agent; empty is allowed. Only used with --review")
+	cmd.Flags().StringSliceVar(&skillsFlag, "skills", nil, "Optional: declare which review skills were run in this session. Only used with --review")
 	return cmd
 }
 
-// resolveReviewSkills returns the skills list to record on an attach-as-review.
-// Precedence: --skills flag > settings.Review[agent] > empty.
+// resolveReviewSkills returns the skills list to record on an
+// attach-as-review. Only the user's --skills flag counts: configured
+// settings.Review[agent] is the spawn-path default ("what I'd run if I
+// used 'entire review'"), not a claim about what actually happened in a
+// given manual session. Silently attaching configured skills would
+// misrepresent the session as having run skills it may not have.
 //
-// Empty is a valid result — the attach still tags the session as a review
-// via Kind + ReviewPrompt (the session's first user prompt). The skills
-// list is a queryable convenience, not the source of truth for "was this
-// a review". Blocking attach just because the user hasn't run
-// `entire review --edit` would force unrelated setup onto the manual flow.
-func resolveReviewSkills(ctx context.Context, agentName types.AgentName, flagSkills []string) ([]string, error) {
-	if len(flagSkills) > 0 {
-		return flagSkills, nil
+// Empty is a valid result — the attach still tags the session as a
+// review via Kind + ReviewPrompt (the session's first user prompt). The
+// skills list is a queryable convenience, not the source of truth.
+func resolveReviewSkills(flagSkills []string) []string {
+	if len(flagSkills) == 0 {
+		return nil
 	}
-	s, err := settings.Load(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("load settings: %w", err)
-	}
-	if s != nil {
-		if skills := s.ReviewSkillsFor(string(agentName)); len(skills) > 0 {
-			return skills, nil
-		}
-	}
-	return nil, nil
+	return flagSkills
 }
 
 // runAttachSurfaceReviewErrors wraps runAttach so review-mode errors reach
@@ -195,16 +187,9 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 		return err
 	}
 
-	// Resolve review skills AFTER agent detection so the real agent's
-	// configured skills (not the --agent flag default) are consulted. The
-	// flag-based --agent default is claude-code, which would make a
-	// Gemini session incorrectly look up review.claude-code.
 	var reviewSkills []string
 	if opts.Review {
-		reviewSkills, err = resolveReviewSkills(ctx, ag.Name(), opts.ReviewSkillsOverride)
-		if err != nil {
-			return err
-		}
+		reviewSkills = resolveReviewSkills(opts.ReviewSkillsOverride)
 	}
 
 	transcriptData, err := ag.ReadTranscript(transcriptPath)
