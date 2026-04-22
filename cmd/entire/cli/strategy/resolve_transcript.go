@@ -10,6 +10,19 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
 
+// transcriptFileExists reports whether the transcript file at the given path
+// actually exists on disk. Returns false for empty paths. This is used by
+// PrepareCommitMsg to avoid adding checkpoint trailers when the transcript
+// file is not locally available (e.g., cloud agents that set TranscriptPath
+// in hook payloads but don't write the file to the runner's filesystem).
+func transcriptFileExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // resolveTranscriptPath returns the current path to the session's transcript file.
 // If the file exists at state.TranscriptPath, that path is returned immediately.
 //
@@ -43,8 +56,20 @@ func resolveTranscriptPath(state *SessionState) (string, error) {
 	// session ID. This handles moved session-state directories (e.g., cloud agents
 	// where COPILOT_SESSION_STATE_DIR points to a host-mapped path different from
 	// the container path stored in TranscriptPath).
+	//
+	// For Copilot CLI, also check the AWF host-mapped path — the well-known
+	// directory where GitHub's Agentic Workflow Firewall maps the container's
+	// session-state via --session-state-dir. The hooks fire on the host but the
+	// transcript lives inside the container; the AWF mount makes it accessible.
+	candidateDirs := []string{}
 	if sessionDir, sdErr := ag.GetSessionDir(""); sdErr == nil {
-		resolved := ag.ResolveSessionFile(sessionDir, state.SessionID)
+		candidateDirs = append(candidateDirs, sessionDir)
+	}
+	if state.AgentType == agent.AgentTypeCopilotCLI {
+		candidateDirs = append(candidateDirs, "/tmp/gh-aw/sandbox/agent/session-state")
+	}
+	for _, dir := range candidateDirs {
+		resolved := ag.ResolveSessionFile(dir, state.SessionID)
 		if resolved != state.TranscriptPath {
 			if _, err := os.Stat(resolved); err == nil {
 				state.TranscriptPath = resolved

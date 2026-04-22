@@ -174,16 +174,35 @@ func (c *CopilotCLIAgent) resolveTranscriptFromPayload(ctx context.Context, env 
 	return c.resolveTranscriptRef(ctx, env.SessionID)
 }
 
+// AWFSessionStateDir is the well-known host path where GitHub's Agentic Workflow
+// Firewall maps the container's Copilot session-state directory via --session-state-dir.
+// Copilot CLI writes events.jsonl inside the container; AWF mounts this directory so
+// the host (where Entire CLI hooks run) can access the transcript.
+const AWFSessionStateDir = "/tmp/gh-aw/sandbox/agent/session-state"
+
 // resolveTranscriptRef computes the transcript path from the session ID.
-// Copilot CLI stores transcripts at ~/.copilot/session-state/<sessionId>/events.jsonl.
-// The userPromptSubmitted hook does not include a transcriptPath field, so we compute it.
+// It checks the primary session-state directory first (from GetSessionDir),
+// then falls back to the AWF host-mapped path for containerized environments.
+// Returns the primary path if neither location has the file (it may appear later).
 func (c *CopilotCLIAgent) resolveTranscriptRef(ctx context.Context, sessionID string) string {
-	// GetSessionDir ignores the repoPath parameter for Copilot CLI since session
-	// state is always in ~/.copilot/session-state/ (not repo-specific).
 	sessionDir, err := c.GetSessionDir("")
 	if err != nil {
 		logging.Warn(ctx, "copilot-cli: failed to resolve transcript path", "sessionID", sessionID, "err", err)
 		return ""
 	}
-	return c.ResolveSessionFile(sessionDir, sessionID)
+
+	primary := c.ResolveSessionFile(sessionDir, sessionID)
+	if _, err := os.Stat(primary); err == nil {
+		return primary
+	}
+
+	// Check AWF host-mapped path for containerized environments.
+	awfPath := c.ResolveSessionFile(AWFSessionStateDir, sessionID)
+	if _, err := os.Stat(awfPath); err == nil {
+		logging.Debug(ctx, "copilot-cli: found transcript at AWF session-state path",
+			"primaryPath", primary, "awfPath", awfPath)
+		return awfPath
+	}
+
+	return primary
 }

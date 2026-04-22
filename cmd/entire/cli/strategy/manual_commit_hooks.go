@@ -2069,13 +2069,16 @@ func (s *ManualCommitStrategy) tryAgentCommitFastPath(ctx context.Context, commi
 			continue
 		}
 		activeSessions++
-		// Skip sessions that have no condensable content: no transcript path,
+		// Skip sessions that have no condensable content: no readable transcript,
 		// no tracked files, and no shadow branch data (StepCount == 0). These
-		// would produce a Skipped result in CondenseSession, leaving the
+		// would produce a Skipped or failed result in CondenseSession, leaving the
 		// Entire-Checkpoint trailer pointing to nothing on the metadata branch.
 		// NOTE: conservative approximation of the skip gate in CondenseSession
 		// (which checks extracted data, not raw state). Keep aligned.
-		if state.TranscriptPath == "" && len(state.FilesTouched) == 0 && state.StepCount == 0 {
+		// The transcript path check verifies the file actually exists on disk,
+		// not just that the path string is set. Cloud agents (e.g., Copilot Cloud)
+		// set TranscriptPath in hook payloads but don't write the file locally.
+		if !transcriptFileExists(state.TranscriptPath) && len(state.FilesTouched) == 0 && state.StepCount == 0 {
 			emptyActiveSessions++
 			logging.Debug(logCtx, "prepare-commit-msg: fast path skipping empty session",
 				slog.String("session_id", state.SessionID),
