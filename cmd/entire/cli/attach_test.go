@@ -700,8 +700,9 @@ func TestAttach_WithReviewFlag(t *testing.T) {
 
 	var out bytes.Buffer
 	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{
-		Force:        true,
-		ReviewSkills: []string{"/pr-review-toolkit:review-pr", "/test-auditor"},
+		Force:                true,
+		Review:               true,
+		ReviewSkillsOverride: []string{"/pr-review-toolkit:review-pr", "/test-auditor"},
 	})
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
@@ -750,8 +751,9 @@ func TestAttach_ReviewWithExistingCheckpointErrors(t *testing.T) {
 	// linking the existing checkpoint.
 	out.Reset()
 	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{
-		Force:        true,
-		ReviewSkills: []string{"/pr-review-toolkit:review-pr"},
+		Force:                true,
+		Review:               true,
+		ReviewSkillsOverride: []string{"/pr-review-toolkit:review-pr"},
 	})
 	if err == nil {
 		t.Fatal("expected error when review-attaching a session that already has a checkpoint")
@@ -851,6 +853,71 @@ func TestAttachCmd_ReviewWithoutSkillsOrConfigErrors(t *testing.T) {
 	}
 	if !strings.Contains(errBuf.String(), "no review skills configured") {
 		t.Errorf("expected helpful error text in stderr; got: %s", errBuf.String())
+	}
+}
+
+// Regression: review-attach must resolve skills against the real agent,
+// not the --agent flag's default (claude-code). If a user runs
+// `entire attach --review <gemini-session-id>` without --agent, the plain
+// attach flow would auto-detect Gemini from the transcript. The review
+// path must honor that detection too — previously the cobra RunE resolved
+// review.claude-code before runAttach had a chance to detect Gemini,
+// erroring out with "no review.claude-code configured" on sessions that
+// would have attached fine without --review.
+func TestAttachCmd_ReviewAutoDetectsAgentForSkills(t *testing.T) {
+	setupAttachTestRepo(t)
+
+	// Force claude-code transcript lookup to fail so auto-detect kicks in.
+	t.Setenv("ENTIRE_TEST_CLAUDE_PROJECT_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+
+	// Create a valid Gemini transcript in the expected project dir.
+	geminiDir := t.TempDir()
+	t.Setenv("ENTIRE_TEST_GEMINI_PROJECT_DIR", geminiDir)
+	sessionID := "abcd1234-review-gemini-autodetect"
+	transcriptContent := `{"messages":[{"type":"user","content":"review this"},{"type":"gemini","content":"reviewing"}]}`
+	transcriptFile := filepath.Join(geminiDir, "session-2026-01-01T10-00-abcd1234.json")
+	if err := os.WriteFile(transcriptFile, []byte(transcriptContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed review config for Gemini only — no claude-code entry, which is
+	// what the pre-fix code would have erroneously looked up.
+	if err := saveReviewConfig(context.Background(), map[string][]string{
+		string(agent.AgentNameGemini): {"/gemini-review-skill"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Invoke without --agent (so the flag falls through to DefaultAgentName =
+	// claude-code). The review flow must still work because runAttach
+	// auto-detects Gemini from the transcript, then resolves
+	// review.gemini-cli post-detection.
+	rootCmd := NewRootCmd()
+	var errBuf, outBuf bytes.Buffer
+	rootCmd.SetErr(&errBuf)
+	rootCmd.SetOut(&outBuf)
+	rootCmd.SetArgs([]string{"attach", "--force", "--review", sessionID})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("attach --review with auto-detect failed: %v\nstderr: %s", err, errBuf.String())
+	}
+
+	store, err := session.NewStateStore(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Load(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil || state.Kind != session.KindAgentReview {
+		t.Fatalf("expected session tagged as review; got state=%+v", state)
+	}
+	if state.AgentType != agent.AgentTypeGemini {
+		t.Errorf("AgentType = %q, want %q (auto-detect should have found Gemini)", state.AgentType, agent.AgentTypeGemini)
+	}
+	if len(state.ReviewSkills) != 1 || state.ReviewSkills[0] != "/gemini-review-skill" {
+		t.Errorf("ReviewSkills = %v, want the Gemini-configured skill — config lookup used the wrong agent", state.ReviewSkills)
 	}
 }
 

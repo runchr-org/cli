@@ -36,13 +36,20 @@ import (
 )
 
 // attachOptions carries optional flags for runAttach. Force is the original
-// flag; ReviewSkills/ReviewPrompt opt the attach into recording the session
-// as an agent_review in the checkpoint metadata.
+// flag; Review opts the attach into recording the session as an
+// agent_review in the checkpoint metadata.
 type attachOptions struct {
 	Force bool
-	// ReviewSkills, when non-nil, tags the attached session as a review and
-	// records the skill list in checkpoint metadata. nil = not a review attach.
-	ReviewSkills []string
+	// Review, when true, tags the attached session as a review. Skills are
+	// resolved inside runAttach after the real agent is known (via session
+	// state or transcript auto-detection), not at the cobra layer — the
+	// --agent flag's default points at claude-code, which would otherwise
+	// make a Gemini session incorrectly look up review.claude-code config.
+	Review bool
+	// ReviewSkillsOverride, when non-empty, overrides the agent's
+	// configured review skills. Empty means "read review.<agent> from
+	// settings after resolving the real agent". Ignored when Review=false.
+	ReviewSkillsOverride []string
 }
 
 func newAttachCmd() *cobra.Command {
@@ -81,17 +88,12 @@ external_agents in settings. Run 'entire configure' to see the full list.`,
 			// and so auto-detection can find transcripts from external agents.
 			external.DiscoverAndRegister(cmd.Context())
 			agentName := types.AgentName(agentFlag)
-			opts := attachOptions{Force: force}
-			if reviewFlag {
-				skills, err := resolveReviewSkills(cmd.Context(), agentName, skillsFlag)
-				if err != nil {
-					cmd.SilenceUsage = true
-					fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
-					return NewSilentError(err)
-				}
-				opts.ReviewSkills = skills
+			opts := attachOptions{
+				Force:                force,
+				Review:               reviewFlag,
+				ReviewSkillsOverride: skillsFlag,
 			}
-			return runAttach(cmd.Context(), cmd.OutOrStdout(), args[0], agentName, opts)
+			return runAttachSurfaceReviewErrors(cmd, args[0], agentName, opts)
 		},
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation and amend the last commit with the checkpoint trailer")
@@ -122,6 +124,19 @@ func resolveReviewSkills(ctx context.Context, agentName types.AgentName, flagSki
 		"no review skills configured for agent %q and --skills not provided; run `entire review --edit`",
 		agentName,
 	)
+}
+
+// runAttachSurfaceReviewErrors wraps runAttach so review-mode errors reach
+// the user as clear stderr messages rather than generic cobra error output.
+// The non-review path preserves the existing runAttach return-err behavior.
+func runAttachSurfaceReviewErrors(cmd *cobra.Command, sessionID string, agentName types.AgentName, opts attachOptions) error {
+	err := runAttach(cmd.Context(), cmd.OutOrStdout(), sessionID, agentName, opts)
+	if err != nil && opts.Review {
+		cmd.SilenceUsage = true
+		fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
+		return NewSilentError(err)
+	}
+	return err
 }
 
 func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName types.AgentName, opts attachOptions) error {
@@ -156,7 +171,7 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 		// ReviewPrompt set, and a new commit pushed onto entire/checkpoints/v1.
 		// Error out with a concrete message rather than silently linking the
 		// checkpoint without the review metadata.
-		if opts.ReviewSkills != nil {
+		if opts.Review {
 			return fmt.Errorf(
 				"session %s already has checkpoint %s; rewriting an existing checkpoint as a review is not supported yet",
 				sessionID, existingState.LastCheckpointID.String(),
@@ -175,6 +190,18 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	ag, transcriptPath, err := resolveAgentAndTranscript(logCtx, w, sessionID, agentName, existingState)
 	if err != nil {
 		return err
+	}
+
+	// Resolve review skills AFTER agent detection so the real agent's
+	// configured skills (not the --agent flag default) are consulted. The
+	// flag-based --agent default is claude-code, which would make a
+	// Gemini session incorrectly look up review.claude-code.
+	var reviewSkills []string
+	if opts.Review {
+		reviewSkills, err = resolveReviewSkills(ctx, ag.Name(), opts.ReviewSkillsOverride)
+		if err != nil {
+			return err
+		}
 	}
 
 	transcriptData, err := ag.ReadTranscript(transcriptPath)
@@ -231,9 +258,9 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 		Model:        meta.Model,
 		TokenUsage:   tokenUsage,
 	}
-	if opts.ReviewSkills != nil {
+	if opts.Review {
 		writeOpts.Kind = string(session.KindAgentReview)
-		writeOpts.ReviewSkills = opts.ReviewSkills
+		writeOpts.ReviewSkills = reviewSkills
 		writeOpts.ReviewPrompt = meta.FirstPrompt
 		writeOpts.HasReview = true
 	}
@@ -264,7 +291,7 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	}
 
 	// Create or update session state.
-	if err := saveAttachSessionState(logCtx, existingState, sessionID, ag.Type(), transcriptPath, checkpointID, meta, tokenUsage, opts); err != nil {
+	if err := saveAttachSessionState(logCtx, existingState, sessionID, ag.Type(), transcriptPath, checkpointID, meta, tokenUsage, opts, reviewSkills); err != nil {
 		logging.Warn(logCtx, "failed to save session state", "error", err)
 	}
 
@@ -333,7 +360,8 @@ func resolveCheckpointID(headCommit *object.Commit) (id.CheckpointID, bool) {
 
 // saveAttachSessionState creates or updates the session state file for the attached session.
 // If existingState is non-nil, it is updated in place (avoids a redundant disk load).
-func saveAttachSessionState(ctx context.Context, existingState *session.State, sessionID string, agentType types.AgentType, transcriptPath string, checkpointID id.CheckpointID, meta transcriptMetadata, tokenUsage *agent.TokenUsage, opts attachOptions) error {
+// reviewSkills is the resolved skills list when opts.Review is true; ignored otherwise.
+func saveAttachSessionState(ctx context.Context, existingState *session.State, sessionID string, agentType types.AgentType, transcriptPath string, checkpointID id.CheckpointID, meta transcriptMetadata, tokenUsage *agent.TokenUsage, opts attachOptions, reviewSkills []string) error {
 	stateStore, err := session.NewStateStore(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open session store: %w", err)
@@ -367,9 +395,9 @@ func saveAttachSessionState(ctx context.Context, existingState *session.State, s
 	if tokenUsage != nil {
 		state.TokenUsage = tokenUsage
 	}
-	if opts.ReviewSkills != nil {
+	if opts.Review {
 		state.Kind = session.KindAgentReview
-		state.ReviewSkills = opts.ReviewSkills
+		state.ReviewSkills = reviewSkills
 		state.ReviewPrompt = meta.FirstPrompt
 	}
 

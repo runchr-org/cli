@@ -452,17 +452,10 @@ discoverability alongside the other review subcommands.`,
 			if checkDisabledGuard(cmd.Context(), cmd.OutOrStdout()) {
 				return nil
 			}
-			ctx := cmd.Context()
-			agentName := types.AgentName(agentFlag)
-			skills, err := resolveReviewSkills(ctx, agentName, skillsFlag)
-			if err != nil {
-				cmd.SilenceUsage = true
-				fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
-				return NewSilentError(err)
-			}
-			return runAttach(ctx, cmd.OutOrStdout(), args[0], agentName, attachOptions{
-				Force:        force,
-				ReviewSkills: skills,
+			return runAttachSurfaceReviewErrors(cmd, args[0], types.AgentName(agentFlag), attachOptions{
+				Force:                force,
+				Review:               true,
+				ReviewSkillsOverride: skillsFlag,
 			})
 		},
 	}
