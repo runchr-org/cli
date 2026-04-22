@@ -502,6 +502,84 @@ func TestParseHookEvent_AllHookTypes(t *testing.T) {
 	}
 }
 
+func TestParseHookEvent_AgentStop_ReResolvesTranscript(t *testing.T) {
+	// Payload has a container path that doesn't exist on the host, but
+	// COPILOT_SESSION_STATE_DIR points to the host-mapped directory.
+	sessionDir := t.TempDir()
+	sessionID := "cloud-sess-1234"
+
+	transcriptDir := filepath.Join(sessionDir, sessionID)
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	hostPath := filepath.Join(transcriptDir, "events.jsonl")
+	content := `{"type":"session.start","data":{},"id":"1","timestamp":"2026-01-01T00:00:00Z","parentId":null}` + "\n"
+	if err := os.WriteFile(hostPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write transcript: %v", err)
+	}
+
+	t.Setenv("ENTIRE_TEST_COPILOT_SESSION_DIR", "")
+	t.Setenv("COPILOT_SESSION_STATE_DIR", sessionDir)
+
+	ag := &CopilotCLIAgent{}
+	containerPath := "/home/runner/.copilot/session-state/" + sessionID + "/events.jsonl"
+	input := `{"timestamp":1771480085412,"cwd":"/repo","sessionId":"` + sessionID + `","transcriptPath":"` + containerPath + `","stopReason":"end_turn"}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameAgentStop, strings.NewReader(input))
+	require.NoError(t, err)
+	require.NotNil(t, event)
+	if event.SessionRef != hostPath {
+		t.Errorf("SessionRef = %q, want %q (re-resolved from container path)", event.SessionRef, hostPath)
+	}
+}
+
+func TestParseHookEvent_UserPromptSubmitted_ReResolvesTranscript(t *testing.T) {
+	// VS Code payload with a container transcript path that doesn't exist, but
+	// COPILOT_SESSION_STATE_DIR has the file.
+	sessionDir := t.TempDir()
+	sessionID := "cloud-prompt-sess"
+
+	transcriptDir := filepath.Join(sessionDir, sessionID)
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	hostPath := filepath.Join(transcriptDir, "events.jsonl")
+	if err := os.WriteFile(hostPath, []byte(`{"type":"user.message"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("failed to write transcript: %v", err)
+	}
+
+	t.Setenv("ENTIRE_TEST_COPILOT_SESSION_DIR", "")
+	t.Setenv("COPILOT_SESSION_STATE_DIR", sessionDir)
+
+	ag := &CopilotCLIAgent{}
+	containerPath := "/container/.copilot/session-state/" + sessionID + "/events.jsonl"
+	input := `{"timestamp":"2026-02-09T10:30:00.000Z","cwd":"/repo","sessionId":"` + sessionID + `","hookEventName":"UserPromptSubmit","transcript_path":"` + containerPath + `","prompt":"hi"}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameUserPromptSubmitted, strings.NewReader(input))
+	require.NoError(t, err)
+	require.NotNil(t, event)
+	if event.SessionRef != hostPath {
+		t.Errorf("SessionRef = %q, want %q (re-resolved from container path)", event.SessionRef, hostPath)
+	}
+}
+
+func TestParseHookEvent_AgentStop_KeepsPayloadPathWhenNeitherExists(t *testing.T) {
+	t.Parallel()
+
+	// When neither the payload path nor the re-resolved path exists,
+	// keep the payload path for downstream retry.
+	ag := &CopilotCLIAgent{}
+	containerPath := "/nonexistent/container/path/events.jsonl"
+	input := `{"timestamp":1771480085412,"cwd":"/repo","sessionId":"no-file-sess","transcriptPath":"` + containerPath + `","stopReason":"end_turn"}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameAgentStop, strings.NewReader(input))
+	require.NoError(t, err)
+	require.NotNil(t, event)
+	if event.SessionRef != containerPath {
+		t.Errorf("SessionRef = %q, want %q (should keep payload path when neither exists)", event.SessionRef, containerPath)
+	}
+}
+
 func TestHookNames_ReturnsAllHooks(t *testing.T) {
 	t.Parallel()
 

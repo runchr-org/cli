@@ -124,6 +124,34 @@ func TestCopilotCLIAgent_GetSessionDir_EnvOverride(t *testing.T) {
 	}
 }
 
+func TestCopilotCLIAgent_GetSessionDir_CopilotSessionStateDir(t *testing.T) {
+	ag := &CopilotCLIAgent{}
+	t.Setenv("ENTIRE_TEST_COPILOT_SESSION_DIR", "")
+	t.Setenv("COPILOT_SESSION_STATE_DIR", "/tmp/gh-aw/sandbox/agent/session-state")
+
+	dir, err := ag.GetSessionDir("/some/repo")
+	if err != nil {
+		t.Fatalf("GetSessionDir() error = %v", err)
+	}
+	if dir != "/tmp/gh-aw/sandbox/agent/session-state" {
+		t.Errorf("GetSessionDir() = %q, want /tmp/gh-aw/sandbox/agent/session-state", dir)
+	}
+}
+
+func TestCopilotCLIAgent_GetSessionDir_TestOverrideTakesPrecedence(t *testing.T) {
+	ag := &CopilotCLIAgent{}
+	t.Setenv("ENTIRE_TEST_COPILOT_SESSION_DIR", "/test/override")
+	t.Setenv("COPILOT_SESSION_STATE_DIR", "/host/path")
+
+	dir, err := ag.GetSessionDir("/some/repo")
+	if err != nil {
+		t.Fatalf("GetSessionDir() error = %v", err)
+	}
+	if dir != "/test/override" {
+		t.Errorf("GetSessionDir() = %q, want /test/override (test override takes precedence)", dir)
+	}
+}
+
 func TestCopilotCLIAgent_GetSessionDir_DefaultPath(t *testing.T) {
 	ag := &CopilotCLIAgent{}
 	t.Setenv("ENTIRE_TEST_COPILOT_SESSION_DIR", "")

@@ -39,8 +39,23 @@ func resolveTranscriptPath(state *SessionState) (string, error) {
 		return "", fmt.Errorf("transcript not found at %s: %w", state.TranscriptPath, os.ErrNotExist)
 	}
 
-	// Extract the session dir and agent session ID from the stored path.
-	// Stored path format: <sessionDir>/<agentSessionID>.jsonl
+	// First try: re-resolve using the agent's current session directory and the
+	// session ID. This handles moved session-state directories (e.g., cloud agents
+	// where COPILOT_SESSION_STATE_DIR points to a host-mapped path different from
+	// the container path stored in TranscriptPath).
+	if sessionDir, sdErr := ag.GetSessionDir(""); sdErr == nil {
+		resolved := ag.ResolveSessionFile(sessionDir, state.SessionID)
+		if resolved != state.TranscriptPath {
+			if _, err := os.Stat(resolved); err == nil {
+				state.TranscriptPath = resolved
+				return resolved, nil
+			}
+		}
+	}
+
+	// Second try: derive agent session ID from the stored path's filename and
+	// re-resolve within the same directory. This handles layout changes (e.g.,
+	// Cursor switching from flat <dir>/<id>.jsonl to nested <dir>/<id>/<id>.jsonl).
 	sessionDir := filepath.Dir(state.TranscriptPath)
 	base := filepath.Base(state.TranscriptPath)
 	agentSessionID := strings.TrimSuffix(base, filepath.Ext(base))

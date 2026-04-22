@@ -60,9 +60,17 @@ func (c *CopilotCLIAgent) GetSessionID(input *agent.HookInput) string {
 }
 
 // GetSessionDir returns the directory where Copilot CLI stores session transcripts.
+// Resolution order:
+//  1. ENTIRE_TEST_COPILOT_SESSION_DIR (test override)
+//  2. COPILOT_SESSION_STATE_DIR (host-mapped path, e.g., from AWF --session-state-dir)
+//  3. ~/.copilot/session-state (default local path)
 func (c *CopilotCLIAgent) GetSessionDir(_ string) (string, error) {
 	if override := os.Getenv("ENTIRE_TEST_COPILOT_SESSION_DIR"); override != "" {
 		return override, nil
+	}
+
+	if dir := os.Getenv("COPILOT_SESSION_STATE_DIR"); dir != "" {
+		return dir, nil
 	}
 
 	homeDir, err := os.UserHomeDir()

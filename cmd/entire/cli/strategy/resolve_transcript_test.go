@@ -10,6 +10,7 @@ import (
 
 	// Register agents so GetByAgentType works in tests.
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
+	_ "github.com/entireio/cli/cmd/entire/cli/agent/copilotcli"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/cursor"
 )
 
@@ -169,6 +170,60 @@ func TestResolveTranscriptPath_DirectoryPathReturnsAsIs(t *testing.T) {
 	}
 	if resolved != dirPath {
 		t.Errorf("resolveTranscriptPath() = %q, want %q", resolved, dirPath)
+	}
+}
+
+func TestResolveTranscriptPath_CopilotSessionDirFallback(t *testing.T) {
+	// Simulates cloud Copilot: stored path points to a container location,
+	// but COPILOT_SESSION_STATE_DIR points to the host-mapped directory.
+	hostDir := t.TempDir()
+	sessionID := "cloud-session-uuid"
+
+	nestedDir := filepath.Join(hostDir, sessionID)
+	if err := os.MkdirAll(nestedDir, 0o750); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	hostPath := filepath.Join(nestedDir, "events.jsonl")
+	if err := os.WriteFile(hostPath, []byte(`{"test":true}`), 0o600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	t.Setenv("ENTIRE_TEST_COPILOT_SESSION_DIR", "")
+	t.Setenv("COPILOT_SESSION_STATE_DIR", hostDir)
+
+	containerPath := "/home/runner/.copilot/session-state/" + sessionID + "/events.jsonl"
+	state := &session.State{
+		SessionID:      sessionID,
+		TranscriptPath: containerPath,
+		AgentType:      agent.AgentTypeCopilotCLI,
+	}
+
+	resolved, err := resolveTranscriptPath(state)
+	if err != nil {
+		t.Fatalf("resolveTranscriptPath() error = %v", err)
+	}
+	if resolved != hostPath {
+		t.Errorf("resolveTranscriptPath() = %q, want %q", resolved, hostPath)
+	}
+	if state.TranscriptPath != hostPath {
+		t.Errorf("state.TranscriptPath = %q, want %q", state.TranscriptPath, hostPath)
+	}
+}
+
+func TestResolveTranscriptPath_CopilotNoSessionDirFallsThrough(t *testing.T) {
+	t.Parallel()
+
+	// When COPILOT_SESSION_STATE_DIR is not set and the container path doesn't
+	// exist, resolveTranscriptPath should return an error.
+	state := &session.State{
+		SessionID:      "missing-session",
+		TranscriptPath: "/container/.copilot/session-state/missing-session/events.jsonl",
+		AgentType:      agent.AgentTypeCopilotCLI,
+	}
+
+	_, err := resolveTranscriptPath(state)
+	if err == nil {
+		t.Fatal("resolveTranscriptPath() expected error, got nil")
 	}
 }
 

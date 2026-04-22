@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
@@ -88,15 +89,10 @@ func (c *CopilotCLIAgent) ParseHookEvent(ctx context.Context, hookName string, s
 // --- Internal event builders (envelope already parsed) ---
 
 func (c *CopilotCLIAgent) buildUserPromptSubmitted(ctx context.Context, env *hookEnvelope) *agent.Event {
-	transcriptRef := env.TranscriptPath
-	if transcriptRef == "" {
-		transcriptRef = c.resolveTranscriptRef(ctx, env.SessionID)
-	}
-
 	return &agent.Event{
 		Type:       agent.TurnStart,
 		SessionID:  env.SessionID,
-		SessionRef: transcriptRef,
+		SessionRef: c.resolveTranscriptFromPayload(ctx, env),
 		Prompt:     env.Prompt,
 		Timestamp:  env.Timestamp,
 	}
@@ -111,15 +107,17 @@ func (c *CopilotCLIAgent) buildSessionStart(env *hookEnvelope) *agent.Event {
 }
 
 func (c *CopilotCLIAgent) buildAgentStop(ctx context.Context, env *hookEnvelope) *agent.Event {
+	transcriptRef := c.resolveTranscriptFromPayload(ctx, env)
+
 	var model string
-	if env.TranscriptPath != "" {
-		model = ExtractModelFromTranscript(ctx, env.TranscriptPath)
+	if transcriptRef != "" {
+		model = ExtractModelFromTranscript(ctx, transcriptRef)
 	}
 
 	return &agent.Event{
 		Type:       agent.TurnEnd,
 		SessionID:  env.SessionID,
-		SessionRef: env.TranscriptPath,
+		SessionRef: transcriptRef,
 		Model:      model,
 		Timestamp:  env.Timestamp,
 	}
@@ -147,6 +145,33 @@ func (c *CopilotCLIAgent) readHookEnvelope(stdin io.Reader) (*hookEnvelope, erro
 		return nil, fmt.Errorf("failed to read hook input: %w", err)
 	}
 	return parseHookEnvelope(data)
+}
+
+// resolveTranscriptFromPayload resolves the transcript file path for a hook event.
+// It validates the payload's transcriptPath exists on disk; if not (e.g., a container
+// path on a host where the file was mapped to a different directory via
+// COPILOT_SESSION_STATE_DIR), it re-resolves via GetSessionDir. Falls back to the
+// original payload path when neither location has the file, allowing downstream
+// resolution (strategy layer) another chance.
+func (c *CopilotCLIAgent) resolveTranscriptFromPayload(ctx context.Context, env *hookEnvelope) string {
+	if env.TranscriptPath != "" {
+		if _, err := os.Stat(env.TranscriptPath); err == nil {
+			return env.TranscriptPath
+		}
+		// Payload path doesn't exist locally — try session-dir resolution.
+		resolved := c.resolveTranscriptRef(ctx, env.SessionID)
+		if resolved != "" && resolved != env.TranscriptPath {
+			if _, err := os.Stat(resolved); err == nil {
+				logging.Debug(ctx, "copilot-cli: resolved transcript to alternate session-state path",
+					"payloadPath", env.TranscriptPath, "resolvedPath", resolved)
+				return resolved
+			}
+		}
+		// Neither path exists — keep payload path for downstream retry.
+		return env.TranscriptPath
+	}
+	// No payload path — compute from session-dir.
+	return c.resolveTranscriptRef(ctx, env.SessionID)
 }
 
 // resolveTranscriptRef computes the transcript path from the session ID.
