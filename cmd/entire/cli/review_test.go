@@ -149,36 +149,6 @@ func TestSaveReviewConfig_PersistsSettings(t *testing.T) {
 	}
 }
 
-func TestRunReview_TrackOnlyWritesMarker(t *testing.T) {
-	// t.Chdir + first-run picker — no t.Parallel.
-	setupReviewTestRepoWithCommit(t)
-	installHooksForTest(t, testAgentName)
-
-	// Seed config so first-run picker doesn't fire.
-	if err := saveReviewConfig(context.Background(), map[string][]string{
-		testAgentName: {testReviewSkill},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	rootCmd := NewRootCmd()
-	rootCmd.SetArgs([]string{"review", "--track-only"})
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-
-	m, ok, err := ReadPendingReviewMarker(context.Background())
-	if err != nil || !ok {
-		t.Fatalf("expected marker present: ok=%v err=%v", ok, err)
-	}
-	if m.AgentName != testAgentName {
-		t.Errorf("AgentName = %q, want %s", m.AgentName, testAgentName)
-	}
-	if len(m.Skills) != 1 || m.Skills[0] != testReviewSkill {
-		t.Errorf("Skills = %v", m.Skills)
-	}
-}
-
 // Regression: running `entire review` when the configured agent has no hooks
 // installed must abort with a clear error instead of writing a marker no
 // hook will ever adopt. Covers both stale config (user edited settings.json
@@ -212,14 +182,15 @@ func TestRunReview_MissingHooksAborts(t *testing.T) {
 	}
 }
 
-// Regression: non-launchable agents must preserve the pending marker so the
-// manually-started agent can adopt it. Previously the cleanup defer was
-// registered before the LauncherFor check, so the !ok fallback printed
-// "falling back to --track-only" but then wiped the marker on return.
+// Regression: non-launchable agents must preserve the pending marker so
+// the manually-started agent can adopt it. Previously the cleanup defer
+// was registered before the LauncherFor check, so the !ok fallback
+// printed its "start manually" message but then wiped the marker on
+// return, silently breaking the hand-off.
 //
-// Uses cursor because it has HookSupport but no Launcher, triggering the
-// !ok fallback.
-func TestRunReview_FallbackToTrackOnlyPreservesMarker(t *testing.T) {
+// Uses cursor because it has HookSupport but no Launcher, triggering
+// the !ok fallback.
+func TestRunReview_NonLaunchableAgentPreservesMarker(t *testing.T) {
 	setupReviewTestRepoWithCommit(t)
 
 	const nonLaunchableAgent = "cursor"
@@ -241,14 +212,14 @@ func TestRunReview_FallbackToTrackOnlyPreservesMarker(t *testing.T) {
 	rootCmd := NewRootCmd()
 	buf := &bytes.Buffer{}
 	rootCmd.SetOut(buf)
-	rootCmd.SetArgs([]string{"review"}) // not --track-only; rely on the fallback
+	rootCmd.SetArgs([]string{"review"})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
 	out := buf.String()
-	if !strings.Contains(out, "Falling back to --track-only") {
-		t.Errorf("expected fallback message, got: %s", out)
+	if !strings.Contains(out, "Marker written") {
+		t.Errorf("expected marker-written message, got: %s", out)
 	}
 
 	m, ok, err := ReadPendingReviewMarker(context.Background())
@@ -256,7 +227,7 @@ func TestRunReview_FallbackToTrackOnlyPreservesMarker(t *testing.T) {
 		t.Fatalf("ReadPendingReviewMarker: %v", err)
 	}
 	if !ok {
-		t.Fatal("marker was cleared by defer on !ok fallback — the 'falling back to --track-only' message is a lie")
+		t.Fatal("marker was cleared by defer on !ok fallback — the hand-off message is a lie")
 	}
 	if m.AgentName != nonLaunchableAgent {
 		t.Errorf("AgentName = %q, want %s", m.AgentName, nonLaunchableAgent)

@@ -421,7 +421,6 @@ func mergePickerResults(existing map[string][]string, offered map[string]struct{
 
 func newReviewCmd() *cobra.Command {
 	var edit bool
-	var trackOnly bool
 	var agentOverride string
 
 	cmd := &cobra.Command{
@@ -435,8 +434,6 @@ review metadata is permanently attached to the commit it covers.
 
 Flags:
   --edit         re-open the review config picker
-  --track-only   write the pending marker without spawning the agent (you
-                 start the agent manually; its hook adopts the marker)
   --agent NAME   select a specific configured agent when more than one is
                  configured (default: alphabetically first)
 
@@ -449,11 +446,10 @@ Subcommands:
 				_, err := runReviewConfigPicker(ctx, cmd.OutOrStdout())
 				return err
 			}
-			return runReview(ctx, cmd, trackOnly, agentOverride)
+			return runReview(ctx, cmd, agentOverride)
 		},
 	}
 	cmd.Flags().BoolVar(&edit, "edit", false, "re-open the review config picker")
-	cmd.Flags().BoolVar(&trackOnly, "track-only", false, "write pending marker without spawning agent")
 	cmd.Flags().StringVar(&agentOverride, "agent", "", "select a specific configured agent (default: alphabetically first)")
 	cmd.AddCommand(newReviewAttachCmd())
 	return cmd
@@ -507,7 +503,7 @@ discoverability alongside the other review subcommands.`,
 	return cmd
 }
 
-func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool, agentOverride string) error {
+func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string) error {
 	out := cmd.OutOrStdout()
 
 	// 1. Pre-flight: must be in a git repo.
@@ -613,23 +609,15 @@ func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool, agentOve
 		return fmt.Errorf("write pending marker: %w", err)
 	}
 
-	if trackOnly {
-		// Marker must persist — the user will start the agent manually and
-		// its hook will adopt the marker.
-		fmt.Fprintln(out, "Pending review marker written.")
-		fmt.Fprintf(out, "Start %s and run these skills manually: %s\n", agentName, strings.Join(skills, ", "))
-		return nil
-	}
-
 	// 7. Resolve launcher BEFORE installing the cleanup defer. Non-launchable
-	// agents fall back to the same persist-marker behavior as --track-only:
-	// the user starts the agent manually and its UserPromptSubmit hook adopts
-	// the marker. If we registered the defer first, it would wipe the marker
-	// on this return path, silently breaking the fallback the message
-	// promises the user.
+	// agents (cursor, opencode, factoryai-droid, etc.) can't be spawned as
+	// subprocesses, so the marker must persist on disk for the user's
+	// manually-started session to adopt. If we registered the defer first,
+	// it would wipe the marker on this return path, silently breaking the
+	// hand-off the message promises.
 	launcher, ok := agent.LauncherFor(types.AgentName(agentName))
 	if !ok {
-		fmt.Fprintf(out, "%s does not support subprocess launch yet. Falling back to --track-only.\n", agentName)
+		fmt.Fprintf(out, "%s does not support subprocess launch yet. Marker written.\n", agentName)
 		fmt.Fprintf(out, "Start %s manually and run: %s\n", agentName, strings.Join(skills, ", "))
 		return nil
 	}

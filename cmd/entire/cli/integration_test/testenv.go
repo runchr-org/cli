@@ -623,6 +623,59 @@ func (env *TestEnv) GitCommitWithMultipleCheckpoints(message string, checkpointI
 	}
 }
 
+// WritePendingReviewMarker writes a review-pending marker under
+// .git/entire-sessions/, mirroring the on-disk shape that `entire
+// review` produces before spawning an agent. Used by integration tests
+// to set up adoption scenarios without running the full spawn pipeline.
+//
+// The JSON shape is duplicated here intentionally: the test shouldn't
+// import the cli package just for a struct literal, and the marker
+// format is small + stable.
+func (env *TestEnv) WritePendingReviewMarker(agentName string, skills []string, startingSHA string) {
+	env.T.Helper()
+	marker := struct {
+		AgentName    string    `json:"agent_name"`
+		Skills       []string  `json:"skills"`
+		Prompt       string    `json:"prompt,omitempty"`
+		StartingSHA  string    `json:"starting_sha"`
+		StartedAt    time.Time `json:"started_at"`
+		WorktreePath string    `json:"worktree_path,omitempty"`
+	}{
+		AgentName:    agentName,
+		Skills:       skills,
+		Prompt:       composeReviewPromptForTest(skills),
+		StartingSHA:  startingSHA,
+		StartedAt:    time.Now().UTC(),
+		WorktreePath: env.RepoDir,
+	}
+	dir := filepath.Join(env.RepoDir, ".git", "entire-sessions")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		env.T.Fatalf("failed to create sessions dir: %v", err)
+	}
+	data, err := json.MarshalIndent(marker, "", "  ")
+	if err != nil {
+		env.T.Fatalf("failed to marshal marker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "review-pending.json"), data, 0o600); err != nil {
+		env.T.Fatalf("failed to write marker: %v", err)
+	}
+}
+
+// composeReviewPromptForTest mirrors the prompt shape runReview composes
+// so integration tests can assert against the same ReviewPrompt format
+// that spawn would produce.
+func composeReviewPromptForTest(skills []string) string {
+	if len(skills) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("Please run these review skills in order:\n")
+	for i, skill := range skills {
+		fmt.Fprintf(&sb, "  %d. %s\n", i+1, skill)
+	}
+	return sb.String()
+}
+
 // GetHeadHash returns the current HEAD commit hash.
 func (env *TestEnv) GetHeadHash() string {
 	env.T.Helper()

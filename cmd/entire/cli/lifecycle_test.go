@@ -1127,12 +1127,12 @@ func TestAdoptPendingReviewMarker_OtherWorktreeLeavesMarker(t *testing.T) {
 	}
 }
 
-// Reproduces the stale-marker problem: `entire review --track-only`
-// writes a marker at SHA A, then the user commits (HEAD moves to SHA B)
-// before starting the review session. The later session must NOT adopt
-// the now-stale marker — that would tag an unrelated session as a review
-// of code that has already moved on. The stale marker is discarded so
-// future sessions start clean.
+// Reproduces the stale-marker problem: `entire review` for a non-
+// launchable agent writes a marker at SHA A, then the user commits
+// (HEAD moves to SHA B) before starting the review session. The later
+// session must NOT adopt the now-stale marker — that would tag an
+// unrelated session as a review of code that has already moved on.
+// The stale marker is discarded so future sessions start clean.
 func TestAdoptPendingReviewMarker_StaleSHAClearsMarker(t *testing.T) {
 	tmp := t.TempDir()
 	testutil.InitRepo(t, tmp)
@@ -1142,7 +1142,8 @@ func TestAdoptPendingReviewMarker_StaleSHAClearsMarker(t *testing.T) {
 	t.Chdir(tmp)
 
 	// Marker written at a SHA that isn't current HEAD (simulating HEAD
-	// having moved since `entire review --track-only` was invoked).
+	// having moved since `entire review` was invoked for a non-launchable
+	// agent and the user then committed before starting the session).
 	const staleSHA = "0000000000000000000000000000000000000000"
 	if err := WritePendingReviewMarker(context.Background(), PendingReviewMarker{
 		AgentName:    string(agent.AgentNameClaudeCode),

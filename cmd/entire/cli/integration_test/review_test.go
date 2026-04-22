@@ -14,21 +14,23 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/session"
 )
 
-func TestReview_TrackOnly_CondensesReviewMetadataOnNextCommit(t *testing.T) {
+// TestReview_MarkerAdoptionCondensesReviewMetadataOnNextCommit exercises
+// the full adoption pipeline: a pending marker written before the agent
+// session is adopted on UserPromptSubmit, then condensed into checkpoint
+// metadata on the next git commit. The marker is written directly rather
+// than through a CLI subcommand so the test focuses on adoption behavior,
+// not on CLI wiring.
+func TestReview_MarkerAdoptionCondensesReviewMetadataOnNextCommit(t *testing.T) {
 	t.Parallel()
 
 	env := NewFeatureBranchEnv(t)
 	enableReviewAgent(t, env, "claude-code")
-	env.PatchSettings(map[string]any{
-		"review": map[string][]string{
-			"claude-code": {"/pr-review-toolkit:review-pr", "/test-auditor"},
-		},
-	})
 
-	output := env.RunCLI("review", "--track-only", "--agent", "claude-code")
-	if !strings.Contains(output, "Pending review marker written.") {
-		t.Fatalf("expected track-only confirmation, got:\n%s", output)
-	}
+	env.WritePendingReviewMarker(
+		"claude-code",
+		[]string{"/pr-review-toolkit:review-pr", "/test-auditor"},
+		env.GetHeadHash(),
+	)
 
 	sess := env.NewSession()
 	reviewPrompt := "review the branch for correctness and missing tests"
@@ -146,19 +148,18 @@ func TestReviewAttach_TagsAttachedSessionAsReview(t *testing.T) {
 	}
 }
 
-func TestReview_TrackOnly_WrongAgentDoesNotAdoptMarker(t *testing.T) {
+func TestReview_MarkerAdoption_WrongAgentDoesNotAdoptMarker(t *testing.T) {
 	t.Parallel()
 
 	env := NewFeatureBranchEnv(t)
 	enableReviewAgent(t, env, "claude-code")
 	enableReviewAgent(t, env, "gemini")
-	env.PatchSettings(map[string]any{
-		"review": map[string][]string{
-			"claude-code": {"/pr-review-toolkit:review-pr"},
-		},
-	})
 
-	env.RunCLI("review", "--track-only", "--agent", "claude-code")
+	env.WritePendingReviewMarker(
+		"claude-code",
+		[]string{"/pr-review-toolkit:review-pr"},
+		env.GetHeadHash(),
+	)
 
 	geminiSession := env.NewGeminiSession()
 	if err := env.SimulateGeminiBeforeAgent(geminiSession.ID); err != nil {
@@ -199,18 +200,17 @@ func TestReview_TrackOnly_WrongAgentDoesNotAdoptMarker(t *testing.T) {
 	}
 }
 
-func TestReview_TrackOnly_StaleMarkerIsIgnoredAfterHeadMoves(t *testing.T) {
+func TestReview_MarkerAdoption_StaleMarkerIsIgnoredAfterHeadMoves(t *testing.T) {
 	t.Parallel()
 
 	env := NewFeatureBranchEnv(t)
 	enableReviewAgent(t, env, "claude-code")
-	env.PatchSettings(map[string]any{
-		"review": map[string][]string{
-			"claude-code": {"/pr-review-toolkit:review-pr"},
-		},
-	})
 
-	env.RunCLI("review", "--track-only", "--agent", "claude-code")
+	env.WritePendingReviewMarker(
+		"claude-code",
+		[]string{"/pr-review-toolkit:review-pr"},
+		env.GetHeadHash(),
+	)
 
 	env.WriteFile("head_move.txt", "new head\n")
 	env.GitAdd("head_move.txt")
