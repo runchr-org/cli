@@ -21,6 +21,7 @@ import (
 	git "github.com/go-git/go-git/v6"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
@@ -452,6 +453,11 @@ discoverability alongside the other review subcommands.`,
 			if checkDisabledGuard(cmd.Context(), cmd.OutOrStdout()) {
 				return nil
 			}
+			// Discover external agents so --agent <external-name> is
+			// recognized and auto-detection covers them. Mirrors the
+			// contract of `entire attach` so the two entry points stay
+			// behaviorally equivalent.
+			external.DiscoverAndRegister(cmd.Context())
 			return runAttachSurfaceReviewErrors(cmd, args[0], types.AgentName(agentFlag), attachOptions{
 				Force:                force,
 				Review:               true,
