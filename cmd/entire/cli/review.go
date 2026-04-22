@@ -238,6 +238,41 @@ func adoptPendingReviewMarkerInto(ctx context.Context, s session.State, agentNam
 	return s, true, nil
 }
 
+// confirmFirstRunSetup prints a banner framing the picker as first-run
+// setup (rather than the review itself) and waits for the user to confirm.
+// Returns false if the user cancels; caller should bail gracefully.
+//
+// Signposting matters here because `entire review` with no config silently
+// drops into the picker — users running the command to start a review can
+// mistake the picker for the review. The banner + confirmation makes the
+// setup phase explicit, and the trailing "running review now" line in the
+// caller closes the loop on what comes next.
+func confirmFirstRunSetup(out io.Writer) bool {
+	fmt.Fprintln(out, "No review config found — let's set one up first.")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "You'll pick skills for each installed agent. They're saved to")
+	fmt.Fprintln(out, ".entire/settings.json; edit later with `entire review --edit`.")
+	fmt.Fprintln(out, "After setup, the review will run with your selection.")
+	fmt.Fprintln(out)
+
+	proceed := true
+	form := NewAccessibleForm(huh.NewGroup(
+		huh.NewConfirm().
+			Title("Set up review skills now?").
+			Affirmative("Yes").
+			Negative("Cancel").
+			Value(&proceed),
+	))
+	if err := form.Run(); err != nil {
+		fmt.Fprintln(out, "Setup cancelled.")
+		return false
+	}
+	if !proceed {
+		fmt.Fprintln(out, "Setup cancelled.")
+	}
+	return proceed
+}
+
 // runReviewConfigPicker presents a huh multi-select for each installed agent
 // that has curated review skills, and saves the selection to
 // .entire/settings.json. Previously-saved skills are pre-checked via
@@ -495,6 +530,9 @@ func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool, agentOve
 		return NewSilentError(err)
 	}
 	if s == nil || len(s.Review) == 0 {
+		if !confirmFirstRunSetup(out) {
+			return nil
+		}
 		picked, pickErr := runReviewConfigPicker(ctx, out)
 		if pickErr != nil {
 			return pickErr
@@ -503,6 +541,8 @@ func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool, agentOve
 			s = &settings.EntireSettings{}
 		}
 		s.Review = picked
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "Setup complete — running review now.")
 	}
 
 	// 3. Pick agent.
