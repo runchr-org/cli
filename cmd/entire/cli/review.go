@@ -157,8 +157,9 @@ func sameWorktreePath(a, b string) bool {
 // the marker is left in place and modified=false — adoption only happens on
 // first tag. The marker is cleared on successful first adoption.
 //
-// Scoping rules — the marker is left untouched (not cleared) when any of
-// these don't match, so the correct session has a chance to claim it:
+// Scoping rules — the marker is left untouched (not cleared) when a scope
+// mismatch still leaves open the possibility that a future session could
+// legitimately claim it:
 //
 //   - WorktreePath: a Claude session in worktree A must not claim a marker
 //     meant for a session `entire review` spawned in worktree B. Both
@@ -168,8 +169,13 @@ func sameWorktreePath(a, b string) bool {
 //     and whichever session fires its UserPromptSubmit hook first would
 //     otherwise silently steal the wrong agent's review metadata.
 //
-// Pre-fix markers with empty WorktreePath/AgentName fall back to unscoped
-// adoption for each missing field (backwards compat).
+// StartingSHA is different: once HEAD moves past the marker's commit, no
+// future session will meaningfully match the original review intent.
+// A stale marker is cleared rather than left to mis-tag a later unrelated
+// session.
+//
+// Pre-fix markers with empty fields fall back to unscoped adoption for
+// each missing field (backwards compat).
 func adoptPendingReviewMarkerInto(ctx context.Context, s session.State, agentName types.AgentName) (session.State, bool, error) {
 	// Already tagged — don't re-apply on subsequent turns.
 	if s.Kind != "" {
@@ -193,6 +199,31 @@ func adoptPendingReviewMarkerInto(ctx context.Context, s session.State, agentNam
 		// correct agent's session will reach its own hook and claim the
 		// marker.
 		return s, false, nil
+	}
+	// SHA drift: the marker was written for a specific commit. If HEAD has
+	// moved since, the user's intent (review THAT commit) no longer applies
+	// to this session, and we'd otherwise silently tag an unrelated session
+	// as a review. Discard the stale marker rather than adopting it or
+	// leaving it in place to mis-tag a later session.
+	//
+	// Failure to resolve HEAD is non-fatal: adoption is best-effort, and
+	// crashing a legitimate review because git rev-parse hiccupped would be
+	// worse than skipping the check.
+	if m.StartingSHA != "" {
+		headSHA, headErr := currentHeadSHA(ctx)
+		switch {
+		case headErr != nil:
+			logging.Debug(ctx, "adopt marker: resolve HEAD failed, skipping SHA check",
+				slog.String("error", headErr.Error()))
+		case headSHA != m.StartingSHA:
+			logging.Warn(ctx, "adopt marker: HEAD moved since marker was written; discarding stale marker",
+				slog.String("marker_sha", m.StartingSHA),
+				slog.String("head_sha", headSHA))
+			if clearErr := ClearPendingReviewMarker(ctx); clearErr != nil {
+				logging.Debug(ctx, "failed to clear stale marker", slog.String("error", clearErr.Error()))
+			}
+			return s, false, nil
+		}
 	}
 	s.Kind = session.KindAgentReview
 	s.ReviewSkills = m.Skills
