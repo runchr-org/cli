@@ -356,6 +356,21 @@ func TestMergePickerResults(t *testing.T) {
 			selected: map[string][]string{testAgentName: {"/a"}},
 			want:     map[string][]string{testAgentName: {"/a"}},
 		},
+		{
+			// Regression: deselecting all curated agents while external
+			// config remains must yield a non-empty merged map, so --edit
+			// can save the "only external agent left" state.
+			name: "deselected curated agent leaves only external entry",
+			existing: map[string][]string{
+				testAgentName: {"/old-pick"},
+				"my-external": {"/external-skill"},
+			},
+			offered:  map[string]struct{}{testAgentName: {}},
+			selected: map[string][]string{}, // user deselected everything offered
+			want: map[string][]string{
+				"my-external": {"/external-skill"},
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

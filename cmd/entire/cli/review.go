@@ -335,10 +335,6 @@ func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string][]str
 			selected[string(c.name)] = picks
 		}
 	}
-	if len(selected) == 0 {
-		return nil, errors.New("no review skills selected")
-	}
-
 	// Merge the picker's output with existing entries the picker could not
 	// surface. Without the merge, save would replace s.Review wholesale and
 	// silently drop entries the user had configured for external agents,
@@ -349,6 +345,15 @@ func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string][]str
 		offered[string(c.name)] = struct{}{}
 	}
 	merged := mergePickerResults(existing, offered, selected)
+
+	// The emptiness check runs on `merged`, not `selected`: a user
+	// deliberately deselecting all curated agents while keeping existing
+	// external-agent entries is a valid outcome that must be saveable. Only
+	// refuse if the final config would be empty — i.e., no picks AND no
+	// pre-existing entries to preserve.
+	if len(merged) == 0 {
+		return nil, errors.New("no review skills selected")
+	}
 
 	if err := saveReviewConfig(ctx, merged); err != nil {
 		return nil, err
