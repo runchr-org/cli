@@ -764,6 +764,54 @@ func TestAttach_ReviewWithExistingCheckpointErrors(t *testing.T) {
 	}
 }
 
+// Regression for the "review-attach overwrote the existing session"
+// bug: the LastCheckpointID guard in session state only catches the case
+// where the state file tracks the checkpoint. A session that's already
+// in a checkpoint on HEAD but whose state file is missing, stale, or
+// has an empty LastCheckpointID would bypass that guard — findSessionIndex
+// would then match by SessionID and overwrite the existing session's
+// metadata. Defense-in-depth check against the on-disk checkpoint must
+// catch it too.
+func TestAttach_ReviewWithExistingCheckpointErrorsEvenWithoutSessionState(t *testing.T) {
+	setupAttachTestRepo(t)
+
+	sessionID := "test-attach-review-no-state"
+	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"hello"},"uuid":"uuid-1"}
+`)
+
+	// First attach (non-review) creates a checkpoint and writes session state.
+	var out bytes.Buffer
+	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{Force: true}); err != nil {
+		t.Fatalf("first attach failed: %v", err)
+	}
+
+	// Delete the session state file to simulate the gap: state lost but
+	// the checkpoint on disk still has the session. (Real-world triggers:
+	// state never written, state file manually removed, condensation path
+	// that didn't update LastCheckpointID.)
+	repoRoot := mustGetwd(t)
+	stateFile := filepath.Join(repoRoot, ".git", "entire-sessions", sessionID+".json")
+	if err := os.Remove(stateFile); err != nil {
+		t.Fatalf("remove state file: %v", err)
+	}
+
+	// Second attach with --review must error. Without the defense-in-depth
+	// guard, this call would silently overwrite the existing session's
+	// metadata in the checkpoint with review-flavored metadata.
+	out.Reset()
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{
+		Force:                true,
+		Review:               true,
+		ReviewSkillsOverride: []string{"/pr-review-toolkit:review-pr"},
+	})
+	if err == nil {
+		t.Fatal("expected error when review-attaching a session already recorded in HEAD's checkpoint, even without session state")
+	}
+	if !strings.Contains(err.Error(), "already recorded in checkpoint") {
+		t.Errorf("error should mention 'already recorded in checkpoint'; got: %v", err)
+	}
+}
+
 // Regression: attach must NOT silently attach skills from the spawn-path
 // config. settings.Review[agent] is what the user would run if they used
 // `entire review`, not a claim about what ran in a given manual session.

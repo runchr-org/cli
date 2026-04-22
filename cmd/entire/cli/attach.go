@@ -215,6 +215,23 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	// Write directly to entire/checkpoints/v1.
 	store := cpkg.NewGitStore(repo)
 
+	// Defense-in-depth guard: the earlier existingState.LastCheckpointID
+	// check only fires when the session's state file records its
+	// checkpoint. A session already stored in the HEAD checkpoint but
+	// whose state is missing/stale (state file deleted, never written,
+	// condensed without LastCheckpointID update) would bypass that guard.
+	// findSessionIndex matches by SessionID — without this check, a
+	// review-attach on such a session silently overwrites the existing
+	// session's metadata in the checkpoint.
+	if opts.Review && isExistingCheckpoint {
+		if existing, readErr := store.ReadSessionContentByID(ctx, checkpointID, sessionID); readErr == nil && existing != nil {
+			return fmt.Errorf(
+				"session %s is already recorded in checkpoint %s; rewriting an existing checkpoint as a review is not supported yet",
+				sessionID, checkpointID.String(),
+			)
+		}
+	}
+
 	author, err := GetGitAuthor(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get git author: %w", err)
