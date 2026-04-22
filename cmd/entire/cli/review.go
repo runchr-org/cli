@@ -307,11 +307,44 @@ func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string][]str
 	if len(selected) == 0 {
 		return nil, errors.New("no review skills selected")
 	}
-	if err := saveReviewConfig(ctx, selected); err != nil {
+
+	// Merge the picker's output with existing entries the picker could not
+	// surface. Without the merge, save would replace s.Review wholesale and
+	// silently drop entries the user had configured for external agents,
+	// uncurated agents, or agents whose hooks are temporarily uninstalled —
+	// exactly the "edit settings.json manually" case the help text suggests.
+	offered := make(map[string]struct{}, len(configurable))
+	for _, c := range configurable {
+		offered[string(c.name)] = struct{}{}
+	}
+	merged := mergePickerResults(existing, offered, selected)
+
+	if err := saveReviewConfig(ctx, merged); err != nil {
 		return nil, err
 	}
 	fmt.Fprintln(out, "Saved review config to .entire/settings.json. Edit directly or run `entire review --edit`.")
-	return selected, nil
+	return merged, nil
+}
+
+// mergePickerResults combines the picker's output with existing review
+// config entries that the picker did not surface. Agents in `offered` are
+// fully controlled by the picker: if they appear in `selected` with picks
+// the entry is set, otherwise the entry is removed. Agents not in `offered`
+// keep their existing skills untouched.
+//
+// Exported via lowercase helper for testability — the picker itself can't
+// be driven headless.
+func mergePickerResults(existing map[string][]string, offered map[string]struct{}, selected map[string][]string) map[string][]string {
+	merged := make(map[string][]string, len(existing)+len(selected))
+	for name, skills := range existing {
+		if _, wasOffered := offered[name]; !wasOffered {
+			merged[name] = skills
+		}
+	}
+	for name, skills := range selected {
+		merged[name] = skills
+	}
+	return merged
 }
 
 func newReviewCmd() *cobra.Command {

@@ -311,6 +311,73 @@ func TestSelectReviewAgent_OverrideResolvesSpecificAgent(t *testing.T) {
 	}
 }
 
+// mergePickerResults unit tests — the picker itself can't run headless, but
+// its post-processing step is pure. Together these pin the data-loss
+// regression where a manually-configured external-agent entry would be
+// silently deleted the first time the user ran `entire review --edit`.
+func TestMergePickerResults(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		existing map[string][]string
+		offered  map[string]struct{}
+		selected map[string][]string
+		want     map[string][]string
+	}{
+		{
+			name: "preserves uncurated/external entries the picker did not surface",
+			existing: map[string][]string{
+				testAgentName: {"/old-pick"},
+				"my-external": {"/external-skill"},
+			},
+			offered:  map[string]struct{}{testAgentName: {}},
+			selected: map[string][]string{testAgentName: {"/new-pick"}},
+			want: map[string][]string{
+				testAgentName: {"/new-pick"},
+				"my-external": {"/external-skill"}, // MUST survive
+			},
+		},
+		{
+			name: "offered agent with no picks is removed (user unconfiguring)",
+			existing: map[string][]string{
+				testAgentName: {"/old-pick"},
+				"codex":       {"/codex-pick"},
+			},
+			offered:  map[string]struct{}{testAgentName: {}, "codex": {}},
+			selected: map[string][]string{testAgentName: {"/new-pick"}},
+			want: map[string][]string{
+				testAgentName: {"/new-pick"},
+			},
+		},
+		{
+			name:     "empty existing: merge is identity on selected",
+			existing: map[string][]string{},
+			offered:  map[string]struct{}{testAgentName: {}},
+			selected: map[string][]string{testAgentName: {"/a"}},
+			want:     map[string][]string{testAgentName: {"/a"}},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := mergePickerResults(tc.existing, tc.offered, tc.selected)
+			if len(got) != len(tc.want) {
+				t.Fatalf("length mismatch: got %d entries, want %d: got=%v want=%v", len(got), len(tc.want), got, tc.want)
+			}
+			for k, v := range tc.want {
+				gv, ok := got[k]
+				if !ok {
+					t.Errorf("missing key %q", k)
+					continue
+				}
+				if len(gv) != len(v) || (len(v) > 0 && gv[0] != v[0]) {
+					t.Errorf("key %q: got %v, want %v", k, gv, v)
+				}
+			}
+		})
+	}
+}
+
 func TestNewReviewCmd_NoHiddenFlags(t *testing.T) {
 	t.Parallel()
 	cmd := newReviewCmd()
