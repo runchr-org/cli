@@ -9,13 +9,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // WorkspaceHash returns the Cursor workspace hash for a project path.
-// Cursor stores per-project data under MD5(absolute_project_path).
+// Cursor stores per-project chat DBs under MD5(absolute_project_path).
 func WorkspaceHash(projectPath string) string {
 	sum := md5.Sum([]byte(projectPath)) //nolint:gosec // matches Cursor's convention
 	return hex.EncodeToString(sum[:])
+}
+
+// WorkspaceSlug returns the Cursor project slug for a project path.
+// Cursor stores per-project transcript JSONLs under a path-flattened slug
+// (leading slash stripped, remaining slashes replaced with dashes), not MD5.
+// For example: /private/tmp/foo -> private-tmp-foo.
+func WorkspaceSlug(projectPath string) string {
+	return strings.ReplaceAll(strings.TrimPrefix(projectPath, "/"), "/", "-")
 }
 
 // RestoreCheckpointFiles reads the Cursor chat archive out of the checkpoint
@@ -49,7 +58,13 @@ func (c *CursorAgent) RestoreCheckpointFiles(_ context.Context, sessionID string
 	if err != nil {
 		return fmt.Errorf("current directory: %w", err)
 	}
+	// Cursor resolves symlinks when hashing (e.g. /tmp → /private/tmp on macOS);
+	// match that so the hash aligns with the directory cursor-agent reads from.
+	if resolved, evalErr := filepath.EvalSymlinks(cwd); evalErr == nil {
+		cwd = resolved
+	}
 	hash := WorkspaceHash(cwd)
+	slug := WorkspaceSlug(cwd)
 
 	dbTarget := filepath.Join(home, ".cursor", "chats", hash, archive.AgentID, "store.db")
 	if err := os.MkdirAll(filepath.Dir(dbTarget), 0o750); err != nil {
@@ -74,7 +89,7 @@ func (c *CursorAgent) RestoreCheckpointFiles(_ context.Context, sessionID string
 	}
 
 	if len(archive.Transcript) > 0 {
-		txTarget := filepath.Join(home, ".cursor", "projects", hash, "agent-transcripts", archive.AgentID+".jsonl")
+		txTarget := filepath.Join(home, ".cursor", "projects", slug, "agent-transcripts", archive.AgentID, archive.AgentID+".jsonl")
 		if err := os.MkdirAll(filepath.Dir(txTarget), 0o750); err != nil {
 			return fmt.Errorf("creating transcripts directory: %w", err)
 		}

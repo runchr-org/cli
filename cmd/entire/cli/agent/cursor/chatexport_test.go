@@ -121,6 +121,44 @@ func TestExportChatArchive_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestExportChatArchive_NestedTranscript(t *testing.T) {
+	// Cursor 2026.04+ writes transcripts at <agent-id>/<agent-id>.jsonl
+	// rather than flat <agent-id>.jsonl. Export must find both layouts.
+	// Cannot t.Parallel: t.Setenv("HOME") conflicts with parallel execution.
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	if err := os.MkdirAll(filepath.Join(tmp, ".cursor", "chats", testWorkspace, testAgentID), 0o755); err != nil {
+		t.Fatalf("mkdir chats: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".cursor", "chats", testWorkspace, testAgentID, "store.db"), []byte("db"), 0o600); err != nil {
+		t.Fatalf("write db: %v", err)
+	}
+	nestedDir := filepath.Join(tmp, ".cursor", "projects", testSlug, "agent-transcripts", testAgentID)
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	nestedPath := filepath.Join(nestedDir, testAgentID+".jsonl")
+	if err := os.WriteFile(nestedPath, []byte(`{"role":"user"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write nested transcript: %v", err)
+	}
+
+	data, err := ExportChatArchive(context.Background(), testAgentID)
+	if err != nil {
+		t.Fatalf("ExportChatArchive: %v", err)
+	}
+	var got ChatArchive
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.TranscriptPath != nestedPath {
+		t.Errorf("TranscriptPath = %q, want %q", got.TranscriptPath, nestedPath)
+	}
+	if len(got.Transcript) != 1 {
+		t.Errorf("Transcript entries = %d, want 1", len(got.Transcript))
+	}
+}
+
 func TestExportChatArchive_ReadOnly_DoesNotMutateSource(t *testing.T) {
 	// Cannot t.Parallel: t.Setenv("HOME") conflicts with parallel execution.
 	tmp := t.TempDir()

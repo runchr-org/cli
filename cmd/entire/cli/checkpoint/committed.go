@@ -1726,6 +1726,16 @@ func (s *GitStore) copyMetadataDir(metadataDir, basePath string, entries map[str
 	return nil
 }
 
+// isOpaqueAgentArchive reports whether a tree path belongs to an agent-contributed
+// opaque archive. These wrap binary blobs (e.g. SQLite store.db) as base64 strings
+// inside JSON, so redaction's secret-pattern substitutions would corrupt them.
+// Kept here (rather than behind an interface) because the checkpoint package
+// otherwise has no reason to know about specific agent file formats; the list
+// stays short as long as agents prefer binary-friendly archive formats.
+func isOpaqueAgentArchive(treePath string) bool {
+	return strings.HasSuffix(treePath, ".cursor-chat.json")
+}
+
 // createRedactedBlobFromFile reads a file, applies secrets redaction, and creates a git blob.
 // JSONL files get JSONL-aware redaction; all other files get plain string redaction.
 func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string) (plumbing.Hash, filemode.FileMode, error) {
@@ -1746,8 +1756,11 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string)
 
 	// Skip redaction for binary files — they can't contain text secrets and
 	// running string replacement on them would corrupt the data.
+	// Also skip for opaque agent-contributed archives: they wrap binary blobs
+	// (e.g. SQLite files) as base64 inside JSON, so IsBinary would classify
+	// them as text, but redaction on the base64 substrings corrupts the data.
 	isBin, binErr := binary.IsBinary(bytes.NewReader(content))
-	if binErr != nil || isBin {
+	if binErr != nil || isBin || isOpaqueAgentArchive(treePath) {
 		hash, err := CreateBlobFromContent(repo, content)
 		if err != nil {
 			return plumbing.ZeroHash, 0, fmt.Errorf("failed to create blob: %w", err)

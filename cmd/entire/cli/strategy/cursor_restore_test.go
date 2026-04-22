@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,8 +129,16 @@ func TestRewind_RestoresCursorChatArchive(t *testing.T) {
 		t.Errorf("archive JSON should not have been restored to working tree, got %v", err)
 	}
 
-	// ~/.cursor: assert store.db + wal written at the expected location.
-	wantHash := cursor.WorkspaceHash(dir)
+	// Cursor itself resolves symlinks when computing the workspace hash/slug
+	// (e.g. on macOS /var/folders → /private/var/folders). Match that so test
+	// assertions align with what RestoreCheckpointFiles wrote.
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%s): %v", dir, err)
+	}
+
+	// ~/.cursor/chats: assert store.db + wal written at the expected md5-hashed dir.
+	wantHash := cursor.WorkspaceHash(resolvedDir)
 	dbPath := filepath.Join(home, ".cursor", "chats", wantHash, sessionID, "store.db")
 	got, err := os.ReadFile(dbPath)
 	if err != nil {
@@ -144,5 +153,16 @@ func TestRewind_RestoresCursorChatArchive(t *testing.T) {
 	}
 	if string(gotWAL) != string(originalWAL) {
 		t.Errorf("wal bytes mismatch")
+	}
+
+	// ~/.cursor/projects: assert transcript JSONL written at the slug/nested path.
+	wantSlug := cursor.WorkspaceSlug(resolvedDir)
+	txPath := filepath.Join(home, ".cursor", "projects", wantSlug, "agent-transcripts", sessionID, sessionID+".jsonl")
+	txBytes, err := os.ReadFile(txPath)
+	if err != nil {
+		t.Fatalf("expected transcript at %s: %v", txPath, err)
+	}
+	if !strings.Contains(string(txBytes), `"role":"user"`) {
+		t.Errorf("transcript content mismatch: got %q", txBytes)
 	}
 }

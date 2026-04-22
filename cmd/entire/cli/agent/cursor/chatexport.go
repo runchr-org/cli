@@ -76,9 +76,17 @@ func ExportChatArchive(_ context.Context, agentID string) ([]byte, error) {
 		return nil, fmt.Errorf("reading store.db-shm: %w", err)
 	}
 
-	transcriptPath, err := findOne(filepath.Join(projectsDir, "*", "agent-transcripts", agentID+".jsonl"))
+	// Cursor 2026.04+ writes transcripts under a nested <agent-id>/<agent-id>.jsonl
+	// layout. Older versions used a flat <agent-id>.jsonl. Probe nested first, then fall back.
+	transcriptPath, err := findOne(filepath.Join(projectsDir, "*", "agent-transcripts", agentID, agentID+".jsonl"))
 	if err != nil {
-		return nil, fmt.Errorf("searching for transcript: %w", err)
+		return nil, fmt.Errorf("searching for transcript (nested): %w", err)
+	}
+	if transcriptPath == "" {
+		transcriptPath, err = findOne(filepath.Join(projectsDir, "*", "agent-transcripts", agentID+".jsonl"))
+		if err != nil {
+			return nil, fmt.Errorf("searching for transcript (flat): %w", err)
+		}
 	}
 	if transcriptPath != "" {
 		archive.TranscriptPath = transcriptPath
