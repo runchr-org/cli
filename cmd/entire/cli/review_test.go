@@ -135,6 +135,7 @@ func TestRunReview_TrackOnlyWritesMarker(t *testing.T) {
 	testutil.GitAdd(t, tmp, "f.txt")
 	testutil.GitCommit(t, tmp, "init")
 	t.Chdir(tmp)
+	installHooksForTest(t, testAgentName)
 
 	// Seed config so first-run picker doesn't fire.
 	if err := saveReviewConfig(context.Background(), map[string][]string{
@@ -158,6 +159,44 @@ func TestRunReview_TrackOnlyWritesMarker(t *testing.T) {
 	}
 	if len(m.Skills) != 1 || m.Skills[0] != testReviewSkill {
 		t.Errorf("Skills = %v", m.Skills)
+	}
+}
+
+// Regression: running `entire review` when the configured agent has no hooks
+// installed must abort with a clear error instead of writing a marker no
+// hook will ever adopt. Covers both stale config (user edited settings.json
+// by hand) and post-disable state (user ran `entire disable` without
+// cleaning up review settings).
+func TestRunReview_MissingHooksAborts(t *testing.T) {
+	tmp := t.TempDir()
+	testutil.InitRepo(t, tmp)
+	testutil.WriteFile(t, tmp, "f.txt", "x")
+	testutil.GitAdd(t, tmp, "f.txt")
+	testutil.GitCommit(t, tmp, "init")
+	t.Chdir(tmp)
+
+	// No installHooksForTest — this is the point.
+	if err := saveReviewConfig(context.Background(), map[string][]string{
+		testAgentName: {testReviewSkill},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rootCmd := NewRootCmd()
+	errBuf := &bytes.Buffer{}
+	rootCmd.SetErr(errBuf)
+	rootCmd.SetArgs([]string{"review"})
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when hooks are not installed")
+	}
+	if !strings.Contains(errBuf.String(), "Hooks are not installed") {
+		t.Errorf("expected 'Hooks are not installed' in stderr, got: %s", errBuf.String())
+	}
+
+	// Marker must not leak — the gate runs before WritePendingReviewMarker.
+	if _, ok, readErr := ReadPendingReviewMarker(context.Background()); readErr != nil || ok {
+		t.Errorf("marker should not exist when hooks are missing: ok=%v err=%v", ok, readErr)
 	}
 }
 

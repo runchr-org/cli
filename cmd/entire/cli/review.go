@@ -195,7 +195,11 @@ func adoptPendingReviewMarkerInto(ctx context.Context, s session.State) (session
 func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string][]string, error) {
 	installed := GetAgentsWithHooksInstalled(ctx)
 	if len(installed) == 0 {
-		return nil, errors.New("no agents installed; run 'entire enable' first")
+		return nil, errors.New(
+			"no agents with hooks installed; " +
+				"run 'entire configure --agent <name>' to install hooks for one, " +
+				"or 'entire enable' to set up the repo",
+		)
 	}
 
 	// Narrow to agents that have a curated skills list; others need manual
@@ -354,6 +358,25 @@ func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool) error {
 	agentName, skills, err := selectReviewAgent(s.Review)
 	if err != nil {
 		return err
+	}
+
+	// 3.5. Verify hooks are installed for the selected agent. Without the
+	// agent's lifecycle hooks firing, UserPromptSubmit will never adopt the
+	// pending marker and the review metadata will never be recorded — a
+	// silent failure mode. Stale config (e.g. user ran `entire disable`
+	// without removing the agent from review settings) hits this same path.
+	installed := GetAgentsWithHooksInstalled(ctx)
+	installedSet := make(map[string]struct{}, len(installed))
+	for _, name := range installed {
+		installedSet[string(name)] = struct{}{}
+	}
+	if _, ok := installedSet[agentName]; !ok {
+		cmd.SilenceUsage = true
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"Hooks are not installed for %q. Run `entire configure --agent %s` first, "+
+				"or remove %q from review settings.\n",
+			agentName, agentName, agentName)
+		return NewSilentError(fmt.Errorf("hooks not installed for %s", agentName))
 	}
 
 	// 4. Re-run guard: check if HEAD's checkpoint already has a review.
