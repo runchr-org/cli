@@ -313,7 +313,13 @@ type WriteCommittedOptions struct {
 	Kind string
 
 	// ReviewSkills is the snapshot of skills used (only meaningful when Kind is a review kind).
+	// May be empty when a review is attached post-hoc without declared skills.
 	ReviewSkills []string
+
+	// ReviewPrompt is the actual text of the review request (composed prompt
+	// for spawn, first user prompt for attach). Only meaningful when Kind is
+	// a review kind.
+	ReviewPrompt string
 
 	// HasReview is set by the caller when this session should mark its
 	// checkpoint as reviewed. The caller computes this (e.g. via
@@ -489,7 +495,13 @@ type CommittedMetadata struct {
 	Kind string `json:"kind,omitempty"`
 
 	// ReviewSkills lists the review skills that were run (only set when Kind is a review kind).
+	// May be empty when a review was attached post-hoc without declared skills.
 	ReviewSkills []string `json:"review_skills,omitempty"`
+
+	// ReviewPrompt is the actual text of the review request (composed prompt
+	// for spawn, first user prompt for attach). Only set when Kind is a
+	// review kind.
+	ReviewPrompt string `json:"review_prompt,omitempty"`
 }
 
 // GetTranscriptStart returns the transcript line offset at which this checkpoint's data begins.

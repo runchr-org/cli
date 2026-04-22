@@ -106,8 +106,15 @@ type State struct {
 	Kind Kind `json:"kind,omitempty"`
 
 	// ReviewSkills is the snapshot of configured review skills at session start.
-	// Preserved so checkpoint metadata records which skills were run.
+	// Preserved so checkpoint metadata records which skills were run. May be
+	// empty when a review was attached post-hoc and skills were not declared;
+	// ReviewPrompt is the ground truth in that case.
 	ReviewSkills []string `json:"review_skills,omitempty"`
+
+	// ReviewPrompt is the actual text of the review request — the composed
+	// prompt sent to the agent (spawn path) or the session's first user
+	// prompt (attach path). Always populated when Kind is a review kind.
+	ReviewPrompt string `json:"review_prompt,omitempty"`
 
 	// TurnID is a unique identifier for the current agent turn.
 	// Lifecycle:

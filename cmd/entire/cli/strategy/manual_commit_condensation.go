@@ -252,6 +252,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		Summary:                     summary,
 		Kind:                        string(state.Kind),
 		ReviewSkills:                state.ReviewSkills,
+		ReviewPrompt:                state.ReviewPrompt,
 		HasReview:                   state.Kind.IsReview(),
 	}
 

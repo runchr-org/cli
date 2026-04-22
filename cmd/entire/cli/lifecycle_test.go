@@ -961,9 +961,11 @@ func TestAdoptPendingReviewMarker(t *testing.T) {
 	testutil.GitCommit(t, tmp, "init")
 	t.Chdir(tmp)
 
+	const reviewPrompt = "Please run these review skills in order:\n  1. /pr-review-toolkit:review-pr\n"
 	if err := WritePendingReviewMarker(context.Background(), PendingReviewMarker{
 		AgentName:   "claude-code",
 		Skills:      []string{"/pr-review-toolkit:review-pr"},
+		Prompt:      reviewPrompt,
 		StartingSHA: "abc",
 		StartedAt:   time.Now().UTC(),
 	}); err != nil {
@@ -986,6 +988,9 @@ func TestAdoptPendingReviewMarker(t *testing.T) {
 	}
 	if len(got.ReviewSkills) != 1 || got.ReviewSkills[0] != "/pr-review-toolkit:review-pr" {
 		t.Errorf("ReviewSkills = %v", got.ReviewSkills)
+	}
+	if got.ReviewPrompt != reviewPrompt {
+		t.Errorf("ReviewPrompt = %q, want %q", got.ReviewPrompt, reviewPrompt)
 	}
 
 	// Marker should be cleared after adoption.

@@ -50,6 +50,7 @@ func TestReviewMarker_RoundTrip(t *testing.T) {
 	m := PendingReviewMarker{
 		AgentName:   "claude-code",
 		Skills:      []string{testReviewSkill},
+		Prompt:      "Please run these review skills in order:\n  1. " + testReviewSkill + "\n",
 		StartingSHA: "deadbeef",
 		StartedAt:   time.Now().UTC(),
 	}
@@ -66,6 +67,9 @@ func TestReviewMarker_RoundTrip(t *testing.T) {
 	}
 	if got.AgentName != m.AgentName || got.StartingSHA != m.StartingSHA {
 		t.Errorf("roundtrip mismatch: %+v", got)
+	}
+	if got.Prompt != m.Prompt {
+		t.Errorf("Prompt roundtrip mismatch: got %q want %q", got.Prompt, m.Prompt)
 	}
 	if err := ClearPendingReviewMarker(ctx); err != nil {
 		t.Fatalf("clear: %v", err)

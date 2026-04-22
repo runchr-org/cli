@@ -45,8 +45,12 @@ const pendingReviewMarkerFilename = "review-pending.json"
 // blank WorktreePath (pre-fix markers) falls back to the legacy unscoped
 // behavior — any session can adopt.
 type PendingReviewMarker struct {
-	AgentName    string    `json:"agent_name"`
-	Skills       []string  `json:"skills"`
+	AgentName string   `json:"agent_name"`
+	Skills    []string `json:"skills"`
+	// Prompt is the composed review prompt the agent will receive.
+	// Stored on the marker (rather than recomputed on adoption) so session
+	// metadata records exactly what the agent was asked to do.
+	Prompt       string    `json:"prompt,omitempty"`
 	StartingSHA  string    `json:"starting_sha"`
 	StartedAt    time.Time `json:"started_at"`
 	WorktreePath string    `json:"worktree_path,omitempty"`
@@ -179,6 +183,7 @@ func adoptPendingReviewMarkerInto(ctx context.Context, s session.State) (session
 	}
 	s.Kind = session.KindAgentReview
 	s.ReviewSkills = m.Skills
+	s.ReviewPrompt = m.Prompt
 	if err := ClearPendingReviewMarker(ctx); err != nil {
 		// Tagging succeeded; leftover marker self-heals on next session start
 		// (since Kind is now set, the next turn will return modified=false
@@ -416,10 +421,15 @@ func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool, agentOve
 		return fmt.Errorf("resolve worktree root: %w", err)
 	}
 
-	// 6. Write pending marker (agent hook will adopt it).
+	// 6. Compose the review prompt once, then write the pending marker. The
+	// composed prompt is carried on the marker so adoption records exactly
+	// what the agent was asked to do (the same string passed to LaunchCmd
+	// below), rather than recomposing from skills on the hook side.
+	prompt := composeReviewPrompt(skills)
 	if err := WritePendingReviewMarker(ctx, PendingReviewMarker{
 		AgentName:    agentName,
 		Skills:       skills,
+		Prompt:       prompt,
 		StartingSHA:  headSHA,
 		StartedAt:    time.Now().UTC(),
 		WorktreePath: worktreeRoot,
@@ -469,7 +479,6 @@ func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool, agentOve
 	if scope, scopeErr := detectReviewScope(ctx); scopeErr == nil {
 		fmt.Fprintln(out, formatReviewScope(scope))
 	}
-	prompt := composeReviewPrompt(skills)
 	execCmd, err := launcher.LaunchCmd(ctx, prompt)
 	if err != nil {
 		return fmt.Errorf("launch %s: %w", agentName, err)
