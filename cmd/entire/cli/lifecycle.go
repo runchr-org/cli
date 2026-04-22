@@ -562,7 +562,10 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	// Let agent contribute custom files to the checkpoint metadata
 	if contributor, ok := ag.(agent.CheckpointContributor); ok {
 		if err := contributor.ContributeCheckpointFiles(ctx, sessionID, sessionDirAbs); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: agent checkpoint contribution failed: %v\n", err)
+			logging.Warn(logCtx, "agent checkpoint contribution failed",
+				slog.String("agent", agentType),
+				slog.String("session_id", sessionID),
+				slog.String("error", err.Error()))
 		}
 	}
 
