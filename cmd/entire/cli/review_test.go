@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -35,17 +36,30 @@ func installHooksForTest(t *testing.T, agentName types.AgentName) {
 }
 
 const (
-	testReviewSkill = "/pr-review-toolkit:review-pr"
-	testMainBranch  = "main"
+	testReviewSkill   = "/pr-review-toolkit:review-pr"
+	testMainBranch    = "main"
+	testCodexAgent    = "codex"
+	testExternalAgent = "my-external"
+	testExternalSkill = "/external-skill"
 )
 
-func TestReviewMarker_RoundTrip(t *testing.T) {
+// setupReviewTestRepoWithCommit initializes a temp git repo with a single
+// commit and chdirs into it. Returns the tmp dir. Use for tests that just
+// need "a git repo with at least one commit" — tests that care about
+// specific filenames or commit content should set up explicitly.
+func setupReviewTestRepoWithCommit(t *testing.T) string {
+	t.Helper()
 	tmp := t.TempDir()
 	testutil.InitRepo(t, tmp)
 	testutil.WriteFile(t, tmp, "f.txt", "x")
 	testutil.GitAdd(t, tmp, "f.txt")
 	testutil.GitCommit(t, tmp, "init")
 	t.Chdir(tmp)
+	return tmp
+}
+
+func TestReviewMarker_RoundTrip(t *testing.T) {
+	tmp := setupReviewTestRepoWithCommit(t)
 
 	m := PendingReviewMarker{
 		AgentName:   "claude-code",
@@ -71,6 +85,18 @@ func TestReviewMarker_RoundTrip(t *testing.T) {
 	if got.Prompt != m.Prompt {
 		t.Errorf("Prompt roundtrip mismatch: got %q want %q", got.Prompt, m.Prompt)
 	}
+
+	// Marker file must live under .git/entire-sessions/, not the worktree.
+	// Check before clearing so the file is actually present on disk.
+	markerGlob := filepath.Join(tmp, ".git", "entire-sessions", "*")
+	entries, err := filepath.Glob(markerGlob)
+	if err != nil {
+		t.Fatalf("glob sessions dir: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Errorf("no marker file found under %s — path resolution may have regressed", markerGlob)
+	}
+
 	if err := ClearPendingReviewMarker(ctx); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
@@ -81,14 +107,6 @@ func TestReviewMarker_RoundTrip(t *testing.T) {
 	if ok {
 		t.Error("expected marker absent after clear")
 	}
-
-	// Ensure the file lived under .git/entire-sessions/, not the worktree.
-	gitDir := filepath.Join(tmp, ".git")
-	entries, err := filepath.Glob(filepath.Join(gitDir, "entire-sessions", "*"))
-	if err != nil {
-		t.Fatalf("glob sessions dir: %v", err)
-	}
-	_ = entries // sanity check only
 }
 
 func TestReviewCmd_Help(t *testing.T) {
@@ -133,12 +151,7 @@ func TestSaveReviewConfig_PersistsSettings(t *testing.T) {
 
 func TestRunReview_TrackOnlyWritesMarker(t *testing.T) {
 	// t.Chdir + first-run picker — no t.Parallel.
-	tmp := t.TempDir()
-	testutil.InitRepo(t, tmp)
-	testutil.WriteFile(t, tmp, "f.txt", "x")
-	testutil.GitAdd(t, tmp, "f.txt")
-	testutil.GitCommit(t, tmp, "init")
-	t.Chdir(tmp)
+	setupReviewTestRepoWithCommit(t)
 	installHooksForTest(t, testAgentName)
 
 	// Seed config so first-run picker doesn't fire.
@@ -172,12 +185,7 @@ func TestRunReview_TrackOnlyWritesMarker(t *testing.T) {
 // by hand) and post-disable state (user ran `entire disable` without
 // cleaning up review settings).
 func TestRunReview_MissingHooksAborts(t *testing.T) {
-	tmp := t.TempDir()
-	testutil.InitRepo(t, tmp)
-	testutil.WriteFile(t, tmp, "f.txt", "x")
-	testutil.GitAdd(t, tmp, "f.txt")
-	testutil.GitCommit(t, tmp, "init")
-	t.Chdir(tmp)
+	setupReviewTestRepoWithCommit(t)
 
 	// No installHooksForTest — this is the point.
 	if err := saveReviewConfig(context.Background(), map[string][]string{
@@ -212,12 +220,7 @@ func TestRunReview_MissingHooksAborts(t *testing.T) {
 // Uses cursor because it has HookSupport but no Launcher, triggering the
 // !ok fallback.
 func TestRunReview_FallbackToTrackOnlyPreservesMarker(t *testing.T) {
-	tmp := t.TempDir()
-	testutil.InitRepo(t, tmp)
-	testutil.WriteFile(t, tmp, "f.txt", "x")
-	testutil.GitAdd(t, tmp, "f.txt")
-	testutil.GitCommit(t, tmp, "init")
-	t.Chdir(tmp)
+	setupReviewTestRepoWithCommit(t)
 
 	const nonLaunchableAgent = "cursor"
 	installHooksForTest(t, types.AgentName(nonLaunchableAgent))
@@ -276,18 +279,17 @@ func TestComposeReviewPrompt_NoFinishSkill(t *testing.T) {
 // silently.
 func TestSelectReviewAgent_OverrideResolvesSpecificAgent(t *testing.T) {
 	t.Parallel()
-	const codexAgent = "codex"
 	review := map[string][]string{
-		testAgentName: {"/a"},
-		codexAgent:    {"/b"},
+		testAgentName:  {"/a"},
+		testCodexAgent: {"/b"},
 	}
 
-	name, skills, err := selectReviewAgent(review, codexAgent)
+	name, skills, err := selectReviewAgent(review, testCodexAgent)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if name != codexAgent || len(skills) != 1 || skills[0] != "/b" {
-		t.Errorf("override=%s returned name=%q skills=%v", codexAgent, name, skills)
+	if name != testCodexAgent || len(skills) != 1 || skills[0] != "/b" {
+		t.Errorf("override=%s returned name=%q skills=%v", testCodexAgent, name, skills)
 	}
 
 	// Default (no override) must remain the alphabetically-first agent for
@@ -297,7 +299,7 @@ func TestSelectReviewAgent_OverrideResolvesSpecificAgent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if name != testAgentName {
-		t.Errorf("default pick = %q, want %s", name, testAgentName)
+		t.Errorf("default pick = %q, want %q", name, testAgentName)
 	}
 
 	// Unknown override must surface a helpful error listing the configured
@@ -306,7 +308,7 @@ func TestSelectReviewAgent_OverrideResolvesSpecificAgent(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unconfigured --agent value")
 	}
-	if !strings.Contains(err.Error(), testAgentName) || !strings.Contains(err.Error(), codexAgent) {
+	if !strings.Contains(err.Error(), testAgentName) || !strings.Contains(err.Error(), testCodexAgent) {
 		t.Errorf("error should list configured agents; got: %v", err)
 	}
 }
@@ -327,23 +329,23 @@ func TestMergePickerResults(t *testing.T) {
 		{
 			name: "preserves uncurated/external entries the picker did not surface",
 			existing: map[string][]string{
-				testAgentName: {"/old-pick"},
-				"my-external": {"/external-skill"},
+				testAgentName:     {"/old-pick"},
+				testExternalAgent: {testExternalSkill},
 			},
 			offered:  map[string]struct{}{testAgentName: {}},
 			selected: map[string][]string{testAgentName: {"/new-pick"}},
 			want: map[string][]string{
-				testAgentName: {"/new-pick"},
-				"my-external": {"/external-skill"}, // MUST survive
+				testAgentName:     {"/new-pick"},
+				testExternalAgent: {testExternalSkill}, // MUST survive
 			},
 		},
 		{
 			name: "offered agent with no picks is removed (user unconfiguring)",
 			existing: map[string][]string{
-				testAgentName: {"/old-pick"},
-				"codex":       {"/codex-pick"},
+				testAgentName:  {"/old-pick"},
+				testCodexAgent: {"/codex-pick"},
 			},
-			offered:  map[string]struct{}{testAgentName: {}, "codex": {}},
+			offered:  map[string]struct{}{testAgentName: {}, testCodexAgent: {}},
 			selected: map[string][]string{testAgentName: {"/new-pick"}},
 			want: map[string][]string{
 				testAgentName: {"/new-pick"},
@@ -362,13 +364,13 @@ func TestMergePickerResults(t *testing.T) {
 			// can save the "only external agent left" state.
 			name: "deselected curated agent leaves only external entry",
 			existing: map[string][]string{
-				testAgentName: {"/old-pick"},
-				"my-external": {"/external-skill"},
+				testAgentName:     {"/old-pick"},
+				testExternalAgent: {testExternalSkill},
 			},
 			offered:  map[string]struct{}{testAgentName: {}},
 			selected: map[string][]string{}, // user deselected everything offered
 			want: map[string][]string{
-				"my-external": {"/external-skill"},
+				testExternalAgent: {testExternalSkill},
 			},
 		},
 	}
@@ -376,18 +378,8 @@ func TestMergePickerResults(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := mergePickerResults(tc.existing, tc.offered, tc.selected)
-			if len(got) != len(tc.want) {
-				t.Fatalf("length mismatch: got %d entries, want %d: got=%v want=%v", len(got), len(tc.want), got, tc.want)
-			}
-			for k, v := range tc.want {
-				gv, ok := got[k]
-				if !ok {
-					t.Errorf("missing key %q", k)
-					continue
-				}
-				if len(gv) != len(v) || (len(v) > 0 && gv[0] != v[0]) {
-					t.Errorf("key %q: got %v, want %v", k, gv, v)
-				}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("mergePickerResults =\n  %v\nwant\n  %v", got, tc.want)
 			}
 		})
 	}
