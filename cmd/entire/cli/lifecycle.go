@@ -277,7 +277,7 @@ func handleLifecycleTurnStart(ctx context.Context, ag agent.Agent, event *agent.
 		logging.Warn(logCtx, "failed to load session state for review marker adoption",
 			slog.String("error", loadErr.Error()))
 	} else if state != nil {
-		if updated, modified, adoptErr := adoptPendingReviewMarkerInto(logCtx, *state); adoptErr != nil {
+		if updated, modified, adoptErr := adoptPendingReviewMarkerInto(logCtx, *state, ag.Name()); adoptErr != nil {
 			logging.Warn(logCtx, "failed to adopt pending review marker",
 				slog.String("error", adoptErr.Error()))
 		} else if modified {

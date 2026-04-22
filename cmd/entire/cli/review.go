@@ -157,13 +157,20 @@ func sameWorktreePath(a, b string) bool {
 // the marker is left in place and modified=false — adoption only happens on
 // first tag. The marker is cleared on successful first adoption.
 //
-// Worktree scoping: when the marker carries a WorktreePath, only a session
-// whose own WorktreePath matches will adopt it. This prevents a Claude
-// session in worktree A from racing to claim a marker that was meant for a
-// session `entire review` just launched in worktree B (both worktrees share
-// the same .git/entire-sessions/ directory where the marker lives).
-// Pre-fix markers with no WorktreePath fall back to unscoped adoption.
-func adoptPendingReviewMarkerInto(ctx context.Context, s session.State) (session.State, bool, error) {
+// Scoping rules — the marker is left untouched (not cleared) when any of
+// these don't match, so the correct session has a chance to claim it:
+//
+//   - WorktreePath: a Claude session in worktree A must not claim a marker
+//     meant for a session `entire review` spawned in worktree B. Both
+//     worktrees share the same .git/entire-sessions/ directory.
+//   - AgentName: a cursor session must not claim a marker that records a
+//     claude-code review — the review config and skills are agent-specific,
+//     and whichever session fires its UserPromptSubmit hook first would
+//     otherwise silently steal the wrong agent's review metadata.
+//
+// Pre-fix markers with empty WorktreePath/AgentName fall back to unscoped
+// adoption for each missing field (backwards compat).
+func adoptPendingReviewMarkerInto(ctx context.Context, s session.State, agentName types.AgentName) (session.State, bool, error) {
 	// Already tagged — don't re-apply on subsequent turns.
 	if s.Kind != "" {
 		return s, false, nil
@@ -179,6 +186,12 @@ func adoptPendingReviewMarkerInto(ctx context.Context, s session.State) (session
 		// Marker belongs to a different worktree — leave it for the session
 		// `entire review` actually spawned, which will reach its own hook
 		// and claim the marker.
+		return s, false, nil
+	}
+	if m.AgentName != "" && m.AgentName != string(agentName) {
+		// Marker was written for a different agent — leave it alone. The
+		// correct agent's session will reach its own hook and claim the
+		// marker.
 		return s, false, nil
 	}
 	s.Kind = session.KindAgentReview
