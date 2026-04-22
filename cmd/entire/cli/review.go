@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -376,12 +377,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool, agentOve
 	// pending marker and the review metadata will never be recorded — a
 	// silent failure mode. Stale config (e.g. user ran `entire disable`
 	// without removing the agent from review settings) hits this same path.
-	installed := GetAgentsWithHooksInstalled(ctx)
-	installedSet := make(map[string]struct{}, len(installed))
-	for _, name := range installed {
-		installedSet[string(name)] = struct{}{}
-	}
-	if _, ok := installedSet[agentName]; !ok {
+	if !slices.Contains(GetAgentsWithHooksInstalled(ctx), types.AgentName(agentName)) {
 		cmd.SilenceUsage = true
 		fmt.Fprintf(cmd.ErrOrStderr(),
 			"Hooks are not installed for %q. Run `entire configure --agent %s` first, "+
@@ -504,10 +500,8 @@ func selectReviewAgent(review map[string][]string, override string) (string, []s
 	}
 	sort.Strings(names)
 	if override != "" {
-		for _, name := range names {
-			if name == override {
-				return override, review[override], nil
-			}
+		if skills, ok := review[override]; ok && len(skills) > 0 {
+			return override, skills, nil
 		}
 		return "", nil, fmt.Errorf(
 			"agent %q is not configured for review; configured agents: %s",
