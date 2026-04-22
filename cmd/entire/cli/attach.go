@@ -212,6 +212,10 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	// Determine checkpoint ID: reuse from HEAD if one exists, otherwise generate new.
 	checkpointID, isExistingCheckpoint := resolveCheckpointID(headCommit)
 
+	// Refresh the metadata branch if HEAD already references a checkpoint.
+	// Returns a possibly-freshly-opened repo handle; see refreshForExistingCheckpoint.
+	repo = refreshForExistingCheckpoint(ctx, logCtx, repo, isExistingCheckpoint)
+
 	// Write directly to entire/checkpoints/v1.
 	store := cpkg.NewGitStore(repo)
 
@@ -219,7 +223,8 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	// check only fires when the session's state file records its
 	// checkpoint. A session already stored in the HEAD checkpoint but
 	// whose state is missing/stale (state file deleted, never written,
-	// condensed without LastCheckpointID update) would bypass that guard.
+	// condensed without LastCheckpointID update, or pulled from a remote
+	// that wasn't reflected locally) would bypass that guard.
 	// findSessionIndex matches by SessionID — without this check, a
 	// review-attach on such a session silently overwrites the existing
 	// session's metadata in the checkpoint.
@@ -348,6 +353,40 @@ func getHeadCommit(repo *git.Repository) (*object.Commit, error) {
 // If HEAD already has an Entire-Checkpoint trailer, reuses that ID (the session
 // gets added as an additional session in the existing checkpoint).
 // Otherwise generates a new ID.
+// refreshForExistingCheckpoint refreshes the entire/checkpoints/v1 branch
+// before reading or writing when HEAD already references a checkpoint.
+// Two concerns both require fresh state:
+//
+//  1. Conflict detection (review mode): a session already recorded in the
+//     checkpoint — locally OR on the remote — must not be silently
+//     overwritten. Without a fetch, a stale local branch makes the
+//     sessionID-dedup check miss remote-only entries.
+//  2. Correct append-as-next-session: findSessionIndex returns
+//     len(Sessions) when the sessionID isn't already present. With a stale
+//     local view, this returns a too-low index and collides with an
+//     existing remote-only session on push.
+//
+// Mirrors the fallback chain `entire resume` uses in getMetadataTree:
+// checkpoint-remote → treeless fetch → local → full fetch → remote-tracking
+// ref. Returns a freshly-opened repo handle (so go-git's packfile cache
+// sees any newly-fetched objects), or the original repo on fetch failure.
+func refreshForExistingCheckpoint(ctx, logCtx context.Context, repo *git.Repository, isExistingCheckpoint bool) *git.Repository {
+	if !isExistingCheckpoint {
+		return repo
+	}
+	_, freshRepo, fetchErr := getMetadataTree(ctx)
+	if fetchErr != nil {
+		// Non-fatal: proceed with local state. Guards downstream catch
+		// what's visible locally; on push the user may still hit a
+		// conflict. Better than blocking attach on a transient fetch
+		// failure.
+		logging.Warn(logCtx, "failed to refresh metadata branch before attach; proceeding with local state",
+			slog.String("error", fetchErr.Error()))
+		return repo
+	}
+	return freshRepo
+}
+
 func resolveCheckpointID(headCommit *object.Commit) (id.CheckpointID, bool) {
 	existing := trailers.ParseAllCheckpoints(headCommit.Message)
 	if len(existing) > 0 {
