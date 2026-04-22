@@ -425,6 +425,11 @@ type SessionContent struct {
 
 	// Prompts contains user prompts from this session
 	Prompts string
+
+	// ExtraFiles contains agent-contributed files stored alongside the standard
+	// metadata (e.g., ".cursor-chat.json" archives). Keys are relative paths
+	// within the session subdirectory; values are the raw file contents.
+	ExtraFiles map[string][]byte
 }
 
 // CommittedMetadata contains the metadata stored in metadata.json for each checkpoint.

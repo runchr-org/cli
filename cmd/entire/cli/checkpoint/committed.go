@@ -1013,11 +1013,50 @@ func (s *GitStore) ReadSessionContent(ctx context.Context, checkpointID id.Check
 		}
 	}
 
+	// Collect any agent-contributed extra files sitting alongside the standard
+	// session metadata (e.g., "<sessionID>.cursor-chat.json").
+	result.ExtraFiles = readExtraSessionFiles(sessionTree.InnerTree())
+
 	if len(result.Transcript) == 0 {
 		return nil, ErrNoTranscript
 	}
 
 	return result, nil
+}
+
+// standardSessionFiles are the framework-written files inside a session subtree.
+// Any other regular file at the session-subtree root is an agent-contributed extra.
+var standardSessionFiles = map[string]bool{
+	paths.MetadataFileName:          true,
+	paths.TranscriptFileName:        true,
+	paths.TranscriptFileNameLegacy:  true,
+	paths.CompactTranscriptFileName: true,
+	paths.V2RawTranscriptFileName:   true,
+	paths.PromptFileName:            true,
+	paths.ContentHashFileName:       true,
+}
+
+func readExtraSessionFiles(sessionTree *object.Tree) map[string][]byte {
+	extras := make(map[string][]byte)
+	_ = sessionTree.Files().ForEach(func(f *object.File) error { //nolint:errcheck // best-effort
+		// Session-subtree files are at the root (no '/'); subtrees like tasks/ are skipped.
+		if strings.Contains(f.Name, "/") {
+			return nil
+		}
+		if standardSessionFiles[f.Name] {
+			return nil
+		}
+		content, err := f.Contents()
+		if err != nil {
+			return nil //nolint:nilerr // best-effort: skip unreadable files
+		}
+		extras[f.Name] = []byte(content)
+		return nil
+	})
+	if len(extras) == 0 {
+		return nil
+	}
+	return extras
 }
 
 // ReadLatestSessionContent is a convenience method that reads the latest session's content.

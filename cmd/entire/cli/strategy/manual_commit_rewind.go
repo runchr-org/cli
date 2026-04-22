@@ -451,6 +451,12 @@ func (s *ManualCommitStrategy) Rewind(ctx context.Context, w, errW io.Writer, po
 		return fmt.Errorf("failed to iterate tree files: %w", err)
 	}
 
+	// Restore agent-contributed files (e.g., Cursor chat archives) to their
+	// native storage locations. Inverse of CheckpointContributor.
+	if hasSessionTrailer {
+		restoreAgentCheckpointFiles(ctx, errW, tree, sessionID)
+	}
+
 	fmt.Fprintln(w)
 	if len(point.ID) >= 7 {
 		fmt.Fprintf(w, "Restored files from shadow commit %s\n", point.ID[:7])
@@ -460,6 +466,48 @@ func (s *ManualCommitStrategy) Rewind(ctx context.Context, w, errW io.Writer, po
 	fmt.Fprintln(w)
 
 	return nil
+}
+
+// restoreAgentCheckpointFiles extracts agent-contributed files from the
+// checkpoint tree and hands them to the agent's CheckpointRestorer (if any).
+// Best-effort: errors are logged but do not fail the rewind.
+func restoreAgentCheckpointFiles(ctx context.Context, errW io.Writer, tree *object.Tree, sessionID string) {
+	ag, err := agentForSession(ctx, sessionID)
+	if err != nil || ag == nil {
+		return
+	}
+	metadataDir := paths.SessionMetadataDirFromSessionID(sessionID)
+	extras := extractExtraFilesFromTree(tree, metadataDir)
+	runCheckpointRestorer(ctx, errW, ag, sessionID, extras)
+}
+
+// runCheckpointRestorer invokes a CheckpointRestorer if the agent implements it
+// and there is anything to restore. Errors are non-fatal.
+func runCheckpointRestorer(ctx context.Context, errW io.Writer, ag agent.Agent, sessionID string, files map[string][]byte) {
+	if len(files) == 0 {
+		return
+	}
+	restorer, ok := ag.(agent.CheckpointRestorer)
+	if !ok {
+		return
+	}
+	if err := restorer.RestoreCheckpointFiles(ctx, sessionID, files); err != nil {
+		fmt.Fprintf(errW, "[entire] Warning: agent checkpoint restore failed: %v\n", err)
+	}
+}
+
+// agentForSession resolves the agent registered for a session by loading its
+// state and looking up the agent type in the registry. Returns (nil, nil)
+// when the session has no recorded agent or no state exists.
+func agentForSession(ctx context.Context, sessionID string) (agent.Agent, error) {
+	state, err := LoadSessionState(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load session state: %w", err)
+	}
+	if state == nil || state.AgentType == "" {
+		return nil, nil //nolint:nilnil // "no agent resolvable" is the happy no-op
+	}
+	return ResolveAgentForRewind(state.AgentType)
 }
 
 // resetShadowBranchToCheckpoint resets the shadow branch HEAD to the given checkpoint.
@@ -789,6 +837,10 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 			}
 			return nil, fmt.Errorf("failed to write session: %w", writeErr)
 		}
+
+		// Hand any agent-contributed extras (e.g., Cursor chat archives) back
+		// to the agent for restoration to native storage. Best-effort.
+		runCheckpointRestorer(ctx, errW, sessionAgent, sessionID, content.ExtraFiles)
 
 		restored = append(restored, RestoredSession{
 			SessionID: sessionID,

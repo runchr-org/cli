@@ -279,6 +279,22 @@ type CheckpointContributor interface {
 	ContributeCheckpointFiles(ctx context.Context, sessionID string, metadataDir string) error
 }
 
+// CheckpointRestorer is the inverse of CheckpointContributor. Agents implement
+// it to restore previously-contributed files during rewind/resume to their
+// native storage locations (e.g., ~/.cursor/chats/... for Cursor).
+//
+// Called after the working-directory files have been restored from the
+// checkpoint tree. The files map keys are the relative paths originally
+// written under metadataDir during ContributeCheckpointFiles; values are
+// the bytes extracted from the checkpoint tree.
+//
+// Errors are non-fatal (logged as warnings, rewind/resume still completes).
+type CheckpointRestorer interface {
+	Agent
+
+	RestoreCheckpointFiles(ctx context.Context, sessionID string, files map[string][]byte) error
+}
+
 // SubagentAwareExtractor provides methods for extracting files and tokens including subagents.
 // Agents that support spawning subagents (like Claude Code's Task tool) should implement this
 // to ensure subagent contributions are included in checkpoints.

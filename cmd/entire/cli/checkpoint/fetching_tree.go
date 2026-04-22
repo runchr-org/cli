@@ -38,6 +38,13 @@ type FetchingTree struct {
 	fetch  BlobFetchFunc
 }
 
+// InnerTree exposes the underlying *object.Tree for callers that need raw
+// iteration (e.g., Files().ForEach). Blob fetching is bypassed when reading
+// via the returned tree — use File() for lazy-fetch semantics.
+func (t *FetchingTree) InnerTree() *object.Tree {
+	return t.inner
+}
+
 // NewFetchingTree wraps a git tree with on-demand blob fetching.
 // The storer is used to check if blobs exist locally, and fetch is called
 // to download any that are missing. If fetch is nil, File() behaves
