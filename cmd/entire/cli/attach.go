@@ -35,10 +35,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// attachOptions carries optional flags for runAttach. Force is the original
+// flag; ReviewSkills/ReviewPrompt opt the attach into recording the session
+// as an agent_review in the checkpoint metadata.
+type attachOptions struct {
+	Force bool
+	// ReviewSkills, when non-nil, tags the attached session as a review and
+	// records the skill list in checkpoint metadata. nil = not a review attach.
+	ReviewSkills []string
+}
+
 func newAttachCmd() *cobra.Command {
 	var (
-		force     bool
-		agentFlag string
+		force      bool
+		agentFlag  string
+		reviewFlag bool
+		skillsFlag []string
 	)
 	cmd := &cobra.Command{
 		Use:   "attach <session-id>",
@@ -51,6 +63,10 @@ the session started, or to attach a research session.
 
 If the last commit already has a checkpoint, the session is added to it.
 Otherwise a new checkpoint is created.
+
+Use --review to tag the attached session as an agent review. The skills
+list defaults to whatever is configured under review.<agent> in
+.entire/settings.json; pass --skills to override.
 
 Works with any registered agent, including external agents enabled via
 external_agents in settings. Run 'entire configure' to see the full list.`,
@@ -65,15 +81,50 @@ external_agents in settings. Run 'entire configure' to see the full list.`,
 			// and so auto-detection can find transcripts from external agents.
 			external.DiscoverAndRegister(cmd.Context())
 			agentName := types.AgentName(agentFlag)
-			return runAttach(cmd.Context(), cmd.OutOrStdout(), args[0], agentName, force)
+			opts := attachOptions{Force: force}
+			if reviewFlag {
+				skills, err := resolveReviewSkills(cmd.Context(), agentName, skillsFlag)
+				if err != nil {
+					cmd.SilenceUsage = true
+					fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
+					return NewSilentError(err)
+				}
+				opts.ReviewSkills = skills
+			}
+			return runAttach(cmd.Context(), cmd.OutOrStdout(), args[0], agentName, opts)
 		},
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation and amend the last commit with the checkpoint trailer")
 	cmd.Flags().StringVarP(&agentFlag, "agent", "a", string(agent.DefaultAgentName), "Agent that created the session (see 'entire configure' for registered agents, including external)")
+	cmd.Flags().BoolVar(&reviewFlag, "review", false, "Tag the attached session as an agent review")
+	cmd.Flags().StringSliceVar(&skillsFlag, "skills", nil, "Review skills that were run (default: configured skills for the agent). Only used with --review")
 	return cmd
 }
 
-func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName types.AgentName, force bool) error {
+// resolveReviewSkills returns the skills list to record on an attach-as-review.
+// If flagSkills is non-empty, it wins. Otherwise the configured review skills
+// for the agent are used; if none are configured, returns an error pointing
+// the user at `entire review --edit`.
+func resolveReviewSkills(ctx context.Context, agentName types.AgentName, flagSkills []string) ([]string, error) {
+	if len(flagSkills) > 0 {
+		return flagSkills, nil
+	}
+	s, err := settings.Load(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load settings: %w", err)
+	}
+	if s != nil {
+		if skills := s.ReviewSkillsFor(string(agentName)); len(skills) > 0 {
+			return skills, nil
+		}
+	}
+	return nil, fmt.Errorf(
+		"no review skills configured for agent %q and --skills not provided; run `entire review --edit`",
+		agentName,
+	)
+}
+
+func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName types.AgentName, opts attachOptions) error {
 	// Initialize structured logger so logging.Warn/Info write to .entire/logs/ not stderr.
 	if err := logging.Init(ctx, sessionID); err != nil {
 		// Init failed — logging will use stderr fallback, non-fatal.
@@ -100,9 +151,20 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 
 	// If session already has a checkpoint, just offer to link it.
 	if existingState != nil && !existingState.LastCheckpointID.IsEmpty() {
+		// Review-upgrade isn't supported yet: the existing checkpoint's
+		// metadata tree would need to be rewritten with Kind/ReviewSkills/
+		// ReviewPrompt set, and a new commit pushed onto entire/checkpoints/v1.
+		// Error out with a concrete message rather than silently linking the
+		// checkpoint without the review metadata.
+		if opts.ReviewSkills != nil {
+			return fmt.Errorf(
+				"session %s already has checkpoint %s; rewriting an existing checkpoint as a review is not supported yet",
+				sessionID, existingState.LastCheckpointID.String(),
+			)
+		}
 		cpID := existingState.LastCheckpointID.String()
 		fmt.Fprintf(w, "Session %s already has checkpoint %s\n", sessionID, cpID)
-		if err := promptAmendCommit(logCtx, w, headCommit, cpID, force); err != nil {
+		if err := promptAmendCommit(logCtx, w, headCommit, cpID, opts.Force); err != nil {
 			logging.Warn(logCtx, "failed to amend commit", "error", err)
 			fmt.Fprintf(w, "\nCopy to your commit message to attach:\n\n  Entire-Checkpoint: %s\n", cpID)
 		}
@@ -169,6 +231,12 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 		Model:        meta.Model,
 		TokenUsage:   tokenUsage,
 	}
+	if opts.ReviewSkills != nil {
+		writeOpts.Kind = string(session.KindAgentReview)
+		writeOpts.ReviewSkills = opts.ReviewSkills
+		writeOpts.ReviewPrompt = meta.FirstPrompt
+		writeOpts.HasReview = true
+	}
 
 	if compacted := compactTranscriptForStartLine(logCtx, redactedTranscript.Bytes(), cpkg.CommittedMetadata{
 		CheckpointID: checkpointID,
@@ -196,7 +264,7 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	}
 
 	// Create or update session state.
-	if err := saveAttachSessionState(logCtx, existingState, sessionID, ag.Type(), transcriptPath, checkpointID, meta, tokenUsage); err != nil {
+	if err := saveAttachSessionState(logCtx, existingState, sessionID, ag.Type(), transcriptPath, checkpointID, meta, tokenUsage, opts); err != nil {
 		logging.Warn(logCtx, "failed to save session state", "error", err)
 	}
 
@@ -208,7 +276,7 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 
 	fmt.Fprintf(w, "  Created checkpoint %s\n", checkpointID)
 	cpIDStr := checkpointID.String()
-	if err := promptAmendCommit(logCtx, w, headCommit, cpIDStr, force); err != nil {
+	if err := promptAmendCommit(logCtx, w, headCommit, cpIDStr, opts.Force); err != nil {
 		logging.Warn(logCtx, "failed to amend commit", "error", err)
 		fmt.Fprintf(w, "\nCopy to your commit message to attach:\n\n  Entire-Checkpoint: %s\n", cpIDStr)
 	}
@@ -265,7 +333,7 @@ func resolveCheckpointID(headCommit *object.Commit) (id.CheckpointID, bool) {
 
 // saveAttachSessionState creates or updates the session state file for the attached session.
 // If existingState is non-nil, it is updated in place (avoids a redundant disk load).
-func saveAttachSessionState(ctx context.Context, existingState *session.State, sessionID string, agentType types.AgentType, transcriptPath string, checkpointID id.CheckpointID, meta transcriptMetadata, tokenUsage *agent.TokenUsage) error {
+func saveAttachSessionState(ctx context.Context, existingState *session.State, sessionID string, agentType types.AgentType, transcriptPath string, checkpointID id.CheckpointID, meta transcriptMetadata, tokenUsage *agent.TokenUsage, opts attachOptions) error {
 	stateStore, err := session.NewStateStore(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open session store: %w", err)
@@ -298,6 +366,11 @@ func saveAttachSessionState(ctx context.Context, existingState *session.State, s
 	}
 	if tokenUsage != nil {
 		state.TokenUsage = tokenUsage
+	}
+	if opts.ReviewSkills != nil {
+		state.Kind = session.KindAgentReview
+		state.ReviewSkills = opts.ReviewSkills
+		state.ReviewPrompt = meta.FirstPrompt
 	}
 
 	if err := stateStore.Save(ctx, state); err != nil {

@@ -320,7 +320,11 @@ Flags:
   --track-only   write the pending marker without spawning the agent (you
                  start the agent manually; its hook adopts the marker)
   --agent NAME   select a specific configured agent when more than one is
-                 configured (default: alphabetically first)`,
+                 configured (default: alphabetically first)
+
+Subcommands:
+  attach <id>    tag an existing session as a review (equivalent to
+                 'entire attach --review <id>')`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			if edit {
@@ -333,6 +337,56 @@ Flags:
 	cmd.Flags().BoolVar(&edit, "edit", false, "re-open the review config picker")
 	cmd.Flags().BoolVar(&trackOnly, "track-only", false, "write pending marker without spawning agent")
 	cmd.Flags().StringVar(&agentOverride, "agent", "", "select a specific configured agent (default: alphabetically first)")
+	cmd.AddCommand(newReviewAttachCmd())
+	return cmd
+}
+
+// newReviewAttachCmd is a thin wrapper around `entire attach --review`. It
+// shares all wiring with runAttach; only the UX surface differs, letting
+// users discover review-attach through `entire review` in help output.
+func newReviewAttachCmd() *cobra.Command {
+	var (
+		force      bool
+		agentFlag  string
+		skillsFlag []string
+	)
+	cmd := &cobra.Command{
+		Use:   "attach <session-id>",
+		Short: "Tag an existing agent session as a review",
+		Long: `Tag an existing agent session as an agent_review and link it to
+the current commit's checkpoint. Use this when you ran a review manually
+(without 'entire review') and want the review metadata attached after
+the fact.
+
+The skills list defaults to whatever is configured under review.<agent>
+in .entire/settings.json; pass --skills to override.
+
+Equivalent to 'entire attach --review <session-id>' — provided here for
+discoverability alongside the other review subcommands.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return cmd.Help()
+			}
+			if checkDisabledGuard(cmd.Context(), cmd.OutOrStdout()) {
+				return nil
+			}
+			ctx := cmd.Context()
+			agentName := types.AgentName(agentFlag)
+			skills, err := resolveReviewSkills(ctx, agentName, skillsFlag)
+			if err != nil {
+				cmd.SilenceUsage = true
+				fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
+				return NewSilentError(err)
+			}
+			return runAttach(ctx, cmd.OutOrStdout(), args[0], agentName, attachOptions{
+				Force:        force,
+				ReviewSkills: skills,
+			})
+		},
+	}
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation and amend the last commit with the checkpoint trailer")
+	cmd.Flags().StringVarP(&agentFlag, "agent", "a", string(agent.DefaultAgentName), "Agent that created the session")
+	cmd.Flags().StringSliceVar(&skillsFlag, "skills", nil, "Review skills that were run (default: configured skills for the agent)")
 	return cmd
 }
 
