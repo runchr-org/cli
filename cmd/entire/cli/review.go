@@ -278,7 +278,7 @@ func confirmFirstRunSetup(out io.Writer) bool {
 // .entire/settings.json. Previously-saved skills are pre-checked via
 // huh.Option.Selected(true), mirroring how `entire enable` preserves prior
 // selections in its own agent picker.
-func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string][]string, error) {
+func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string]settings.ReviewConfig, error) {
 	installed := GetAgentsWithHooksInstalled(ctx)
 	if len(installed) == 0 {
 		return nil, errors.New(
@@ -313,12 +313,12 @@ func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string][]str
 		)
 	}
 
-	// Load existing config so we can pre-check saved skills. A load error
-	// here means the settings file is malformed; log at Warn so users
-	// debugging "my saved skills aren't pre-checked" can see why, but keep
-	// going with an empty prefill — runReview already surfaces the same
-	// error distinctly when it's the first load.
-	existing := map[string][]string{}
+	// Load existing config so we can pre-check saved skills and seed saved
+	// prompts. A load error here means the settings file is malformed; log
+	// at Warn so users debugging "my saved skills aren't pre-checked" can
+	// see why, but keep going with an empty prefill — runReview already
+	// surfaces the same error distinctly when it's the first load.
+	existing := map[string]settings.ReviewConfig{}
 	if s, err := settings.Load(ctx); err != nil {
 		logging.Warn(ctx, "settings.Load failed when pre-filling picker", slog.String("error", err.Error()))
 	} else if s != nil {
@@ -332,15 +332,15 @@ func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string][]str
 	for _, c := range configurable {
 		labels = append(labels, string(c.ag.Type()))
 	}
-	fmt.Fprintf(out, "Configuring review skills for %d agent(s): %s\n", len(configurable), strings.Join(labels, ", "))
+	fmt.Fprintf(out, "Configuring review for %d agent(s): %s\n", len(configurable), strings.Join(labels, ", "))
 	fmt.Fprintln(out, "(Previously-saved skills are pre-checked. Space to toggle, enter to confirm.)")
 	fmt.Fprintln(out)
 
-	selected := map[string][]string{}
+	selected := map[string]settings.ReviewConfig{}
 	for i, c := range configurable {
 		curated := curatedReviewSkills[string(c.name)]
 		savedSet := map[string]struct{}{}
-		for _, s := range existing[string(c.name)] {
+		for _, s := range existing[string(c.name)].Skills {
 			savedSet[s] = struct{}{}
 		}
 
@@ -356,19 +356,35 @@ func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string][]str
 		// huh populates picks from Option.Selected(true) — do NOT pre-seed,
 		// matching the convention used in detectOrSelectAgent (setup.go).
 		var picks []string
+		// Seed prompt input with the previously-saved value so users can
+		// tweak it without retyping.
+		prompt := existing[string(c.name)].Prompt
+
 		title := fmt.Sprintf("[%d/%d] Review skills for %s", i+1, len(configurable), c.ag.Type())
-		form := NewAccessibleForm(huh.NewGroup(
-			huh.NewMultiSelect[string]().
-				Title(title).
-				Description(fmt.Sprintf("Agent: %s", c.ag.Type())).
-				Options(options...).
-				Value(&picks),
-		))
+		form := NewAccessibleForm(
+			huh.NewGroup(
+				huh.NewMultiSelect[string]().
+					Title(title).
+					Description(fmt.Sprintf("Agent: %s", c.ag.Type())).
+					Options(options...).
+					Value(&picks),
+			),
+			huh.NewGroup(
+				huh.NewText().
+					Title("Additional instructions (optional)").
+					Description("Used verbatim as the review prompt when set. Leave blank to use the default 'run these skills in order' template.").
+					Value(&prompt),
+			),
+		)
 		if err := form.Run(); err != nil {
 			return nil, fmt.Errorf("picker for %s: %w", c.name, err)
 		}
-		if len(picks) > 0 {
-			selected[string(c.name)] = picks
+		cfg := settings.ReviewConfig{
+			Skills: picks,
+			Prompt: strings.TrimSpace(prompt),
+		}
+		if !cfg.IsZero() {
+			selected[string(c.name)] = cfg
 		}
 	}
 	// Merge the picker's output with existing entries the picker could not
@@ -385,10 +401,10 @@ func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string][]str
 	// The emptiness check runs on `merged`, not `selected`: a user
 	// deliberately deselecting all curated agents while keeping existing
 	// external-agent entries is a valid outcome that must be saveable. Only
-	// refuse if the final config would be empty — i.e., no picks AND no
-	// pre-existing entries to preserve.
+	// refuse if the final config would be empty — i.e., no picks/prompt
+	// AND no pre-existing entries to preserve.
 	if len(merged) == 0 {
-		return nil, errors.New("no review skills selected")
+		return nil, errors.New("no review skills or prompt configured")
 	}
 
 	if err := saveReviewConfig(ctx, merged); err != nil {
@@ -400,21 +416,21 @@ func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string][]str
 
 // mergePickerResults combines the picker's output with existing review
 // config entries that the picker did not surface. Agents in `offered` are
-// fully controlled by the picker: if they appear in `selected` with picks
-// the entry is set, otherwise the entry is removed. Agents not in `offered`
-// keep their existing skills untouched.
+// fully controlled by the picker: if they appear in `selected` with a
+// non-zero config the entry is set, otherwise the entry is removed.
+// Agents not in `offered` keep their existing config untouched.
 //
-// Exported via lowercase helper for testability — the picker itself can't
-// be driven headless.
-func mergePickerResults(existing map[string][]string, offered map[string]struct{}, selected map[string][]string) map[string][]string {
-	merged := make(map[string][]string, len(existing)+len(selected))
-	for name, skills := range existing {
+// Exposed as a helper so tests can drive it directly — the picker itself
+// can't run headless.
+func mergePickerResults(existing map[string]settings.ReviewConfig, offered map[string]struct{}, selected map[string]settings.ReviewConfig) map[string]settings.ReviewConfig {
+	merged := make(map[string]settings.ReviewConfig, len(existing)+len(selected))
+	for name, cfg := range existing {
 		if _, wasOffered := offered[name]; !wasOffered {
-			merged[name] = skills
+			merged[name] = cfg
 		}
 	}
-	for name, skills := range selected {
-		merged[name] = skills
+	for name, cfg := range selected {
+		merged[name] = cfg
 	}
 	return merged
 }
@@ -542,7 +558,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string) er
 	}
 
 	// 3. Pick agent.
-	agentName, skills, err := selectReviewAgent(s.Review, agentOverride)
+	agentName, cfg, err := selectReviewAgent(s.Review, agentOverride)
 	if err != nil {
 		cmd.SilenceUsage = true
 		fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
@@ -596,11 +612,13 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string) er
 	// 6. Compose the review prompt once, then write the pending marker. The
 	// composed prompt is carried on the marker so adoption records exactly
 	// what the agent was asked to do (the same string passed to LaunchCmd
-	// below), rather than recomposing from skills on the hook side.
-	prompt := composeReviewPrompt(skills)
+	// below), rather than recomposing on the hook side. When the user has
+	// configured a custom Prompt, it wins verbatim; otherwise Skills are
+	// composed into the default "run these in order" template.
+	prompt := composeReviewPrompt(cfg)
 	if err := WritePendingReviewMarker(ctx, PendingReviewMarker{
 		AgentName:    agentName,
-		Skills:       skills,
+		Skills:       cfg.Skills,
 		Prompt:       prompt,
 		StartingSHA:  headSHA,
 		StartedAt:    time.Now().UTC(),
@@ -618,7 +636,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string) er
 	launcher, ok := agent.LauncherFor(types.AgentName(agentName))
 	if !ok {
 		fmt.Fprintf(out, "%s does not support subprocess launch yet. Marker written.\n", agentName)
-		fmt.Fprintf(out, "Start %s manually and run: %s\n", agentName, strings.Join(skills, ", "))
+		fmt.Fprintf(out, "Start %s manually and use this prompt:\n\n%s\n", agentName, prompt)
 		return nil
 	}
 
@@ -655,28 +673,28 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string) er
 
 // selectReviewAgent picks an agent from the configured review map.
 //
-// If override is non-empty, returns the skills for that agent or an error
+// If override is non-empty, returns the config for that agent or an error
 // listing the configured alternatives. Otherwise returns the alphabetically
 // first configured agent — deterministic but user-overridable via --agent.
-func selectReviewAgent(review map[string][]string, override string) (string, []string, error) {
+func selectReviewAgent(review map[string]settings.ReviewConfig, override string) (string, settings.ReviewConfig, error) {
 	if len(review) == 0 {
-		return "", nil, errors.New("no review skills configured")
+		return "", settings.ReviewConfig{}, errors.New("no review config found")
 	}
 	var names []string
-	for name, skills := range review {
-		if len(skills) > 0 {
+	for name, cfg := range review {
+		if !cfg.IsZero() {
 			names = append(names, name)
 		}
 	}
 	if len(names) == 0 {
-		return "", nil, errors.New("no review skills configured")
+		return "", settings.ReviewConfig{}, errors.New("no review config found")
 	}
 	sort.Strings(names)
 	if override != "" {
-		if skills, ok := review[override]; ok && len(skills) > 0 {
-			return override, skills, nil
+		if cfg, ok := review[override]; ok && !cfg.IsZero() {
+			return override, cfg, nil
 		}
-		return "", nil, fmt.Errorf(
+		return "", settings.ReviewConfig{}, fmt.Errorf(
 			"agent %q is not configured for review; configured agents: %s",
 			override, strings.Join(names, ", "),
 		)
@@ -685,11 +703,21 @@ func selectReviewAgent(review map[string][]string, override string) (string, []s
 	return pick, review[pick], nil
 }
 
-// composeReviewPrompt builds the initial prompt the agent receives.
-func composeReviewPrompt(skills []string) string {
+// composeReviewPrompt builds the prompt sent to the agent from a
+// ReviewConfig. If the config carries an explicit Prompt it wins
+// verbatim — the user's words are the source of truth. Otherwise the
+// skills list is composed into the default "run these in order"
+// template. Empty config returns "" (caller should avoid that case).
+func composeReviewPrompt(cfg settings.ReviewConfig) string {
+	if cfg.Prompt != "" {
+		return cfg.Prompt
+	}
+	if len(cfg.Skills) == 0 {
+		return ""
+	}
 	var sb strings.Builder
 	sb.WriteString("Please run these review skills in order:\n")
-	for i, skill := range skills {
+	for i, skill := range cfg.Skills {
 		fmt.Fprintf(&sb, "  %d. %s\n", i+1, skill)
 	}
 	return sb.String()
@@ -887,7 +915,7 @@ func headHasReviewCheckpoint(ctx context.Context) (bool, string) {
 // malformed — we must NOT silently overwrite it with an empty struct, or
 // every unrelated setting the user had configured would be wiped. Return the
 // error so the caller can surface it instead.
-func saveReviewConfig(ctx context.Context, review map[string][]string) error {
+func saveReviewConfig(ctx context.Context, review map[string]settings.ReviewConfig) error {
 	s, err := settings.Load(ctx)
 	if err != nil {
 		return fmt.Errorf("load settings before save: %w", err)

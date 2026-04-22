@@ -20,6 +20,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
 	"github.com/go-git/go-git/v6"
@@ -776,8 +777,8 @@ func TestAttachCmd_ReviewDoesNotInferSkillsFromConfig(t *testing.T) {
 `)
 
 	// Seed review config — the spawn-path default. Attach must ignore this.
-	if err := saveReviewConfig(context.Background(), map[string][]string{
-		"claude-code": {"/pr-review-toolkit:review-pr"},
+	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		"claude-code": {Skills: []string{"/pr-review-toolkit:review-pr"}},
 	}); err != nil {
 		t.Fatal(err)
 	}

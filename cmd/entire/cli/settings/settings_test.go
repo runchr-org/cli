@@ -979,31 +979,67 @@ func TestEntireSettings_ReviewRoundTrip(t *testing.T) {
 	raw := []byte(`{
       "enabled": true,
       "review": {
-        "claude-code": ["/pr-review-toolkit:review-pr", "/test-auditor"],
-        "codex": ["/codex:adversarial-review"]
+        "claude-code": {
+          "skills": ["/pr-review-toolkit:review-pr", "/test-auditor"],
+          "prompt": "Focus on security regressions."
+        },
+        "codex": {
+          "skills": ["/codex:adversarial-review"]
+        }
       }
     }`)
 	var s EntireSettings
 	if err := json.Unmarshal(raw, &s); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got := s.Review["claude-code"]; len(got) != 2 || got[0] != "/pr-review-toolkit:review-pr" {
-		t.Fatalf("unexpected claude skills: %v", got)
+	claude := s.Review["claude-code"]
+	if len(claude.Skills) != 2 || claude.Skills[0] != "/pr-review-toolkit:review-pr" {
+		t.Fatalf("unexpected claude skills: %v", claude.Skills)
 	}
-	if got := s.Review["codex"]; len(got) != 1 {
-		t.Fatalf("unexpected codex skills: %v", got)
+	if claude.Prompt != "Focus on security regressions." {
+		t.Fatalf("unexpected claude prompt: %q", claude.Prompt)
+	}
+	codex := s.Review["codex"]
+	if len(codex.Skills) != 1 {
+		t.Fatalf("unexpected codex skills: %v", codex.Skills)
+	}
+	if codex.Prompt != "" {
+		t.Fatalf("expected empty prompt for codex, got %q", codex.Prompt)
 	}
 }
 
-func TestEntireSettings_ReviewSkillsFor(t *testing.T) {
+func TestEntireSettings_ReviewConfigFor(t *testing.T) {
 	t.Parallel()
-	s := &EntireSettings{Review: map[string][]string{
-		"claude-code": {"/pr-review-toolkit:review-pr"},
+	s := &EntireSettings{Review: map[string]ReviewConfig{
+		"claude-code": {Skills: []string{"/pr-review-toolkit:review-pr"}},
 	}}
-	if got := s.ReviewSkillsFor("claude-code"); len(got) != 1 {
-		t.Fatalf("expected 1 skill, got %v", got)
+	if cfg := s.ReviewConfigFor("claude-code"); len(cfg.Skills) != 1 {
+		t.Fatalf("expected 1 skill, got %v", cfg.Skills)
 	}
-	if got := s.ReviewSkillsFor("codex"); len(got) != 0 {
-		t.Fatalf("expected 0 skills for unconfigured agent, got %v", got)
+	if cfg := s.ReviewConfigFor("codex"); !cfg.IsZero() {
+		t.Fatalf("expected zero config for unconfigured agent, got %+v", cfg)
+	}
+}
+
+func TestReviewConfig_IsZero(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		cfg  ReviewConfig
+		want bool
+	}{
+		{"empty", ReviewConfig{}, true},
+		{"skills-only", ReviewConfig{Skills: []string{"/x"}}, false},
+		{"prompt-only", ReviewConfig{Prompt: "hello"}, false},
+		{"both", ReviewConfig{Skills: []string{"/x"}, Prompt: "y"}, false},
+		{"empty-slice", ReviewConfig{Skills: []string{}}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.cfg.IsZero(); got != tc.want {
+				t.Errorf("IsZero() = %v, want %v (cfg=%+v)", got, tc.want, tc.cfg)
+			}
+		})
 	}
 }

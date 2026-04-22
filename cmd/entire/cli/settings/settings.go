@@ -69,10 +69,9 @@ type EntireSettings struct {
 	// Redaction configures PII redaction behavior for transcripts and metadata.
 	Redaction *RedactionSettings `json:"redaction,omitempty"`
 
-	// Review maps agent name (e.g. "claude-code") to the list of review
-	// skills/commands that `entire review` should run for that agent.
-	// When empty, `entire review` triggers the first-run picker.
-	Review map[string][]string `json:"review,omitempty"`
+	// Review maps agent name (e.g. "claude-code") to the review config for
+	// that agent. When empty, `entire review` triggers the first-run picker.
+	Review map[string]ReviewConfig `json:"review,omitempty"`
 
 	// CommitLinking controls how commits are linked to agent sessions.
 	// "always" = auto-link without prompting, "prompt" = ask on each commit.
@@ -188,12 +187,41 @@ func (s *EntireSettings) SummaryTimeoutValue() time.Duration {
 	return time.Duration(s.SummaryTimeoutSeconds) * time.Second
 }
 
-// ReviewSkillsFor returns the configured review skills for the given agent.
-// Returns nil when the agent has no configuration; callers should treat
-// this as "not yet configured."
-func (s *EntireSettings) ReviewSkillsFor(agentName string) []string {
+// ReviewConfig holds the per-agent review configuration. Both fields are
+// optional; together they describe what `entire review` should ask the
+// agent to do.
+//
+// Precedence when composing the review prompt sent to the agent:
+//   - If Prompt is non-empty, it is used verbatim.
+//   - Otherwise, Skills are composed into a default template
+//     ("Please run these review skills in order: 1. /X 2. /Y").
+//
+// Skills are always recorded on the checkpoint metadata regardless of
+// which path composed the prompt — they're the structured, queryable
+// tag alongside ReviewPrompt (which is the ground truth).
+type ReviewConfig struct {
+	// Skills is the list of slash-prefixed skill invocations configured
+	// for this agent. May be empty when Prompt carries the full request.
+	Skills []string `json:"skills,omitempty"`
+
+	// Prompt, when non-empty, is used verbatim as the review prompt
+	// instead of the skills-composed template. Lets users include
+	// context (e.g. "focus on security issues, then run /X").
+	Prompt string `json:"prompt,omitempty"`
+}
+
+// IsZero reports whether the config is effectively unset.
+func (c ReviewConfig) IsZero() bool {
+	return len(c.Skills) == 0 && c.Prompt == ""
+}
+
+// ReviewConfigFor returns the configured review config for the given agent.
+// Returns a zero-value config when the agent has no entry; callers should
+// check IsZero (or the individual fields) to decide whether configuration
+// is present.
+func (s *EntireSettings) ReviewConfigFor(agentName string) ReviewConfig {
 	if s == nil {
-		return nil
+		return ReviewConfig{}
 	}
 	return s.Review[agentName]
 }

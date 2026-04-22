@@ -130,8 +130,8 @@ func TestSaveReviewConfig_PersistsSettings(t *testing.T) {
 	testutil.InitRepo(t, tmp)
 	t.Chdir(tmp)
 
-	err := saveReviewConfig(context.Background(), map[string][]string{
-		"claude-code": {testReviewSkill, "/test-auditor"},
+	err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		"claude-code": {Skills: []string{testReviewSkill, "/test-auditor"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -141,11 +141,12 @@ func TestSaveReviewConfig_PersistsSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load settings: %v", err)
 	}
-	if len(s.Review["claude-code"]) != 2 {
-		t.Errorf("expected 2 skills saved, got %v", s.Review)
+	cfg := s.Review["claude-code"]
+	if len(cfg.Skills) != 2 {
+		t.Errorf("expected 2 skills saved, got %v", cfg.Skills)
 	}
-	if s.Review["claude-code"][0] != testReviewSkill {
-		t.Errorf("first skill = %q", s.Review["claude-code"][0])
+	if cfg.Skills[0] != testReviewSkill {
+		t.Errorf("first skill = %q", cfg.Skills[0])
 	}
 }
 
@@ -158,8 +159,8 @@ func TestRunReview_MissingHooksAborts(t *testing.T) {
 	setupReviewTestRepoWithCommit(t)
 
 	// No installHooksForTest — this is the point.
-	if err := saveReviewConfig(context.Background(), map[string][]string{
-		testAgentName: {testReviewSkill},
+	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		testAgentName: {Skills: []string{testReviewSkill}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -203,8 +204,8 @@ func TestRunReview_NonLaunchableAgentPreservesMarker(t *testing.T) {
 		t.Skipf("%s now implements Launcher; pick another non-launchable agent for this regression test", nonLaunchableAgent)
 	}
 
-	if err := saveReviewConfig(context.Background(), map[string][]string{
-		nonLaunchableAgent: {testReviewSkill},
+	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		nonLaunchableAgent: {Skills: []string{testReviewSkill}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -234,9 +235,11 @@ func TestRunReview_NonLaunchableAgentPreservesMarker(t *testing.T) {
 	}
 }
 
-func TestComposeReviewPrompt_NoFinishSkill(t *testing.T) {
+func TestComposeReviewPrompt_SkillsOnly(t *testing.T) {
 	t.Parallel()
-	prompt := composeReviewPrompt([]string{"/review-pr", "/test-auditor"})
+	prompt := composeReviewPrompt(settings.ReviewConfig{
+		Skills: []string{"/review-pr", "/test-auditor"},
+	})
 	if strings.Contains(prompt, "entire-review:finish") {
 		t.Errorf("prompt should not reference finish skill; got: %s", prompt)
 	}
@@ -245,22 +248,45 @@ func TestComposeReviewPrompt_NoFinishSkill(t *testing.T) {
 	}
 }
 
+// Custom Prompt wins verbatim over skills — the user's words are the
+// source of truth for what the agent receives.
+func TestComposeReviewPrompt_CustomPromptWinsOverSkills(t *testing.T) {
+	t.Parallel()
+	custom := "Focus on security regressions this week."
+	prompt := composeReviewPrompt(settings.ReviewConfig{
+		Skills: []string{"/review-pr"},
+		Prompt: custom,
+	})
+	if prompt != custom {
+		t.Errorf("composeReviewPrompt = %q, want verbatim custom prompt %q", prompt, custom)
+	}
+}
+
+// Empty config returns an empty string — callers should avoid invoking
+// the spawn path with empty config.
+func TestComposeReviewPrompt_EmptyConfigReturnsEmpty(t *testing.T) {
+	t.Parallel()
+	if got := composeReviewPrompt(settings.ReviewConfig{}); got != "" {
+		t.Errorf("empty config = %q, want empty", got)
+	}
+}
+
 // --agent flag resolves a non-default configured agent when the map has
 // multiple entries. Previously the alphabetically-first agent always won
 // silently.
 func TestSelectReviewAgent_OverrideResolvesSpecificAgent(t *testing.T) {
 	t.Parallel()
-	review := map[string][]string{
-		testAgentName:  {"/a"},
-		testCodexAgent: {"/b"},
+	review := map[string]settings.ReviewConfig{
+		testAgentName:  {Skills: []string{"/a"}},
+		testCodexAgent: {Skills: []string{"/b"}},
 	}
 
-	name, skills, err := selectReviewAgent(review, testCodexAgent)
+	name, cfg, err := selectReviewAgent(review, testCodexAgent)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if name != testCodexAgent || len(skills) != 1 || skills[0] != "/b" {
-		t.Errorf("override=%s returned name=%q skills=%v", testCodexAgent, name, skills)
+	if name != testCodexAgent || len(cfg.Skills) != 1 || cfg.Skills[0] != "/b" {
+		t.Errorf("override=%s returned name=%q cfg=%+v", testCodexAgent, name, cfg)
 	}
 
 	// Default (no override) must remain the alphabetically-first agent for
@@ -292,56 +318,69 @@ func TestMergePickerResults(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
-		existing map[string][]string
+		existing map[string]settings.ReviewConfig
 		offered  map[string]struct{}
-		selected map[string][]string
-		want     map[string][]string
+		selected map[string]settings.ReviewConfig
+		want     map[string]settings.ReviewConfig
 	}{
 		{
 			name: "preserves uncurated/external entries the picker did not surface",
-			existing: map[string][]string{
-				testAgentName:     {"/old-pick"},
-				testExternalAgent: {testExternalSkill},
+			existing: map[string]settings.ReviewConfig{
+				testAgentName:     {Skills: []string{"/old-pick"}},
+				testExternalAgent: {Skills: []string{testExternalSkill}},
 			},
 			offered:  map[string]struct{}{testAgentName: {}},
-			selected: map[string][]string{testAgentName: {"/new-pick"}},
-			want: map[string][]string{
-				testAgentName:     {"/new-pick"},
-				testExternalAgent: {testExternalSkill}, // MUST survive
+			selected: map[string]settings.ReviewConfig{testAgentName: {Skills: []string{"/new-pick"}}},
+			want: map[string]settings.ReviewConfig{
+				testAgentName:     {Skills: []string{"/new-pick"}},
+				testExternalAgent: {Skills: []string{testExternalSkill}}, // MUST survive
 			},
 		},
 		{
 			name: "offered agent with no picks is removed (user unconfiguring)",
-			existing: map[string][]string{
-				testAgentName:  {"/old-pick"},
-				testCodexAgent: {"/codex-pick"},
+			existing: map[string]settings.ReviewConfig{
+				testAgentName:  {Skills: []string{"/old-pick"}},
+				testCodexAgent: {Skills: []string{"/codex-pick"}},
 			},
 			offered:  map[string]struct{}{testAgentName: {}, testCodexAgent: {}},
-			selected: map[string][]string{testAgentName: {"/new-pick"}},
-			want: map[string][]string{
-				testAgentName: {"/new-pick"},
+			selected: map[string]settings.ReviewConfig{testAgentName: {Skills: []string{"/new-pick"}}},
+			want: map[string]settings.ReviewConfig{
+				testAgentName: {Skills: []string{"/new-pick"}},
 			},
 		},
 		{
 			name:     "empty existing: merge is identity on selected",
-			existing: map[string][]string{},
+			existing: map[string]settings.ReviewConfig{},
 			offered:  map[string]struct{}{testAgentName: {}},
-			selected: map[string][]string{testAgentName: {"/a"}},
-			want:     map[string][]string{testAgentName: {"/a"}},
+			selected: map[string]settings.ReviewConfig{testAgentName: {Skills: []string{"/a"}}},
+			want:     map[string]settings.ReviewConfig{testAgentName: {Skills: []string{"/a"}}},
 		},
 		{
 			// Regression: deselecting all curated agents while external
 			// config remains must yield a non-empty merged map, so --edit
 			// can save the "only external agent left" state.
 			name: "deselected curated agent leaves only external entry",
-			existing: map[string][]string{
-				testAgentName:     {"/old-pick"},
-				testExternalAgent: {testExternalSkill},
+			existing: map[string]settings.ReviewConfig{
+				testAgentName:     {Skills: []string{"/old-pick"}},
+				testExternalAgent: {Skills: []string{testExternalSkill}},
 			},
 			offered:  map[string]struct{}{testAgentName: {}},
-			selected: map[string][]string{}, // user deselected everything offered
-			want: map[string][]string{
-				testExternalAgent: {testExternalSkill},
+			selected: map[string]settings.ReviewConfig{}, // user deselected everything offered
+			want: map[string]settings.ReviewConfig{
+				testExternalAgent: {Skills: []string{testExternalSkill}},
+			},
+		},
+		{
+			// A custom prompt without skills is a valid, non-zero entry.
+			// Users can configure a freeform review with no skills list.
+			name:     "prompt-only entry is preserved",
+			existing: map[string]settings.ReviewConfig{},
+			offered:  map[string]struct{}{testAgentName: {}},
+			selected: map[string]settings.ReviewConfig{
+				testAgentName: {Prompt: "Focus on security regressions."},
+			},
+			want: map[string]settings.ReviewConfig{
+				testAgentName: {Prompt: "Focus on security regressions."},
 			},
 		},
 	}
@@ -582,8 +621,8 @@ func TestSaveReviewConfig_ReturnsErrorOnMalformedSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = saveReviewConfig(context.Background(), map[string][]string{
-		testAgentName: {testReviewSkill},
+	err = saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		testAgentName: {Skills: []string{testReviewSkill}},
 	})
 	if err == nil {
 		t.Fatal("expected saveReviewConfig to error on malformed settings; returned nil (data-loss bug)")
