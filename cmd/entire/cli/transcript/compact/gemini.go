@@ -56,7 +56,7 @@ type geminiMessage struct {
 	Timestamp string           `json:"timestamp"`
 	Type      string           `json:"type"`
 	Content   json.RawMessage  `json:"content"`
-	Thoughts  []geminiThought   `json:"thoughts"`
+	Thoughts  []geminiThought  `json:"thoughts"`
 	ToolCalls []geminiToolCall `json:"toolCalls"`
 	Tokens    *geminiTokens    `json:"tokens"`
 }
