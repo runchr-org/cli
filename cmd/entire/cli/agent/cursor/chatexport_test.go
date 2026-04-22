@@ -2,14 +2,11 @@ package cursor
 
 import (
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
-
-	_ "modernc.org/sqlite"
 )
 
 const (
@@ -19,22 +16,34 @@ const (
 )
 
 type seed struct {
-	meta       map[string]string
-	blobs      map[string][]byte
+	db         []byte
+	wal        []byte // optional
+	shm        []byte // optional
 	transcript []string
 }
 
-// seedCursorTree materializes a fake ~/.cursor tree under home and returns the db path.
-// Callers point HOME at this tree via t.Setenv.
-func seedCursorTree(t *testing.T, home string, s seed) (dbPath string) {
+// seedCursorTree writes a fake ~/.cursor tree under home and returns the db path.
+// Production code treats store.db as an opaque blob, so any bytes work.
+func seedCursorTree(t *testing.T, home string, s seed) string {
 	t.Helper()
-
 	dbDir := filepath.Join(home, ".cursor", "chats", testWorkspace, testAgentID)
 	if err := os.MkdirAll(dbDir, 0o755); err != nil {
 		t.Fatalf("mkdir chats: %v", err)
 	}
-	dbPath = filepath.Join(dbDir, "store.db")
-	writeFixtureDB(t, dbPath, s.meta, s.blobs)
+	dbPath := filepath.Join(dbDir, "store.db")
+	if err := os.WriteFile(dbPath, s.db, 0o600); err != nil {
+		t.Fatalf("write db: %v", err)
+	}
+	if s.wal != nil {
+		if err := os.WriteFile(dbPath+"-wal", s.wal, 0o600); err != nil {
+			t.Fatalf("write wal: %v", err)
+		}
+	}
+	if s.shm != nil {
+		if err := os.WriteFile(dbPath+"-shm", s.shm, 0o600); err != nil {
+			t.Fatalf("write shm: %v", err)
+		}
+	}
 
 	if s.transcript != nil {
 		txDir := filepath.Join(home, ".cursor", "projects", testSlug, "agent-transcripts")
@@ -56,30 +65,13 @@ func seedCursorTree(t *testing.T, home string, s seed) (dbPath string) {
 	return dbPath
 }
 
-func writeFixtureDB(t *testing.T, path string, meta map[string]string, blobs map[string][]byte) {
+func decodeB64(t *testing.T, s string) []byte {
 	t.Helper()
-	db, err := sql.Open("sqlite", path)
+	data, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
-		t.Fatalf("open fixture db: %v", err)
+		t.Fatalf("base64 decode: %v", err)
 	}
-	defer db.Close()
-	ctx := context.Background()
-	if _, err := db.ExecContext(ctx, "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)"); err != nil {
-		t.Fatalf("create meta: %v", err)
-	}
-	if _, err := db.ExecContext(ctx, "CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)"); err != nil {
-		t.Fatalf("create blobs: %v", err)
-	}
-	for k, v := range meta {
-		if _, err := db.ExecContext(ctx, "INSERT INTO meta (key, value) VALUES (?, ?)", k, v); err != nil {
-			t.Fatalf("insert meta: %v", err)
-		}
-	}
-	for id, data := range blobs {
-		if _, err := db.ExecContext(ctx, "INSERT INTO blobs (id, data) VALUES (?, ?)", id, data); err != nil {
-			t.Fatalf("insert blob: %v", err)
-		}
-	}
+	return data
 }
 
 func TestExportChatArchive_Roundtrip(t *testing.T) {
@@ -88,8 +80,8 @@ func TestExportChatArchive_Roundtrip(t *testing.T) {
 	t.Setenv("HOME", tmp)
 
 	s := seed{
-		meta:  map[string]string{"version": "1", "model": "gpt-5"},
-		blobs: map[string][]byte{"b1": []byte("hello"), "b2": {0x00, 0xff, 0x42}},
+		db:  []byte("SQLite format 3\x00\x01\x02\x03not really a db"),
+		wal: []byte("wal sidecar bytes"),
 		transcript: []string{
 			`{"role":"user","content":"hi"}`,
 			`{"role":"assistant","content":"hey"}`,
@@ -101,103 +93,91 @@ func TestExportChatArchive_Roundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExportChatArchive: %v", err)
 	}
-
 	var got ChatArchive
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unmarshal archive: %v", err)
 	}
 
 	if got.Format != "cursor-chat-export" {
-		t.Fatalf("format = %q, want cursor-chat-export", got.Format)
+		t.Fatalf("format = %q", got.Format)
 	}
-	if got.Version != 1 {
-		t.Fatalf("version = %d, want 1", got.Version)
+	if got.Version != 2 {
+		t.Fatalf("version = %d, want 2", got.Version)
 	}
 	if got.AgentID != testAgentID {
-		t.Fatalf("agentId mismatch: %q", got.AgentID)
+		t.Fatalf("agentId = %q", got.AgentID)
 	}
-	if len(got.Store.Meta) != len(s.meta) {
-		t.Fatalf("meta len = %d, want %d", len(got.Store.Meta), len(s.meta))
+	if gotDB := decodeB64(t, got.DBBytes); string(gotDB) != string(s.db) {
+		t.Errorf("db roundtrip mismatch: got %q, want %q", gotDB, s.db)
 	}
-	for k, want := range s.meta {
-		if got.Store.Meta[k] != want {
-			t.Errorf("meta[%q] = %q, want %q", k, got.Store.Meta[k], want)
-		}
+	if gotWAL := decodeB64(t, got.DBWALBytes); string(gotWAL) != string(s.wal) {
+		t.Errorf("wal roundtrip mismatch")
 	}
-	for id, want := range s.blobs {
-		b64, ok := got.Store.Blobs[id]
-		if !ok {
-			t.Errorf("blob %q missing", id)
-			continue
-		}
-		decoded, err := base64.StdEncoding.DecodeString(b64)
-		if err != nil {
-			t.Errorf("blob %q base64: %v", id, err)
-			continue
-		}
-		if string(decoded) != string(want) {
-			t.Errorf("blob %q = %x, want %x", id, decoded, want)
-		}
+	if got.DBSHMBytes != "" {
+		t.Errorf("expected no SHM in archive, got %q", got.DBSHMBytes)
 	}
 	if len(got.Transcript) != len(s.transcript) {
 		t.Fatalf("transcript entries = %d, want %d", len(got.Transcript), len(s.transcript))
 	}
 }
 
-func TestExportChatArchive_ReadOnly_WithWALSidecar(t *testing.T) {
+func TestExportChatArchive_ReadOnly_DoesNotMutateSource(t *testing.T) {
 	// Cannot t.Parallel: t.Setenv("HOME") conflicts with parallel execution.
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
 	s := seed{
-		meta:  map[string]string{"k": "v"},
-		blobs: map[string][]byte{"b": []byte("x")},
+		db:  []byte("db"),
+		wal: []byte("wal"),
+		shm: []byte("shm"),
 	}
 	dbPath := seedCursorTree(t, tmp, s)
 
-	// Simulate Cursor holding the DB open with WAL — create empty sidecar files.
-	for _, ext := range []string{"-wal", "-shm"} {
-		if err := os.WriteFile(dbPath+ext, []byte{}, 0o600); err != nil {
-			t.Fatalf("seed %s: %v", ext, err)
-		}
-	}
-
-	before, err := os.Stat(dbPath)
-	if err != nil {
-		t.Fatalf("stat before: %v", err)
-	}
+	before := statAll(t, dbPath)
 
 	if _, err := ExportChatArchive(context.Background(), testAgentID); err != nil {
 		t.Fatalf("ExportChatArchive: %v", err)
 	}
 
-	after, err := os.Stat(dbPath)
-	if err != nil {
-		t.Fatalf("stat after: %v", err)
-	}
-	if before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
-		t.Errorf("export mutated the source DB: size %d->%d, mtime %v->%v",
-			before.Size(), after.Size(), before.ModTime(), after.ModTime())
+	after := statAll(t, dbPath)
+
+	for k, b := range before {
+		a := after[k]
+		if !b.ModTime().Equal(a.ModTime()) {
+			t.Errorf("%s modtime changed", k)
+		}
+		if b.Size() != a.Size() {
+			t.Errorf("%s size changed: %d -> %d", k, b.Size(), a.Size())
+		}
 	}
 }
 
-func TestExportChatArchive_ReadOnlyOnReadOnlyFile(t *testing.T) {
+// statAll stats store.db plus its -wal and -shm sidecars.
+// Any file that does not exist is omitted from the returned map.
+func statAll(t *testing.T, dbPath string) map[string]os.FileInfo {
+	t.Helper()
+	out := map[string]os.FileInfo{}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		info, err := os.Stat(dbPath + suffix)
+		if err != nil {
+			continue
+		}
+		out["store.db"+suffix] = info
+	}
+	return out
+}
+
+func TestExportChatArchive_ReadOnlyFile(t *testing.T) {
 	// Cannot t.Parallel: t.Setenv("HOME") conflicts with parallel execution.
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	s := seed{
-		meta:  map[string]string{"k": "v"},
-		blobs: map[string][]byte{"b": []byte("x")},
-	}
+	s := seed{db: []byte("db")}
 	dbPath := seedCursorTree(t, tmp, s)
 
-	// Make the DB file read-only (0o400). A read-write open performs an
-	// implicit WAL checkpoint/write which would fail here.
 	if err := os.Chmod(dbPath, 0o400); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	// Also make parent directory read-only so WAL sidecar creation would fail.
 	parent := filepath.Dir(dbPath)
 	if err := os.Chmod(parent, 0o500); err != nil {
 		t.Fatalf("chmod parent: %v", err)
@@ -218,12 +198,7 @@ func TestExportChatArchive_NoTranscript(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	s := seed{
-		meta:  map[string]string{"k": "v"},
-		blobs: map[string][]byte{"b": []byte("x")},
-		// no transcript
-	}
-	seedCursorTree(t, tmp, s)
+	seedCursorTree(t, tmp, seed{db: []byte("db")})
 
 	data, err := ExportChatArchive(context.Background(), testAgentID)
 	if err != nil {
@@ -245,10 +220,9 @@ func TestExportChatArchive_MissingDB(t *testing.T) {
 	// Cannot t.Parallel: t.Setenv("HOME") conflicts with parallel execution.
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	// no seeding — no ~/.cursor/chats exists
 
 	_, err := ExportChatArchive(context.Background(), testAgentID)
 	if err == nil {
-		t.Fatal("expected error when no store.db exists, got nil")
+		t.Fatal("expected error when no store.db exists")
 	}
 }

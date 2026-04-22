@@ -46,7 +46,8 @@ func runCursorExport(cmd *cobra.Command, agentID, outputPath string) error {
 	}
 
 	fmt.Fprintf(w, "Found database: %s\n", archive.DBPath)
-	fmt.Fprintf(w, "Exported %d meta rows, %d blobs\n", len(archive.Store.Meta), len(archive.Store.Blobs))
+	fmt.Fprintf(w, "Exported store.db (WAL=%t, SHM=%t)\n",
+		archive.DBWALBytes != "", archive.DBSHMBytes != "")
 	if archive.TranscriptPath != "" {
 		fmt.Fprintf(w, "Found transcript: %s\n", archive.TranscriptPath)
 		fmt.Fprintf(w, "Exported %d transcript entries\n", len(archive.Transcript))

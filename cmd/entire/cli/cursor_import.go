@@ -1,9 +1,7 @@
 package cli
 
 import (
-	"context"
-	"crypto/md5" //nolint:gosec // MD5 used to match Cursor's directory naming, not for security
-	"database/sql"
+	"crypto/md5" //nolint:gosec // MD5 matches Cursor's directory naming, not security
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -47,9 +45,8 @@ By default, the workspace hash is computed as MD5 of the current directory
 
 func runCursorImport(cmd *cobra.Command, archivePath, workspaceHash, projectSlug string, force bool) error {
 	w := cmd.OutOrStdout()
-	ctx := cmd.Context()
 
-	data, err := os.ReadFile(archivePath) //nolint:gosec // archivePath is a CLI argument, not user-controlled web input
+	data, err := os.ReadFile(archivePath) //nolint:gosec // archivePath is a CLI argument
 	if err != nil {
 		return fmt.Errorf("reading archive: %w", err)
 	}
@@ -58,9 +55,11 @@ func runCursorImport(cmd *cobra.Command, archivePath, workspaceHash, projectSlug
 	if err := json.Unmarshal(data, &archive); err != nil {
 		return fmt.Errorf("parsing archive: %w", err)
 	}
-
 	if archive.Format != "cursor-chat-export" {
 		return fmt.Errorf("not a valid cursor-chat-export file (format: %q)", archive.Format)
+	}
+	if archive.Version != 2 {
+		return fmt.Errorf("unsupported archive version %d (want 2)", archive.Version)
 	}
 
 	agentID := archive.AgentID
@@ -70,14 +69,12 @@ func runCursorImport(cmd *cobra.Command, archivePath, workspaceHash, projectSlug
 	if err != nil {
 		return fmt.Errorf("getting home directory: %w", err)
 	}
-
 	cursorDir := filepath.Join(homeDir, ".cursor")
 	chatsDir := filepath.Join(cursorDir, "chats")
 	projectsDir := filepath.Join(cursorDir, "projects")
 
-	// Determine workspace hash: MD5 of current directory (Cursor's convention)
 	if workspaceHash == "" {
-		cwd, err := os.Getwd() //nolint:forbidigo // need actual cwd for Cursor's MD5(project_path) hash, not git root
+		cwd, err := os.Getwd() //nolint:forbidigo // Cursor hashes MD5(project_path), not git root
 		if err != nil {
 			return fmt.Errorf("getting current directory: %w", err)
 		}
@@ -85,37 +82,31 @@ func runCursorImport(cmd *cobra.Command, archivePath, workspaceHash, projectSlug
 		fmt.Fprintf(w, "Workspace hash: %s (from %s)\n", workspaceHash, cwd)
 	}
 
-	// Import store.db
 	dbTarget := filepath.Join(chatsDir, workspaceHash, agentID, "store.db")
 	fmt.Fprintf(w, "Target database: %s\n", dbTarget)
-
 	if fileExists(dbTarget) && !force {
 		return fmt.Errorf("%s already exists; use --force to overwrite", dbTarget)
 	}
-
-	if err := importCursorDB(ctx, archive.Store, dbTarget, force); err != nil {
+	if err := writeArchiveDBFiles(archive, dbTarget); err != nil {
 		return fmt.Errorf("importing database: %w", err)
 	}
-	fmt.Fprintf(w, "Imported %d meta rows, %d blobs\n", len(archive.Store.Meta), len(archive.Store.Blobs))
+	fmt.Fprintf(w, "Imported store.db (+WAL=%t, +SHM=%t)\n",
+		archive.DBWALBytes != "", archive.DBSHMBytes != "")
 
-	// Import transcript if present
 	if len(archive.Transcript) > 0 {
 		slug := projectSlug
 		if slug == "" {
-			cwd, err := os.Getwd() //nolint:forbidigo // need actual cwd for Cursor's MD5(project_path) hash, not git root
+			cwd, err := os.Getwd() //nolint:forbidigo // Cursor's project slug convention
 			if err != nil {
 				return fmt.Errorf("getting current directory: %w", err)
 			}
 			slug = cursorWorkspaceHash(cwd)
 		}
-
 		transcriptTarget := filepath.Join(projectsDir, slug, "agent-transcripts", agentID+".jsonl")
 		fmt.Fprintf(w, "Target transcript: %s\n", transcriptTarget)
-
 		if fileExists(transcriptTarget) && !force {
 			return fmt.Errorf("%s already exists; use --force to overwrite", transcriptTarget)
 		}
-
 		if err := importCursorTranscript(archive.Transcript, transcriptTarget); err != nil {
 			return fmt.Errorf("importing transcript: %w", err)
 		}
@@ -131,63 +122,44 @@ func runCursorImport(cmd *cobra.Command, archivePath, workspaceHash, projectSlug
 // cursorWorkspaceHash computes the workspace hash Cursor uses for directory naming.
 // Cursor stores per-project data under MD5(absolute_project_path).
 func cursorWorkspaceHash(projectPath string) string {
-	sum := md5.Sum([]byte(projectPath)) //nolint:gosec // matching Cursor's convention, not used for security
+	sum := md5.Sum([]byte(projectPath)) //nolint:gosec // matching Cursor's convention
 	return hex.EncodeToString(sum[:])
 }
 
-func importCursorDB(ctx context.Context, store cursor.StoreData, targetPath string, force bool) error {
+// writeArchiveDBFiles decodes the base64-encoded DB blobs from the archive and
+// writes them alongside each other (main + optional WAL + optional SHM).
+func writeArchiveDBFiles(archive cursor.ChatArchive, targetPath string) error {
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o750); err != nil {
 		return fmt.Errorf("creating directory: %w", err)
 	}
-
-	if force {
-		// Remove existing DB and WAL/SHM files (errors ignored; files may not exist)
-		_ = os.Remove(targetPath)
-		_ = os.Remove(targetPath + "-wal")
-		_ = os.Remove(targetPath + "-shm")
+	if err := writeBase64ToFile(archive.DBBytes, targetPath); err != nil {
+		return fmt.Errorf("writing store.db: %w", err)
 	}
+	for _, pair := range []struct {
+		b64, path string
+	}{
+		{archive.DBWALBytes, targetPath + "-wal"},
+		{archive.DBSHMBytes, targetPath + "-shm"},
+	} {
+		if pair.b64 == "" {
+			// Remove any leftover sidecar from a previous, differently-stated import.
+			_ = os.Remove(pair.path)
+			continue
+		}
+		if err := writeBase64ToFile(pair.b64, pair.path); err != nil {
+			return fmt.Errorf("writing %s: %w", filepath.Base(pair.path), err)
+		}
+	}
+	return nil
+}
 
-	db, err := sql.Open("sqlite", targetPath)
+func writeBase64ToFile(b64, targetPath string) error {
+	data, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
-		return fmt.Errorf("creating database: %w", err)
+		return fmt.Errorf("decoding base64: %w", err)
 	}
-	defer db.Close()
-
-	if _, err := db.ExecContext(ctx, "PRAGMA journal_mode=wal"); err != nil {
-		return fmt.Errorf("setting journal mode: %w", err)
-	}
-
-	if _, err := db.ExecContext(ctx, "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)"); err != nil {
-		return fmt.Errorf("creating meta table: %w", err)
-	}
-	if _, err := db.ExecContext(ctx, "CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)"); err != nil {
-		return fmt.Errorf("creating blobs table: %w", err)
-	}
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
-
-	for key, value := range store.Meta {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO meta (key, value) VALUES (?, ?)", key, value); err != nil {
-			return fmt.Errorf("inserting meta key %q: %w", key, err)
-		}
-	}
-
-	for id, b64Data := range store.Blobs {
-		data, err := base64.StdEncoding.DecodeString(b64Data)
-		if err != nil {
-			return fmt.Errorf("decoding blob %q: %w", id, err)
-		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO blobs (id, data) VALUES (?, ?)", id, data); err != nil {
-			return fmt.Errorf("inserting blob %q: %w", id, err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing transaction: %w", err)
+	if err := os.WriteFile(targetPath, data, 0o600); err != nil {
+		return fmt.Errorf("writing %s: %w", targetPath, err)
 	}
 	return nil
 }
@@ -196,8 +168,7 @@ func importCursorTranscript(entries []json.RawMessage, targetPath string) error 
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o750); err != nil {
 		return fmt.Errorf("creating directory: %w", err)
 	}
-
-	f, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // targetPath is constructed from known paths
+	f, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // targetPath from known dirs
 	if err != nil {
 		return fmt.Errorf("creating file: %w", err)
 	}
@@ -211,6 +182,5 @@ func importCursorTranscript(entries []json.RawMessage, targetPath string) error 
 			return fmt.Errorf("writing newline: %w", err)
 		}
 	}
-
 	return nil
 }

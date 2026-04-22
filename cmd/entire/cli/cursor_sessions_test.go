@@ -3,13 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
-
-	_ "modernc.org/sqlite"
 )
 
 const (
@@ -17,26 +14,17 @@ const (
 	sessB = "20000000-0000-0000-0000-00000000000b"
 )
 
-// seedImportedSession creates a minimal valid Cursor session tree under home.
+// seedImportedSession writes a Cursor session tree under home.
+// Production code treats store.db as opaque bytes, so the seed body doesn't matter.
 func seedImportedSession(t *testing.T, home, workspaceHash, slug, agentID string, transcriptLines int) {
 	t.Helper()
 	dbDir := filepath.Join(home, ".cursor", "chats", workspaceHash, agentID)
 	if err := os.MkdirAll(dbDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	dbPath := filepath.Join(dbDir, "store.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open: %v", err)
+	if err := os.WriteFile(filepath.Join(dbDir, "store.db"), []byte("fake-db-"+agentID), 0o600); err != nil {
+		t.Fatalf("write db: %v", err)
 	}
-	ctx := context.Background()
-	if _, err := db.ExecContext(ctx, "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)"); err != nil {
-		t.Fatalf("create meta: %v", err)
-	}
-	if _, err := db.ExecContext(ctx, "CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)"); err != nil {
-		t.Fatalf("create blobs: %v", err)
-	}
-	db.Close()
 
 	if transcriptLines > 0 {
 		txDir := filepath.Join(home, ".cursor", "projects", slug, "agent-transcripts")

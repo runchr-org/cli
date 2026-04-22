@@ -3,14 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
-	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/cursor"
-	_ "modernc.org/sqlite"
 )
 
 const exportTestAgentID = "eeeeeeee-1111-2222-3333-ffffffffffff"
@@ -20,21 +19,14 @@ func TestCursorExportCmd_WritesArchiveToDisk(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	// Seed minimal Cursor tree.
 	dbDir := filepath.Join(tmp, ".cursor", "chats", "hash", exportTestAgentID)
 	if err := os.MkdirAll(dbDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dbPath := filepath.Join(dbDir, "store.db")
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open: %v", err)
+	originalDB := []byte("opaque store.db bytes")
+	if err := os.WriteFile(filepath.Join(dbDir, "store.db"), originalDB, 0o600); err != nil {
+		t.Fatalf("seed db: %v", err)
 	}
-	ctx := context.Background()
-	if _, err := db.ExecContext(ctx, "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); INSERT INTO meta VALUES ('k','v');"); err != nil {
-		t.Fatalf("schema: %v", err)
-	}
-	db.Close()
 
 	outputPath := filepath.Join(tmp, "snap.cursor-chat.json")
 
@@ -58,10 +50,17 @@ func TestCursorExportCmd_WritesArchiveToDisk(t *testing.T) {
 	if archive.Format != "cursor-chat-export" {
 		t.Errorf("format = %q", archive.Format)
 	}
+	if archive.Version != 2 {
+		t.Errorf("version = %d", archive.Version)
+	}
 	if archive.AgentID != exportTestAgentID {
 		t.Errorf("agentId = %q", archive.AgentID)
 	}
-	if archive.Store.Meta["k"] != "v" {
-		t.Errorf("meta[k] = %q, want v", archive.Store.Meta["k"])
+	gotDB, err := base64.StdEncoding.DecodeString(archive.DBBytes)
+	if err != nil {
+		t.Fatalf("decode db: %v", err)
+	}
+	if !bytes.Equal(gotDB, originalDB) {
+		t.Errorf("db roundtrip: got %q, want %q", gotDB, originalDB)
 	}
 }
