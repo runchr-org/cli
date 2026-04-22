@@ -32,7 +32,7 @@ func (c *ClaudeCodeAgent) GenerateText(ctx context.Context, prompt string, model
 	}
 	res, runErr := agent.RunIsolatedTextGeneratorCLIRaw(ctx, c.CommandRunner, "claude", args, prompt)
 
-	if env := classifyClaudeEnvelope(res.Stdout); env != nil {
+	if env := classifyClaudeEnvelope(res.Stdout, runErr); env != nil {
 		env.ExitCode = res.ExitCode
 		env.Cause = runErr
 		return "", env

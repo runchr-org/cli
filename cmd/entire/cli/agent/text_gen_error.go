@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 )
@@ -67,12 +69,20 @@ const stderrMessageMaxLen = 500
 
 // TruncateStderr trims whitespace and caps stderr for use as a TextGenError
 // Message. Shared across providers so the user-facing Message is predictable.
+//
+// UTF-8 safe: a naive byte-slice at stderrMessageMaxLen can land in the middle
+// of a multi-byte rune, producing invalid UTF-8 in the rendered error message.
+// strings.ToValidUTF8 replaces any broken trailing sequence with "".
 func TruncateStderr(s string) string {
 	s = strings.TrimSpace(s)
-	if len(s) > stderrMessageMaxLen {
-		s = s[:stderrMessageMaxLen]
+	if len(s) <= stderrMessageMaxLen {
+		return s
 	}
-	return s
+	truncated := s[:stderrMessageMaxLen]
+	if !utf8.ValidString(truncated) {
+		truncated = strings.ToValidUTF8(truncated, "")
+	}
+	return truncated
 }
 
 // IsExecNotFoundErr reports whether err indicates the CLI binary was not found
@@ -91,17 +101,31 @@ func IsExecNotFoundErr(err error) bool {
 	return errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist)
 }
 
+// http4xxPattern matches a standalone 4xx HTTP status code, bounded by word
+// breaks on both sides. This avoids the false positives that plain
+// strings.Contains hits: port numbers ("port 14010" contains "401"),
+// timestamps ("took 429ms" contains "429"), request IDs, byte counts, etc.
+// The \b boundaries require a non-word character (or string edge) on either
+// side — so "401 Unauthorized" / "status 401" / "HTTP 401:" all match, while
+// "14010" / "429ms" / "status429" do not.
+var http4xxPattern = regexp.MustCompile(`\b4\d{2}\b`)
+
 // ClassifyStderrHTTPStatus scans stderr for an HTTP status code and returns
 // the matching error Kind. Most CLIs pass through their upstream API's HTTP
 // status on failure, so this is the load-bearing classification signal.
 // Returns TextGenErrorUnknown when no recognized status is present.
+//
+// When multiple 4xx codes appear in stderr, the first (leftmost) match wins —
+// this matches the typical "HTTP error: 401 Unauthorized\ndetail: ..." pattern
+// where the leading status is the primary failure.
 func ClassifyStderrHTTPStatus(stderr string) TextGenErrorKind {
-	switch {
-	case strings.Contains(stderr, "401"), strings.Contains(stderr, "403"):
+	match := http4xxPattern.FindString(stderr)
+	switch match {
+	case "401", "403":
 		return TextGenErrorAuth
-	case strings.Contains(stderr, "429"):
+	case "429":
 		return TextGenErrorRateLimit
-	case strings.Contains(stderr, "400"), strings.Contains(stderr, "404"):
+	case "400", "404":
 		return TextGenErrorConfig
 	}
 	return TextGenErrorUnknown

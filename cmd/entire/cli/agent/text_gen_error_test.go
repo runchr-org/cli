@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestTextGenError_ErrorIncludesKindAndMessage(t *testing.T) {
@@ -75,6 +76,17 @@ func TestClassifyStderrHTTPStatus(t *testing.T) {
 		{"404 maps to config", "ERROR: 404 Not Found", TextGenErrorConfig},
 		{"no status maps to unknown", "something weird and unclassifiable", TextGenErrorUnknown},
 		{"empty maps to unknown", "", TextGenErrorUnknown},
+
+		// Regression guards for the PR #1005 review finding: bare substring
+		// match on short digit sequences produced false positives. Word-
+		// boundary matching must reject digits embedded in larger numbers,
+		// unit suffixes, or adjacent word characters.
+		{"port number containing 401 is NOT auth", "could not bind to port 14010", TextGenErrorUnknown},
+		{"millisecond suffix 429ms is NOT rate_limit", "request took 429ms before failing", TextGenErrorUnknown},
+		{"byte count containing 400 is NOT config", "wrote 14000 bytes then stalled", TextGenErrorUnknown},
+		{"id containing 404 is NOT config", "trace-id=404a9f", TextGenErrorUnknown},
+		{"timestamp minute containing 401 is NOT auth", "2026-04-21T14:01:23Z connection reset", TextGenErrorUnknown},
+		{"leftmost 4xx wins when multiple codes appear", "HTTP 401 Unauthorized; retry window 429", TextGenErrorAuth},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -95,6 +107,26 @@ func TestTruncateStderr(t *testing.T) {
 	}
 	if got := TruncateStderr("  hello  "); got != "hello" {
 		t.Errorf("TruncateStderr trims whitespace = %q; want 'hello'", got)
+	}
+}
+
+// TestTruncateStderr_UTF8Safe pins the PR #1005 review finding: a naive
+// byte-slice at stderrMessageMaxLen could land mid-rune and produce invalid
+// UTF-8 in user-facing output. The truncator must return a valid-UTF-8
+// string in every case.
+func TestTruncateStderr_UTF8Safe(t *testing.T) {
+	t.Parallel()
+	// Build a string whose byte 499 is a continuation byte of a 3-byte rune
+	// (U+4E2D "中" → 0xE4 0xB8 0xAD). Each 中 occupies 3 bytes; pad with
+	// single-byte ASCII so the 500-byte cut lands inside a rune.
+	padding := strings.Repeat("a", 498)
+	s := padding + "中" + "xx" // total = 498 + 3 + 2 = 503 bytes
+	got := TruncateStderr(s)
+	if !utf8.ValidString(got) {
+		t.Fatalf("TruncateStderr returned invalid UTF-8: bytes=%v", []byte(got))
+	}
+	if len(got) > stderrMessageMaxLen {
+		t.Errorf("len = %d; want <= %d", len(got), stderrMessageMaxLen)
 	}
 }
 

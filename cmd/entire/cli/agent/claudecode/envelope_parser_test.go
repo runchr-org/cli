@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,14 +12,14 @@ import (
 func TestClassifyClaudeEnvelope_NonErrorReturnsNil(t *testing.T) {
 	t.Parallel()
 	stdout := []byte(`{"type":"result","subtype":"success","is_error":false,"result":"ok"}`)
-	if env := classifyClaudeEnvelope(stdout); env != nil {
+	if env := classifyClaudeEnvelope(stdout, nil); env != nil {
 		t.Errorf("want nil on success envelope; got %#v", env)
 	}
 }
 
 func TestClassifyClaudeEnvelope_EmptyStdoutReturnsNil(t *testing.T) {
 	t.Parallel()
-	if env := classifyClaudeEnvelope(nil); env != nil {
+	if env := classifyClaudeEnvelope(nil, nil); env != nil {
 		t.Errorf("want nil on empty stdout (caller handles via CLIMissing/stderr path); got %#v", env)
 	}
 }
@@ -26,7 +27,7 @@ func TestClassifyClaudeEnvelope_EmptyStdoutReturnsNil(t *testing.T) {
 func TestClassifyClaudeEnvelope_IsErrorWithHTTP401MapsToAuth(t *testing.T) {
 	t.Parallel()
 	stdout := []byte(`{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"result":"Auth required"}`)
-	env := classifyClaudeEnvelope(stdout)
+	env := classifyClaudeEnvelope(stdout, nil)
 	if env == nil {
 		t.Fatal("want typed error")
 	}
@@ -47,7 +48,7 @@ func TestClassifyClaudeEnvelope_IsErrorWithHTTP401MapsToAuth(t *testing.T) {
 func TestClassifyClaudeEnvelope_AuthFromResultWhenStatusMissing(t *testing.T) {
 	t.Parallel()
 	stdout := []byte(`{"type":"result","is_error":true,"result":"Invalid API key provided"}`)
-	env := classifyClaudeEnvelope(stdout)
+	env := classifyClaudeEnvelope(stdout, nil)
 	if env == nil {
 		t.Fatal("want typed error")
 	}
@@ -56,10 +57,24 @@ func TestClassifyClaudeEnvelope_AuthFromResultWhenStatusMissing(t *testing.T) {
 	}
 }
 
+func TestClassifyClaudeEnvelope_MalformedJSONDefersToCtxSentinel(t *testing.T) {
+	t.Parallel()
+	// Partial non-JSON stdout AND a ctx sentinel — the envelope parser must
+	// return nil so the caller can surface context.Canceled / DeadlineExceeded
+	// unwrapped. Regression guard for Cursor Bugbot finding on PR #1005.
+	partial := []byte(`{"type":"resul`)
+	if env := classifyClaudeEnvelope(partial, context.Canceled); env != nil {
+		t.Errorf("want nil on parse failure + ctx.Canceled; got %#v", env)
+	}
+	if env := classifyClaudeEnvelope(partial, context.DeadlineExceeded); env != nil {
+		t.Errorf("want nil on parse failure + ctx.DeadlineExceeded; got %#v", env)
+	}
+}
+
 func TestClassifyClaudeEnvelope_MalformedJSONPreserves963Wording(t *testing.T) {
 	t.Parallel()
 	stdout := []byte(`garbage not json`)
-	env := classifyClaudeEnvelope(stdout)
+	env := classifyClaudeEnvelope(stdout, nil)
 	if env == nil {
 		t.Fatal("want typed error on malformed JSON — caller at exit 0 needs a non-nil error")
 	}
@@ -89,7 +104,7 @@ func TestClassifyClaudeEnvelope_HTTPStatusMapping(t *testing.T) {
 			stdout := []byte(
 				`{"type":"result","is_error":true,"api_error_status":` + strconv.Itoa(tc.status) + `,"result":"err"}`,
 			)
-			env := classifyClaudeEnvelope(stdout)
+			env := classifyClaudeEnvelope(stdout, nil)
 			if env == nil {
 				t.Fatal("want typed error")
 			}

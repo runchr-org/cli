@@ -1,6 +1,8 @@
 package claudecode
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -13,22 +15,32 @@ import (
 //
 // Return contract:
 //   - nil: no envelope to classify. Reached when stdout is empty (subprocess
-//     produced no output — e.g. CLIMissing or SIGKILL before any writes) OR
-//     when the envelope parsed cleanly with is_error:false (success path).
+//     produced no output — e.g. CLIMissing or SIGKILL before any writes), when
+//     the envelope parsed cleanly with is_error:false (success path), or when
+//     stdout was partial non-JSON AND runErr is a ctx sentinel (so the caller
+//     can surface the ctx sentinel unwrapped).
 //   - non-nil: structured failure — either an is_error:true envelope
 //     classified by api_error_status / auth-phrase heuristic, or a malformed-
-//     JSON case (stdout non-empty but unparseable).
+//     JSON case (stdout non-empty but unparseable, runErr not a ctx sentinel).
 //
-// The empty-stdout carveout preserves 963's fallthrough semantics: when the
-// subprocess died before emitting anything, the envelope path must not
-// preempt CLIMissing / stderr / ctx-sentinel classification done by the
-// caller.
-func classifyClaudeEnvelope(stdout []byte) *agent.TextGenError {
+// runErr is consulted only to suppress parse-failure classification when the
+// subprocess was cancelled mid-write. A complete is_error envelope still wins
+// over a ctx sentinel — that is 963's intentional ordering: if Claude managed
+// to emit a structured diagnostic, that is more actionable than "cancelled".
+func classifyClaudeEnvelope(stdout []byte, runErr error) *agent.TextGenError {
 	if len(stdout) == 0 {
 		return nil
 	}
 	result, envelope, parseErr := parseGenerateTextResponse(stdout)
 	if parseErr != nil {
+		// Partial stdout from a cancelled subprocess: defer to the ctx
+		// sentinel path so the user sees "canceled" instead of "failed to
+		// parse claude CLI response". A complete is_error envelope below
+		// would still preempt ctx (that is the success of this function,
+		// not its failure).
+		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+			return nil
+		}
 		return &agent.TextGenError{
 			Kind:     agent.TextGenErrorUnknown,
 			Provider: agent.AgentNameClaudeCode,
