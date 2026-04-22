@@ -14,6 +14,93 @@ import (
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/cursor"
 )
 
+func TestTranscriptFileExists(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	regularFile := filepath.Join(tmpDir, "events.jsonl")
+	if err := os.WriteFile(regularFile, []byte(`{}`), 0o600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	dirPath := filepath.Join(tmpDir, "subdir")
+	if err := os.MkdirAll(dirPath, 0o750); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+
+	symlinkPath := filepath.Join(tmpDir, "link.jsonl")
+	if err := os.Symlink(regularFile, symlinkPath); err != nil {
+		t.Fatalf("failed to create symlink: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"empty path", "", false},
+		{"regular file", regularFile, true},
+		{"nonexistent", filepath.Join(tmpDir, "missing.jsonl"), false},
+		{"directory", dirPath, false},
+		{"symlink", symlinkPath, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := transcriptFileExists(tt.path); got != tt.want {
+				t.Errorf("transcriptFileExists(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsRegularFile(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	regularFile := filepath.Join(tmpDir, "file.txt")
+	if err := os.WriteFile(regularFile, []byte("data"), 0o600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	dirPath := filepath.Join(tmpDir, "dir")
+	if err := os.MkdirAll(dirPath, 0o750); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+
+	symlinkToFile := filepath.Join(tmpDir, "sym-file")
+	if err := os.Symlink(regularFile, symlinkToFile); err != nil {
+		t.Fatalf("failed to create symlink: %v", err)
+	}
+
+	symlinkToDir := filepath.Join(tmpDir, "sym-dir")
+	if err := os.Symlink(dirPath, symlinkToDir); err != nil {
+		t.Fatalf("failed to create symlink to dir: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"regular file", regularFile, true},
+		{"nonexistent", filepath.Join(tmpDir, "nope"), false},
+		{"directory", dirPath, false},
+		{"symlink to file", symlinkToFile, false},
+		{"symlink to dir", symlinkToDir, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isRegularFile(tt.path); got != tt.want {
+				t.Errorf("isRegularFile(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveTranscriptPath_FileExists(t *testing.T) {
 	t.Parallel()
 
@@ -147,12 +234,12 @@ func TestResolveTranscriptPath_EmptyPath(t *testing.T) {
 	}
 }
 
-func TestResolveTranscriptPath_DirectoryPathReturnsAsIs(t *testing.T) {
+func TestResolveTranscriptPath_DirectoryPathTriggersReResolution(t *testing.T) {
 	t.Parallel()
 
-	// When the path is a directory (not a file), os.Stat succeeds so
-	// resolveTranscriptPath returns the path as-is. The caller will get
-	// an error when it tries os.ReadFile.
+	// When the stored path is a directory (not a regular file), the fast path
+	// should not match. Re-resolution should be attempted and, when it also
+	// fails, an error is returned.
 	tmpDir := t.TempDir()
 	dirPath := filepath.Join(tmpDir, "adir")
 	if err := os.MkdirAll(dirPath, 0o750); err != nil {
@@ -164,12 +251,35 @@ func TestResolveTranscriptPath_DirectoryPathReturnsAsIs(t *testing.T) {
 		AgentType:      agent.AgentTypeCursor,
 	}
 
-	resolved, err := resolveTranscriptPath(state)
-	if err != nil {
-		t.Fatalf("resolveTranscriptPath() error = %v", err)
+	_, err := resolveTranscriptPath(state)
+	if err == nil {
+		t.Fatal("resolveTranscriptPath() expected error for directory path, got nil")
 	}
-	if resolved != dirPath {
-		t.Errorf("resolveTranscriptPath() = %q, want %q", resolved, dirPath)
+}
+
+func TestResolveTranscriptPath_SymlinkPathTriggersReResolution(t *testing.T) {
+	t.Parallel()
+
+	// A symlink at the stored path should not satisfy the fast path (os.Lstat
+	// reports the symlink itself, not the target). Re-resolution kicks in.
+	tmpDir := t.TempDir()
+	realFile := filepath.Join(tmpDir, "real.jsonl")
+	if err := os.WriteFile(realFile, []byte(`{"test":true}`), 0o600); err != nil {
+		t.Fatalf("failed to write real file: %v", err)
+	}
+	symlinkPath := filepath.Join(tmpDir, "link.jsonl")
+	if err := os.Symlink(realFile, symlinkPath); err != nil {
+		t.Fatalf("failed to create symlink: %v", err)
+	}
+
+	state := &session.State{
+		TranscriptPath: symlinkPath,
+		AgentType:      agent.AgentTypeCursor,
+	}
+
+	_, err := resolveTranscriptPath(state)
+	if err == nil {
+		t.Fatal("resolveTranscriptPath() expected error for symlink path, got nil")
 	}
 }
 

@@ -10,17 +10,25 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
 
+// isRegularFile reports whether path exists and is a regular file (not a
+// directory, symlink, or other special file). Uses os.Lstat to avoid
+// following symlinks.
+func isRegularFile(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
 // transcriptFileExists reports whether the transcript file at the given path
-// actually exists on disk. Returns false for empty paths. This is used by
-// PrepareCommitMsg to avoid adding checkpoint trailers when the transcript
-// file is not locally available (e.g., cloud agents that set TranscriptPath
-// in hook payloads but don't write the file to the runner's filesystem).
+// actually exists on disk as a regular file. Returns false for empty paths,
+// directories, and symlinks. This is used by PrepareCommitMsg to avoid adding
+// checkpoint trailers when the transcript file is not locally available
+// (e.g., cloud agents that set TranscriptPath in hook payloads but don't
+// write the file to the runner's filesystem).
 func transcriptFileExists(path string) bool {
 	if path == "" {
 		return false
 	}
-	_, err := os.Stat(path)
-	return err == nil
+	return isRegularFile(path)
 }
 
 // resolveTranscriptPath returns the current path to the session's transcript file.
@@ -38,9 +46,13 @@ func resolveTranscriptPath(state *SessionState) (string, error) {
 		return "", errors.New("no transcript path in session state")
 	}
 
-	// Fast path: file exists at the stored location.
-	if _, err := os.Stat(state.TranscriptPath); err == nil {
-		return state.TranscriptPath, nil
+	// Fast path: file exists at the stored location and is a regular file.
+	if info, err := os.Lstat(state.TranscriptPath); err == nil {
+		if info.Mode().IsRegular() {
+			return state.TranscriptPath, nil
+		}
+		// Path exists but is not a regular file (directory, symlink, etc.).
+		// Fall through to re-resolution rather than returning a non-file path.
 	} else if !errors.Is(err, os.ErrNotExist) {
 		// Non-ENOENT error (permission denied, etc.) — return as-is.
 		return "", fmt.Errorf("failed to access transcript: %w", err)
@@ -71,7 +83,7 @@ func resolveTranscriptPath(state *SessionState) (string, error) {
 	for _, dir := range candidateDirs {
 		resolved := ag.ResolveSessionFile(dir, state.SessionID)
 		if resolved != state.TranscriptPath {
-			if _, err := os.Stat(resolved); err == nil {
+			if isRegularFile(resolved) {
 				state.TranscriptPath = resolved
 				return resolved, nil
 			}
@@ -91,8 +103,8 @@ func resolveTranscriptPath(state *SessionState) (string, error) {
 		return "", fmt.Errorf("transcript not found at %s: %w", state.TranscriptPath, os.ErrNotExist)
 	}
 
-	// Check if the re-resolved path exists.
-	if _, err := os.Stat(resolved); err != nil {
+	// Check if the re-resolved path exists and is a regular file.
+	if !isRegularFile(resolved) {
 		return "", fmt.Errorf("transcript not found at %s (also tried %s): %w", state.TranscriptPath, resolved, os.ErrNotExist)
 	}
 

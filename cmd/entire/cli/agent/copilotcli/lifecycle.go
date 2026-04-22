@@ -147,6 +147,14 @@ func (c *CopilotCLIAgent) readHookEnvelope(stdin io.Reader) (*hookEnvelope, erro
 	return parseHookEnvelope(data)
 }
 
+// isRegularFile reports whether path exists and is a regular file (not a
+// directory, symlink, or other special file). Uses os.Lstat to avoid
+// following symlinks.
+func isRegularFile(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
 // resolveTranscriptFromPayload resolves the transcript file path for a hook event.
 // It validates the payload's transcriptPath exists on disk; if not (e.g., a container
 // path on a host where the file was mapped to a different directory via
@@ -155,13 +163,13 @@ func (c *CopilotCLIAgent) readHookEnvelope(stdin io.Reader) (*hookEnvelope, erro
 // resolution (strategy layer) another chance.
 func (c *CopilotCLIAgent) resolveTranscriptFromPayload(ctx context.Context, env *hookEnvelope) string {
 	if env.TranscriptPath != "" {
-		if _, err := os.Stat(env.TranscriptPath); err == nil {
+		if isRegularFile(env.TranscriptPath) {
 			return env.TranscriptPath
 		}
 		// Payload path doesn't exist locally — try session-dir resolution.
 		resolved := c.resolveTranscriptRef(ctx, env.SessionID)
 		if resolved != "" && resolved != env.TranscriptPath {
-			if _, err := os.Stat(resolved); err == nil {
+			if isRegularFile(resolved) {
 				logging.Debug(ctx, "copilot-cli: resolved transcript to alternate session-state path",
 					"payloadPath", env.TranscriptPath, "resolvedPath", resolved)
 				return resolved
@@ -192,13 +200,13 @@ func (c *CopilotCLIAgent) resolveTranscriptRef(ctx context.Context, sessionID st
 	}
 
 	primary := c.ResolveSessionFile(sessionDir, sessionID)
-	if _, err := os.Stat(primary); err == nil {
+	if isRegularFile(primary) {
 		return primary
 	}
 
 	// Check AWF host-mapped path for containerized environments.
 	awfPath := c.ResolveSessionFile(AWFSessionStateDir, sessionID)
-	if _, err := os.Stat(awfPath); err == nil {
+	if isRegularFile(awfPath) {
 		logging.Debug(ctx, "copilot-cli: found transcript at AWF session-state path",
 			"primaryPath", primary, "awfPath", awfPath)
 		return awfPath
