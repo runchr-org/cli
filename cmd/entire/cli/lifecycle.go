@@ -563,7 +563,7 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	if contributor, ok := ag.(agent.CheckpointContributor); ok {
 		if err := contributor.ContributeCheckpointFiles(ctx, sessionID, sessionDirAbs); err != nil {
 			logging.Warn(logCtx, "agent checkpoint contribution failed",
-				slog.String("agent", agentType),
+				slog.String("agent", string(agentType)),
 				slog.String("session_id", sessionID),
 				slog.String("error", err.Error()))
 		}
