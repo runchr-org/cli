@@ -22,6 +22,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/external"
+	"github.com/entireio/cli/cmd/entire/cli/agent/skilldiscovery"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
@@ -117,32 +118,7 @@ func ClearPendingReviewMarker(ctx context.Context) error {
 	return nil
 }
 
-// curatedSkill represents a known review skill/command surfaced by the
-// first-run picker. Users can add custom skills by editing
-// .entire/settings.json directly.
-type curatedSkill struct {
-	Name string
-	Desc string
-}
-
-// curatedReviewSkills groups known review skills by agent name (as a string
-// matching types.AgentName values). Agents not listed here still work via
-// the picker — users just see an empty list and should edit settings.json
-// manually to add skills.
-var curatedReviewSkills = map[string][]curatedSkill{
-	"claude-code": {
-		{Name: "/pr-review-toolkit:review-pr", Desc: "Full PR review"},
-		{Name: "/pr-review-toolkit:code-reviewer", Desc: "Code review for standards"},
-		{Name: "/test-auditor", Desc: "Test coverage audit"},
-		{Name: "/verification-before-completion", Desc: "Verify before marking done"},
-		{Name: "/requesting-code-review", Desc: "Prepare code for review"},
-		{Name: "/pr-review-toolkit:silent-failure-hunter", Desc: "Find suppressed errors"},
-	},
-	"codex": {
-		{Name: "/codex:review", Desc: "Codex review"},
-		{Name: "/codex:adversarial-review", Desc: "Adversarial review — red-team"},
-	},
-}
+// Curated built-ins and install hints live in package skilldiscovery.
 
 // sameWorktreePath compares two worktree paths after filepath.Clean. Both
 // paths come from paths.WorktreeRoot, so an exact-bytes match is expected in
@@ -296,8 +272,7 @@ func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string]setti
 	}
 	var configurable []configurableAgent
 	for _, name := range installed {
-		curated, ok := curatedReviewSkills[string(name)]
-		if !ok || len(curated) == 0 {
+		if !skilldiscovery.IsEligible(string(name)) {
 			continue
 		}
 		ag, err := agent.Get(name)
@@ -338,49 +313,53 @@ func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string]setti
 
 	selected := map[string]settings.ReviewConfig{}
 	for i, c := range configurable {
-		curated := curatedReviewSkills[string(c.name)]
-		savedSet := map[string]struct{}{}
-		for _, s := range existing[string(c.name)].Skills {
-			savedSet[s] = struct{}{}
-		}
+		curated := skilldiscovery.CuratedBuiltinsFor(string(c.name))
 
-		options := make([]huh.Option[string], 0, len(curated))
-		for _, s := range curated {
-			opt := huh.NewOption(fmt.Sprintf("%s — %s", s.Name, s.Desc), s.Name)
-			if _, ok := savedSet[s.Name]; ok {
-				opt = opt.Selected(true)
+		// Discover + dedupe + filter hints.
+		var discovered []agent.DiscoveredSkill
+		if d, ok := c.ag.(agent.SkillDiscoverer); ok {
+			if ds, dErr := d.DiscoverReviewSkills(ctx); dErr == nil {
+				discovered = ds
+			} else {
+				logging.Debug(ctx, "review discovery failed",
+					slog.String("agent", string(c.name)), slog.String("error", dErr.Error()))
 			}
-			options = append(options, opt)
 		}
+		builtinNames := builtinNameSet(curated)
+		discovered = filterOutBuiltinCollisions(discovered, builtinNames)
 
-		// huh populates picks from Option.Selected(true) — do NOT pre-seed,
-		// matching the convention used in detectOrSelectAgent (setup.go).
-		var picks []string
-		// Seed prompt input with the previously-saved value so users can
-		// tweak it without retyping.
+		discoveredSet := make(map[string]struct{}, len(discovered))
+		for _, d := range discovered {
+			discoveredSet[d.Name] = struct{}{}
+		}
+		activeHints := skilldiscovery.ActiveInstallHintsFor(string(c.name), discoveredSet)
+
+		var builtinPicks, discoveredPicks []string
 		prompt := existing[string(c.name)].Prompt
 
-		title := fmt.Sprintf("[%d/%d] Review skills for %s", i+1, len(configurable), c.ag.Type())
-		form := NewAccessibleForm(
-			huh.NewGroup(
-				huh.NewMultiSelect[string]().
-					Title(title).
-					Description(fmt.Sprintf("Agent: %s", c.ag.Type())).
-					Options(options...).
-					Value(&picks),
-			),
-			huh.NewGroup(
-				huh.NewText().
-					Title("Additional instructions (optional)").
-					Description("Used verbatim as the review prompt when set. Leave blank to use the default 'run these skills in order' template.").
-					Value(&prompt),
-			),
+		fields := buildReviewPickerFields(
+			string(c.name), curated, discovered, activeHints, prompt,
+			&builtinPicks, &discoveredPicks, &prompt,
 		)
+
+		// huh's Group has no .Title(), so the counter goes on the first field
+		// via type assertion. If the interface assertion fails (e.g. future huh
+		// refactor changes method sets), we silently skip the counter — UI nit,
+		// not a correctness issue.
+		title := fmt.Sprintf("[%d/%d] Review skills for %s", i+1, len(configurable), c.ag.Type())
+		if titleable, ok := fields[0].(interface {
+			Title(t string) huh.Field
+		}); ok {
+			fields[0] = titleable.Title(title)
+		}
+
+		form := NewAccessibleForm(huh.NewGroup(fields...))
 		if err := form.Run(); err != nil {
 			return nil, fmt.Errorf("picker for %s: %w", c.name, err)
 		}
+
 		cfg := settings.ReviewConfig{
-			Skills: picks,
+			Skills: dedupeStrings(append(builtinPicks, discoveredPicks...)),
 			Prompt: strings.TrimSpace(prompt),
 		}
 		if !cfg.IsZero() {
@@ -928,4 +907,129 @@ func saveReviewConfig(ctx context.Context, review map[string]settings.ReviewConf
 		return fmt.Errorf("save settings: %w", err)
 	}
 	return nil
+}
+
+// buildReviewPickerFields composes the per-agent group fields for the
+// review picker. Returns a slice of huh.Field in render order:
+//
+//	0: built-in commands (multiselect) OR note
+//	1: installed plugin skills (multiselect) OR note
+//	2: install hints (note with all active hint messages) — OMITTED if empty
+//	3: additional instructions (text) — always present
+//
+// Pure function — no side effects, no huh form running — so unit-testable.
+// Value bindings (builtinPicksOut, discoveredPicksOut, promptOut) may be
+// nil when the caller only needs the field count (tests).
+func buildReviewPickerFields(
+	agentName string,
+	builtins []skilldiscovery.CuratedSkill,
+	discovered []agent.DiscoveredSkill,
+	activeHints []skilldiscovery.InstallHint,
+	previousPrompt string,
+	builtinPicksOut, discoveredPicksOut *[]string,
+	promptOut *string,
+) []huh.Field {
+	var fields []huh.Field
+
+	if len(builtins) > 0 {
+		opts := make([]huh.Option[string], 0, len(builtins))
+		for _, b := range builtins {
+			opts = append(opts, huh.NewOption(fmt.Sprintf("%s — %s", b.Name, b.Desc), b.Name))
+		}
+		ms := huh.NewMultiSelect[string]().Title("Built-in commands").Options(opts...)
+		if builtinPicksOut != nil {
+			ms = ms.Value(builtinPicksOut)
+		}
+		fields = append(fields, ms)
+	} else {
+		fields = append(fields, huh.NewNote().
+			Title("Built-in commands").
+			Description(fmt.Sprintf("No built-in review commands in %s.", agentName)))
+	}
+
+	if len(discovered) > 0 {
+		opts := make([]huh.Option[string], 0, len(discovered))
+		for _, d := range discovered {
+			label := d.Name
+			if d.Description != "" {
+				label = fmt.Sprintf("%s — %s", d.Name, d.Description)
+			}
+			opts = append(opts, huh.NewOption(label, d.Name))
+		}
+		ms := huh.NewMultiSelect[string]().Title("Installed plugin skills").Options(opts...)
+		if discoveredPicksOut != nil {
+			ms = ms.Value(discoveredPicksOut)
+		}
+		fields = append(fields, ms)
+	} else {
+		fields = append(fields, huh.NewNote().
+			Title("Installed plugin skills").
+			Description("No plugin review skills detected on disk."))
+	}
+
+	if len(activeHints) > 0 {
+		var sb strings.Builder
+		for i, h := range activeHints {
+			if i > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString("• ")
+			sb.WriteString(h.Message)
+		}
+		fields = append(fields, huh.NewNote().
+			Title("Install more").
+			Description(sb.String()))
+	}
+
+	text := huh.NewText().
+		Title("Additional instructions (optional)").
+		Description("Used verbatim as the review prompt when set. Leave blank to use the default 'run these skills in order' template.")
+	if promptOut != nil {
+		*promptOut = previousPrompt
+		text = text.Value(promptOut)
+	}
+	fields = append(fields, text)
+
+	return fields
+}
+
+func builtinNameSet(curated []skilldiscovery.CuratedSkill) map[string]struct{} {
+	set := make(map[string]struct{}, len(curated))
+	for _, c := range curated {
+		set[c.Name] = struct{}{}
+	}
+	return set
+}
+
+// filterOutBuiltinCollisions drops any discovered skill whose name collides
+// with a curated built-in. Built-in wins because it carries a richer,
+// hand-authored description.
+func filterOutBuiltinCollisions(discovered []agent.DiscoveredSkill, builtins map[string]struct{}) []agent.DiscoveredSkill {
+	if len(discovered) == 0 || len(builtins) == 0 {
+		return discovered
+	}
+	out := make([]agent.DiscoveredSkill, 0, len(discovered))
+	for _, d := range discovered {
+		if _, clash := builtins[d.Name]; clash {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+func dedupeStrings(xs []string) []string {
+	if len(xs) == 0 {
+		return xs
+	}
+	seen := make(map[string]struct{}, len(xs))
+	out := make([]string, 0, len(xs))
+	for _, x := range xs {
+		if _, ok := seen[x]; ok {
+			continue
+		}
+		seen[x] = struct{}{}
+		out = append(out, x)
+	}
+	return out
 }

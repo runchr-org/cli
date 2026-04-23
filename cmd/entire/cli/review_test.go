@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/skilldiscovery"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -634,5 +635,55 @@ func TestSaveReviewConfig_ReturnsErrorOnMalformedSettings(t *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		t.Errorf("settings.json was overwritten on load error:\nbefore=%q\nafter=%q", before, after)
+	}
+}
+
+func TestPickerForm_StructureWithDiscovery(t *testing.T) {
+	t.Parallel()
+	fields := buildReviewPickerFields(
+		"claude-code",
+		[]skilldiscovery.CuratedSkill{{Name: "/review", Desc: "x"}},
+		[]agent.DiscoveredSkill{{Name: "/pr-review-toolkit:review-pr", Description: "y"}},
+		[]skilldiscovery.InstallHint{{Message: "install more"}},
+		"",                                                           /* previousPrompt */
+		nil /* builtinPicksOut */, nil /* discoveredPicksOut */, nil, /* promptOut */
+	)
+	if len(fields) != 4 {
+		t.Fatalf("picker fields = %d, want 4 (built-in, discovered, hint, prompt)", len(fields))
+	}
+}
+
+func TestPickerForm_EmptyBuiltinsRendersNote(t *testing.T) {
+	t.Parallel()
+	fields := buildReviewPickerFields(
+		"gemini-cli",
+		nil,
+		nil,
+		[]skilldiscovery.InstallHint{{Message: "install gemini-code-review"}},
+		"",
+		nil, nil, nil,
+	)
+	if len(fields) != 4 {
+		t.Fatalf("fields = %d, want 4 even with empty built-ins and discovered", len(fields))
+	}
+	for i, f := range fields {
+		if f == nil {
+			t.Errorf("fields[%d] is nil — every slot must be populated", i)
+		}
+	}
+}
+
+func TestPickerForm_AllHintsSuppressedHidesSection(t *testing.T) {
+	t.Parallel()
+	fields := buildReviewPickerFields(
+		"claude-code",
+		[]skilldiscovery.CuratedSkill{{Name: "/review", Desc: "x"}},
+		nil,
+		nil, /* no active hints */
+		"",
+		nil, nil, nil,
+	)
+	if len(fields) != 3 {
+		t.Errorf("fields count = %d, want 3 (hint section omitted when empty)", len(fields))
 	}
 }
