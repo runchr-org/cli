@@ -558,6 +558,20 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string) er
 		return NewSilentError(fmt.Errorf("hooks not installed for %s", agentName))
 	}
 
+	// 3.6. Verify configured skills are actually installed on disk. Catches
+	// the hand-edited-settings.json case where the user named a skill that
+	// doesn't exist; without this guard the agent would spawn and fail
+	// silently with "I don't have that skill".
+	ag, agErr := agent.Get(types.AgentName(agentName))
+	if agErr != nil {
+		return fmt.Errorf("resolve agent %s: %w", agentName, agErr)
+	}
+	if err := verifyConfiguredSkillsInstalled(ctx, ag, cfg); err != nil {
+		cmd.SilenceUsage = true
+		fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
+		return NewSilentError(err)
+	}
+
 	// 4. Re-run guard: check if HEAD's checkpoint already has a review.
 	if reviewed, meta := headHasReviewCheckpoint(ctx); reviewed {
 		var proceed bool
@@ -680,6 +694,48 @@ func selectReviewAgent(review map[string]settings.ReviewConfig, override string)
 	}
 	pick := names[0]
 	return pick, review[pick], nil
+}
+
+// verifyConfiguredSkillsInstalled is the spawn-time backstop for the
+// silent-failure vector. For each skill in cfg.Skills, check it's either a
+// curated built-in or returned by the agent's SkillDiscoverer; fail with a
+// user-facing error if any skill is missing. Empty Skills (prompt-only
+// config) short-circuits to nil — a freeform prompt has no skill list to
+// validate against.
+func verifyConfiguredSkillsInstalled(ctx context.Context, ag agent.Agent, cfg settings.ReviewConfig) error {
+	if len(cfg.Skills) == 0 {
+		return nil
+	}
+	builtins := builtinNameSet(skilldiscovery.CuratedBuiltinsFor(string(ag.Name())))
+	discoveredNames := map[string]struct{}{}
+	if d, ok := ag.(agent.SkillDiscoverer); ok {
+		if skills, err := d.DiscoverReviewSkills(ctx); err == nil {
+			for _, s := range skills {
+				discoveredNames[s.Name] = struct{}{}
+			}
+		} else {
+			logging.Debug(ctx, "skill verification discovery failed",
+				slog.String("agent", string(ag.Name())), slog.String("error", err.Error()))
+		}
+	}
+	var missing []string
+	for _, s := range cfg.Skills {
+		if _, ok := builtins[s]; ok {
+			continue
+		}
+		if _, ok := discoveredNames[s]; ok {
+			continue
+		}
+		missing = append(missing, s)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"configured review skill(s) not installed: %s\n"+
+			"run `entire review --edit` to reconfigure, or install the plugin and retry",
+		strings.Join(missing, ", "),
+	)
 }
 
 // composeReviewPrompt builds the prompt sent to the agent from a

@@ -236,6 +236,35 @@ func TestReview_MarkerAdoption_StaleMarkerIsIgnoredAfterHeadMoves(t *testing.T) 
 	}
 }
 
+// TestReview_MissingSkillAtSpawn_ErrorsCleanly pins the runtime verification
+// guard: a settings file naming a nonexistent skill must cause entire review
+// to exit non-zero with a clear stderr message and leave no pending marker.
+func TestReview_MissingSkillAtSpawn_ErrorsCleanly(t *testing.T) {
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t)
+	enableReviewAgent(t, env, "claude-code")
+
+	env.WriteSettings(map[string]any{
+		"review": map[string]any{
+			"claude-code": map[string]any{
+				"skills": []string{"/nonexistent:skill-xyz"},
+			},
+		},
+	})
+
+	output, exitErr := env.RunCLIWithError("review")
+	if exitErr == nil {
+		t.Fatalf("expected non-zero exit; output:\n%s", output)
+	}
+	if !strings.Contains(output, "not installed") {
+		t.Errorf("stderr should mention skill not installed; got:\n%s", output)
+	}
+	if _, err := os.Stat(filepath.Join(env.RepoDir, ".git", "entire-sessions", "review-pending.json")); !os.IsNotExist(err) {
+		t.Errorf("pending marker should not exist; stat err=%v", err)
+	}
+}
+
 func enableReviewAgent(t *testing.T, env *TestEnv, name string) {
 	t.Helper()
 	env.RunCLI("enable", "--agent", name, "--telemetry=false")

@@ -205,8 +205,14 @@ func TestRunReview_NonLaunchableAgentPreservesMarker(t *testing.T) {
 		t.Skipf("%s now implements Launcher; pick another non-launchable agent for this regression test", nonLaunchableAgent)
 	}
 
+	// Use a prompt-only config here: cursor has no curated built-ins and
+	// no SkillDiscoverer, so listing a Skills value would trip the
+	// spawn-time installed-skill guard (see
+	// TestRunReview_MissingConfiguredSkillAbortsBeforeMarker) before we
+	// reach the non-launchable code path this test pins. Prompt-only
+	// configs skip verification and still exercise the same fallback.
 	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
-		nonLaunchableAgent: {Skills: []string{testReviewSkill}},
+		nonLaunchableAgent: {Prompt: "review the diff"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -685,5 +691,70 @@ func TestPickerForm_AllHintsSuppressedHidesSection(t *testing.T) {
 	)
 	if len(fields) != 3 {
 		t.Errorf("fields count = %d, want 3 (hint section omitted when empty)", len(fields))
+	}
+}
+
+// Regression: when settings.json names a review skill that isn't installed
+// as a built-in or on-disk plugin skill, `entire review` must abort with a
+// user-facing error before writing the pending marker. Without this guard,
+// the marker gets claimed by the agent's session and the agent silently
+// fails with "I don't have that skill" — no recoverable signal to the user.
+func TestRunReview_MissingConfiguredSkillAbortsBeforeMarker(t *testing.T) {
+	setupReviewTestRepoWithCommit(t)
+	installHooksForTest(t, testAgentName)
+
+	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		testAgentName: {Skills: []string{"/bogus:skill-does-not-exist"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rootCmd := NewRootCmd()
+	errBuf := &bytes.Buffer{}
+	rootCmd.SetErr(errBuf)
+	rootCmd.SetArgs([]string{"review"})
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when configured skill not installed")
+	}
+	if !strings.Contains(errBuf.String(), "not installed") {
+		t.Errorf("stderr should mention 'not installed', got: %s", errBuf.String())
+	}
+	_, markerExists, markerErr := ReadPendingReviewMarker(context.Background())
+	if markerErr != nil {
+		t.Fatalf("ReadPendingReviewMarker: %v", markerErr)
+	}
+	if markerExists {
+		t.Error("pending marker should not exist when verification fails")
+	}
+}
+
+// Prompt-only configs (no Skills list) must skip the installed-skill
+// verification: a freeform review prompt can't be validated against any
+// registry, and blocking would break a documented use case. The marker
+// must still be written normally.
+func TestRunReview_PromptOnlyConfigSkipsVerification(t *testing.T) {
+	setupReviewTestRepoWithCommit(t)
+	installHooksForTest(t, "cursor")
+
+	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		"cursor": {Prompt: "review the diff"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rootCmd := NewRootCmd()
+	buf := &bytes.Buffer{}
+	rootCmd.SetOut(buf)
+	rootCmd.SetArgs([]string{"review"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, markerExists, markerErr := ReadPendingReviewMarker(context.Background())
+	if markerErr != nil {
+		t.Fatalf("ReadPendingReviewMarker: %v", markerErr)
+	}
+	if !markerExists {
+		t.Error("marker should exist for prompt-only config")
 	}
 }
