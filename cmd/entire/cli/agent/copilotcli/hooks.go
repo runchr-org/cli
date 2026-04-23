@@ -137,7 +137,7 @@ func (c *CopilotCLIAgent) InstallHooks(ctx context.Context, localDev bool, force
 	}
 
 	if err := agent.WriteJSONHookMeta(rawFile); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("stamp entireMeta: %w", err)
 	}
 
 	// Marshal modified hook types back into rawHooks
@@ -240,7 +240,7 @@ func (c *CopilotCLIAgent) UninstallHooks(ctx context.Context) error {
 }
 
 // ReadHookMeta returns the CLI-version stamp recorded in Copilot CLI's entire.json.
-func (c *CopilotCLIAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, error) {
+func (c *CopilotCLIAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool) {
 	worktreeRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		worktreeRoot = "."
@@ -248,10 +248,9 @@ func (c *CopilotCLIAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, boo
 	hooksPath := filepath.Join(worktreeRoot, hooksDir, HooksFileName)
 	data, err := os.ReadFile(hooksPath) //nolint:gosec // path is constructed from repo root + fixed path
 	if err != nil {
-		return agent.HookMeta{}, false, nil //nolint:nilerr // missing file means "no stamp", not a drift-check error
+		return agent.HookMeta{}, false
 	}
-	meta, ok := agent.ReadJSONHookMetaFromFile(data)
-	return meta, ok, nil
+	return agent.ReadJSONHookMetaFromFile(data)
 }
 
 // AreHooksInstalled checks if Entire hooks are installed in the Copilot CLI config.

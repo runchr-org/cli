@@ -207,7 +207,7 @@ func (f *FactoryAIDroidAgent) InstallHooks(ctx context.Context, localDev bool, f
 	}
 
 	if err := agent.WriteJSONHookMeta(rawSettings); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("stamp entireMeta: %w", err)
 	}
 
 	// Marshal modified hook types back to rawHooks
@@ -396,7 +396,7 @@ func (f *FactoryAIDroidAgent) UninstallHooks(ctx context.Context) error {
 }
 
 // ReadHookMeta returns the CLI-version stamp recorded in .factory/settings.json.
-func (f *FactoryAIDroidAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, error) {
+func (f *FactoryAIDroidAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool) {
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		repoRoot = "."
@@ -404,10 +404,9 @@ func (f *FactoryAIDroidAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta,
 	settingsPath := filepath.Join(repoRoot, ".factory", FactorySettingsFileName)
 	data, err := os.ReadFile(settingsPath) //nolint:gosec // path is constructed from repo root + fixed path
 	if err != nil {
-		return agent.HookMeta{}, false, nil //nolint:nilerr // missing file means "no stamp", not a drift-check error
+		return agent.HookMeta{}, false
 	}
-	meta, ok := agent.ReadJSONHookMetaFromFile(data)
-	return meta, ok, nil
+	return agent.ReadJSONHookMetaFromFile(data)
 }
 
 // AreHooksInstalled checks if Entire hooks are installed.

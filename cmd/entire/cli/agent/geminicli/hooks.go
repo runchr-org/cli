@@ -271,7 +271,7 @@ func stripNonArrayHookFields(ctx context.Context, rawHooks map[string]json.RawMe
 // detection knows which binary last touched the file.
 func writeGeminiSettingsFile(rawSettings map[string]json.RawMessage, rawHooks map[string]json.RawMessage, hooksConfig GeminiHooksConfig, settingsPath string) error {
 	if err := agent.WriteJSONHookMeta(rawSettings); err != nil {
-		return err
+		return fmt.Errorf("stamp entireMeta: %w", err)
 	}
 
 	hooksConfigJSON, err := jsonutil.MarshalWithNoHTMLEscape(hooksConfig)
@@ -422,7 +422,7 @@ func (g *GeminiCLIAgent) UninstallHooks(ctx context.Context) error {
 }
 
 // ReadHookMeta returns the CLI-version stamp recorded in .gemini/settings.json.
-func (g *GeminiCLIAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, error) {
+func (g *GeminiCLIAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool) {
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		repoRoot = "."
@@ -430,10 +430,9 @@ func (g *GeminiCLIAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool
 	settingsPath := filepath.Join(repoRoot, ".gemini", GeminiSettingsFileName)
 	data, err := os.ReadFile(settingsPath) //nolint:gosec // path is constructed from repo root + fixed path
 	if err != nil {
-		return agent.HookMeta{}, false, nil //nolint:nilerr // missing file means "no stamp", not a drift-check error
+		return agent.HookMeta{}, false
 	}
-	meta, ok := agent.ReadJSONHookMetaFromFile(data)
-	return meta, ok, nil
+	return agent.ReadJSONHookMetaFromFile(data)
 }
 
 // AreHooksInstalled checks if Entire hooks are installed.

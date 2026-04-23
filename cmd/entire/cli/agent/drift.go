@@ -69,8 +69,8 @@ func CheckHookDrift(ctx context.Context) []DriftReport {
 			continue
 		}
 
-		meta, found, err := hv.ReadHookMeta(ctx)
-		if err != nil || !found {
+		meta, found := hv.ReadHookMeta(ctx)
+		if !found {
 			reports = append(reports, DriftReport{
 				Agent:    name,
 				Required: required,

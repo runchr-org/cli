@@ -46,10 +46,7 @@ func TestInstallHooks_StampsEntireMeta(t *testing.T) {
 	}
 
 	// ReadHookMeta must return the same stamp via the typed API.
-	readMeta, found, err := ag.ReadHookMeta(context.Background())
-	if err != nil {
-		t.Fatalf("ReadHookMeta: %v", err)
-	}
+	readMeta, found := ag.ReadHookMeta(context.Background())
 	if !found {
 		t.Fatalf("ReadHookMeta reported no stamp")
 	}
@@ -90,10 +87,7 @@ func TestInstallHooks_StampsOnPreExistingInstall(t *testing.T) {
 		t.Fatalf("InstallHooks() error = %v", err)
 	}
 
-	meta, found, err := ag.ReadHookMeta(context.Background())
-	if err != nil {
-		t.Fatalf("ReadHookMeta: %v", err)
-	}
+	meta, found := ag.ReadHookMeta(context.Background())
 	if !found {
 		t.Fatal("expected stamp to be backfilled on pre-existing install")
 	}

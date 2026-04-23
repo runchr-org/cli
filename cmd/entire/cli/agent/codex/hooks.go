@@ -126,7 +126,7 @@ func (c *CodexAgent) InstallHooks(ctx context.Context, localDev bool, force bool
 	marshalHookType(rawHooks, "Stop", stop)
 
 	if err := agent.WriteJSONHookMeta(topLevel); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("stamp entireMeta: %w", err)
 	}
 
 	hooksJSON, err := jsonutil.MarshalWithNoHTMLEscape(rawHooks)
@@ -226,7 +226,7 @@ func (c *CodexAgent) UninstallHooks(ctx context.Context) error {
 }
 
 // ReadHookMeta returns the CLI-version stamp recorded in .codex/hooks.json.
-func (c *CodexAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, error) {
+func (c *CodexAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool) {
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		repoRoot = "."
@@ -234,10 +234,9 @@ func (c *CodexAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, er
 	hooksPath := filepath.Join(repoRoot, ".codex", HooksFileName)
 	data, err := os.ReadFile(hooksPath) //nolint:gosec // path constructed from repo root
 	if err != nil {
-		return agent.HookMeta{}, false, nil //nolint:nilerr // missing file means "no stamp", not a drift-check error
+		return agent.HookMeta{}, false
 	}
-	meta, ok := agent.ReadJSONHookMetaFromFile(data)
-	return meta, ok, nil
+	return agent.ReadJSONHookMetaFromFile(data)
 }
 
 // AreHooksInstalled checks if Entire hooks are installed in Codex hooks.json.
