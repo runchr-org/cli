@@ -14,15 +14,24 @@ import (
 	"syscall"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 )
 
+// previewRateWindow caps the rate at which preview tees forward stdout
+// lines to the TUI — roughly 10/sec per agent. Keeps the bubbletea
+// program's inbound message queue manageable even when a subprocess
+// floods stdout.
+const previewRateWindow = 100 * time.Millisecond
+
 // multiReviewOrchestrator owns the lifecycle of an N-agent parallel review:
 // writes the shared pending marker, spawns one goroutine per agent, drives
-// cancellation, cleans up on exit. Chunk 3 dumps results to an io.Writer on
-// completion; Chunk 4 swaps in a bubbletea program that consumes live
-// messages emitted by the same goroutines.
+// cancellation, cleans up on exit. When stdout is a terminal, it drives a
+// bubbletea reviewTUIModel with per-agent live status rows; otherwise it
+// falls back to an io.Writer dump of all per-agent outputs. Either way the
+// final dump runs after the TUI exits so transcripts follow the table.
 type multiReviewOrchestrator struct {
 	worktreePath string
 }
@@ -123,20 +132,52 @@ func (o *multiReviewOrchestrator) Run(ctx context.Context, tasks []MultiAgentTas
 		}
 	}()
 
-	// 6. Spawn one goroutine per task.
+	// 6. Optional bubbletea program. Only spin up the TUI when out is a
+	// real terminal — piping to a file or CI log pipe should get the
+	// plain io.Writer dump instead of escape-code garbage.
+	var program *tea.Program
+	if isTerminalWriter(out) {
+		program = tea.NewProgram(newReviewTUIModel(tasks), tea.WithOutput(out))
+	}
+	send := sendFunc(program)
+
+	// 7. Spawn one goroutine per task. Each goroutine also posts state +
+	// preview messages to the TUI (no-op when program is nil).
 	var wg sync.WaitGroup
 	results := make([]AgentRunResult, len(tasks))
 	for i, task := range tasks {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = runSingleAgentTask(runCtx, task, setCmd, i)
+			results[i] = runSingleAgentTask(runCtx, task, setCmd, i, send)
 		}()
 	}
-	wg.Wait()
-	close(allDone)
 
-	// 7. Dump per-agent outputs + summary.
+	// 8. If we have a TUI, run program in the foreground while a small
+	// goroutine waits for all agents to finish and then signals quit.
+	// Without a TUI, just wait for the goroutines to finish synchronously.
+	if program != nil {
+		go func() {
+			wg.Wait()
+			close(allDone)
+			// Last chance for the TUI to repaint with final state before
+			// allRowsTerminal triggers its own tea.Quit. Sending Quit here
+			// is a safety net in case some row never reached a terminal
+			// status (shouldn't happen, but a silent hang would be worse).
+			program.Quit()
+		}()
+		if _, runErr := program.Run(); runErr != nil {
+			logging.Debug(ctx, "orchestrator: tea.Program exited with error",
+				slog.String("error", runErr.Error()))
+		}
+		wg.Wait()
+	} else {
+		wg.Wait()
+		close(allDone)
+	}
+
+	// 9. Dump per-agent outputs + summary. Runs after the TUI exits so
+	// the final table paint stays above the full responses.
 	dumpMultiAgentResults(out, tasks, results, cancelled.load())
 
 	return MultiRunResult{
@@ -146,17 +187,30 @@ func (o *multiReviewOrchestrator) Run(ctx context.Context, tasks []MultiAgentTas
 	}, nil
 }
 
+// sendFunc returns a tea-message sender bound to program. If program is
+// nil (non-TTY output), returns a no-op so call sites don't have to
+// branch on nil at every post.
+func sendFunc(program *tea.Program) func(msg tea.Msg) {
+	if program == nil {
+		return func(_ tea.Msg) {}
+	}
+	return program.Send
+}
+
 // errNoMultiAgentTasks is the sentinel returned when Run is invoked with
 // an empty task list — a programmer error the caller should surface.
 var errNoMultiAgentTasks = errors.New("orchestrator: no tasks")
 
 // runSingleAgentTask launches one headless agent subprocess, buffers its
 // stdout/stderr, and classifies the exit. Called once per task by Run.
-func runSingleAgentTask(ctx context.Context, task MultiAgentTask, setCmd func(int, *exec.Cmd), idx int) AgentRunResult {
+// send posts lifecycle + preview messages to the TUI; a no-op sender is
+// used when the caller output isn't a terminal.
+func runSingleAgentTask(ctx context.Context, task MultiAgentTask, setCmd func(int, *exec.Cmd), idx int, send func(tea.Msg)) AgentRunResult {
 	startTime := time.Now()
 
 	cmd, err := task.Agent.LaunchHeadlessCmd(ctx, task.Prompt)
 	if err != nil {
+		send(agentStateMsg{Name: task.Name, Status: AgentRunFailed, Duration: time.Since(startTime)})
 		return AgentRunResult{
 			Name:     task.Name,
 			Status:   AgentRunFailed,
@@ -167,8 +221,9 @@ func runSingleAgentTask(ctx context.Context, task MultiAgentTask, setCmd func(in
 	setCmd(idx, cmd)
 
 	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	tee := newPreviewTeeWriter(&buf, send, task.Name)
+	cmd.Stdout = tee
+	cmd.Stderr = tee
 	// WaitDelay protects against subprocesses whose children hold stdio
 	// pipes open after the root pid has been killed (e.g. `sh -c "sleep
 	// N"`). Without it, cmd.Wait() blocks on pipe close even though the
@@ -177,6 +232,11 @@ func runSingleAgentTask(ctx context.Context, task MultiAgentTask, setCmd func(in
 	if cmd.WaitDelay == 0 {
 		cmd.WaitDelay = 500 * time.Millisecond
 	}
+
+	// Notify the TUI that this agent is now running. Posted after
+	// LaunchHeadlessCmd so failures above never advertise a "running"
+	// state the orchestrator never actually observed.
+	send(agentStateMsg{Name: task.Name, Status: AgentRunRunning})
 
 	runErr := cmd.Run()
 	duration := time.Since(startTime)
@@ -220,6 +280,21 @@ func runSingleAgentTask(ctx context.Context, task MultiAgentTask, setCmd func(in
 		}
 	}
 
+	totalTokens := 0
+	if tokenUsage != nil {
+		totalTokens = tokenUsage.InputTokens +
+			tokenUsage.CacheCreationTokens +
+			tokenUsage.CacheReadTokens +
+			tokenUsage.OutputTokens
+	}
+	send(agentStateMsg{
+		Name:     task.Name,
+		Status:   status,
+		Duration: duration,
+		ExitCode: exitCode,
+		Tokens:   totalTokens,
+	})
+
 	return AgentRunResult{
 		Name:           task.Name,
 		Status:         status,
@@ -230,6 +305,64 @@ func runSingleAgentTask(ctx context.Context, task MultiAgentTask, setCmd func(in
 		TokenUsage:     tokenUsage,
 		TranscriptPath: transcriptPath,
 	}
+}
+
+// previewTeeWriter tees subprocess stdout/stderr bytes into a buffer
+// (for the final per-agent dump) and — rate-limited — emits preview
+// lines to the TUI as agentPreviewMsg. The rate limit is per-agent:
+// at most one message per previewRateWindow.
+type previewTeeWriter struct {
+	buf        io.Writer
+	send       func(tea.Msg)
+	agentName  string
+	mu         sync.Mutex
+	partial    []byte
+	lastSentAt time.Time
+}
+
+func newPreviewTeeWriter(buf io.Writer, send func(tea.Msg), agentName string) *previewTeeWriter {
+	return &previewTeeWriter{buf: buf, send: send, agentName: agentName}
+}
+
+// Write implements io.Writer: captures into the buffer for the final
+// response dump, then scans for newline-terminated lines and forwards
+// the last-complete one as a preview message, subject to the rate
+// window. A partial line without a trailing newline is carried forward.
+func (p *previewTeeWriter) Write(data []byte) (int, error) {
+	n, err := p.buf.Write(data)
+	if err != nil {
+		return n, fmt.Errorf("tee buf write: %w", err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.partial = append(p.partial, data[:n]...)
+	// Only scan on newline; short writes with no newline just accumulate.
+	lastNL := bytes.LastIndexByte(p.partial, '\n')
+	if lastNL < 0 {
+		return n, nil
+	}
+	// The last complete line is the segment right before lastNL.
+	completed := p.partial[:lastNL]
+	p.partial = p.partial[lastNL+1:]
+	prevNL := bytes.LastIndexByte(completed, '\n')
+	var last []byte
+	if prevNL < 0 {
+		last = completed
+	} else {
+		last = completed[prevNL+1:]
+	}
+	if len(last) == 0 {
+		return n, nil
+	}
+	now := time.Now()
+	if now.Sub(p.lastSentAt) < previewRateWindow {
+		return n, nil
+	}
+	p.lastSentAt = now
+	// Copy into a new buffer because p.partial's backing array is reused.
+	line := string(bytes.TrimRight(last, "\r"))
+	p.send(agentPreviewMsg{Name: p.agentName, Line: line})
+	return n, nil
 }
 
 // dumpMultiAgentResults prints per-agent headers + FinalOutput, then a
@@ -316,8 +449,9 @@ func forceKillAll(cmds []*exec.Cmd) {
 
 // resolveLatestTranscript returns the newest .jsonl (or .json) file under
 // baseDir, searched recursively. Returns "" if baseDir is empty, unreadable,
-// or contains no transcript files. Chunk 3 uses a best-effort newest-file
-// heuristic; Chunk 4 may refine to a session-ID-specific resolver.
+// or contains no transcript files. Uses a best-effort newest-file
+// heuristic; a future refinement could switch to a session-ID-specific
+// resolver.
 func resolveLatestTranscript(baseDir string) string {
 	if baseDir == "" {
 		return ""

@@ -54,25 +54,28 @@ type runReviewDeps struct {
 	runMultiAgentFn   func(ctx context.Context, tasks []MultiAgentTask, out io.Writer) (MultiRunResult, error)
 }
 
-// MultiAgentTask is a forward-declared type that Chunk 3's orchestrator
-// populates. For Chunk 2 only the name/prompt matter for dispatch tests.
+// MultiAgentTask describes one agent's slot in a parallel review run.
+// The dispatcher populates all three fields; the orchestrator passes the
+// task straight through to HeadlessLauncher.LaunchHeadlessCmd.
 type MultiAgentTask struct {
 	Agent  agent.HeadlessLauncher // set by dispatcher when routing to multi-agent
 	Name   string                 // agent registry key
 	Prompt string                 // composed via composeReviewPrompt(cfg)
 }
 
-// MultiRunResult is a placeholder — full shape lands in Chunk 3. Kept
-// minimal here so dispatch compile-checks; orchestrator in Chunk 3
-// expands Runs/Duration/Cancelled fields.
+// MultiRunResult is the aggregated result of a multi-agent review. Runs
+// contains one entry per task (in task order); Duration is wall-clock
+// span (max of per-agent durations, not sum); Cancelled reports whether
+// the orchestrator was signal-cancelled during the run.
 type MultiRunResult struct {
 	Runs      []AgentRunResult
 	Duration  time.Duration
 	Cancelled bool
 }
 
-// AgentRunStatus / AgentRunResult — full shape lands in Chunk 3. Minimal
-// definitions here so MultiRunResult compiles. Chunk 3 may expand these.
+// AgentRunStatus tracks one agent's lifecycle through a multi-agent
+// review run. Transitions are Queued → Running → {Done, Failed,
+// Cancelled}; the last three are terminal.
 type AgentRunStatus int
 
 const (
@@ -84,7 +87,7 @@ const (
 )
 
 // AgentRunResult reports the outcome of a single agent run inside a
-// multi-agent review. Forward-declared here; Chunk 3 wires real values.
+// multi-agent review.
 type AgentRunResult struct {
 	Name           string
 	Status         AgentRunStatus
@@ -939,8 +942,8 @@ func dispatchMultiAgent(ctx context.Context, cmd *cobra.Command, s *settings.Ent
 	if err != nil {
 		return err
 	}
-	// Result is informational for Chunk 2's test stub. Chunk 4 wires
-	// the completion dump; Chunk 3 wires the marker writes / cleanup.
+	// The orchestrator prints its own completion dump + summary line to
+	// out; the returned result is informational for test assertions.
 	_ = result
 	return nil
 }
