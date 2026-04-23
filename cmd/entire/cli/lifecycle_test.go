@@ -961,13 +961,10 @@ func TestAdoptPendingReviewMarker(t *testing.T) {
 	testutil.GitCommit(t, tmp, "init")
 	t.Chdir(tmp)
 
-	const reviewPrompt = "Please run these review skills in order:\n  1. /pr-review-toolkit:review-pr\n"
-	headSHA := testutil.GetHeadHash(t, tmp)
 	if err := WritePendingReviewMarker(context.Background(), PendingReviewMarker{
 		AgentName:   "claude-code",
 		Skills:      []string{"/pr-review-toolkit:review-pr"},
-		Prompt:      reviewPrompt,
-		StartingSHA: headSHA,
+		StartingSHA: "abc",
 		StartedAt:   time.Now().UTC(),
 	}); err != nil {
 		t.Fatal(err)
@@ -977,7 +974,7 @@ func TestAdoptPendingReviewMarker(t *testing.T) {
 	got, modified, err := adoptPendingReviewMarkerInto(context.Background(), session.State{
 		SessionID: "s1",
 		Kind:      "",
-	}, agent.AgentNameClaudeCode)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -989,9 +986,6 @@ func TestAdoptPendingReviewMarker(t *testing.T) {
 	}
 	if len(got.ReviewSkills) != 1 || got.ReviewSkills[0] != "/pr-review-toolkit:review-pr" {
 		t.Errorf("ReviewSkills = %v", got.ReviewSkills)
-	}
-	if got.ReviewPrompt != reviewPrompt {
-		t.Errorf("ReviewPrompt = %q, want %q", got.ReviewPrompt, reviewPrompt)
 	}
 
 	// Marker should be cleared after adoption.
@@ -1013,7 +1007,7 @@ func TestAdoptPendingReviewMarker_NoMarker(t *testing.T) {
 	t.Chdir(tmp)
 
 	// No marker written.
-	got, modified, err := adoptPendingReviewMarkerInto(context.Background(), session.State{SessionID: "s2"}, agent.AgentNameClaudeCode)
+	got, modified, err := adoptPendingReviewMarkerInto(context.Background(), session.State{SessionID: "s2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1041,7 +1035,7 @@ func TestAdoptPendingReviewMarker_AlreadyReview(t *testing.T) {
 	}
 	// State already tagged — adoption should be a no-op (not a second re-tag).
 	in := session.State{SessionID: "s3", Kind: session.KindAgentReview, ReviewSkills: []string{"/y"}}
-	got, modified, err := adoptPendingReviewMarkerInto(context.Background(), in, agent.AgentNameClaudeCode)
+	got, modified, err := adoptPendingReviewMarkerInto(context.Background(), in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1073,13 +1067,10 @@ func TestAdoptPendingReviewMarker_OtherWorktreeLeavesMarker(t *testing.T) {
 	testutil.GitCommit(t, tmp, "init")
 	t.Chdir(tmp)
 
-	// Use the real HEAD SHA so the SHA binding doesn't interfere with the
-	// worktree-scope path this test exercises.
-	headSHA := testutil.GetHeadHash(t, tmp)
 	if err := WritePendingReviewMarker(context.Background(), PendingReviewMarker{
 		AgentName:    "claude-code",
 		Skills:       []string{"/pr-review-toolkit:review-pr"},
-		StartingSHA:  headSHA,
+		StartingSHA:  "abc",
 		StartedAt:    time.Now().UTC(),
 		WorktreePath: "/repo/main",
 	}); err != nil {
@@ -1091,7 +1082,7 @@ func TestAdoptPendingReviewMarker_OtherWorktreeLeavesMarker(t *testing.T) {
 	got, modified, err := adoptPendingReviewMarkerInto(context.Background(), session.State{
 		SessionID:    "other-worktree-session",
 		WorktreePath: "/repo/.worktrees/feature",
-	}, agent.AgentNameClaudeCode)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1115,134 +1106,12 @@ func TestAdoptPendingReviewMarker_OtherWorktreeLeavesMarker(t *testing.T) {
 	got, modified, err = adoptPendingReviewMarkerInto(context.Background(), session.State{
 		SessionID:    "matching-worktree-session",
 		WorktreePath: "/repo/main",
-	}, agent.AgentNameClaudeCode)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !modified {
 		t.Fatal("expected modified=true when worktree matches")
-	}
-	if got.Kind != session.KindAgentReview {
-		t.Errorf("Kind = %q, want review", got.Kind)
-	}
-}
-
-// Reproduces the stale-marker problem: `entire review` for a non-
-// launchable agent writes a marker at SHA A, then the user commits
-// (HEAD moves to SHA B) before starting the review session. The later
-// session must NOT adopt the now-stale marker — that would tag an
-// unrelated session as a review of code that has already moved on.
-// The stale marker is discarded so future sessions start clean.
-func TestAdoptPendingReviewMarker_StaleSHAClearsMarker(t *testing.T) {
-	tmp := t.TempDir()
-	testutil.InitRepo(t, tmp)
-	testutil.WriteFile(t, tmp, "f.txt", "x")
-	testutil.GitAdd(t, tmp, "f.txt")
-	testutil.GitCommit(t, tmp, "init")
-	t.Chdir(tmp)
-
-	// Marker written at a SHA that isn't current HEAD (simulating HEAD
-	// having moved since `entire review` was invoked for a non-launchable
-	// agent and the user then committed before starting the session).
-	const staleSHA = "0000000000000000000000000000000000000000"
-	if err := WritePendingReviewMarker(context.Background(), PendingReviewMarker{
-		AgentName:    string(agent.AgentNameClaudeCode),
-		Skills:       []string{"/pr-review-toolkit:review-pr"},
-		StartingSHA:  staleSHA,
-		StartedAt:    time.Now().UTC(),
-		WorktreePath: tmp,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Matching agent + worktree, but SHA has drifted — discard the marker.
-	got, modified, err := adoptPendingReviewMarkerInto(context.Background(), session.State{
-		SessionID:    "later-session",
-		WorktreePath: tmp,
-	}, agent.AgentNameClaudeCode)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if modified {
-		t.Fatal("expected modified=false when marker SHA != current HEAD SHA")
-	}
-	if got.Kind != "" {
-		t.Errorf("Kind = %q, want empty (stale marker must not tag session)", got.Kind)
-	}
-
-	// Marker must be CLEARED (not left in place) — no future session will
-	// legitimately match the stale SHA, so leaving it would let it mis-tag
-	// subsequent unrelated sessions.
-	_, markerPresent, readErr := ReadPendingReviewMarker(context.Background())
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if markerPresent {
-		t.Error("expected stale marker to be cleared, not preserved")
-	}
-}
-
-// Reproduces the agent-mismatch steal: `entire review` writes a marker for
-// claude-code, but a cursor session fires its UserPromptSubmit hook first in
-// the same worktree. The wrong-agent session must NOT claim the marker —
-// whichever agent's hook happens to fire first would otherwise silently
-// steal a review meant for a different agent (with different skills).
-func TestAdoptPendingReviewMarker_DifferentAgentLeavesMarker(t *testing.T) {
-	tmp := t.TempDir()
-	testutil.InitRepo(t, tmp)
-	testutil.WriteFile(t, tmp, "f.txt", "x")
-	testutil.GitAdd(t, tmp, "f.txt")
-	testutil.GitCommit(t, tmp, "init")
-	t.Chdir(tmp)
-
-	// Use the real HEAD SHA so the SHA binding doesn't interfere with the
-	// agent-scope path this test exercises.
-	headSHA := testutil.GetHeadHash(t, tmp)
-	if err := WritePendingReviewMarker(context.Background(), PendingReviewMarker{
-		AgentName:    string(agent.AgentNameClaudeCode),
-		Skills:       []string{"/pr-review-toolkit:review-pr"},
-		StartingSHA:  headSHA,
-		StartedAt:    time.Now().UTC(),
-		WorktreePath: tmp,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = ClearPendingReviewMarker(context.Background()) }) //nolint:errcheck // test cleanup, best-effort
-
-	// A cursor session in the same worktree must NOT adopt a claude-code marker.
-	got, modified, err := adoptPendingReviewMarkerInto(context.Background(), session.State{
-		SessionID:    "cursor-session",
-		WorktreePath: tmp,
-	}, agent.AgentNameCursor)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if modified {
-		t.Fatal("expected modified=false when session's agent differs from marker's agent")
-	}
-	if got.Kind != "" {
-		t.Errorf("Kind = %q, want empty (should not be tagged)", got.Kind)
-	}
-
-	// Marker must survive so the correct claude-code session can adopt later.
-	_, ok, readErr := ReadPendingReviewMarker(context.Background())
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if !ok {
-		t.Fatal("expected marker preserved after mismatched-agent adoption attempt")
-	}
-
-	// Now the correct agent adopts.
-	got, modified, err = adoptPendingReviewMarkerInto(context.Background(), session.State{
-		SessionID:    "claude-session",
-		WorktreePath: tmp,
-	}, agent.AgentNameClaudeCode)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !modified {
-		t.Fatal("expected modified=true when agent matches")
 	}
 	if got.Kind != session.KindAgentReview {
 		t.Errorf("Kind = %q, want review", got.Kind)

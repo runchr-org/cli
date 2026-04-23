@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,8 +20,6 @@ import (
 	git "github.com/go-git/go-git/v6"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
-	"github.com/entireio/cli/cmd/entire/cli/agent/external"
-	"github.com/entireio/cli/cmd/entire/cli/agent/skilldiscovery"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
@@ -36,22 +33,6 @@ import (
 
 const pendingReviewMarkerFilename = "review-pending.json"
 
-// agentChoice is one row in the spawn-time picker. Name is the agent
-// registry key (used for marker/override); Label is the picker-visible
-// string ("<name>   (N skills configured)" or "<name>   (prompt-only)").
-type agentChoice struct {
-	Name  string
-	Label string
-}
-
-// runReviewDeps collects the runtime-injectable hooks runReview uses.
-// Tests stub fields on this struct to drive branches that would otherwise
-// require a real TTY. Production wiring leaves fields nil and defaults
-// are resolved inside runReview.
-type runReviewDeps struct {
-	promptForAgentFn func(ctx context.Context, eligible []agentChoice) (string, error)
-}
-
 // PendingReviewMarker is written by `entire review` before spawning the agent.
 // The next agent session's UserPromptSubmit hook reads it, tags the session
 // kind/review-skills, then clears the marker (so a second review run doesn't
@@ -63,12 +44,8 @@ type runReviewDeps struct {
 // blank WorktreePath (pre-fix markers) falls back to the legacy unscoped
 // behavior — any session can adopt.
 type PendingReviewMarker struct {
-	AgentName string   `json:"agent_name"`
-	Skills    []string `json:"skills"`
-	// Prompt is the composed review prompt the agent will receive.
-	// Stored on the marker (rather than recomputed on adoption) so session
-	// metadata records exactly what the agent was asked to do.
-	Prompt       string    `json:"prompt,omitempty"`
+	AgentName    string    `json:"agent_name"`
+	Skills       []string  `json:"skills"`
 	StartingSHA  string    `json:"starting_sha"`
 	StartedAt    time.Time `json:"started_at"`
 	WorktreePath string    `json:"worktree_path,omitempty"`
@@ -134,7 +111,32 @@ func ClearPendingReviewMarker(ctx context.Context) error {
 	return nil
 }
 
-// Curated built-ins and install hints live in package skilldiscovery.
+// curatedSkill represents a known review skill/command surfaced by the
+// first-run picker. Users can add custom skills by editing
+// .entire/settings.json directly.
+type curatedSkill struct {
+	Name string
+	Desc string
+}
+
+// curatedReviewSkills groups known review skills by agent name (as a string
+// matching types.AgentName values). Agents not listed here still work via
+// the picker — users just see an empty list and should edit settings.json
+// manually to add skills.
+var curatedReviewSkills = map[string][]curatedSkill{
+	"claude-code": {
+		{Name: "/pr-review-toolkit:review-pr", Desc: "Full PR review"},
+		{Name: "/pr-review-toolkit:code-reviewer", Desc: "Code review for standards"},
+		{Name: "/test-auditor", Desc: "Test coverage audit"},
+		{Name: "/verification-before-completion", Desc: "Verify before marking done"},
+		{Name: "/requesting-code-review", Desc: "Prepare code for review"},
+		{Name: "/pr-review-toolkit:silent-failure-hunter", Desc: "Find suppressed errors"},
+	},
+	"codex": {
+		{Name: "/codex:review", Desc: "Codex review"},
+		{Name: "/codex:adversarial-review", Desc: "Adversarial review — red-team"},
+	},
+}
 
 // sameWorktreePath compares two worktree paths after filepath.Clean. Both
 // paths come from paths.WorktreeRoot, so an exact-bytes match is expected in
@@ -150,26 +152,13 @@ func sameWorktreePath(a, b string) bool {
 // the marker is left in place and modified=false — adoption only happens on
 // first tag. The marker is cleared on successful first adoption.
 //
-// Scoping rules — the marker is left untouched (not cleared) when a scope
-// mismatch still leaves open the possibility that a future session could
-// legitimately claim it:
-//
-//   - WorktreePath: a Claude session in worktree A must not claim a marker
-//     meant for a session `entire review` spawned in worktree B. Both
-//     worktrees share the same .git/entire-sessions/ directory.
-//   - AgentName: a cursor session must not claim a marker that records a
-//     claude-code review — the review config and skills are agent-specific,
-//     and whichever session fires its UserPromptSubmit hook first would
-//     otherwise silently steal the wrong agent's review metadata.
-//
-// StartingSHA is different: once HEAD moves past the marker's commit, no
-// future session will meaningfully match the original review intent.
-// A stale marker is cleared rather than left to mis-tag a later unrelated
-// session.
-//
-// Pre-fix markers with empty fields fall back to unscoped adoption for
-// each missing field (backwards compat).
-func adoptPendingReviewMarkerInto(ctx context.Context, s session.State, agentName types.AgentName) (session.State, bool, error) {
+// Worktree scoping: when the marker carries a WorktreePath, only a session
+// whose own WorktreePath matches will adopt it. This prevents a Claude
+// session in worktree A from racing to claim a marker that was meant for a
+// session `entire review` just launched in worktree B (both worktrees share
+// the same .git/entire-sessions/ directory where the marker lives).
+// Pre-fix markers with no WorktreePath fall back to unscoped adoption.
+func adoptPendingReviewMarkerInto(ctx context.Context, s session.State) (session.State, bool, error) {
 	// Already tagged — don't re-apply on subsequent turns.
 	if s.Kind != "" {
 		return s, false, nil
@@ -187,40 +176,8 @@ func adoptPendingReviewMarkerInto(ctx context.Context, s session.State, agentNam
 		// and claim the marker.
 		return s, false, nil
 	}
-	if m.AgentName != "" && m.AgentName != string(agentName) {
-		// Marker was written for a different agent — leave it alone. The
-		// correct agent's session will reach its own hook and claim the
-		// marker.
-		return s, false, nil
-	}
-	// SHA drift: the marker was written for a specific commit. If HEAD has
-	// moved since, the user's intent (review THAT commit) no longer applies
-	// to this session, and we'd otherwise silently tag an unrelated session
-	// as a review. Discard the stale marker rather than adopting it or
-	// leaving it in place to mis-tag a later session.
-	//
-	// Failure to resolve HEAD is non-fatal: adoption is best-effort, and
-	// crashing a legitimate review because git rev-parse hiccupped would be
-	// worse than skipping the check.
-	if m.StartingSHA != "" {
-		headSHA, headErr := currentHeadSHA(ctx)
-		switch {
-		case headErr != nil:
-			logging.Debug(ctx, "adopt marker: resolve HEAD failed, skipping SHA check",
-				slog.String("error", headErr.Error()))
-		case headSHA != m.StartingSHA:
-			logging.Warn(ctx, "adopt marker: HEAD moved since marker was written; discarding stale marker",
-				slog.String("marker_sha", m.StartingSHA),
-				slog.String("head_sha", headSHA))
-			if clearErr := ClearPendingReviewMarker(ctx); clearErr != nil {
-				logging.Debug(ctx, "failed to clear stale marker", slog.String("error", clearErr.Error()))
-			}
-			return s, false, nil
-		}
-	}
 	s.Kind = session.KindAgentReview
 	s.ReviewSkills = m.Skills
-	s.ReviewPrompt = m.Prompt
 	if err := ClearPendingReviewMarker(ctx); err != nil {
 		// Tagging succeeded; leftover marker self-heals on next session start
 		// (since Kind is now set, the next turn will return modified=false
@@ -230,54 +187,15 @@ func adoptPendingReviewMarkerInto(ctx context.Context, s session.State, agentNam
 	return s, true, nil
 }
 
-// confirmFirstRunSetup prints a banner framing the picker as first-run
-// setup (rather than the review itself) and waits for the user to confirm.
-// Returns false if the user cancels; caller should bail gracefully.
-//
-// Signposting matters here because `entire review` with no config silently
-// drops into the picker — users running the command to start a review can
-// mistake the picker for the review. The banner + confirmation makes the
-// setup phase explicit, and the trailing "running review now" line in the
-// caller closes the loop on what comes next.
-func confirmFirstRunSetup(out io.Writer) bool {
-	fmt.Fprintln(out, "No review config found — let's set one up first.")
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "You'll pick skills for each installed agent. They're saved to")
-	fmt.Fprintln(out, ".entire/settings.json; edit later with `entire review --edit`.")
-	fmt.Fprintln(out, "After setup, the review will run with your selection.")
-	fmt.Fprintln(out)
-
-	proceed := true
-	form := NewAccessibleForm(huh.NewGroup(
-		huh.NewConfirm().
-			Title("Set up review skills now?").
-			Affirmative("Yes").
-			Negative("Cancel").
-			Value(&proceed),
-	))
-	if err := form.Run(); err != nil {
-		fmt.Fprintln(out, "Setup cancelled.")
-		return false
-	}
-	if !proceed {
-		fmt.Fprintln(out, "Setup cancelled.")
-	}
-	return proceed
-}
-
 // runReviewConfigPicker presents a huh multi-select for each installed agent
 // that has curated review skills, and saves the selection to
 // .entire/settings.json. Previously-saved skills are pre-checked via
 // huh.Option.Selected(true), mirroring how `entire enable` preserves prior
 // selections in its own agent picker.
-func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string]settings.ReviewConfig, error) {
+func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string][]string, error) {
 	installed := GetAgentsWithHooksInstalled(ctx)
 	if len(installed) == 0 {
-		return nil, errors.New(
-			"no agents with hooks installed; " +
-				"run 'entire configure --agent <name>' to install hooks for one, " +
-				"or 'entire enable' to set up the repo",
-		)
+		return nil, errors.New("no agents installed; run 'entire enable' first")
 	}
 
 	// Narrow to agents that have a curated skills list; others need manual
@@ -288,7 +206,8 @@ func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string]setti
 	}
 	var configurable []configurableAgent
 	for _, name := range installed {
-		if !skilldiscovery.IsEligible(string(name)) {
+		curated, ok := curatedReviewSkills[string(name)]
+		if !ok || len(curated) == 0 {
 			continue
 		}
 		ag, err := agent.Get(name)
@@ -304,12 +223,12 @@ func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string]setti
 		)
 	}
 
-	// Load existing config so we can pre-check saved skills and seed saved
-	// prompts. A load error here means the settings file is malformed; log
-	// at Warn so users debugging "my saved skills aren't pre-checked" can
-	// see why, but keep going with an empty prefill — runReview already
-	// surfaces the same error distinctly when it's the first load.
-	existing := map[string]settings.ReviewConfig{}
+	// Load existing config so we can pre-check saved skills. A load error
+	// here means the settings file is malformed; log at Warn so users
+	// debugging "my saved skills aren't pre-checked" can see why, but keep
+	// going with an empty prefill — runReview already surfaces the same
+	// error distinctly when it's the first load.
+	existing := map[string][]string{}
 	if s, err := settings.Load(ctx); err != nil {
 		logging.Warn(ctx, "settings.Load failed when pre-filling picker", slog.String("error", err.Error()))
 	} else if s != nil {
@@ -323,125 +242,58 @@ func runReviewConfigPicker(ctx context.Context, out io.Writer) (map[string]setti
 	for _, c := range configurable {
 		labels = append(labels, string(c.ag.Type()))
 	}
-	fmt.Fprintf(out, "Configuring review for %d agent(s): %s\n", len(configurable), strings.Join(labels, ", "))
+	fmt.Fprintf(out, "Configuring review skills for %d agent(s): %s\n", len(configurable), strings.Join(labels, ", "))
 	fmt.Fprintln(out, "(Previously-saved skills are pre-checked. Space to toggle, enter to confirm.)")
 	fmt.Fprintln(out)
 
-	selected := map[string]settings.ReviewConfig{}
+	selected := map[string][]string{}
 	for i, c := range configurable {
-		curated := skilldiscovery.CuratedBuiltinsFor(string(c.name))
+		curated := curatedReviewSkills[string(c.name)]
+		savedSet := map[string]struct{}{}
+		for _, s := range existing[string(c.name)] {
+			savedSet[s] = struct{}{}
+		}
 
-		// Discover + dedupe + filter hints.
-		var discovered []agent.DiscoveredSkill
-		if d, ok := c.ag.(agent.SkillDiscoverer); ok {
-			if ds, dErr := d.DiscoverReviewSkills(ctx); dErr == nil {
-				discovered = ds
-			} else {
-				logging.Debug(ctx, "review discovery failed",
-					slog.String("agent", string(c.name)), slog.String("error", dErr.Error()))
+		options := make([]huh.Option[string], 0, len(curated))
+		for _, s := range curated {
+			opt := huh.NewOption(fmt.Sprintf("%s — %s", s.Name, s.Desc), s.Name)
+			if _, ok := savedSet[s.Name]; ok {
+				opt = opt.Selected(true)
 			}
+			options = append(options, opt)
 		}
-		builtinNames := builtinNameSet(curated)
-		discovered = filterOutBuiltinCollisions(discovered, builtinNames)
 
-		discoveredSet := make(map[string]struct{}, len(discovered))
-		for _, d := range discovered {
-			discoveredSet[d.Name] = struct{}{}
-		}
-		activeHints := skilldiscovery.ActiveInstallHintsFor(string(c.name), discoveredSet)
-
-		var builtinPicks, discoveredPicks []string
-		prompt := existing[string(c.name)].Prompt
-
-		fields := buildReviewPickerFields(
-			string(c.name), curated, discovered, activeHints, prompt,
-			&builtinPicks, &discoveredPicks, &prompt,
-		)
-
-		// huh's Group has no .Title(), so the counter goes on the first field
-		// via type assertion. If the interface assertion fails (e.g. future huh
-		// refactor changes method sets), we silently skip the counter — UI nit,
-		// not a correctness issue.
+		// huh populates picks from Option.Selected(true) — do NOT pre-seed,
+		// matching the convention used in detectOrSelectAgent (setup.go).
+		var picks []string
 		title := fmt.Sprintf("[%d/%d] Review skills for %s", i+1, len(configurable), c.ag.Type())
-		if titleable, ok := fields[0].(interface {
-			Title(t string) huh.Field
-		}); ok {
-			fields[0] = titleable.Title(title)
-		}
-
-		form := NewAccessibleForm(huh.NewGroup(fields...))
+		form := NewAccessibleForm(huh.NewGroup(
+			huh.NewMultiSelect[string]().
+				Title(title).
+				Description(fmt.Sprintf("Agent: %s", c.ag.Type())).
+				Options(options...).
+				Value(&picks),
+		))
 		if err := form.Run(); err != nil {
 			return nil, fmt.Errorf("picker for %s: %w", c.name, err)
 		}
-
-		cfg := settings.ReviewConfig{
-			Skills: dedupeStrings(append(builtinPicks, discoveredPicks...)),
-			Prompt: strings.TrimSpace(prompt),
-		}
-		if !cfg.IsZero() {
-			selected[string(c.name)] = cfg
+		if len(picks) > 0 {
+			selected[string(c.name)] = picks
 		}
 	}
-	// Merge the picker's output with existing entries the picker could not
-	// surface. Without the merge, save would replace s.Review wholesale and
-	// silently drop entries the user had configured for external agents,
-	// uncurated agents, or agents whose hooks are temporarily uninstalled —
-	// exactly the "edit settings.json manually" case the help text suggests.
-	offered := make(map[string]struct{}, len(configurable))
-	for _, c := range configurable {
-		offered[string(c.name)] = struct{}{}
+	if len(selected) == 0 {
+		return nil, errors.New("no review skills selected")
 	}
-	merged := mergePickerResults(existing, offered, selected)
-
-	// The emptiness check runs on `merged`, not `selected`: a user
-	// deliberately deselecting all curated agents while keeping existing
-	// external-agent entries is a valid outcome that must be saveable. Only
-	// refuse if the final config would be empty — i.e., no picks/prompt
-	// AND no pre-existing entries to preserve.
-	if len(merged) == 0 {
-		return nil, errors.New("no review skills or prompt configured")
-	}
-
-	if err := saveReviewConfig(ctx, merged); err != nil {
+	if err := saveReviewConfig(ctx, selected); err != nil {
 		return nil, err
 	}
 	fmt.Fprintln(out, "Saved review config to .entire/settings.json. Edit directly or run `entire review --edit`.")
-	return merged, nil
-}
-
-// mergePickerResults combines the picker's output with existing review
-// config entries that the picker did not surface. Agents in `offered` are
-// fully controlled by the picker: if they appear in `selected` with a
-// non-zero config the entry is set, otherwise the entry is removed.
-// Agents not in `offered` keep their existing config untouched.
-//
-// Exposed as a helper so tests can drive it directly — the picker itself
-// can't run headless.
-func mergePickerResults(existing map[string]settings.ReviewConfig, offered map[string]struct{}, selected map[string]settings.ReviewConfig) map[string]settings.ReviewConfig {
-	merged := make(map[string]settings.ReviewConfig, len(existing)+len(selected))
-	for name, cfg := range existing {
-		if _, wasOffered := offered[name]; !wasOffered {
-			merged[name] = cfg
-		}
-	}
-	for name, cfg := range selected {
-		merged[name] = cfg
-	}
-	return merged
+	return selected, nil
 }
 
 func newReviewCmd() *cobra.Command {
-	return newReviewCmdWithDeps(runReviewDeps{})
-}
-
-// newReviewCmdWithDeps returns the review subcommand wired against the
-// provided deps. Tests use this constructor directly to inject stubs for
-// branches that would otherwise require a real TTY. Callers should pass
-// runReviewDeps{} in production; runReview fills in defaults for any nil
-// fields.
-func newReviewCmdWithDeps(deps runReviewDeps) *cobra.Command {
 	var edit bool
-	var agentOverride string
+	var trackOnly bool
 
 	cmd := &cobra.Command{
 		Use:   "review",
@@ -450,80 +302,22 @@ func newReviewCmdWithDeps(deps runReviewDeps) *cobra.Command {
 the current branch. On first run, an interactive picker writes the config.
 
 The review session is recorded as part of the next checkpoint, so the
-review metadata is permanently attached to the commit it covers.
-
-Flags:
-  --edit         re-open the review config picker
-  --agent NAME   select a specific configured agent when more than one is
-                 configured (default: alphabetically first)
-
-Subcommands:
-  attach <id>    tag an existing session as a review (equivalent to
-                 'entire attach --review <id>')`,
+review metadata is permanently attached to the commit it covers.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			if edit {
 				_, err := runReviewConfigPicker(ctx, cmd.OutOrStdout())
 				return err
 			}
-			return runReview(ctx, cmd, agentOverride, deps)
+			return runReview(ctx, cmd, trackOnly)
 		},
 	}
 	cmd.Flags().BoolVar(&edit, "edit", false, "re-open the review config picker")
-	cmd.Flags().StringVar(&agentOverride, "agent", "", "select a specific configured agent (default: alphabetically first)")
-	cmd.AddCommand(newReviewAttachCmd())
+	cmd.Flags().BoolVar(&trackOnly, "track-only", false, "write pending marker without spawning agent")
 	return cmd
 }
 
-// newReviewAttachCmd is a thin wrapper around `entire attach --review`. It
-// shares all wiring with runAttach; only the UX surface differs, letting
-// users discover review-attach through `entire review` in help output.
-func newReviewAttachCmd() *cobra.Command {
-	var (
-		force      bool
-		agentFlag  string
-		skillsFlag []string
-	)
-	cmd := &cobra.Command{
-		Use:   "attach <session-id>",
-		Short: "Tag an existing agent session as a review",
-		Long: `Tag an existing agent session as an agent_review and link it to
-the current commit's checkpoint. Use this when you ran a review manually
-(without 'entire review') and want the review metadata attached after
-the fact.
-
-The first user prompt in the transcript is recorded as the review
-prompt. Pass --skills to declare which skills were actually run; omit
-to attach a review without a declared skills list.
-
-Equivalent to 'entire attach --review <session-id>' — provided here for
-discoverability alongside the other review subcommands.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) != 1 {
-				return cmd.Help()
-			}
-			if checkDisabledGuard(cmd.Context(), cmd.OutOrStdout()) {
-				return nil
-			}
-			// Discover external agents so --agent <external-name> is
-			// recognized and auto-detection covers them. Mirrors the
-			// contract of `entire attach` so the two entry points stay
-			// behaviorally equivalent.
-			external.DiscoverAndRegister(cmd.Context())
-			return runAttachSurfaceReviewErrors(cmd, args[0], types.AgentName(agentFlag), attachOptions{
-				Force:                force,
-				Review:               true,
-				ReviewSkillsOverride: skillsFlag,
-			})
-		},
-	}
-	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation and amend the last commit with the checkpoint trailer")
-	cmd.Flags().StringVarP(&agentFlag, "agent", "a", string(agent.DefaultAgentName), "Agent that created the session")
-	cmd.Flags().StringSliceVar(&skillsFlag, "skills", nil, "Optional: declare which review skills were run in this session")
-	return cmd
-}
-
-func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string, deps runReviewDeps) error {
+func runReview(ctx context.Context, cmd *cobra.Command, trackOnly bool) error {
 	out := cmd.OutOrStdout()
 
 	// 1. Pre-flight: must be in a git repo.
@@ -546,9 +340,6 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string, de
 		return NewSilentError(err)
 	}
 	if s == nil || len(s.Review) == 0 {
-		if !confirmFirstRunSetup(out) {
-			return nil
-		}
 		picked, pickErr := runReviewConfigPicker(ctx, out)
 		if pickErr != nil {
 			return pickErr
@@ -557,75 +348,12 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string, de
 			s = &settings.EntireSettings{}
 		}
 		s.Review = picked
-		fmt.Fprintln(out)
-		fmt.Fprintln(out, "Setup complete — running review now.")
 	}
 
-	// 3. Pick agent. When multiple agents are configured with hooks installed
-	// and no --agent override is provided, prompt the user to pick one.
-	// Skipped when --agent is passed, and skipped when only one eligible
-	// agent is configured (selectReviewAgent's alphabetical default handles
-	// the single-agent case deterministically).
-	if agentOverride == "" {
-		eligible := computeEligibleConfigured(ctx, s)
-		if len(eligible) > 1 {
-			fn := deps.promptForAgentFn
-			if fn == nil {
-				fn = promptForAgent
-			}
-			picked, pickErr := fn(ctx, eligible)
-			if pickErr != nil {
-				cmd.SilenceUsage = true
-				fmt.Fprintln(cmd.ErrOrStderr(), pickErr.Error())
-				return NewSilentError(pickErr)
-			}
-			if picked == "" {
-				// Defensive: a nil-or-empty return from the picker must NOT
-				// fall through to selectReviewAgent's alphabetical-first
-				// default. That's exactly the silent-masking shape the
-				// picker was added to eliminate. Refuse to proceed.
-				cmd.SilenceUsage = true
-				emptyErr := errors.New("agent picker returned empty agent name")
-				fmt.Fprintln(cmd.ErrOrStderr(), emptyErr.Error())
-				return NewSilentError(emptyErr)
-			}
-			agentOverride = picked
-		}
-	}
-
-	agentName, cfg, err := selectReviewAgent(s.Review, agentOverride)
+	// 3. Pick agent.
+	agentName, skills, err := selectReviewAgent(s.Review)
 	if err != nil {
-		cmd.SilenceUsage = true
-		fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
-		return NewSilentError(err)
-	}
-
-	// 3.5. Verify hooks are installed for the selected agent. Without the
-	// agent's lifecycle hooks firing, UserPromptSubmit will never adopt the
-	// pending marker and the review metadata will never be recorded — a
-	// silent failure mode. Stale config (e.g. user ran `entire disable`
-	// without removing the agent from review settings) hits this same path.
-	if !slices.Contains(GetAgentsWithHooksInstalled(ctx), types.AgentName(agentName)) {
-		cmd.SilenceUsage = true
-		fmt.Fprintf(cmd.ErrOrStderr(),
-			"Hooks are not installed for %q. Run `entire configure --agent %s` first, "+
-				"or remove %q from review settings.\n",
-			agentName, agentName, agentName)
-		return NewSilentError(fmt.Errorf("hooks not installed for %s", agentName))
-	}
-
-	// 3.6. Verify configured skills are actually installed on disk. Catches
-	// the hand-edited-settings.json case where the user named a skill that
-	// doesn't exist; without this guard the agent would spawn and fail
-	// silently with "I don't have that skill".
-	ag, agErr := agent.Get(types.AgentName(agentName))
-	if agErr != nil {
-		return fmt.Errorf("resolve agent %s: %w", agentName, agErr)
-	}
-	if err := verifyConfiguredSkillsInstalled(ctx, ag, cfg); err != nil {
-		cmd.SilenceUsage = true
-		fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
-		return NewSilentError(err)
+		return err
 	}
 
 	// 4. Re-run guard: check if HEAD's checkpoint already has a review.
@@ -658,17 +386,10 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string, de
 		return fmt.Errorf("resolve worktree root: %w", err)
 	}
 
-	// 6. Compose the review prompt once, then write the pending marker. The
-	// composed prompt is carried on the marker so adoption records exactly
-	// what the agent was asked to do (the same string passed to LaunchCmd
-	// below), rather than recomposing on the hook side. When the user has
-	// configured a custom Prompt, it wins verbatim; otherwise Skills are
-	// composed into the default "run these in order" template.
-	prompt := composeReviewPrompt(cfg)
+	// 6. Write pending marker (agent hook will adopt it).
 	if err := WritePendingReviewMarker(ctx, PendingReviewMarker{
 		AgentName:    agentName,
-		Skills:       cfg.Skills,
-		Prompt:       prompt,
+		Skills:       skills,
 		StartingSHA:  headSHA,
 		StartedAt:    time.Now().UTC(),
 		WorktreePath: worktreeRoot,
@@ -676,16 +397,11 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string, de
 		return fmt.Errorf("write pending marker: %w", err)
 	}
 
-	// 7. Resolve launcher BEFORE installing the cleanup defer. Non-launchable
-	// agents (cursor, opencode, factoryai-droid, etc.) can't be spawned as
-	// subprocesses, so the marker must persist on disk for the user's
-	// manually-started session to adopt. If we registered the defer first,
-	// it would wipe the marker on this return path, silently breaking the
-	// hand-off the message promises.
-	launcher, ok := agent.LauncherFor(types.AgentName(agentName))
-	if !ok {
-		fmt.Fprintf(out, "%s does not support subprocess launch yet. Marker written.\n", agentName)
-		fmt.Fprintf(out, "Start %s manually and use this prompt:\n\n%s\n", agentName, prompt)
+	if trackOnly {
+		// Marker must persist — the user will start the agent manually and
+		// its hook will adopt the marker.
+		fmt.Fprintln(out, "Pending review marker written.")
+		fmt.Fprintf(out, "Start %s and run these skills manually: %s\n", agentName, strings.Join(skills, ", "))
 		return nil
 	}
 
@@ -704,12 +420,21 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string, de
 			logging.Debug(ctx, "cleanup unadopted review marker", slog.String("error", clearErr.Error()))
 		}
 	}()
+
+	// 7. Spawn agent with the composed initial prompt.
+	launcher, ok := agent.LauncherFor(types.AgentName(agentName))
+	if !ok {
+		fmt.Fprintf(out, "%s does not support subprocess launch yet. Falling back to --track-only.\n", agentName)
+		fmt.Fprintf(out, "Start %s manually and run: %s\n", agentName, strings.Join(skills, ", "))
+		return nil
+	}
 	// Best-effort: show the user what's in scope so they can tell whether
 	// the review target is what they expected. Failures are silent — scope
 	// is informational, not load-bearing.
 	if scope, scopeErr := detectReviewScope(ctx); scopeErr == nil {
 		fmt.Fprintln(out, formatReviewScope(scope))
 	}
+	prompt := composeReviewPrompt(skills)
 	execCmd, err := launcher.LaunchCmd(ctx, prompt)
 	if err != nil {
 		return fmt.Errorf("launch %s: %w", agentName, err)
@@ -720,165 +445,33 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string, de
 	return nil
 }
 
-// computeEligibleConfigured returns the sorted list of agents that are both
-// configured (non-zero ReviewConfig entry) AND have hooks installed. Only
-// eligible agents are valid picker targets — spawning a review for an agent
-// without hooks would silently drop the review metadata.
-func computeEligibleConfigured(ctx context.Context, s *settings.EntireSettings) []agentChoice {
-	if s == nil {
-		return nil
-	}
-	installed := GetAgentsWithHooksInstalled(ctx)
-	installedSet := make(map[types.AgentName]struct{}, len(installed))
-	for _, name := range installed {
-		installedSet[name] = struct{}{}
-	}
-	out := make([]agentChoice, 0, len(s.Review))
-	for name, cfg := range s.Review {
-		if cfg.IsZero() {
-			continue
-		}
-		if _, ok := installedSet[types.AgentName(name)]; !ok {
-			continue
-		}
-		out = append(out, agentChoice{Name: name, Label: labelForAgentChoice(name, cfg)})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
-}
-
-// labelForAgentChoice builds the picker-visible label for an agent row.
-// Annotates with "(N skills configured)" when skills are set, "(prompt-only)"
-// when only a freeform prompt is configured, and falls back to the bare name
-// otherwise (defensive — computeEligibleConfigured filters zero configs out
-// before we get here).
-func labelForAgentChoice(name string, cfg settings.ReviewConfig) string {
-	switch {
-	case len(cfg.Skills) > 0:
-		return fmt.Sprintf("%s   (%d skills configured)", name, len(cfg.Skills))
-	case cfg.Prompt != "":
-		return name + "   (prompt-only)"
-	default:
-		return name
-	}
-}
-
-// promptForAgent renders the single-select agent picker shown when more than
-// one eligible agent is configured. Returns the chosen agent name. Respects
-// accessibility mode via NewAccessibleForm.
-func promptForAgent(ctx context.Context, eligible []agentChoice) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf("agent picker: %w", err)
-	}
-	if len(eligible) == 0 {
-		return "", errors.New("no eligible agents to prompt for")
-	}
-	options := make([]huh.Option[string], 0, len(eligible))
-	for _, c := range eligible {
-		options = append(options, huh.NewOption(c.Label, c.Name))
-	}
-	picked := eligible[0].Name
-	form := NewAccessibleForm(huh.NewGroup(
-		huh.NewSelect[string]().
-			Title("Which agent should run this review?").
-			Options(options...).
-			Value(&picked),
-	))
-	if err := form.Run(); err != nil {
-		return "", fmt.Errorf("agent picker: %w", err)
-	}
-	return picked, nil
-}
-
-// selectReviewAgent picks an agent from the configured review map.
-//
-// If override is non-empty, returns the config for that agent or an error
-// listing the configured alternatives. Otherwise returns the alphabetically
-// first configured agent — deterministic but user-overridable via --agent.
-func selectReviewAgent(review map[string]settings.ReviewConfig, override string) (string, settings.ReviewConfig, error) {
+// selectReviewAgent picks an agent from the configured review map. v1: single
+// agent. If multiple are configured, returns the one that sorts first by name
+// (deterministic default). Returns an error if the map is empty.
+func selectReviewAgent(review map[string][]string) (string, []string, error) {
 	if len(review) == 0 {
-		return "", settings.ReviewConfig{}, errors.New("no review config found")
+		return "", nil, errors.New("no review skills configured")
 	}
+	// Deterministic pick: alphabetical by agent name.
 	var names []string
-	for name, cfg := range review {
-		if !cfg.IsZero() {
+	for name, skills := range review {
+		if len(skills) > 0 {
 			names = append(names, name)
 		}
 	}
 	if len(names) == 0 {
-		return "", settings.ReviewConfig{}, errors.New("no review config found")
+		return "", nil, errors.New("no review skills configured")
 	}
 	sort.Strings(names)
-	if override != "" {
-		if cfg, ok := review[override]; ok && !cfg.IsZero() {
-			return override, cfg, nil
-		}
-		return "", settings.ReviewConfig{}, fmt.Errorf(
-			"agent %q is not configured for review; configured agents: %s",
-			override, strings.Join(names, ", "),
-		)
-	}
 	pick := names[0]
 	return pick, review[pick], nil
 }
 
-// verifyConfiguredSkillsInstalled is the spawn-time backstop for the
-// silent-failure vector. For each skill in cfg.Skills, check it's either a
-// curated built-in or returned by the agent's SkillDiscoverer; fail with a
-// user-facing error if any skill is missing. Empty Skills (prompt-only
-// config) short-circuits to nil — a freeform prompt has no skill list to
-// validate against.
-func verifyConfiguredSkillsInstalled(ctx context.Context, ag agent.Agent, cfg settings.ReviewConfig) error {
-	if len(cfg.Skills) == 0 {
-		return nil
-	}
-	builtins := builtinNameSet(skilldiscovery.CuratedBuiltinsFor(string(ag.Name())))
-	discoveredNames := map[string]struct{}{}
-	if d, ok := ag.(agent.SkillDiscoverer); ok {
-		if skills, err := d.DiscoverReviewSkills(ctx); err == nil {
-			for _, s := range skills {
-				discoveredNames[s.Name] = struct{}{}
-			}
-		} else {
-			logging.Debug(ctx, "skill verification discovery failed",
-				slog.String("agent", string(ag.Name())), slog.String("error", err.Error()))
-		}
-	}
-	var missing []string
-	for _, s := range cfg.Skills {
-		if _, ok := builtins[s]; ok {
-			continue
-		}
-		if _, ok := discoveredNames[s]; ok {
-			continue
-		}
-		missing = append(missing, s)
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	return fmt.Errorf(
-		"configured review skill(s) not installed: %s\n"+
-			"run `entire review --edit` to reconfigure, or install the plugin and retry",
-		strings.Join(missing, ", "),
-	)
-}
-
-// composeReviewPrompt builds the prompt sent to the agent from a
-// ReviewConfig. If the config carries an explicit Prompt it wins
-// verbatim — the user's words are the source of truth. Otherwise the
-// skills list is composed into the default "run these in order"
-// template. Empty config returns "" (caller should avoid that case).
-func composeReviewPrompt(cfg settings.ReviewConfig) string {
-	if cfg.Prompt != "" {
-		return cfg.Prompt
-	}
-	if len(cfg.Skills) == 0 {
-		return ""
-	}
+// composeReviewPrompt builds the initial prompt the agent receives.
+func composeReviewPrompt(skills []string) string {
 	var sb strings.Builder
 	sb.WriteString("Please run these review skills in order:\n")
-	for i, skill := range cfg.Skills {
+	for i, skill := range skills {
 		fmt.Fprintf(&sb, "  %d. %s\n", i+1, skill)
 	}
 	return sb.String()
@@ -1076,7 +669,7 @@ func headHasReviewCheckpoint(ctx context.Context) (bool, string) {
 // malformed — we must NOT silently overwrite it with an empty struct, or
 // every unrelated setting the user had configured would be wiped. Return the
 // error so the caller can surface it instead.
-func saveReviewConfig(ctx context.Context, review map[string]settings.ReviewConfig) error {
+func saveReviewConfig(ctx context.Context, review map[string][]string) error {
 	s, err := settings.Load(ctx)
 	if err != nil {
 		return fmt.Errorf("load settings before save: %w", err)
@@ -1089,129 +682,4 @@ func saveReviewConfig(ctx context.Context, review map[string]settings.ReviewConf
 		return fmt.Errorf("save settings: %w", err)
 	}
 	return nil
-}
-
-// buildReviewPickerFields composes the per-agent group fields for the
-// review picker. Returns a slice of huh.Field in render order:
-//
-//	0: built-in commands (multiselect) OR note
-//	1: installed plugin skills (multiselect) OR note
-//	2: install hints (note with all active hint messages) — OMITTED if empty
-//	3: additional instructions (text) — always present
-//
-// Pure function — no side effects, no huh form running — so unit-testable.
-// Value bindings (builtinPicksOut, discoveredPicksOut, promptOut) may be
-// nil when the caller only needs the field count (tests).
-func buildReviewPickerFields(
-	agentName string,
-	builtins []skilldiscovery.CuratedSkill,
-	discovered []agent.DiscoveredSkill,
-	activeHints []skilldiscovery.InstallHint,
-	previousPrompt string,
-	builtinPicksOut, discoveredPicksOut *[]string,
-	promptOut *string,
-) []huh.Field {
-	var fields []huh.Field
-
-	// Picker labels show only the invocation name — no descriptions. Agent
-	// descriptions in particular can be pages of embedded usage examples,
-	// which makes the picker unreadable. Users recognize skills by name;
-	// the stored value is the name either way.
-	if len(builtins) > 0 {
-		opts := make([]huh.Option[string], 0, len(builtins))
-		for _, b := range builtins {
-			opts = append(opts, huh.NewOption(b.Name, b.Name))
-		}
-		ms := huh.NewMultiSelect[string]().Title("Built-in commands").Options(opts...)
-		if builtinPicksOut != nil {
-			ms = ms.Value(builtinPicksOut)
-		}
-		fields = append(fields, ms)
-	} else {
-		fields = append(fields, huh.NewNote().
-			Title("Built-in commands").
-			Description(fmt.Sprintf("No built-in review commands in %s.", agentName)))
-	}
-
-	if len(discovered) > 0 {
-		opts := make([]huh.Option[string], 0, len(discovered))
-		for _, d := range discovered {
-			opts = append(opts, huh.NewOption(d.Name, d.Name))
-		}
-		ms := huh.NewMultiSelect[string]().Title("Installed plugin skills").Options(opts...)
-		if discoveredPicksOut != nil {
-			ms = ms.Value(discoveredPicksOut)
-		}
-		fields = append(fields, ms)
-	} else {
-		fields = append(fields, huh.NewNote().
-			Title("Installed plugin skills").
-			Description("No plugin review skills detected on disk."))
-	}
-
-	if len(activeHints) > 0 {
-		var sb strings.Builder
-		for i, h := range activeHints {
-			if i > 0 {
-				sb.WriteString("\n")
-			}
-			sb.WriteString("• ")
-			sb.WriteString(h.Message)
-		}
-		fields = append(fields, huh.NewNote().
-			Title("Install more").
-			Description(sb.String()))
-	}
-
-	text := huh.NewText().
-		Title("Additional instructions (optional)").
-		Description("Used verbatim as the review prompt when set. Leave blank to use the default 'run these skills in order' template.")
-	if promptOut != nil {
-		*promptOut = previousPrompt
-		text = text.Value(promptOut)
-	}
-	fields = append(fields, text)
-
-	return fields
-}
-
-func builtinNameSet(curated []skilldiscovery.CuratedSkill) map[string]struct{} {
-	set := make(map[string]struct{}, len(curated))
-	for _, c := range curated {
-		set[c.Name] = struct{}{}
-	}
-	return set
-}
-
-// filterOutBuiltinCollisions drops any discovered skill whose name collides
-// with a curated built-in. Built-in wins because it carries a richer,
-// hand-authored description.
-func filterOutBuiltinCollisions(discovered []agent.DiscoveredSkill, builtins map[string]struct{}) []agent.DiscoveredSkill {
-	if len(discovered) == 0 || len(builtins) == 0 {
-		return discovered
-	}
-	out := make([]agent.DiscoveredSkill, 0, len(discovered))
-	for _, d := range discovered {
-		if _, clash := builtins[d.Name]; clash {
-			continue
-		}
-		out = append(out, d)
-	}
-	return out
-}
-
-func dedupeStrings(xs []string) []string {
-	if len(xs) == 0 {
-		return xs
-	}
-	seen := make(map[string]struct{}, len(xs))
-	out := make([]string, 0, len(xs))
-	for _, x := range xs {
-		if _, ok := seen[x]; ok {
-			continue
-		}
-		seen[x] = struct{}{}
-		out = append(out, x)
-	}
-	return out
 }

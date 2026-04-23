@@ -35,29 +35,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// attachOptions carries optional flags for runAttach. Force is the original
-// flag; Review opts the attach into recording the session as an
-// agent_review in the checkpoint metadata.
-type attachOptions struct {
-	Force bool
-	// Review, when true, tags the attached session as a review. Skills are
-	// resolved inside runAttach after the real agent is known (via session
-	// state or transcript auto-detection), not at the cobra layer — the
-	// --agent flag's default points at claude-code, which would otherwise
-	// make a Gemini session incorrectly look up review.claude-code config.
-	Review bool
-	// ReviewSkillsOverride, when non-empty, overrides the agent's
-	// configured review skills. Empty means "read review.<agent> from
-	// settings after resolving the real agent". Ignored when Review=false.
-	ReviewSkillsOverride []string
-}
-
 func newAttachCmd() *cobra.Command {
 	var (
-		force      bool
-		agentFlag  string
-		reviewFlag bool
-		skillsFlag []string
+		force     bool
+		agentFlag string
 	)
 	cmd := &cobra.Command{
 		Use:   "attach <session-id>",
@@ -70,11 +51,6 @@ the session started, or to attach a research session.
 
 If the last commit already has a checkpoint, the session is added to it.
 Otherwise a new checkpoint is created.
-
-Use --review to tag the attached session as an agent review. The
-first user prompt in the transcript is recorded as the review prompt.
-Pass --skills to declare which skills were actually run; omit to
-attach a review without a declared skills list.
 
 Works with any registered agent, including external agents enabled via
 external_agents in settings. Run 'entire configure' to see the full list.`,
@@ -89,52 +65,15 @@ external_agents in settings. Run 'entire configure' to see the full list.`,
 			// and so auto-detection can find transcripts from external agents.
 			external.DiscoverAndRegister(cmd.Context())
 			agentName := types.AgentName(agentFlag)
-			opts := attachOptions{
-				Force:                force,
-				Review:               reviewFlag,
-				ReviewSkillsOverride: skillsFlag,
-			}
-			return runAttachSurfaceReviewErrors(cmd, args[0], agentName, opts)
+			return runAttach(cmd.Context(), cmd.OutOrStdout(), args[0], agentName, force)
 		},
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation and amend the last commit with the checkpoint trailer")
 	cmd.Flags().StringVarP(&agentFlag, "agent", "a", string(agent.DefaultAgentName), "Agent that created the session (see 'entire configure' for registered agents, including external)")
-	cmd.Flags().BoolVar(&reviewFlag, "review", false, "Tag the attached session as an agent review")
-	cmd.Flags().StringSliceVar(&skillsFlag, "skills", nil, "Optional: declare which review skills were run in this session. Only used with --review")
 	return cmd
 }
 
-// resolveReviewSkills returns the skills list to record on an
-// attach-as-review. Only the user's --skills flag counts: configured
-// settings.Review[agent] is the spawn-path default ("what I'd run if I
-// used 'entire review'"), not a claim about what actually happened in a
-// given manual session. Silently attaching configured skills would
-// misrepresent the session as having run skills it may not have.
-//
-// Empty is a valid result — the attach still tags the session as a
-// review via Kind + ReviewPrompt (the session's first user prompt). The
-// skills list is a queryable convenience, not the source of truth.
-func resolveReviewSkills(flagSkills []string) []string {
-	if len(flagSkills) == 0 {
-		return nil
-	}
-	return flagSkills
-}
-
-// runAttachSurfaceReviewErrors wraps runAttach so review-mode errors reach
-// the user as clear stderr messages rather than generic cobra error output.
-// The non-review path preserves the existing runAttach return-err behavior.
-func runAttachSurfaceReviewErrors(cmd *cobra.Command, sessionID string, agentName types.AgentName, opts attachOptions) error {
-	err := runAttach(cmd.Context(), cmd.OutOrStdout(), sessionID, agentName, opts)
-	if err != nil && opts.Review {
-		cmd.SilenceUsage = true
-		fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
-		return NewSilentError(err)
-	}
-	return err
-}
-
-func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName types.AgentName, opts attachOptions) error {
+func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName types.AgentName, force bool) error {
 	// Initialize structured logger so logging.Warn/Info write to .entire/logs/ not stderr.
 	if err := logging.Init(ctx, sessionID); err != nil {
 		// Init failed — logging will use stderr fallback, non-fatal.
@@ -161,20 +100,9 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 
 	// If session already has a checkpoint, just offer to link it.
 	if existingState != nil && !existingState.LastCheckpointID.IsEmpty() {
-		// Review-upgrade isn't supported yet: the existing checkpoint's
-		// metadata tree would need to be rewritten with Kind/ReviewSkills/
-		// ReviewPrompt set, and a new commit pushed onto entire/checkpoints/v1.
-		// Error out with a concrete message rather than silently linking the
-		// checkpoint without the review metadata.
-		if opts.Review {
-			return fmt.Errorf(
-				"session %s already has checkpoint %s; rewriting an existing checkpoint as a review is not supported yet",
-				sessionID, existingState.LastCheckpointID.String(),
-			)
-		}
 		cpID := existingState.LastCheckpointID.String()
 		fmt.Fprintf(w, "Session %s already has checkpoint %s\n", sessionID, cpID)
-		if err := promptAmendCommit(logCtx, w, headCommit, cpID, opts.Force); err != nil {
+		if err := promptAmendCommit(logCtx, w, headCommit, cpID, force); err != nil {
 			logging.Warn(logCtx, "failed to amend commit", "error", err)
 			fmt.Fprintf(w, "\nCopy to your commit message to attach:\n\n  Entire-Checkpoint: %s\n", cpID)
 		}
@@ -185,11 +113,6 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	ag, transcriptPath, err := resolveAgentAndTranscript(logCtx, w, sessionID, agentName, existingState)
 	if err != nil {
 		return err
-	}
-
-	var reviewSkills []string
-	if opts.Review {
-		reviewSkills = resolveReviewSkills(opts.ReviewSkillsOverride)
 	}
 
 	transcriptData, err := ag.ReadTranscript(transcriptPath)
@@ -212,30 +135,8 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	// Determine checkpoint ID: reuse from HEAD if one exists, otherwise generate new.
 	checkpointID, isExistingCheckpoint := resolveCheckpointID(headCommit)
 
-	// Refresh the metadata branch if HEAD already references a checkpoint.
-	// Returns a possibly-freshly-opened repo handle; see refreshForExistingCheckpoint.
-	repo = refreshForExistingCheckpoint(ctx, logCtx, repo, isExistingCheckpoint)
-
 	// Write directly to entire/checkpoints/v1.
 	store := cpkg.NewGitStore(repo)
-
-	// Defense-in-depth guard: the earlier existingState.LastCheckpointID
-	// check only fires when the session's state file records its
-	// checkpoint. A session already stored in the HEAD checkpoint but
-	// whose state is missing/stale (state file deleted, never written,
-	// condensed without LastCheckpointID update, or pulled from a remote
-	// that wasn't reflected locally) would bypass that guard.
-	// findSessionIndex matches by SessionID — without this check, a
-	// review-attach on such a session silently overwrites the existing
-	// session's metadata in the checkpoint.
-	if opts.Review && isExistingCheckpoint {
-		if existing, readErr := store.ReadSessionContentByID(ctx, checkpointID, sessionID); readErr == nil && existing != nil {
-			return fmt.Errorf(
-				"session %s is already recorded in checkpoint %s; rewriting an existing checkpoint as a review is not supported yet",
-				sessionID, checkpointID.String(),
-			)
-		}
-	}
 
 	author, err := GetGitAuthor(ctx)
 	if err != nil {
@@ -268,12 +169,6 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 		Model:        meta.Model,
 		TokenUsage:   tokenUsage,
 	}
-	if opts.Review {
-		writeOpts.Kind = string(session.KindAgentReview)
-		writeOpts.ReviewSkills = reviewSkills
-		writeOpts.ReviewPrompt = meta.FirstPrompt
-		writeOpts.HasReview = true
-	}
 
 	if compacted := compactTranscriptForStartLine(logCtx, redactedTranscript.Bytes(), cpkg.CommittedMetadata{
 		CheckpointID: checkpointID,
@@ -301,7 +196,7 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	}
 
 	// Create or update session state.
-	if err := saveAttachSessionState(logCtx, existingState, sessionID, ag.Type(), transcriptPath, checkpointID, meta, tokenUsage, opts, reviewSkills); err != nil {
+	if err := saveAttachSessionState(logCtx, existingState, sessionID, ag.Type(), transcriptPath, checkpointID, meta, tokenUsage); err != nil {
 		logging.Warn(logCtx, "failed to save session state", "error", err)
 	}
 
@@ -313,7 +208,7 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 
 	fmt.Fprintf(w, "  Created checkpoint %s\n", checkpointID)
 	cpIDStr := checkpointID.String()
-	if err := promptAmendCommit(logCtx, w, headCommit, cpIDStr, opts.Force); err != nil {
+	if err := promptAmendCommit(logCtx, w, headCommit, cpIDStr, force); err != nil {
 		logging.Warn(logCtx, "failed to amend commit", "error", err)
 		fmt.Fprintf(w, "\nCopy to your commit message to attach:\n\n  Entire-Checkpoint: %s\n", cpIDStr)
 	}
@@ -353,40 +248,6 @@ func getHeadCommit(repo *git.Repository) (*object.Commit, error) {
 // If HEAD already has an Entire-Checkpoint trailer, reuses that ID (the session
 // gets added as an additional session in the existing checkpoint).
 // Otherwise generates a new ID.
-// refreshForExistingCheckpoint refreshes the entire/checkpoints/v1 branch
-// before reading or writing when HEAD already references a checkpoint.
-// Two concerns both require fresh state:
-//
-//  1. Conflict detection (review mode): a session already recorded in the
-//     checkpoint — locally OR on the remote — must not be silently
-//     overwritten. Without a fetch, a stale local branch makes the
-//     sessionID-dedup check miss remote-only entries.
-//  2. Correct append-as-next-session: findSessionIndex returns
-//     len(Sessions) when the sessionID isn't already present. With a stale
-//     local view, this returns a too-low index and collides with an
-//     existing remote-only session on push.
-//
-// Mirrors the fallback chain `entire resume` uses in getMetadataTree:
-// checkpoint-remote → treeless fetch → local → full fetch → remote-tracking
-// ref. Returns a freshly-opened repo handle (so go-git's packfile cache
-// sees any newly-fetched objects), or the original repo on fetch failure.
-func refreshForExistingCheckpoint(ctx, logCtx context.Context, repo *git.Repository, isExistingCheckpoint bool) *git.Repository {
-	if !isExistingCheckpoint {
-		return repo
-	}
-	_, freshRepo, fetchErr := getMetadataTree(ctx)
-	if fetchErr != nil {
-		// Non-fatal: proceed with local state. Guards downstream catch
-		// what's visible locally; on push the user may still hit a
-		// conflict. Better than blocking attach on a transient fetch
-		// failure.
-		logging.Warn(logCtx, "failed to refresh metadata branch before attach; proceeding with local state",
-			slog.String("error", fetchErr.Error()))
-		return repo
-	}
-	return freshRepo
-}
-
 func resolveCheckpointID(headCommit *object.Commit) (id.CheckpointID, bool) {
 	existing := trailers.ParseAllCheckpoints(headCommit.Message)
 	if len(existing) > 0 {
@@ -404,8 +265,7 @@ func resolveCheckpointID(headCommit *object.Commit) (id.CheckpointID, bool) {
 
 // saveAttachSessionState creates or updates the session state file for the attached session.
 // If existingState is non-nil, it is updated in place (avoids a redundant disk load).
-// reviewSkills is the resolved skills list when opts.Review is true; ignored otherwise.
-func saveAttachSessionState(ctx context.Context, existingState *session.State, sessionID string, agentType types.AgentType, transcriptPath string, checkpointID id.CheckpointID, meta transcriptMetadata, tokenUsage *agent.TokenUsage, opts attachOptions, reviewSkills []string) error {
+func saveAttachSessionState(ctx context.Context, existingState *session.State, sessionID string, agentType types.AgentType, transcriptPath string, checkpointID id.CheckpointID, meta transcriptMetadata, tokenUsage *agent.TokenUsage) error {
 	stateStore, err := session.NewStateStore(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open session store: %w", err)
@@ -438,11 +298,6 @@ func saveAttachSessionState(ctx context.Context, existingState *session.State, s
 	}
 	if tokenUsage != nil {
 		state.TokenUsage = tokenUsage
-	}
-	if opts.Review {
-		state.Kind = session.KindAgentReview
-		state.ReviewSkills = reviewSkills
-		state.ReviewPrompt = meta.FirstPrompt
 	}
 
 	if err := stateStore.Save(ctx, state); err != nil {

@@ -20,7 +20,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
-	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
 	"github.com/go-git/go-git/v6"
@@ -55,7 +54,7 @@ func TestAttach_TranscriptNotFound(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, "nonexistent-session-id", agent.AgentNameClaudeCode, attachOptions{Force: true})
+	err := runAttach(context.Background(), &out, "nonexistent-session-id", agent.AgentNameClaudeCode, true)
 	if err == nil {
 		t.Fatal("expected error for missing transcript")
 	}
@@ -72,7 +71,7 @@ func TestAttach_Success(t *testing.T) {
 `)
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{Force: true})
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
@@ -130,7 +129,7 @@ func TestAttach_SessionAlreadyTracked_NoCheckpoint(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err = runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{Force: true})
+	err = runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true)
 	if err != nil {
 		t.Fatalf("expected attach to handle already-tracked session, got error: %v", err)
 	}
@@ -160,7 +159,7 @@ func TestAttach_OutputContainsCheckpointID(t *testing.T) {
 `)
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{Force: true})
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
@@ -188,7 +187,7 @@ func TestAttach_V2DualWriteEnabled(t *testing.T) {
 `)
 
 	var out bytes.Buffer
-	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{Force: true}); err != nil {
+	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true); err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
 
@@ -240,7 +239,7 @@ func TestAttach_V2DualWriteDisabled(t *testing.T) {
 `)
 
 	var out bytes.Buffer
-	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{Force: true}); err != nil {
+	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true); err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
 
@@ -265,7 +264,7 @@ func TestAttach_PopulatesTokenUsage(t *testing.T) {
 `)
 
 	var out bytes.Buffer
-	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{Force: true}); err != nil {
+	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true); err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
 
@@ -296,7 +295,7 @@ func TestAttach_SetsSessionTurnCount(t *testing.T) {
 `)
 
 	var out bytes.Buffer
-	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{Force: true}); err != nil {
+	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true); err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
 
@@ -438,7 +437,7 @@ func TestAttach_GeminiSubdirectorySession(t *testing.T) {
 	t.Setenv("ENTIRE_TEST_GEMINI_PROJECT_DIR", emptyProjectDir)
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameGemini, attachOptions{Force: true})
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameGemini, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
@@ -483,7 +482,7 @@ func TestAttach_GeminiSuccess(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameGemini, attachOptions{Force: true})
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameGemini, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
@@ -531,7 +530,7 @@ func TestAttach_CursorSuccess(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameCursor, attachOptions{Force: true})
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameCursor, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
@@ -580,7 +579,7 @@ func TestAttach_CodexSuccess(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameCodex, attachOptions{Force: true})
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameCodex, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
@@ -629,7 +628,7 @@ func TestAttach_FactoryAIDroidSuccess(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameFactoryAIDroid, attachOptions{Force: true})
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameFactoryAIDroid, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
@@ -677,304 +676,13 @@ func TestAttach_CursorNestedLayout(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameCursor, attachOptions{Force: true})
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameCursor, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
 
 	if !strings.Contains(out.String(), "Attached session") {
 		t.Errorf("expected 'Attached session' in output, got: %s", out.String())
-	}
-}
-
-// TestAttach_WithReviewFlag exercises runAttach with review mode: the
-// attached session must be tagged Kind=agent_review with the given skills
-// and the transcript's first prompt captured as ReviewPrompt.
-func TestAttach_WithReviewFlag(t *testing.T) {
-	setupAttachTestRepo(t)
-
-	sessionID := "test-attach-review-001"
-	firstPrompt := "please review the auth module for security issues"
-	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"`+firstPrompt+`"},"uuid":"uuid-1"}
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reviewing now."}]},"uuid":"uuid-2"}
-`)
-
-	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{
-		Force:                true,
-		Review:               true,
-		ReviewSkillsOverride: []string{"/pr-review-toolkit:review-pr", "/test-auditor"},
-	})
-	if err != nil {
-		t.Fatalf("runAttach failed: %v", err)
-	}
-
-	store, err := session.NewStateStore(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := store.Load(context.Background(), sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state == nil {
-		t.Fatal("expected session state to be created")
-	}
-	if state.Kind != session.KindAgentReview {
-		t.Errorf("Kind = %q, want %q", state.Kind, session.KindAgentReview)
-	}
-	if len(state.ReviewSkills) != 2 {
-		t.Errorf("ReviewSkills = %v, want 2 entries", state.ReviewSkills)
-	}
-	if state.ReviewPrompt != firstPrompt {
-		t.Errorf("ReviewPrompt = %q, want %q", state.ReviewPrompt, firstPrompt)
-	}
-}
-
-// TestAttach_ReviewWithExistingCheckpointErrors: attempting to tag a session
-// that already has a checkpoint is refused. Upgrading an existing
-// checkpoint's metadata to carry review fields would require rewriting the
-// entire/checkpoints/v1 tree — not supported in this first cut.
-func TestAttach_ReviewWithExistingCheckpointErrors(t *testing.T) {
-	setupAttachTestRepo(t)
-
-	sessionID := "test-attach-review-existing"
-	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"hello"},"uuid":"uuid-1"}
-`)
-
-	// First attach (non-review) creates a checkpoint.
-	var out bytes.Buffer
-	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{Force: true}); err != nil {
-		t.Fatalf("first attach failed: %v", err)
-	}
-
-	// Second attach with --review should error rather than silently
-	// linking the existing checkpoint.
-	out.Reset()
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{
-		Force:                true,
-		Review:               true,
-		ReviewSkillsOverride: []string{"/pr-review-toolkit:review-pr"},
-	})
-	if err == nil {
-		t.Fatal("expected error when review-attaching a session that already has a checkpoint")
-	}
-	if !strings.Contains(err.Error(), "already has checkpoint") {
-		t.Errorf("error should mention 'already has checkpoint'; got: %v", err)
-	}
-}
-
-// Regression for the "review-attach overwrote the existing session"
-// bug: the LastCheckpointID guard in session state only catches the case
-// where the state file tracks the checkpoint. A session that's already
-// in a checkpoint on HEAD but whose state file is missing, stale, or
-// has an empty LastCheckpointID would bypass that guard — findSessionIndex
-// would then match by SessionID and overwrite the existing session's
-// metadata. Defense-in-depth check against the on-disk checkpoint must
-// catch it too.
-func TestAttach_ReviewWithExistingCheckpointErrorsEvenWithoutSessionState(t *testing.T) {
-	setupAttachTestRepo(t)
-
-	sessionID := "test-attach-review-no-state"
-	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"hello"},"uuid":"uuid-1"}
-`)
-
-	// First attach (non-review) creates a checkpoint and writes session state.
-	var out bytes.Buffer
-	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{Force: true}); err != nil {
-		t.Fatalf("first attach failed: %v", err)
-	}
-
-	// Delete the session state file to simulate the gap: state lost but
-	// the checkpoint on disk still has the session. (Real-world triggers:
-	// state never written, state file manually removed, condensation path
-	// that didn't update LastCheckpointID.)
-	repoRoot := mustGetwd(t)
-	stateFile := filepath.Join(repoRoot, ".git", "entire-sessions", sessionID+".json")
-	if err := os.Remove(stateFile); err != nil {
-		t.Fatalf("remove state file: %v", err)
-	}
-
-	// Second attach with --review must error. Without the defense-in-depth
-	// guard, this call would silently overwrite the existing session's
-	// metadata in the checkpoint with review-flavored metadata.
-	out.Reset()
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{
-		Force:                true,
-		Review:               true,
-		ReviewSkillsOverride: []string{"/pr-review-toolkit:review-pr"},
-	})
-	if err == nil {
-		t.Fatal("expected error when review-attaching a session already recorded in HEAD's checkpoint, even without session state")
-	}
-	if !strings.Contains(err.Error(), "already recorded in checkpoint") {
-		t.Errorf("error should mention 'already recorded in checkpoint'; got: %v", err)
-	}
-}
-
-// Regression: attach must NOT silently attach skills from the spawn-path
-// config. settings.Review[agent] is what the user would run if they used
-// `entire review`, not a claim about what ran in a given manual session.
-// Only explicit --skills counts as a user assertion; without it,
-// ReviewSkills must be empty even when config exists.
-func TestAttachCmd_ReviewDoesNotInferSkillsFromConfig(t *testing.T) {
-	setupAttachTestRepo(t)
-
-	sessionID := "test-attach-review-no-leak"
-	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"review please"},"uuid":"uuid-1"}
-`)
-
-	// Seed review config — the spawn-path default. Attach must ignore this.
-	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
-		"claude-code": {Skills: []string{"/pr-review-toolkit:review-pr"}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	rootCmd := NewRootCmd()
-	rootCmd.SetArgs([]string{"attach", "--force", "--review", sessionID})
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("attach --review failed: %v", err)
-	}
-
-	store, err := session.NewStateStore(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := store.Load(context.Background(), sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state == nil || state.Kind != session.KindAgentReview {
-		t.Errorf("expected session tagged as review; got state=%+v", state)
-	}
-	if len(state.ReviewSkills) != 0 {
-		t.Errorf("ReviewSkills leaked from spawn config: %v; want empty (no --skills passed)", state.ReviewSkills)
-	}
-}
-
-// TestReviewAttachCmd_TagsSession drives `entire review attach <id>`,
-// verifying the subcommand reaches runAttach with review options set.
-func TestReviewAttachCmd_TagsSession(t *testing.T) {
-	setupAttachTestRepo(t)
-
-	sessionID := "test-review-attach-cmd-001"
-	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"check this out"},"uuid":"uuid-1"}
-`)
-
-	rootCmd := NewRootCmd()
-	rootCmd.SetArgs([]string{"review", "attach", "--force", "--skills", "/custom-review", sessionID})
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("review attach failed: %v", err)
-	}
-
-	store, err := session.NewStateStore(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := store.Load(context.Background(), sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state == nil || state.Kind != session.KindAgentReview {
-		t.Errorf("expected session tagged as review; got state=%+v", state)
-	}
-	if len(state.ReviewSkills) != 1 || state.ReviewSkills[0] != "/custom-review" {
-		t.Errorf("--skills override not applied: %v", state.ReviewSkills)
-	}
-}
-
-// TestAttachCmd_ReviewWithoutSkillsOrConfigErrors: the --review flag
-// requires either a --skills override or configured skills. Otherwise we
-// error rather than tagging a review with an empty skills list.
-// TestAttachCmd_ReviewWithoutSkillsOrConfigSucceeds: --review must not
-// block attach when neither --skills nor configured skills exist. The
-// review is still tagged via Kind + ReviewPrompt (the session's first
-// user prompt); ReviewSkills is the queryable convenience, not the
-// source of truth, and is allowed to be empty.
-func TestAttachCmd_ReviewWithoutSkillsOrConfigSucceeds(t *testing.T) {
-	setupAttachTestRepo(t)
-
-	sessionID := "test-attach-review-no-skills"
-	firstPrompt := "please review this change end-to-end"
-	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"`+firstPrompt+`"},"uuid":"uuid-1"}
-`)
-
-	rootCmd := NewRootCmd()
-	rootCmd.SetArgs([]string{"attach", "--force", "--review", sessionID})
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("attach --review without skills config should succeed; got error: %v", err)
-	}
-
-	store, err := session.NewStateStore(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := store.Load(context.Background(), sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state == nil {
-		t.Fatal("expected session state to be created")
-	}
-	if state.Kind != session.KindAgentReview {
-		t.Errorf("Kind = %q, want %q", state.Kind, session.KindAgentReview)
-	}
-	if state.ReviewPrompt != firstPrompt {
-		t.Errorf("ReviewPrompt = %q, want %q", state.ReviewPrompt, firstPrompt)
-	}
-	if len(state.ReviewSkills) != 0 {
-		t.Errorf("ReviewSkills = %v, want empty (no --skills, no config)", state.ReviewSkills)
-	}
-}
-
-// Regression: `entire attach --review <gemini-session-id>` without
-// --agent must attach successfully. The plain attach flow already
-// auto-detects Gemini from the transcript; the review path must not
-// add a blocking pre-check against the --agent flag's default
-// (claude-code), which would have failed when claude-code had no
-// matching transcript/config.
-func TestAttachCmd_ReviewAutoDetectsAgent(t *testing.T) {
-	setupAttachTestRepo(t)
-
-	// Force claude-code transcript lookup to fail so auto-detect kicks in.
-	t.Setenv("ENTIRE_TEST_CLAUDE_PROJECT_DIR", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
-
-	// Create a valid Gemini transcript in the expected project dir.
-	geminiDir := t.TempDir()
-	t.Setenv("ENTIRE_TEST_GEMINI_PROJECT_DIR", geminiDir)
-	sessionID := "abcd1234-review-gemini-autodetect"
-	transcriptContent := `{"messages":[{"type":"user","content":"review this"},{"type":"gemini","content":"reviewing"}]}`
-	transcriptFile := filepath.Join(geminiDir, "session-2026-01-01T10-00-abcd1234.json")
-	if err := os.WriteFile(transcriptFile, []byte(transcriptContent), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	// Invoke without --agent (flag falls through to DefaultAgentName =
-	// claude-code). runAttach's auto-detect should find Gemini.
-	rootCmd := NewRootCmd()
-	var errBuf, outBuf bytes.Buffer
-	rootCmd.SetErr(&errBuf)
-	rootCmd.SetOut(&outBuf)
-	rootCmd.SetArgs([]string{"attach", "--force", "--review", sessionID})
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("attach --review with auto-detect failed: %v\nstderr: %s", err, errBuf.String())
-	}
-
-	store, err := session.NewStateStore(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := store.Load(context.Background(), sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state == nil || state.Kind != session.KindAgentReview {
-		t.Fatalf("expected session tagged as review; got state=%+v", state)
-	}
-	if state.AgentType != agent.AgentTypeGemini {
-		t.Errorf("AgentType = %q, want %q (auto-detect should have found Gemini)", state.AgentType, agent.AgentTypeGemini)
 	}
 }
 

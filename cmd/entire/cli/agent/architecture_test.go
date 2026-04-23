@@ -126,10 +126,9 @@ func discoverAgentPackages(t *testing.T, agentDir string) []string {
 	t.Helper()
 
 	skipDirs := map[string]bool{
-		"types":          true, // contract types, not an agent implementation
-		"testutil":       true, // shared test utilities
-		"external":       true, // external agent adapter, not a self-registering agent
-		"skilldiscovery": true, // shared capability helper (registries, match), not an agent
+		"types":    true, // contract types, not an agent implementation
+		"testutil": true, // shared test utilities
+		"external": true, // external agent adapter, not a self-registering agent
 	}
 
 	entries, err := os.ReadDir(agentDir)
