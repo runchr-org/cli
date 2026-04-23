@@ -106,17 +106,16 @@ func (a *OpenCodeAgent) UninstallHooks(ctx context.Context) error {
 
 // ReadHookMeta scans .opencode/plugins/entire.ts for the `// entireMeta: {...}`
 // comment and returns the parsed stamp.
-func (a *OpenCodeAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, error) {
+func (a *OpenCodeAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool) {
 	pluginPath, err := getPluginPath(ctx)
 	if err != nil {
-		return agent.HookMeta{}, false, nil //nolint:nilerr // path errors upstream of file reads are surfaced elsewhere
+		return agent.HookMeta{}, false
 	}
 	data, err := os.ReadFile(pluginPath) //nolint:gosec // Path constructed from repo root
 	if err != nil {
-		return agent.HookMeta{}, false, nil //nolint:nilerr // missing file means "no stamp", not a drift-check error
+		return agent.HookMeta{}, false
 	}
-	meta, ok := agent.ReadTSHookMeta(string(data))
-	return meta, ok, nil
+	return agent.ReadTSHookMeta(string(data))
 }
 
 // marshalHookMetaJSON returns a minified JSON encoding of the current HookMeta

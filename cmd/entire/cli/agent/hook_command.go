@@ -123,9 +123,12 @@ const MinCompatibleCLIVersion = "0.0.0"
 // (MinCompatibleCLIVersion); agents don't pick their own.
 type HookVersionSupport interface {
 	// ReadHookMeta returns the stamp recorded in the agent's config. The second
-	// return value is false when the config lacks a stamp — treated as drift
-	// once the global MinCompatibleCLIVersion rises above "0.0.0".
-	ReadHookMeta(ctx context.Context) (HookMeta, bool, error)
+	// return value is false when the config lacks a stamp, cannot be read, or
+	// is malformed — any of those is treated as drift once the global
+	// MinCompatibleCLIVersion rises above "0.0.0". Transient read failures are
+	// deliberately collapsed into ok=false so we warn instead of silently
+	// masking state.
+	ReadHookMeta(ctx context.Context) (HookMeta, bool)
 }
 
 type WarningFormat int

@@ -198,7 +198,7 @@ func (c *ClaudeCodeAgent) InstallHooks(ctx context.Context, localDev bool, force
 	// Always refresh the CLI-version stamp so subsequent drift checks know
 	// which version last modified the config.
 	if err := agent.WriteJSONHookMeta(rawSettings); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("stamp entireMeta: %w", err)
 	}
 
 	// Marshal modified hook types back to rawHooks
@@ -383,8 +383,8 @@ func (c *ClaudeCodeAgent) UninstallHooks(ctx context.Context) error {
 }
 
 // ReadHookMeta returns the CLI-version stamp recorded in .claude/settings.json.
-// Missing or unparseable stamp returns ok=false so drift.go can flag it.
-func (c *ClaudeCodeAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool, error) {
+// Missing file or unparseable stamp returns ok=false so drift.go can flag it.
+func (c *ClaudeCodeAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, bool) {
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		repoRoot = "."
@@ -392,10 +392,9 @@ func (c *ClaudeCodeAgent) ReadHookMeta(ctx context.Context) (agent.HookMeta, boo
 	settingsPath := filepath.Join(repoRoot, ".claude", ClaudeSettingsFileName)
 	data, err := os.ReadFile(settingsPath) //nolint:gosec // path is constructed from repo root + fixed path
 	if err != nil {
-		return agent.HookMeta{}, false, nil //nolint:nilerr // missing file means "no stamp", not a drift-check error
+		return agent.HookMeta{}, false
 	}
-	meta, ok := agent.ReadJSONHookMetaFromFile(data)
-	return meta, ok, nil
+	return agent.ReadJSONHookMetaFromFile(data)
 }
 
 // AreHooksInstalled checks if Entire hooks are installed.
