@@ -126,6 +126,132 @@ func TestDiscoverReviewSkills_MalformedSkillSkipped(t *testing.T) {
 	}
 }
 
+// TestDiscoverReviewSkills_FindsPluginCommand covers the pr-review-toolkit
+// shape: slash commands live as flat *.md files under <plugin>/commands/,
+// with description in YAML frontmatter and the invocation name derived
+// from the filename (no `name:` field).
+func TestDiscoverReviewSkills_FindsPluginCommand(t *testing.T) {
+	home := withFakeHome(t)
+	cmdDir := filepath.Join(home, ".claude", "plugins", "cache",
+		"fake-market", "pr-review-toolkit", "unknown", "commands")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Frontmatter with quoted description and no `name:` field — exactly
+	// the shape pr-review-toolkit ships (verified on-disk).
+	content := `---
+description: "Comprehensive PR review using specialized agents"
+argument-hint: "[review-aspects]"
+allowed-tools: ["Bash", "Read"]
+---
+
+# Comprehensive PR Review
+`
+	if err := os.WriteFile(filepath.Join(cmdDir, "review-pr.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &claudecode.ClaudeCodeAgent{}
+	skills, err := a.DiscoverReviewSkills(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("expected 1 plugin command, got %d: %+v", len(skills), skills)
+	}
+	if skills[0].Name != "/pr-review-toolkit:review-pr" {
+		t.Errorf("Name = %q, want /pr-review-toolkit:review-pr", skills[0].Name)
+	}
+	if skills[0].Description != "Comprehensive PR review using specialized agents" {
+		t.Errorf("Description = %q", skills[0].Description)
+	}
+}
+
+// TestDiscoverReviewSkills_FindsPluginAgent covers the same shape for
+// <plugin>/agents/ — pr-review-toolkit ships subagents (code-reviewer,
+// silent-failure-hunter, etc.) there. Same flat .md file format.
+func TestDiscoverReviewSkills_FindsPluginAgent(t *testing.T) {
+	home := withFakeHome(t)
+	agentDir := filepath.Join(home, ".claude", "plugins", "cache",
+		"fake-market", "pr-review-toolkit", "unknown", "agents")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `---
+description: "Audit code against project style"
+---
+`
+	if err := os.WriteFile(filepath.Join(agentDir, "code-reviewer.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &claudecode.ClaudeCodeAgent{}
+	skills, err := a.DiscoverReviewSkills(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("expected 1 plugin agent, got %d: %+v", len(skills), skills)
+	}
+	if skills[0].Name != "/pr-review-toolkit:code-reviewer" {
+		t.Errorf("Name = %q, want /pr-review-toolkit:code-reviewer", skills[0].Name)
+	}
+}
+
+// TestDiscoverReviewSkills_SkipsNonReviewCommand verifies that commands
+// whose filename doesn't match keywords (and whose plugin prefix doesn't
+// either) are dropped by the name-only Matches filter.
+func TestDiscoverReviewSkills_SkipsNonReviewCommand(t *testing.T) {
+	home := withFakeHome(t)
+	cmdDir := filepath.Join(home, ".claude", "plugins", "cache",
+		"fake-market", "unrelated-plugin", "1.0.0", "commands")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `---
+description: "Format your code nicely"
+---
+`
+	if err := os.WriteFile(filepath.Join(cmdDir, "format.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &claudecode.ClaudeCodeAgent{}
+	skills, err := a.DiscoverReviewSkills(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 0 {
+		t.Errorf("unrelated command should be skipped, got %+v", skills)
+	}
+}
+
+// TestDiscoverReviewSkills_SkipsReadme verifies README.md files sitting
+// alongside commands/agents don't get parsed as skills (pr-review-toolkit
+// and several other plugins ship a README.md next to commands/).
+func TestDiscoverReviewSkills_SkipsReadme(t *testing.T) {
+	home := withFakeHome(t)
+	cmdDir := filepath.Join(home, ".claude", "plugins", "cache",
+		"fake-market", "pr-review-toolkit", "unknown", "commands")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// README has no frontmatter and would otherwise trigger parse errors.
+	if err := os.WriteFile(filepath.Join(cmdDir, "README.md"),
+		[]byte("# PR Review Toolkit\n\nSome prose.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &claudecode.ClaudeCodeAgent{}
+	skills, err := a.DiscoverReviewSkills(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 0 {
+		t.Errorf("README.md should be skipped, got %+v", skills)
+	}
+}
+
 func TestDiscoverReviewSkills_UserSkillsDir(t *testing.T) {
 	home := withFakeHome(t)
 	userSkillDir := filepath.Join(home, ".claude", "skills", "my-review")

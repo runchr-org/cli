@@ -987,10 +987,14 @@ func buildReviewPickerFields(
 ) []huh.Field {
 	var fields []huh.Field
 
+	// Picker labels show only the invocation name — no descriptions. Agent
+	// descriptions in particular can be pages of embedded usage examples,
+	// which makes the picker unreadable. Users recognize skills by name;
+	// the stored value is the name either way.
 	if len(builtins) > 0 {
 		opts := make([]huh.Option[string], 0, len(builtins))
 		for _, b := range builtins {
-			opts = append(opts, huh.NewOption(fmt.Sprintf("%s — %s", b.Name, b.Desc), b.Name))
+			opts = append(opts, huh.NewOption(b.Name, b.Name))
 		}
 		ms := huh.NewMultiSelect[string]().Title("Built-in commands").Options(opts...)
 		if builtinPicksOut != nil {
@@ -1006,11 +1010,7 @@ func buildReviewPickerFields(
 	if len(discovered) > 0 {
 		opts := make([]huh.Option[string], 0, len(discovered))
 		for _, d := range discovered {
-			label := d.Name
-			if d.Description != "" {
-				label = fmt.Sprintf("%s — %s", d.Name, d.Description)
-			}
-			opts = append(opts, huh.NewOption(label, d.Name))
+			opts = append(opts, huh.NewOption(d.Name, d.Name))
 		}
 		ms := huh.NewMultiSelect[string]().Title("Installed plugin skills").Options(opts...)
 		if discoveredPicksOut != nil {

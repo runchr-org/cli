@@ -17,13 +17,26 @@ var reviewKeywords = []string{
 	"security-scan",
 }
 
-// Matches reports whether the given skill name or description contains any
-// review-adjacent keyword (case-insensitive).
+// Matches reports whether the given skill invocation contains any
+// review-adjacent keyword (case-insensitive) in its name.
+//
+// We deliberately match on name only. Descriptions often contain words like
+// "review" or "inspect" in non-review contexts — "review the plan",
+// "inspect recent sessions", "review checkpoints" — which would pull in
+// unrelated skills. Legitimate review skills either have the keyword in
+// their name directly (e.g. /test-auditor, /superpowers:receiving-code-review)
+// or live under a plugin whose prefix contains it (e.g.
+// /pr-review-toolkit:silent-failure-hunter matches via "review" in
+// "pr-review-toolkit").
+//
+// The description parameter is retained for signature stability — callers
+// still supply it so the picker can show descriptions — but it does not
+// affect match decisions.
 func Matches(name, description string) bool {
+	_ = description
 	lname := strings.ToLower(name)
-	ldesc := strings.ToLower(description)
 	for _, kw := range reviewKeywords {
-		if strings.Contains(lname, kw) || strings.Contains(ldesc, kw) {
+		if strings.Contains(lname, kw) {
 			return true
 		}
 	}
