@@ -49,8 +49,66 @@ type agentChoice struct {
 // require a real TTY. Production wiring leaves fields nil and defaults
 // are resolved inside runReview.
 type runReviewDeps struct {
-	promptForAgentFn func(ctx context.Context, eligible []agentChoice) (string, error)
+	promptForAgentFn  func(ctx context.Context, eligible []agentChoice) (string, error)
+	promptForAgentsFn func(ctx context.Context, eligible []agentChoice) ([]string, error)
+	runMultiAgentFn   func(ctx context.Context, tasks []MultiAgentTask, out io.Writer) (MultiRunResult, error)
 }
+
+// MultiAgentTask is a forward-declared type that Chunk 3's orchestrator
+// populates. For Chunk 2 only the name/prompt matter for dispatch tests.
+type MultiAgentTask struct {
+	Agent  agent.HeadlessLauncher // set by dispatcher when routing to multi-agent
+	Name   string                 // agent registry key
+	Prompt string                 // composed via composeReviewPrompt(cfg)
+}
+
+// MultiRunResult is a placeholder — full shape lands in Chunk 3. Kept
+// minimal here so dispatch compile-checks; orchestrator in Chunk 3
+// expands Runs/Duration/Cancelled fields.
+type MultiRunResult struct {
+	Runs      []AgentRunResult
+	Duration  time.Duration
+	Cancelled bool
+}
+
+// AgentRunStatus / AgentRunResult — full shape lands in Chunk 3. Minimal
+// definitions here so MultiRunResult compiles. Chunk 3 may expand these.
+type AgentRunStatus int
+
+const (
+	AgentRunQueued AgentRunStatus = iota
+	AgentRunRunning
+	AgentRunDone
+	AgentRunFailed
+	AgentRunCancelled
+)
+
+// AgentRunResult reports the outcome of a single agent run inside a
+// multi-agent review. Forward-declared here; Chunk 3 wires real values.
+type AgentRunResult struct {
+	Name           string
+	Status         AgentRunStatus
+	ExitCode       int
+	Duration       time.Duration
+	FinalOutput    []byte
+	Err            error
+	TokenUsage     *agent.TokenUsage
+	TranscriptPath string
+}
+
+// Package-level anchor — keeps forward-declared types referenced until
+// the orchestrator in Chunk 3 consumes them. Removed or replaced when
+// Chunk 3 lands real usages.
+var (
+	_ = MultiAgentTask{}
+	_ = MultiRunResult{}
+	_ = AgentRunResult{}
+	_ = AgentRunQueued
+	_ = AgentRunRunning
+	_ = AgentRunDone
+	_ = AgentRunFailed
+	_ = AgentRunCancelled
+)
 
 // PendingReviewMarker is written by `entire review` before spawning the agent.
 // The next agent session's UserPromptSubmit hook reads it, tags the session
@@ -580,35 +638,21 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string, de
 	}
 
 	// 3. Pick agent. When multiple agents are configured with hooks installed
-	// and no --agent override is provided, prompt the user to pick one.
-	// Skipped when --agent is passed, and skipped when only one eligible
-	// agent is configured (selectReviewAgent's alphabetical default handles
-	// the single-agent case deterministically).
+	// and no --agent override is provided, prompt the user to pick one (or
+	// many, for multi-agent review). Skipped when --agent is passed, and
+	// skipped when only one eligible agent is configured (selectReviewAgent's
+	// alphabetical default handles the single-agent case deterministically).
 	if agentOverride == "" {
-		eligible := computeEligibleConfigured(ctx, s)
-		if len(eligible) > 1 {
-			fn := deps.promptForAgentFn
-			if fn == nil {
-				fn = promptForAgent
-			}
-			picked, pickErr := fn(ctx, eligible)
-			if pickErr != nil {
-				cmd.SilenceUsage = true
-				fmt.Fprintln(cmd.ErrOrStderr(), pickErr.Error())
-				return NewSilentError(pickErr)
-			}
-			if picked == "" {
-				// Defensive: a nil-or-empty return from the picker must NOT
-				// fall through to selectReviewAgent's alphabetical-first
-				// default. That's exactly the silent-masking shape the
-				// picker was added to eliminate. Refuse to proceed.
-				cmd.SilenceUsage = true
-				emptyErr := errors.New("agent picker returned empty agent name")
-				fmt.Fprintln(cmd.ErrOrStderr(), emptyErr.Error())
-				return NewSilentError(emptyErr)
-			}
-			agentOverride = picked
+		override, dispatched, pickErr := pickAgentForReview(ctx, cmd, s, deps)
+		if dispatched {
+			// Multi-agent orchestrator took over; nothing more for runReview
+			// to do. Propagate any error verbatim (may be nil).
+			return pickErr
 		}
+		if pickErr != nil {
+			return pickErr
+		}
+		agentOverride = override
 	}
 
 	agentName, cfg, err := selectReviewAgent(s.Review, agentOverride)
@@ -738,6 +782,151 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string, de
 	return nil
 }
 
+// pickAgentForReview runs the agent-selection picker. Returns:
+//
+//   - override: the chosen agent name for the single-agent spawn path,
+//     empty if no picker fired (caller falls through to selectReviewAgent's
+//     alphabetical default).
+//   - dispatched: true when the multi-agent orchestrator has already been
+//     invoked; caller should return immediately.
+//   - err: picker error or a silent-error shell used to print a user-facing
+//     message without a usage dump.
+//
+// Dispatch order:
+//
+//   - If 2+ eligible agents implement HeadlessLauncher → multi-select
+//     picker. Selecting 1 falls through to single-agent path; selecting
+//     2+ routes to the orchestrator.
+//   - Otherwise, if 2+ eligible → fall back to the 2.1 single-select.
+//   - Otherwise, single-eligible case is handled by selectReviewAgent in
+//     the caller (alphabetically first, deterministic).
+func pickAgentForReview(ctx context.Context, cmd *cobra.Command, s *settings.EntireSettings, deps runReviewDeps) (override string, dispatched bool, err error) {
+	eligibleConfigured := computeEligibleConfigured(ctx, s)
+
+	// Filter to agents implementing HeadlessLauncher. The multi-agent
+	// picker only offers these, because the orchestrator spawns them
+	// headlessly. Single-agent fallback below operates on the full
+	// eligible set.
+	var runnable []agentChoice
+	for _, e := range eligibleConfigured {
+		ag, getErr := agent.Get(types.AgentName(e.Name))
+		if getErr != nil {
+			continue // already reported by earlier gates
+		}
+		if _, ok := ag.(agent.HeadlessLauncher); ok {
+			runnable = append(runnable, e)
+		}
+	}
+
+	switch {
+	case len(runnable) >= 2:
+		return pickMultiAgent(ctx, cmd, s, runnable, deps)
+	case len(eligibleConfigured) > 1:
+		return pickSingleAgent(ctx, cmd, eligibleConfigured, deps)
+	}
+	// <=1 eligible → no picker; selectReviewAgent picks alphabetically-first.
+	return "", false, nil
+}
+
+// pickMultiAgent runs the multi-select picker over runnable agents. Returns
+// override + dispatched=false when the user picks exactly one agent (caller
+// continues with single-agent path), dispatched=true when the orchestrator
+// has been invoked (caller should return).
+func pickMultiAgent(ctx context.Context, cmd *cobra.Command, s *settings.EntireSettings, runnable []agentChoice, deps runReviewDeps) (string, bool, error) {
+	fn := deps.promptForAgentsFn
+	if fn == nil {
+		fn = promptForAgents
+	}
+	selected, pickErr := fn(ctx, runnable)
+	if pickErr != nil {
+		cmd.SilenceUsage = true
+		fmt.Fprintln(cmd.ErrOrStderr(), pickErr.Error())
+		return "", false, NewSilentError(pickErr)
+	}
+	if len(selected) == 0 {
+		// User cancelled.
+		return "", false, NewSilentError(errors.New("multi-agent picker cancelled"))
+	}
+	if len(selected) == 1 {
+		// Drop into single-agent path.
+		return selected[0], false, nil
+	}
+	// Route to multi-agent orchestrator.
+	if err := dispatchMultiAgent(ctx, cmd, s, selected, deps); err != nil {
+		return "", true, err
+	}
+	return "", true, nil
+}
+
+// pickSingleAgent runs the 2.1 single-select picker over the eligible set.
+// Returns override=<picked> when the user picks a valid agent.
+func pickSingleAgent(ctx context.Context, cmd *cobra.Command, eligible []agentChoice, deps runReviewDeps) (string, bool, error) {
+	fn := deps.promptForAgentFn
+	if fn == nil {
+		fn = promptForAgent
+	}
+	picked, pickErr := fn(ctx, eligible)
+	if pickErr != nil {
+		cmd.SilenceUsage = true
+		fmt.Fprintln(cmd.ErrOrStderr(), pickErr.Error())
+		return "", false, NewSilentError(pickErr)
+	}
+	if picked == "" {
+		// Defensive: a nil-or-empty return from the picker must NOT fall
+		// through to selectReviewAgent's alphabetical-first default. That's
+		// exactly the silent-masking shape the picker was added to
+		// eliminate. Refuse to proceed.
+		cmd.SilenceUsage = true
+		emptyErr := errors.New("agent picker returned empty agent name")
+		fmt.Fprintln(cmd.ErrOrStderr(), emptyErr.Error())
+		return "", false, NewSilentError(emptyErr)
+	}
+	return picked, false, nil
+}
+
+// dispatchMultiAgent composes per-agent tasks, resolves HeadlessLauncher
+// capabilities, and hands off to the orchestrator via deps.runMultiAgentFn.
+// Marker write, hook adoption, and cleanup are the orchestrator's
+// responsibility — this function only prepares the task list and dispatches.
+func dispatchMultiAgent(ctx context.Context, cmd *cobra.Command, s *settings.EntireSettings, selected []string, deps runReviewDeps) error {
+	out := cmd.OutOrStdout()
+	tasks := make([]MultiAgentTask, 0, len(selected))
+	for _, name := range selected {
+		cfg := s.Review[name]
+		if cfg.IsZero() {
+			return fmt.Errorf("internal error: agent %q selected but has no configured review config", name)
+		}
+		ag, err := agent.Get(types.AgentName(name))
+		if err != nil {
+			return fmt.Errorf("resolve agent %s: %w", name, err)
+		}
+		hl, ok := ag.(agent.HeadlessLauncher)
+		if !ok {
+			return fmt.Errorf("agent %s does not implement HeadlessLauncher (should have been filtered by picker)", name)
+		}
+		tasks = append(tasks, MultiAgentTask{
+			Agent:  hl,
+			Name:   name,
+			Prompt: composeReviewPrompt(cfg),
+		})
+	}
+
+	fn := deps.runMultiAgentFn
+	if fn == nil {
+		// Real orchestrator lands in Chunk 3. Until then this is a
+		// compile-time sentinel.
+		return errors.New("multi-agent orchestrator not implemented (Chunk 3)")
+	}
+	result, err := fn(ctx, tasks, out)
+	if err != nil {
+		return err
+	}
+	// Result is informational for Chunk 2's test stub. Chunk 4 wires
+	// the completion dump; Chunk 3 wires the marker writes / cleanup.
+	_ = result
+	return nil
+}
+
 // computeEligibleConfigured returns the sorted list of agents that are both
 // configured (non-zero ReviewConfig entry) AND have hooks installed. Only
 // eligible agents are valid picker targets — spawning a review for an agent
@@ -804,6 +993,34 @@ func promptForAgent(ctx context.Context, eligible []agentChoice) (string, error)
 	))
 	if err := form.Run(); err != nil {
 		return "", fmt.Errorf("agent picker: %w", err)
+	}
+	return picked, nil
+}
+
+// promptForAgents runs a multi-select huh picker over the given eligible
+// agents and returns selected names. An empty return is an explicit user
+// cancel — caller should exit silently, no marker written.
+func promptForAgents(ctx context.Context, eligible []agentChoice) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("multi-agent picker: %w", err)
+	}
+	if len(eligible) == 0 {
+		return nil, errors.New("no eligible agents to prompt for")
+	}
+	options := make([]huh.Option[string], 0, len(eligible))
+	for _, c := range eligible {
+		options = append(options, huh.NewOption(c.Label, c.Name))
+	}
+	var picked []string
+	form := NewAccessibleForm(huh.NewGroup(
+		huh.NewMultiSelect[string]().
+			Title("Which agents should run this review?").
+			Description("Space to toggle, Enter to confirm. Select 2+ for parallel run; 1 drops into single-agent mode.").
+			Options(options...).
+			Value(&picked),
+	))
+	if err := form.Run(); err != nil {
+		return nil, fmt.Errorf("multi-agent picker: %w", err)
 	}
 	return picked, nil
 }

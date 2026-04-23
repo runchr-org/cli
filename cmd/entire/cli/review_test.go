@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1005,5 +1006,169 @@ func TestRunReview_MultiAgentNoFlagTriggersPicker(t *testing.T) {
 	}
 	if m.AgentName != testPickerAgentB {
 		t.Errorf("AgentName = %q, want %s", m.AgentName, testPickerAgentB)
+	}
+}
+
+// TestPromptForAgents_CallsInjection pins the dispatch contract: when the
+// deps hook is set and ≥2 HeadlessLauncher agents are eligible, runReview
+// routes to the multi-select picker AND the multi-agent orchestrator. Proves
+// the injection wiring works before Chunk 3's real orchestrator lands.
+//
+// Uses claude-code + codex because they implement HeadlessLauncher — only
+// these get offered in the multi-agent picker per the dispatch switch.
+func TestPromptForAgents_CallsInjection(t *testing.T) {
+	setupReviewTestRepoWithCommit(t)
+	installHooksForTest(t, testAgentName)
+	installHooksForTest(t, testCodexAgent)
+
+	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		testAgentName:  {Prompt: "review the diff"},
+		testCodexAgent: {Prompt: "review the diff"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	promptCalled := false
+	multiCalled := false
+	deps := runReviewDeps{
+		promptForAgentsFn: func(_ context.Context, eligible []agentChoice) ([]string, error) {
+			promptCalled = true
+			if len(eligible) < 2 {
+				t.Fatalf("expected >=2 eligible, got %d", len(eligible))
+			}
+			return []string{eligible[0].Name, eligible[1].Name}, nil
+		},
+		runMultiAgentFn: func(_ context.Context, tasks []MultiAgentTask, _ io.Writer) (MultiRunResult, error) {
+			multiCalled = true
+			if len(tasks) != 2 {
+				t.Fatalf("expected 2 tasks, got %d", len(tasks))
+			}
+			// Minimal MultiRunResult so the dispatch returns OK.
+			return MultiRunResult{
+				Runs: []AgentRunResult{
+					{Name: tasks[0].Name, Status: AgentRunDone},
+					{Name: tasks[1].Name, Status: AgentRunDone},
+				},
+			}, nil
+		},
+	}
+
+	reviewCmd := newReviewCmdWithDeps(deps)
+	if err := reviewCmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !promptCalled {
+		t.Error("promptForAgentsFn should have been called")
+	}
+	if !multiCalled {
+		t.Error("runMultiAgentFn should have been called")
+	}
+}
+
+// TestPromptForAgents_SingleSelectionFallsBackToSingleAgent pins that
+// selecting exactly one agent in the multi-select picker routes to the 2.1
+// single-agent path rather than the orchestrator.
+//
+// Deviation from plan: the plan proposes using non-launchable agents
+// (cursor, opencode) to avoid spawning a real subprocess. But the dispatch
+// switch filters the multi-select picker to HeadlessLauncher agents only —
+// cursor/opencode wouldn't reach promptForAgentsFn at all. Using
+// claude-code/codex (HeadlessLauncher) fires the picker, then the picker
+// callback cancels the shared context so the downstream single-agent spawn
+// aborts immediately (rather than actually running an agent). We assert on
+// runMultiAgentFn NOT being called rather than on marker state, since the
+// spawn-failure defer clears the marker anyway.
+func TestPromptForAgents_SingleSelectionFallsBackToSingleAgent(t *testing.T) {
+	setupReviewTestRepoWithCommit(t)
+	installHooksForTest(t, testAgentName)
+	installHooksForTest(t, testCodexAgent)
+
+	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		testAgentName:  {Prompt: "review"},
+		testCodexAgent: {Prompt: "review"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cancellable context so the single-agent fallback's spawn is aborted
+	// before it actually runs the agent. The picker callback cancels right
+	// after it returns a single selection.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	promptCalled := false
+	multiCalled := false
+	deps := runReviewDeps{
+		promptForAgentsFn: func(_ context.Context, eligible []agentChoice) ([]string, error) {
+			promptCalled = true
+			// Cancel so the single-agent fallback's exec.CommandContext
+			// is already cancelled when Run() fires — exits immediately
+			// instead of running a real agent.
+			cancel()
+			// Return just one — single-agent fallback expected.
+			return []string{eligible[0].Name}, nil
+		},
+		runMultiAgentFn: func(_ context.Context, _ []MultiAgentTask, _ io.Writer) (MultiRunResult, error) {
+			multiCalled = true
+			return MultiRunResult{}, nil
+		},
+	}
+
+	reviewCmd := newReviewCmdWithDeps(deps)
+	// The final error is expected (the single-agent fallback's spawn is
+	// cancelled via the shared ctx). What matters for dispatch is the call
+	// sites below — if execute unexpectedly succeeds, that's fine too.
+	if err := reviewCmd.ExecuteContext(ctx); err != nil {
+		t.Logf("execute (ctx-cancelled, expected): %v", err)
+	}
+
+	if !promptCalled {
+		t.Error("promptForAgentsFn should have been called")
+	}
+	if multiCalled {
+		t.Error("runMultiAgentFn should NOT have been called for single-selection fallback")
+	}
+}
+
+// TestPromptForAgents_EmptySelectionCancels pins that returning [] from the
+// multi-select picker is treated as user cancel — silent error, no marker
+// written, no orchestrator call.
+func TestPromptForAgents_EmptySelectionCancels(t *testing.T) {
+	setupReviewTestRepoWithCommit(t)
+	installHooksForTest(t, testAgentName)
+	installHooksForTest(t, testCodexAgent)
+
+	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		testAgentName:  {Prompt: "review"},
+		testCodexAgent: {Prompt: "review"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	multiCalled := false
+	deps := runReviewDeps{
+		promptForAgentsFn: func(_ context.Context, _ []agentChoice) ([]string, error) {
+			return []string{}, nil // empty = cancel
+		},
+		runMultiAgentFn: func(_ context.Context, _ []MultiAgentTask, _ io.Writer) (MultiRunResult, error) {
+			multiCalled = true
+			return MultiRunResult{}, nil
+		},
+	}
+
+	reviewCmd := newReviewCmdWithDeps(deps)
+	err := reviewCmd.Execute()
+	if err == nil {
+		t.Fatal("expected silent cancel error, got nil")
+	}
+	if multiCalled {
+		t.Error("runMultiAgentFn should NOT have been called after user cancel")
+	}
+	_, markerExists, readErr := ReadPendingReviewMarker(context.Background())
+	if readErr != nil {
+		t.Fatalf("ReadPendingReviewMarker: %v", readErr)
+	}
+	if markerExists {
+		t.Error("marker should not have been written on cancel")
 	}
 }
