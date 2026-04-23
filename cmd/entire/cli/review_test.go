@@ -758,3 +758,157 @@ func TestRunReview_PromptOnlyConfigSkipsVerification(t *testing.T) {
 		t.Error("marker should exist for prompt-only config")
 	}
 }
+
+// Non-launchable agents used by the picker tests below. Non-launchable is
+// important: runReview registers a defer that clears the marker on exit
+// for launchable agents, which would defeat the "marker was written with
+// agent X" assertion. See TestRunReview_NonLaunchableAgentPreservesMarker
+// for the same pattern.
+const (
+	testPickerAgentA = "cursor"   // alphabetically first
+	testPickerAgentB = "opencode" // alphabetically second
+)
+
+// TestPromptForAgent_SingleEligibleSkipsPicker: when only one agent is
+// configured AND has hooks, the picker never fires and runReview proceeds
+// directly to spawn.
+func TestPromptForAgent_SingleEligibleSkipsPicker(t *testing.T) {
+	setupReviewTestRepoWithCommit(t)
+	installHooksForTest(t, testPickerAgentA)
+
+	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		testPickerAgentA: {Prompt: "review the diff"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	deps := runReviewDeps{
+		promptForAgentFn: func(_ context.Context, _ []agentChoice) (string, error) {
+			called = true
+			return "", nil
+		},
+	}
+
+	reviewCmd := newReviewCmdWithDeps(deps)
+	if err := reviewCmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if called {
+		t.Error("promptForAgentFn should not be called when only one eligible agent is configured")
+	}
+}
+
+// TestPromptForAgent_FlagOverrideSkipsPicker: when --agent is passed, the
+// picker is skipped even with multiple eligible agents configured.
+func TestPromptForAgent_FlagOverrideSkipsPicker(t *testing.T) {
+	setupReviewTestRepoWithCommit(t)
+	installHooksForTest(t, testPickerAgentA)
+	installHooksForTest(t, testPickerAgentB)
+
+	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		testPickerAgentA: {Prompt: "review the diff"},
+		testPickerAgentB: {Prompt: "review the diff"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	deps := runReviewDeps{
+		promptForAgentFn: func(_ context.Context, _ []agentChoice) (string, error) {
+			called = true
+			return "", nil
+		},
+	}
+
+	reviewCmd := newReviewCmdWithDeps(deps)
+	reviewCmd.SetArgs([]string{"--agent", testPickerAgentB})
+	if err := reviewCmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if called {
+		t.Error("promptForAgentFn should not be called when --agent is passed")
+	}
+
+	m, ok, err := ReadPendingReviewMarker(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("marker should be written: ok=%v err=%v", ok, err)
+	}
+	if m.AgentName != testPickerAgentB {
+		t.Errorf("AgentName = %q, want %s", m.AgentName, testPickerAgentB)
+	}
+}
+
+// TestPromptForAgent_FlagOverrideMustBeEligibleAgent: --agent NAME where
+// NAME is configured but has no hooks → clear error via existing gate.
+func TestPromptForAgent_FlagOverrideMustBeEligibleAgent(t *testing.T) {
+	setupReviewTestRepoWithCommit(t)
+	installHooksForTest(t, testPickerAgentA)
+	// Configure a second agent too but do NOT install its hooks.
+
+	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		testPickerAgentA: {Prompt: "review the diff"},
+		testPickerAgentB: {Prompt: "review the diff"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rootCmd := NewRootCmd()
+	errBuf := &bytes.Buffer{}
+	rootCmd.SetErr(errBuf)
+	rootCmd.SetArgs([]string{"review", "--agent", testPickerAgentB})
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when --agent points at hookless agent")
+	}
+	if !strings.Contains(errBuf.String(), "Hooks are not installed") {
+		t.Errorf("stderr should mention 'Hooks are not installed', got: %s", errBuf.String())
+	}
+}
+
+// TestRunReview_MultiAgentNoFlagTriggersPicker: canonical picker-fires path.
+// Two eligible agents, no flag, stubbed promptForAgentFn returns the second
+// (alphabetically) → marker written with that agent.
+func TestRunReview_MultiAgentNoFlagTriggersPicker(t *testing.T) {
+	setupReviewTestRepoWithCommit(t)
+	installHooksForTest(t, testPickerAgentA)
+	installHooksForTest(t, testPickerAgentB)
+
+	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		testPickerAgentA: {Prompt: "review the diff"},
+		testPickerAgentB: {Prompt: "review the diff"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var seen []string
+	deps := runReviewDeps{
+		promptForAgentFn: func(_ context.Context, eligible []agentChoice) (string, error) {
+			for _, e := range eligible {
+				seen = append(seen, e.Name)
+			}
+			if len(eligible) < 2 {
+				t.Fatalf("expected >=2 eligible, got %d", len(eligible))
+			}
+			// Alphabetical ordering; pick the second one.
+			return eligible[1].Name, nil
+		},
+	}
+
+	reviewCmd := newReviewCmdWithDeps(deps)
+	if err := reviewCmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(seen) < 2 || seen[0] != testPickerAgentA || seen[1] != testPickerAgentB {
+		t.Errorf("eligible presented to picker = %v, want [%s %s]", seen, testPickerAgentA, testPickerAgentB)
+	}
+
+	m, ok, err := ReadPendingReviewMarker(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("marker should be written: ok=%v err=%v", ok, err)
+	}
+	if m.AgentName != testPickerAgentB {
+		t.Errorf("AgentName = %q, want %s", m.AgentName, testPickerAgentB)
+	}
+}

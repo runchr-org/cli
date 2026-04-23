@@ -36,6 +36,22 @@ import (
 
 const pendingReviewMarkerFilename = "review-pending.json"
 
+// agentChoice is one row in the spawn-time picker. Name is the agent
+// registry key (used for marker/override); Label is the picker-visible
+// string ("<name>   (N skills configured)" or "<name>   (prompt-only)").
+type agentChoice struct {
+	Name  string
+	Label string
+}
+
+// runReviewDeps collects the runtime-injectable hooks runReview uses.
+// Tests stub fields on this struct to drive branches that would otherwise
+// require a real TTY. Production wiring leaves fields nil and defaults
+// are resolved inside runReview.
+type runReviewDeps struct {
+	promptForAgentFn func(ctx context.Context, eligible []agentChoice) (string, error)
+}
+
 // PendingReviewMarker is written by `entire review` before spawning the agent.
 // The next agent session's UserPromptSubmit hook reads it, tags the session
 // kind/review-skills, then clears the marker (so a second review run doesn't
@@ -415,6 +431,15 @@ func mergePickerResults(existing map[string]settings.ReviewConfig, offered map[s
 }
 
 func newReviewCmd() *cobra.Command {
+	return newReviewCmdWithDeps(runReviewDeps{})
+}
+
+// newReviewCmdWithDeps returns the review subcommand wired against the
+// provided deps. Tests use this constructor directly to inject stubs for
+// branches that would otherwise require a real TTY. Callers should pass
+// runReviewDeps{} in production; runReview fills in defaults for any nil
+// fields.
+func newReviewCmdWithDeps(deps runReviewDeps) *cobra.Command {
 	var edit bool
 	var agentOverride string
 
@@ -441,7 +466,7 @@ Subcommands:
 				_, err := runReviewConfigPicker(ctx, cmd.OutOrStdout())
 				return err
 			}
-			return runReview(ctx, cmd, agentOverride)
+			return runReview(ctx, cmd, agentOverride, deps)
 		},
 	}
 	cmd.Flags().BoolVar(&edit, "edit", false, "re-open the review config picker")
@@ -498,7 +523,7 @@ discoverability alongside the other review subcommands.`,
 	return cmd
 }
 
-func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string) error {
+func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string, deps runReviewDeps) error {
 	out := cmd.OutOrStdout()
 
 	// 1. Pre-flight: must be in a git repo.
@@ -536,7 +561,38 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string) er
 		fmt.Fprintln(out, "Setup complete — running review now.")
 	}
 
-	// 3. Pick agent.
+	// 3. Pick agent. When multiple agents are configured with hooks installed
+	// and no --agent override is provided, prompt the user to pick one.
+	// Skipped when --agent is passed, and skipped when only one eligible
+	// agent is configured (selectReviewAgent's alphabetical default handles
+	// the single-agent case deterministically).
+	if agentOverride == "" {
+		eligible := computeEligibleConfigured(ctx, s)
+		if len(eligible) > 1 {
+			fn := deps.promptForAgentFn
+			if fn == nil {
+				fn = promptForAgent
+			}
+			picked, pickErr := fn(ctx, eligible)
+			if pickErr != nil {
+				cmd.SilenceUsage = true
+				fmt.Fprintln(cmd.ErrOrStderr(), pickErr.Error())
+				return NewSilentError(pickErr)
+			}
+			if picked == "" {
+				// Defensive: a nil-or-empty return from the picker must NOT
+				// fall through to selectReviewAgent's alphabetical-first
+				// default. That's exactly the silent-masking shape the
+				// picker was added to eliminate. Refuse to proceed.
+				cmd.SilenceUsage = true
+				emptyErr := errors.New("agent picker returned empty agent name")
+				fmt.Fprintln(cmd.ErrOrStderr(), emptyErr.Error())
+				return NewSilentError(emptyErr)
+			}
+			agentOverride = picked
+		}
+	}
+
 	agentName, cfg, err := selectReviewAgent(s.Review, agentOverride)
 	if err != nil {
 		cmd.SilenceUsage = true
@@ -662,6 +718,76 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string) er
 		return fmt.Errorf("agent exited: %w", err)
 	}
 	return nil
+}
+
+// computeEligibleConfigured returns the sorted list of agents that are both
+// configured (non-zero ReviewConfig entry) AND have hooks installed. Only
+// eligible agents are valid picker targets — spawning a review for an agent
+// without hooks would silently drop the review metadata.
+func computeEligibleConfigured(ctx context.Context, s *settings.EntireSettings) []agentChoice {
+	if s == nil {
+		return nil
+	}
+	installed := GetAgentsWithHooksInstalled(ctx)
+	installedSet := make(map[types.AgentName]struct{}, len(installed))
+	for _, name := range installed {
+		installedSet[name] = struct{}{}
+	}
+	out := make([]agentChoice, 0, len(s.Review))
+	for name, cfg := range s.Review {
+		if cfg.IsZero() {
+			continue
+		}
+		if _, ok := installedSet[types.AgentName(name)]; !ok {
+			continue
+		}
+		out = append(out, agentChoice{Name: name, Label: labelForAgentChoice(name, cfg)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// labelForAgentChoice builds the picker-visible label for an agent row.
+// Annotates with "(N skills configured)" when skills are set, "(prompt-only)"
+// when only a freeform prompt is configured, and falls back to the bare name
+// otherwise (defensive — computeEligibleConfigured filters zero configs out
+// before we get here).
+func labelForAgentChoice(name string, cfg settings.ReviewConfig) string {
+	switch {
+	case len(cfg.Skills) > 0:
+		return fmt.Sprintf("%s   (%d skills configured)", name, len(cfg.Skills))
+	case cfg.Prompt != "":
+		return name + "   (prompt-only)"
+	default:
+		return name
+	}
+}
+
+// promptForAgent renders the single-select agent picker shown when more than
+// one eligible agent is configured. Returns the chosen agent name. Respects
+// accessibility mode via NewAccessibleForm.
+func promptForAgent(ctx context.Context, eligible []agentChoice) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("agent picker: %w", err)
+	}
+	if len(eligible) == 0 {
+		return "", errors.New("no eligible agents to prompt for")
+	}
+	options := make([]huh.Option[string], 0, len(eligible))
+	for _, c := range eligible {
+		options = append(options, huh.NewOption(c.Label, c.Name))
+	}
+	picked := eligible[0].Name
+	form := NewAccessibleForm(huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("Which agent should run this review?").
+			Options(options...).
+			Value(&picked),
+	))
+	if err := form.Run(); err != nil {
+		return "", fmt.Errorf("agent picker: %w", err)
+	}
+	return picked, nil
 }
 
 // selectReviewAgent picks an agent from the configured review map.
