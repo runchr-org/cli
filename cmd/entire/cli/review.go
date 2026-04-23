@@ -96,20 +96,6 @@ type AgentRunResult struct {
 	TranscriptPath string
 }
 
-// Package-level anchor — keeps forward-declared types referenced until
-// the orchestrator in Chunk 3 consumes them. Removed or replaced when
-// Chunk 3 lands real usages.
-var (
-	_ = MultiAgentTask{}
-	_ = MultiRunResult{}
-	_ = AgentRunResult{}
-	_ = AgentRunQueued
-	_ = AgentRunRunning
-	_ = AgentRunDone
-	_ = AgentRunFailed
-	_ = AgentRunCancelled
-)
-
 // PendingReviewMarker is written by `entire review` before spawning the agent.
 // The next agent session's UserPromptSubmit hook reads it, tags the session
 // kind/review-skills, then clears the marker (so a second review run doesn't
@@ -121,8 +107,13 @@ var (
 // blank WorktreePath (pre-fix markers) falls back to the legacy unscoped
 // behavior — any session can adopt.
 type PendingReviewMarker struct {
-	AgentName string   `json:"agent_name"`
-	Skills    []string `json:"skills"`
+	AgentName string `json:"agent_name,omitempty"`
+	// AgentNames is set by the multi-agent orchestrator. Any agent whose
+	// name appears in this list is allowed to adopt the marker (tagging
+	// its session as a review); the orchestrator — not the adopting hook
+	// — owns clearing the marker once the parallel run finishes.
+	AgentNames []string `json:"agent_names,omitempty"`
+	Skills     []string `json:"skills"`
 	// Prompt is the composed review prompt the agent will receive.
 	// Stored on the marker (rather than recomputed on adoption) so session
 	// metadata records exactly what the agent was asked to do.
@@ -245,7 +236,25 @@ func adoptPendingReviewMarkerInto(ctx context.Context, s session.State, agentNam
 		// and claim the marker.
 		return s, false, nil
 	}
-	if m.AgentName != "" && m.AgentName != string(agentName) {
+	// Multi-agent markers (written by multiReviewOrchestrator) carry a
+	// list of eligible agent names. Any agent in the list may adopt, but
+	// the orchestrator — not the adopting hook — owns clearing the marker
+	// once the whole parallel run exits.
+	multiAgent := len(m.AgentNames) > 0
+	if multiAgent {
+		inList := false
+		for _, n := range m.AgentNames {
+			if n == string(agentName) {
+				inList = true
+				break
+			}
+		}
+		if !inList {
+			// Agent not in the orchestrator's list — leave marker so the
+			// other configured agents' hooks can still adopt.
+			return s, false, nil
+		}
+	} else if m.AgentName != "" && m.AgentName != string(agentName) {
 		// Marker was written for a different agent — leave it alone. The
 		// correct agent's session will reach its own hook and claim the
 		// marker.
@@ -279,6 +288,12 @@ func adoptPendingReviewMarkerInto(ctx context.Context, s session.State, agentNam
 	s.Kind = session.KindAgentReview
 	s.ReviewSkills = m.Skills
 	s.ReviewPrompt = m.Prompt
+	if multiAgent {
+		// The orchestrator owns marker cleanup for multi-agent runs; a per-
+		// hook clear here would race the sibling agents still waiting to
+		// adopt.
+		return s, true, nil
+	}
 	if err := ClearPendingReviewMarker(ctx); err != nil {
 		// Tagging succeeded; leftover marker self-heals on next session start
 		// (since Kind is now set, the next turn will return modified=false
@@ -913,9 +928,12 @@ func dispatchMultiAgent(ctx context.Context, cmd *cobra.Command, s *settings.Ent
 
 	fn := deps.runMultiAgentFn
 	if fn == nil {
-		// Real orchestrator lands in Chunk 3. Until then this is a
-		// compile-time sentinel.
-		return errors.New("multi-agent orchestrator not implemented (Chunk 3)")
+		worktreeRoot, err := paths.WorktreeRoot(ctx)
+		if err != nil {
+			return fmt.Errorf("resolve worktree root: %w", err)
+		}
+		orch := newMultiReviewOrchestrator(worktreeRoot)
+		fn = orch.Run
 	}
 	result, err := fn(ctx, tasks, out)
 	if err != nil {

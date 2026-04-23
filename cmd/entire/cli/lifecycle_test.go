@@ -1248,3 +1248,174 @@ func TestAdoptPendingReviewMarker_DifferentAgentLeavesMarker(t *testing.T) {
 		t.Errorf("Kind = %q, want review", got.Kind)
 	}
 }
+
+// adoptionEnv bundles the state the multi-agent adoption tests below need:
+// a temp git repo, the current HEAD SHA, and the worktree path. The
+// existing single-agent tests inline this setup; collecting it behind a
+// helper keeps the new multi-agent tests compact.
+type adoptionEnv struct {
+	WorktreePath string
+	HeadSHA      string
+}
+
+func setupAdoptionEnv(t *testing.T) adoptionEnv {
+	t.Helper()
+	tmp := setupReviewTestRepoWithCommit(t)
+	sha, err := currentHeadSHA(context.Background())
+	if err != nil {
+		t.Fatalf("currentHeadSHA: %v", err)
+	}
+	return adoptionEnv{WorktreePath: tmp, HeadSHA: sha}
+}
+
+// TestAdoptMarker_MultiAgent_AgentInList pins that a session whose agent
+// name appears in the marker's AgentNames list is tagged as a review but
+// the marker is deliberately left in place — the orchestrator owns cleanup.
+func TestAdoptMarker_MultiAgent_AgentInList(t *testing.T) {
+	// Cannot t.Parallel — uses the global pending-review marker file.
+	ctx := context.Background()
+	env := setupAdoptionEnv(t)
+
+	if err := WritePendingReviewMarker(ctx, PendingReviewMarker{
+		AgentNames:   []string{"claude-code", "codex"},
+		Skills:       []string{"/review"},
+		Prompt:       "review the diff",
+		StartingSHA:  env.HeadSHA,
+		StartedAt:    time.Now(),
+		WorktreePath: env.WorktreePath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ClearPendingReviewMarker(ctx) }) //nolint:errcheck // test cleanup, best-effort
+
+	state := session.State{WorktreePath: env.WorktreePath}
+	updated, modified, err := adoptPendingReviewMarkerInto(ctx, state, agent.AgentNameClaudeCode)
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if !modified {
+		t.Error("expected session to be tagged")
+	}
+	if updated.Kind != session.KindAgentReview {
+		t.Errorf("Kind = %q, want agent_review", updated.Kind)
+	}
+	if len(updated.ReviewSkills) != 1 || updated.ReviewSkills[0] != "/review" {
+		t.Errorf("ReviewSkills = %v", updated.ReviewSkills)
+	}
+	if updated.ReviewPrompt != "review the diff" {
+		t.Errorf("ReviewPrompt = %q", updated.ReviewPrompt)
+	}
+
+	// Marker must remain — orchestrator clears it after all agents finish.
+	_, markerOK, markerErr := ReadPendingReviewMarker(ctx)
+	if markerErr != nil {
+		t.Fatalf("read marker: %v", markerErr)
+	}
+	if !markerOK {
+		t.Error("marker should still exist after multi-agent adopt")
+	}
+}
+
+// TestAdoptMarker_MultiAgent_AgentNotInList pins that an agent whose name
+// is absent from AgentNames leaves the marker untouched and does not tag
+// its session — protecting sibling agents from stealing the wrong config.
+func TestAdoptMarker_MultiAgent_AgentNotInList(t *testing.T) {
+	// Cannot t.Parallel — uses the global pending-review marker file.
+	ctx := context.Background()
+	env := setupAdoptionEnv(t)
+
+	if err := WritePendingReviewMarker(ctx, PendingReviewMarker{
+		AgentNames:   []string{"claude-code", "codex"},
+		Skills:       []string{"/review"},
+		StartingSHA:  env.HeadSHA,
+		StartedAt:    time.Now(),
+		WorktreePath: env.WorktreePath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ClearPendingReviewMarker(ctx) }) //nolint:errcheck // test cleanup, best-effort
+
+	state := session.State{WorktreePath: env.WorktreePath}
+	got, modified, err := adoptPendingReviewMarkerInto(ctx, state, agent.AgentNameGemini)
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if modified {
+		t.Error("agent not in AgentNames should not tag session")
+	}
+	if got.Kind != "" {
+		t.Errorf("Kind = %q, want empty (session should not be tagged)", got.Kind)
+	}
+	// Marker must remain — the correct agents still need to adopt it.
+	_, markerOK, markerErr := ReadPendingReviewMarker(ctx)
+	if markerErr != nil {
+		t.Fatalf("read marker: %v", markerErr)
+	}
+	if !markerOK {
+		t.Error("marker should survive when agent is not in AgentNames")
+	}
+}
+
+// TestAdoptMarker_MultiAgent_WorktreeMismatchIgnores pins that the
+// worktree-path guard still applies in the multi-agent branch — a
+// matching-name agent in the wrong worktree must not adopt.
+func TestAdoptMarker_MultiAgent_WorktreeMismatchIgnores(t *testing.T) {
+	// Cannot t.Parallel — uses the global pending-review marker file.
+	ctx := context.Background()
+	env := setupAdoptionEnv(t)
+
+	if err := WritePendingReviewMarker(ctx, PendingReviewMarker{
+		AgentNames:   []string{"claude-code"},
+		StartingSHA:  env.HeadSHA,
+		StartedAt:    time.Now(),
+		WorktreePath: "/some/other/worktree",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ClearPendingReviewMarker(ctx) }) //nolint:errcheck // test cleanup, best-effort
+
+	state := session.State{WorktreePath: env.WorktreePath}
+	_, modified, err := adoptPendingReviewMarkerInto(ctx, state, agent.AgentNameClaudeCode)
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if modified {
+		t.Error("worktree mismatch should prevent adopt even for multi-agent")
+	}
+}
+
+// TestAdoptMarker_SingleAgent_BackwardsCompat pins that the pre-existing
+// single-agent (AgentName) path is untouched by the new multi-agent
+// branch: the marker is cleared on successful adoption, and the session
+// is tagged exactly as before.
+func TestAdoptMarker_SingleAgent_BackwardsCompat(t *testing.T) {
+	// Cannot t.Parallel — uses the global pending-review marker file.
+	ctx := context.Background()
+	env := setupAdoptionEnv(t)
+
+	if err := WritePendingReviewMarker(ctx, PendingReviewMarker{
+		AgentName:    "claude-code",
+		Skills:       []string{"/review"},
+		StartingSHA:  env.HeadSHA,
+		StartedAt:    time.Now(),
+		WorktreePath: env.WorktreePath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	state := session.State{WorktreePath: env.WorktreePath}
+	_, modified, err := adoptPendingReviewMarkerInto(ctx, state, agent.AgentNameClaudeCode)
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if !modified {
+		t.Error("single-agent path should still tag session")
+	}
+	_, markerOK, markerErr := ReadPendingReviewMarker(ctx)
+	if markerErr != nil {
+		t.Fatalf("read marker: %v", markerErr)
+	}
+	if markerOK {
+		t.Error("single-agent adopt should clear the marker")
+	}
+}
