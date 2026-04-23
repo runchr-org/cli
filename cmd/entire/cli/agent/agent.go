@@ -269,6 +269,28 @@ type Launcher interface {
 	LaunchCmd(ctx context.Context, initialPrompt string) (*exec.Cmd, error)
 }
 
+// HeadlessLauncher is implemented by agents that support running a prompt
+// in non-interactive mode. The subprocess writes its native transcript to
+// disk (same file as an interactive session) and exits when the prompt
+// completes. Used by `entire review`'s multi-agent TUI to spawn N parallel
+// reviews; agents that implement only Launcher (interactive TTY only)
+// remain reachable via the single-agent spawn path from Sub-phase 2.1.
+//
+// Contract:
+//   - LaunchHeadlessCmd returns an *exec.Cmd with Stdout/Stderr pipes left
+//     for the caller to assign (orchestrator wires them to tees + buffers).
+//   - Stdin is left nil; the prompt is passed as the positional arg or
+//     equivalent per-agent flag.
+//   - UserPromptSubmit hook must fire during the run so the pending-review
+//     marker adoption pipeline works.
+//   - Subprocess must terminate on its own once the prompt completes. The
+//     orchestrator does not send a graceful signal to end the run — only
+//     to cancel it (SIGTERM via ctx cancel).
+type HeadlessLauncher interface {
+	Agent
+	LaunchHeadlessCmd(ctx context.Context, initialPrompt string) (*exec.Cmd, error)
+}
+
 // DiscoveredSkill describes one review-adjacent skill found on disk by a
 // SkillDiscoverer. Name is the agent-native invocation form (e.g. a
 // slash-prefixed command); Description is scraped from on-disk metadata
