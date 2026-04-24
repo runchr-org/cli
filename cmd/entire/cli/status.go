@@ -184,23 +184,15 @@ func formatSettingsStatusShort(ctx context.Context, s *EntireSettings, sty statu
 
 		if drift := agent.CheckHookDrift(ctx); len(drift) > 0 {
 			b.WriteString("\n")
-			b.WriteString(sty.render(sty.yellow, "  Hooks · stale for "))
-			b.WriteString(sty.render(sty.yellow, formatDriftAgentList(drift)))
-			b.WriteString(sty.render(sty.dim, " — run `entire enable --force` to refresh"))
+			var buf strings.Builder
+			emitStaleHooksWarning(&buf, drift)
+			// emitStaleHooksWarning adds trailing \n; trim to fit inline under
+			// the status card (the caller already appends its own newlines).
+			b.WriteString(strings.TrimRight(buf.String(), "\n"))
 		}
 	}
 
 	return b.String()
-}
-
-// formatDriftAgentList turns a DriftReport slice into a comma-separated agent
-// name list (e.g., "claude-code, cursor") suitable for a one-line status warning.
-func formatDriftAgentList(reports []agent.DriftReport) string {
-	names := make([]string, 0, len(reports))
-	for _, r := range reports {
-		names = append(names, string(r.Agent))
-	}
-	return strings.Join(names, ", ")
 }
 
 // formatSettingsStatus formats a settings status line with source prefix.
