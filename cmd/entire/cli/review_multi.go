@@ -137,7 +137,24 @@ func (o *multiReviewOrchestrator) Run(ctx context.Context, tasks []MultiAgentTas
 	// plain io.Writer dump instead of escape-code garbage.
 	var program *tea.Program
 	if isTerminalWriter(out) {
-		program = tea.NewProgram(newReviewTUIModel(tasks), tea.WithOutput(out))
+		// WithoutSignalHandler: bubbletea's default handler would quit the
+		// program on its own SIGINT handler; we need to stay alive long
+		// enough to render the "cancelling" banner and drain subprocess
+		// output. Opt out so cancellation is driven explicitly.
+		//
+		// Passing cancelRun as the model's onCancel is what actually tears
+		// down subprocesses when Ctrl+C is pressed inside the TUI. In raw
+		// mode the terminal captures byte 0x03 and bubbletea hands it to
+		// the model as tea.KeyCtrlC, so the SIGINT never reaches the
+		// orchestrator's signal.Notify goroutine. The model calls
+		// onCancel() which cancels runCtx, SIGTERM propagates to the
+		// subprocesses via exec.CommandContext, and the 5-second watchdog
+		// above escalates to SIGKILL if anything is still alive.
+		program = tea.NewProgram(
+			newReviewTUIModel(tasks, cancelRun),
+			tea.WithOutput(out),
+			tea.WithoutSignalHandler(),
+		)
 	}
 	send := sendFunc(program)
 
@@ -245,12 +262,20 @@ func runSingleAgentTask(ctx context.Context, task MultiAgentTask, setCmd func(in
 	exitCode := 0
 	if runErr != nil {
 		var exitErr *exec.ExitError
+		hasExit := errors.As(runErr, &exitErr)
 		switch {
-		case errors.As(runErr, &exitErr):
+		case errors.Is(ctx.Err(), context.Canceled):
+			// Orchestrator cancelled the run (Ctrl+C or explicit cancel).
+			// Classify as Cancelled even though Go's exec.CommandContext
+			// delivers the kill as an *exec.ExitError with exit -1
+			// ("signal: killed"). Record the exit code for transparency.
+			status = AgentRunCancelled
+			if hasExit {
+				exitCode = exitErr.ExitCode()
+			}
+		case hasExit:
 			exitCode = exitErr.ExitCode()
 			status = AgentRunFailed
-		case errors.Is(ctx.Err(), context.Canceled):
-			status = AgentRunCancelled
 		default:
 			status = AgentRunFailed
 		}
@@ -379,6 +404,11 @@ func dumpMultiAgentResults(out io.Writer, tasks []MultiAgentTask, results []Agen
 		case AgentRunCancelled:
 			fmt.Fprintln(out, "(cancelled)")
 			fmt.Fprintln(out)
+			// Skip the FinalOutput dump for cancelled agents. The buffered
+			// partial stdout is rarely useful (often 100+ lines of noise
+			// from agents like codex that stream verbosely) and the user
+			// explicitly asked to stop — dumping would be adversarial.
+			continue
 		case AgentRunQueued, AgentRunRunning, AgentRunDone:
 			// Done: no header; buffered output follows.
 			// Queued/Running would indicate a logic bug; fall through.

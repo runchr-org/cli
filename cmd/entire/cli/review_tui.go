@@ -28,6 +28,12 @@ type reviewTUIModel struct {
 	termWidth  int
 	allDone    bool
 	cancelling bool
+	// onCancel, if non-nil, is invoked the first time the user triggers
+	// cancellation from within the TUI (Ctrl+C or 'q'). The orchestrator
+	// wires this to its runCtx cancel function so raw-mode-captured Ctrl+C
+	// still tears down subprocesses — bubbletea intercepts byte 0x03 before
+	// it can reach the orchestrator's signal.Notify handler.
+	onCancel func()
 }
 
 // rowState is the per-agent render state. Mutated only from Update via the
@@ -83,7 +89,10 @@ func stripANSI(s string) string {
 // newReviewTUIModel constructs a model pre-populated with one queued row
 // per task. Callers pass the same task list they'll hand the orchestrator,
 // so row names line up with the agentStateMsg.Name values posted later.
-func newReviewTUIModel(tasks []MultiAgentTask) reviewTUIModel {
+// onCancel, if non-nil, is invoked the first time the user presses Ctrl+C
+// or 'q' inside the TUI so the orchestrator can tear down subprocesses.
+// Pass nil when cancellation wiring isn't needed (e.g. in unit tests).
+func newReviewTUIModel(tasks []MultiAgentTask, onCancel func()) reviewTUIModel {
 	rows := make([]rowState, len(tasks))
 	for i, t := range tasks {
 		rows[i] = rowState{name: t.Name, status: AgentRunQueued}
@@ -96,6 +105,7 @@ func newReviewTUIModel(tasks []MultiAgentTask) reviewTUIModel {
 		spinner:   sp,
 		startTime: time.Now(),
 		termWidth: 80,
+		onCancel:  onCancel,
 	}
 }
 
@@ -118,6 +128,21 @@ func (m reviewTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.termWidth = msg.Width
+	case tea.KeyMsg:
+		// Ctrl+C (or 'q') flips the cancelling banner immediately for
+		// user feedback and fires the orchestrator-supplied cancel hook.
+		// The hook must be called from here — bubbletea puts the terminal
+		// in raw mode, so byte 0x03 is captured as a KeyMsg and never
+		// reaches the OS as SIGINT. The orchestrator's signal.Notify
+		// handler therefore never fires for in-TUI Ctrl+C; we have to
+		// cancel runCtx directly via m.onCancel. Guarded on !m.cancelling
+		// so repeat key presses don't re-fire the hook.
+		if msg.Type == tea.KeyCtrlC || msg.String() == "q" {
+			if !m.cancelling && m.onCancel != nil {
+				m.onCancel()
+			}
+			m.cancelling = true
+		}
 	case agentStateMsg:
 		for i, r := range m.rows {
 			if r.name == msg.Name {

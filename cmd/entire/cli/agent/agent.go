@@ -279,8 +279,9 @@ type Launcher interface {
 // Contract:
 //   - LaunchHeadlessCmd returns an *exec.Cmd with Stdout/Stderr pipes left
 //     for the caller to assign (orchestrator wires them to tees + buffers).
-//   - Stdin is left nil; the prompt is passed as the positional arg or
-//     equivalent per-agent flag.
+//   - Stdin MAY be set by the agent when the prompt must be piped (e.g.
+//     codex, gemini). Stdout and Stderr are always left unwired so the
+//     caller can pipe/capture them.
 //   - UserPromptSubmit hook must fire during the run so the pending-review
 //     marker adoption pipeline works.
 //   - Subprocess must terminate on its own once the prompt completes. The

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/exp/teatest"
 )
 
@@ -15,7 +16,7 @@ func TestTUIModel_InitialViewAllQueued(t *testing.T) {
 	t.Parallel()
 	m := newReviewTUIModel([]MultiAgentTask{
 		{Name: "a"}, {Name: "b"}, {Name: "c"},
-	})
+	}, nil)
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 20))
 
 	// Force quit quickly so FinalOutput terminates. The model exits on
@@ -41,7 +42,7 @@ func TestTUIModel_InitialViewAllQueued(t *testing.T) {
 // with Status=AgentRunRunning causes the view to reflect "running".
 func TestTUIModel_TransitionsToRunningOnMsg(t *testing.T) {
 	t.Parallel()
-	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}})
+	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}}, nil)
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 20))
 	tm.Send(agentStateMsg{Name: "a", Status: AgentRunRunning})
 	teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
@@ -57,7 +58,7 @@ func TestTUIModel_TransitionsToRunningOnMsg(t *testing.T) {
 // state, the model returns tea.Quit without an explicit Quit call.
 func TestTUIModel_DoneQuits(t *testing.T) {
 	t.Parallel()
-	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}})
+	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}}, nil)
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 20))
 	tm.Send(agentStateMsg{Name: "a", Status: AgentRunDone, Duration: time.Second})
 	tm.WaitFinished(t, teatest.WithFinalTimeout(time.Second))
@@ -67,7 +68,7 @@ func TestTUIModel_DoneQuits(t *testing.T) {
 // terminal width is truncated in the rendered view.
 func TestTUIModel_PreviewTruncates(t *testing.T) {
 	t.Parallel()
-	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}})
+	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}}, nil)
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(60, 20))
 	longLine := strings.Repeat("x", 300)
 	tm.Send(agentPreviewMsg{Name: "a", Line: longLine})
@@ -84,5 +85,24 @@ func TestTUIModel_PreviewTruncates(t *testing.T) {
 	// mean truncation was disabled or mis-sized for the terminal width.
 	if strings.Contains(view, strings.Repeat("x", 100)) {
 		t.Errorf("preview should truncate at terminal width; got:\n%s", view)
+	}
+}
+
+// TestTUIModel_KeyCtrlCCallsOnCancel pins the fix for the raw-mode Ctrl+C
+// bug: when bubbletea delivers KeyCtrlC to the model, the onCancel hook
+// must fire so the orchestrator can tear down subprocesses. Without this,
+// Ctrl+C only flips the banner and the subprocesses keep running because
+// the terminal swallowed the 0x03 byte before it could become a SIGINT.
+func TestTUIModel_KeyCtrlCCallsOnCancel(t *testing.T) {
+	t.Parallel()
+	called := false
+	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}}, func() { called = true })
+	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 20))
+	tm.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
+	// Send a terminal state so the model quits and the test finishes.
+	tm.Send(agentStateMsg{Name: "a", Status: AgentRunCancelled, Duration: time.Second})
+	tm.WaitFinished(t, teatest.WithFinalTimeout(500*time.Millisecond))
+	if !called {
+		t.Error("onCancel was not called on Ctrl+C")
 	}
 }
