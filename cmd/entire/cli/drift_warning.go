@@ -77,6 +77,8 @@ var isTerminalWriterFn = interactive.IsTerminalWriter
 // driftWarningPreRun is wired as the root command's PersistentPreRun. It
 // emits the stale-hooks warning on stderr when:
 //   - cmd passes shouldSkipDriftWarning (not hidden, not `status`),
+//   - cmd is not `enable`/`configure` being invoked with `--force` (user
+//     is already running the remediation the warning would suggest),
 //   - stderr is an actual terminal (don't pollute scripted / CI stderr),
 //   - checkHookDriftForWarning returns a non-empty list.
 //
@@ -84,6 +86,9 @@ var isTerminalWriterFn = interactive.IsTerminalWriter
 // early when the floor is still "0.0.0" (the default).
 func driftWarningPreRun(cmd *cobra.Command, _ []string) {
 	if shouldSkipDriftWarning(cmd) {
+		return
+	}
+	if forceRemediationInFlight(cmd) {
 		return
 	}
 	w := cmd.ErrOrStderr()
@@ -95,4 +100,21 @@ func driftWarningPreRun(cmd *cobra.Command, _ []string) {
 		return
 	}
 	emitStaleHooksWarning(w, drifts)
+}
+
+// forceRemediationInFlight reports whether cmd is `entire enable` or
+// `entire configure` invoked with `--force`. Re-running `entire enable
+// --force` is the exact remediation the warning tells users to run, so
+// firing the warning during that invocation is noise.
+func forceRemediationInFlight(cmd *cobra.Command) bool {
+	switch cmd.Name() {
+	case "enable", "configure":
+	default:
+		return false
+	}
+	flag := cmd.Flags().Lookup("force")
+	if flag == nil {
+		return false
+	}
+	return flag.Changed
 }

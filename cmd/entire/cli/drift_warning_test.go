@@ -141,4 +141,52 @@ func TestDriftWarningPreRun(t *testing.T) {
 			t.Errorf("expected second warning line in output, got %q", out)
 		}
 	})
+
+	// enable/configure --force must skip even with a TTY stderr: the user is
+	// already running the exact remediation the warning would suggest.
+	forceSkipCases := []struct {
+		name string
+		cmd  func() *cobra.Command
+	}{
+		{"enable --force", func() *cobra.Command {
+			c := &cobra.Command{Use: "enable"}
+			c.Flags().BoolP("force", "f", false, "")
+			if err := c.Flags().Set("force", "true"); err != nil {
+				t.Fatalf("set force: %v", err)
+			}
+			return c
+		}},
+		{"configure --force", func() *cobra.Command {
+			c := &cobra.Command{Use: "configure"}
+			c.Flags().BoolP("force", "f", false, "")
+			if err := c.Flags().Set("force", "true"); err != nil {
+				t.Fatalf("set force: %v", err)
+			}
+			return c
+		}},
+	}
+	for _, tc := range forceSkipCases {
+		t.Run(tc.name, func(t *testing.T) {
+			isTerminalWriterFn = func(io.Writer) bool { return true }
+			t.Cleanup(func() {
+				isTerminalWriterFn = func(io.Writer) bool { return false }
+			})
+			if out := run(tc.cmd()); out != "" {
+				t.Errorf("expected no output for %s, got %q", tc.name, out)
+			}
+		})
+	}
+
+	// enable WITHOUT --force still gets the warning (flag present but unset).
+	t.Run("enable without --force emits warning", func(t *testing.T) {
+		isTerminalWriterFn = func(io.Writer) bool { return true }
+		t.Cleanup(func() {
+			isTerminalWriterFn = func(io.Writer) bool { return false }
+		})
+		c := &cobra.Command{Use: "enable"}
+		c.Flags().BoolP("force", "f", false, "")
+		if out := run(c); !strings.Contains(out, "Action required") {
+			t.Errorf("expected warning for enable without --force, got %q", out)
+		}
+	})
 }
