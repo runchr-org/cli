@@ -46,6 +46,16 @@ func CheckHookDrift(ctx context.Context) []DriftReport {
 		return nil
 	}
 
+	// A floor of "0.0.0" (the default) means drift warnings are off
+	// globally: we've shipped the stamp mechanism but not yet raised
+	// the bar on any agent. Bail before touching the registry or the
+	// filesystem — this path runs on every visible command via
+	// PersistentPreRun.
+	required := MinCompatibleCLIVersion
+	if normalizeSemver(required) == zeroSemver {
+		return nil
+	}
+
 	var reports []DriftReport
 	for _, name := range List() {
 		ag, err := Get(name)
@@ -58,14 +68,6 @@ func CheckHookDrift(ctx context.Context) []DriftReport {
 		}
 		hv, ok := AsHookVersionSupport(ag)
 		if !ok {
-			continue
-		}
-
-		// A floor of "0.0.0" (the default) means drift warnings are off
-		// globally: we've shipped the stamp mechanism but not yet raised
-		// the bar on any agent. Bail before the per-agent file read.
-		required := MinCompatibleCLIVersion
-		if normalizeSemver(required) == zeroSemver {
 			continue
 		}
 

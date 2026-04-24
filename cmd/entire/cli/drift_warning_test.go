@@ -34,6 +34,7 @@ func TestShouldSkipDriftWarning(t *testing.T) {
 		{"enable", enable, false},
 		{"configure", configure, false},
 		{"status", &cobra.Command{Use: "status"}, true},
+		{"root", &cobra.Command{Use: "entire"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

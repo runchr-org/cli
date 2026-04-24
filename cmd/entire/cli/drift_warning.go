@@ -16,6 +16,9 @@ import (
 // shouldSkipDriftWarning returns true when the stale-hooks warning should
 // NOT be emitted for cmd. Rules (any triggers skip):
 //   - cmd is nil (defensive).
+//   - cmd is the root command itself (bare `entire`, which prints help or
+//     runs the first-time setup flow — neither is the right surface for a
+//     warning).
 //   - cmd or any ancestor has Hidden=true (internal / machine-invoked commands
 //     like `entire hooks`, `entire migrate`, dev helpers).
 //   - cmd.Name() is "status" — the status card calls emitStaleHooksWarning
@@ -24,7 +27,10 @@ func shouldSkipDriftWarning(cmd *cobra.Command) bool {
 	if cmd == nil {
 		return true
 	}
-	if cmd.Name() == "status" {
+	switch cmd.Name() {
+	case "entire", "status":
+		// "entire" is the root command (bare `entire` prints help or runs
+		// first-time setup); "status" renders the warning inline.
 		return true
 	}
 	for c := cmd; c != nil; c = c.Parent() {
@@ -82,8 +88,9 @@ var isTerminalWriterFn = interactive.IsTerminalWriter
 //   - stderr is an actual terminal (don't pollute scripted / CI stderr),
 //   - checkHookDriftForWarning returns a non-empty list.
 //
-// All other conditions return silently. Cheap: CheckHookDrift itself bails
-// early when the floor is still "0.0.0" (the default).
+// All other conditions return silently. Cheap: CheckHookDrift bails
+// before touching the agent registry or filesystem when the floor is
+// still "0.0.0" (the default).
 func driftWarningPreRun(cmd *cobra.Command, _ []string) {
 	if shouldSkipDriftWarning(cmd) {
 		return

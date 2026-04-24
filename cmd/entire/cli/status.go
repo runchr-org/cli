@@ -181,12 +181,16 @@ func formatSettingsStatusShort(ctx context.Context, s *EntireSettings, sty statu
 
 			b.WriteString(strings.Join(displayNames, ", "))
 		}
+	}
 
-		if drift := agent.CheckHookDrift(ctx); len(drift) > 0 {
-			for _, line := range staleHooksWarningLines(sty, drift) {
-				b.WriteString("\n  ")
-				b.WriteString(line)
-			}
+	// Drift warning is independent of `Enabled`: a repo may have Entire
+	// disabled in settings yet still have stale hook configs on disk
+	// installed by a prior session. The root PersistentPreRun also skips
+	// `status`, so this is the only surface where that case appears.
+	if drift := agent.CheckHookDrift(ctx); len(drift) > 0 {
+		for _, line := range staleHooksWarningLines(sty, drift) {
+			b.WriteString("\n  ")
+			b.WriteString(line)
 		}
 	}
 

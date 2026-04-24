@@ -36,14 +36,15 @@ Examples:
   entire sessions info <session-id> --json Output as JSON
   entire sessions stop                     Interactive stop`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// Cobra stops at the first PersistentPreRun(E) walking from the
-			// executed command toward root, so root's driftWarningPreRun
-			// would be silently shadowed here. Call it explicitly to keep
-			// `entire sessions *` covered by the stale-hooks warning.
-			driftWarningPreRun(cmd, args)
 			if _, err := paths.WorktreeRoot(cmd.Context()); err != nil {
 				return errors.New("not a git repository")
 			}
+			// Cobra stops at the first PersistentPreRun(E) walking from the
+			// executed command toward root, so root's driftWarningPreRun
+			// would be silently shadowed here. Call it explicitly after the
+			// git-repo check so we don't warn then bail with "not a git
+			// repository".
+			driftWarningPreRun(cmd, args)
 			return nil
 		},
 	}
