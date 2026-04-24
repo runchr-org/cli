@@ -49,9 +49,10 @@ type agentChoice struct {
 // require a real TTY. Production wiring leaves fields nil and defaults
 // are resolved inside runReview.
 type runReviewDeps struct {
-	promptForAgentFn  func(ctx context.Context, eligible []agentChoice) (string, error)
-	promptForAgentsFn func(ctx context.Context, eligible []agentChoice) ([]string, error)
-	runMultiAgentFn   func(ctx context.Context, tasks []MultiAgentTask, out io.Writer) (MultiRunResult, error)
+	promptForAgentFn      func(ctx context.Context, eligible []agentChoice) (string, error)
+	promptForAgentsFn     func(ctx context.Context, eligible []agentChoice) ([]string, error)
+	runMultiAgentFn       func(ctx context.Context, tasks []MultiAgentTask, out io.Writer) (MultiRunResult, error)
+	promptForRunContextFn func(ctx context.Context) (string, error)
 }
 
 // MultiAgentTask describes one agent's slot in a parallel review run.
@@ -60,7 +61,7 @@ type runReviewDeps struct {
 type MultiAgentTask struct {
 	Agent  agent.HeadlessLauncher // set by dispatcher when routing to multi-agent
 	Name   string                 // agent registry key
-	Prompt string                 // composed via composeReviewPrompt(cfg)
+	Prompt string                 // composed via composeReviewPrompt(cfg, runContext)
 }
 
 // MultiRunResult is the aggregated result of a multi-agent review. Runs
@@ -738,13 +739,22 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string, de
 		return fmt.Errorf("resolve worktree root: %w", err)
 	}
 
+	// 5.5. Prompt the user for per-run context (optional). Fires between
+	// agent selection and marker write so the ephemeral context text is
+	// composed into the prompt the session's hook records. Empty/Enter-
+	// only is treated as "skip" — base prompt is used verbatim.
+	runContext, err := resolveRunContext(ctx, cmd, deps)
+	if err != nil {
+		return err
+	}
+
 	// 6. Compose the review prompt once, then write the pending marker. The
 	// composed prompt is carried on the marker so adoption records exactly
 	// what the agent was asked to do (the same string passed to LaunchCmd
 	// below), rather than recomposing on the hook side. When the user has
 	// configured a custom Prompt, it wins verbatim; otherwise Skills are
 	// composed into the default "run these in order" template.
-	prompt := composeReviewPrompt(cfg)
+	prompt := composeReviewPrompt(cfg, runContext)
 	if err := WritePendingReviewMarker(ctx, PendingReviewMarker{
 		AgentName:    agentName,
 		Skills:       cfg.Skills,
@@ -869,8 +879,14 @@ func pickMultiAgent(ctx context.Context, cmd *cobra.Command, s *settings.EntireS
 		// Drop into single-agent path.
 		return selected[0], false, nil
 	}
+	// Per-run context prompt fires after selection but before dispatch so
+	// the same ephemeral text is composed into every task's prompt.
+	runContext, err := resolveRunContext(ctx, cmd, deps)
+	if err != nil {
+		return "", false, err
+	}
 	// Route to multi-agent orchestrator.
-	if err := dispatchMultiAgent(ctx, cmd, s, selected, deps); err != nil {
+	if err := dispatchMultiAgent(ctx, cmd, s, selected, runContext, deps); err != nil {
 		return "", true, err
 	}
 	return "", true, nil
@@ -906,7 +922,9 @@ func pickSingleAgent(ctx context.Context, cmd *cobra.Command, eligible []agentCh
 // capabilities, and hands off to the orchestrator via deps.runMultiAgentFn.
 // Marker write, hook adoption, and cleanup are the orchestrator's
 // responsibility — this function only prepares the task list and dispatches.
-func dispatchMultiAgent(ctx context.Context, cmd *cobra.Command, s *settings.EntireSettings, selected []string, deps runReviewDeps) error {
+// runContext is the optional per-run text gathered by pickMultiAgent; it is
+// composed into every selected agent's prompt alongside the persistent cfg.
+func dispatchMultiAgent(ctx context.Context, cmd *cobra.Command, s *settings.EntireSettings, selected []string, runContext string, deps runReviewDeps) error {
 	out := cmd.OutOrStdout()
 	tasks := make([]MultiAgentTask, 0, len(selected))
 	for _, name := range selected {
@@ -925,7 +943,7 @@ func dispatchMultiAgent(ctx context.Context, cmd *cobra.Command, s *settings.Ent
 		tasks = append(tasks, MultiAgentTask{
 			Agent:  hl,
 			Name:   name,
-			Prompt: composeReviewPrompt(cfg),
+			Prompt: composeReviewPrompt(cfg, runContext),
 		})
 	}
 
@@ -1046,6 +1064,44 @@ func promptForAgents(ctx context.Context, eligible []agentChoice) ([]string, err
 	return picked, nil
 }
 
+// promptForRunContext presents a small optional textarea for per-run
+// context. Empty return = user skipped (Enter on empty). Never saved to
+// settings — ephemeral per run.
+func promptForRunContext(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("run-context prompt: %w", err)
+	}
+	var text string
+	form := NewAccessibleForm(huh.NewGroup(
+		huh.NewText().
+			Title("Additional context for this review (optional)").
+			Description("What are you asking the agent(s) to focus on? Press Enter to skip.").
+			Value(&text),
+	))
+	if err := form.Run(); err != nil {
+		return "", fmt.Errorf("run-context prompt: %w", err)
+	}
+	return strings.TrimSpace(text), nil
+}
+
+// resolveRunContext runs the injection-hookable run-context prompt. Used
+// by both the single-agent path (in runReview) and the multi-agent path
+// (in pickMultiAgent) so the same ephemeral per-run text is composed
+// into every selected agent's prompt.
+func resolveRunContext(ctx context.Context, cmd *cobra.Command, deps runReviewDeps) (string, error) {
+	fn := deps.promptForRunContextFn
+	if fn == nil {
+		fn = promptForRunContext
+	}
+	runContext, err := fn(ctx)
+	if err != nil {
+		cmd.SilenceUsage = true
+		fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
+		return "", NewSilentError(err)
+	}
+	return runContext, nil
+}
+
 // selectReviewAgent picks an agent from the configured review map.
 //
 // If override is non-empty, returns the config for that agent or an error
@@ -1121,23 +1177,31 @@ func verifyConfiguredSkillsInstalled(ctx context.Context, ag agent.Agent, cfg se
 }
 
 // composeReviewPrompt builds the prompt sent to the agent from a
-// ReviewConfig. If the config carries an explicit Prompt it wins
-// verbatim — the user's words are the source of truth. Otherwise the
-// skills list is composed into the default "run these in order"
-// template. Empty config returns "" (caller should avoid that case).
-func composeReviewPrompt(cfg settings.ReviewConfig) string {
+// ReviewConfig plus optional per-run context. The base is whichever of
+// cfg.Prompt (persistent) or a skills-composed template is set; per-run
+// context, when non-empty, is appended with a clear marker so the agent
+// can distinguish persistent preferences from per-run intent. Empty
+// cfg + empty runContext returns "".
+func composeReviewPrompt(cfg settings.ReviewConfig, runContext string) string {
+	var base string
 	if cfg.Prompt != "" {
-		return cfg.Prompt
+		base = cfg.Prompt
+	} else if len(cfg.Skills) > 0 {
+		var sb strings.Builder
+		sb.WriteString("Please run these review skills in order:\n")
+		for i, skill := range cfg.Skills {
+			fmt.Fprintf(&sb, "  %d. %s\n", i+1, skill)
+		}
+		base = sb.String()
 	}
-	if len(cfg.Skills) == 0 {
-		return ""
+
+	if runContext == "" {
+		return base
 	}
-	var sb strings.Builder
-	sb.WriteString("Please run these review skills in order:\n")
-	for i, skill := range cfg.Skills {
-		fmt.Fprintf(&sb, "  %d. %s\n", i+1, skill)
+	if base == "" {
+		return runContext
 	}
-	return sb.String()
+	return base + "\n\nFor this review: " + runContext
 }
 
 // currentHeadSHA returns the current HEAD commit hash as a 40-char hex string.

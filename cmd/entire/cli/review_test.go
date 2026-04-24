@@ -218,11 +218,15 @@ func TestRunReview_NonLaunchableAgentPreservesMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rootCmd := NewRootCmd()
+	// Stub the run-context prompt so the test doesn't hit the real huh
+	// textarea (no TTY in tests).
+	deps := runReviewDeps{
+		promptForRunContextFn: func(_ context.Context) (string, error) { return "", nil },
+	}
+	reviewCmd := newReviewCmdWithDeps(deps)
 	buf := &bytes.Buffer{}
-	rootCmd.SetOut(buf)
-	rootCmd.SetArgs([]string{"review"})
-	if err := rootCmd.Execute(); err != nil {
+	reviewCmd.SetOut(buf)
+	if err := reviewCmd.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 
@@ -247,7 +251,7 @@ func TestComposeReviewPrompt_SkillsOnly(t *testing.T) {
 	t.Parallel()
 	prompt := composeReviewPrompt(settings.ReviewConfig{
 		Skills: []string{"/review-pr", "/test-auditor"},
-	})
+	}, "")
 	if strings.Contains(prompt, "entire-review:finish") {
 		t.Errorf("prompt should not reference finish skill; got: %s", prompt)
 	}
@@ -264,7 +268,7 @@ func TestComposeReviewPrompt_CustomPromptWinsOverSkills(t *testing.T) {
 	prompt := composeReviewPrompt(settings.ReviewConfig{
 		Skills: []string{"/review-pr"},
 		Prompt: custom,
-	})
+	}, "")
 	if prompt != custom {
 		t.Errorf("composeReviewPrompt = %q, want verbatim custom prompt %q", prompt, custom)
 	}
@@ -274,8 +278,143 @@ func TestComposeReviewPrompt_CustomPromptWinsOverSkills(t *testing.T) {
 // the spawn path with empty config.
 func TestComposeReviewPrompt_EmptyConfigReturnsEmpty(t *testing.T) {
 	t.Parallel()
-	if got := composeReviewPrompt(settings.ReviewConfig{}); got != "" {
+	if got := composeReviewPrompt(settings.ReviewConfig{}, ""); got != "" {
 		t.Errorf("empty config = %q, want empty", got)
+	}
+}
+
+// TestComposeReviewPrompt_AppendsRunContext covers the four composition cases
+// when per-run context is provided alongside persistent cfg fields.
+func TestComposeReviewPrompt_AppendsRunContext(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		cfg        settings.ReviewConfig
+		runContext string
+		want       string
+	}{
+		{
+			name:       "no context, skills only",
+			cfg:        settings.ReviewConfig{Skills: []string{"/review"}},
+			runContext: "",
+			want:       "Please run these review skills in order:\n  1. /review\n",
+		},
+		{
+			name:       "context + skills",
+			cfg:        settings.ReviewConfig{Skills: []string{"/review"}},
+			runContext: "focus on auth",
+			want:       "Please run these review skills in order:\n  1. /review\n\n\nFor this review: focus on auth",
+		},
+		{
+			name:       "context + persistent prompt",
+			cfg:        settings.ReviewConfig{Prompt: "always flag side effects"},
+			runContext: "review the migration",
+			want:       "always flag side effects\n\nFor this review: review the migration",
+		},
+		{
+			name:       "context only, no cfg",
+			cfg:        settings.ReviewConfig{},
+			runContext: "one-off review",
+			want:       "one-off review",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := composeReviewPrompt(tt.cfg, tt.runContext)
+			if got != tt.want {
+				t.Errorf("composeReviewPrompt(%+v, %q) =\n%q\nwant:\n%q", tt.cfg, tt.runContext, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRunReview_CallsPromptForRunContextBeforeSpawn pins that runReview
+// calls the injection hook between agent selection and marker write/spawn,
+// and that the returned run-context text is composed into the final
+// prompt stored on PendingReviewMarker.Prompt.
+func TestRunReview_CallsPromptForRunContextBeforeSpawn(t *testing.T) {
+	setupReviewTestRepoWithCommit(t)
+	installHooksForTest(t, "cursor") // non-launchable so !ok fallback preserves marker
+
+	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		"cursor": {Prompt: "always flag side effects"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	deps := runReviewDeps{
+		promptForRunContextFn: func(_ context.Context) (string, error) {
+			called = true
+			return "focus on auth refactor", nil
+		},
+	}
+
+	reviewCmd := newReviewCmdWithDeps(deps)
+	if err := reviewCmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !called {
+		t.Error("promptForRunContextFn was not called")
+	}
+
+	m, ok, err := ReadPendingReviewMarker(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("marker should exist (non-launchable fallback): ok=%v err=%v", ok, err)
+	}
+	want := "always flag side effects\n\nFor this review: focus on auth refactor"
+	if m.Prompt != want {
+		t.Errorf("marker.Prompt = %q\nwant %q", m.Prompt, want)
+	}
+}
+
+// TestRunReview_MultiAgent_PassesRunContextToAllTasks pins that the per-run
+// context fires in the multi-agent path and is composed into each task's
+// prompt before reaching the orchestrator.
+func TestRunReview_MultiAgent_PassesRunContextToAllTasks(t *testing.T) {
+	setupReviewTestRepoWithCommit(t)
+	installHooksForTest(t, testAgentName)
+	installHooksForTest(t, testCodexAgent)
+
+	if err := saveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		testAgentName:  {Prompt: "always flag side effects"},
+		testCodexAgent: {Prompt: "always flag side effects"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotPrompts []string
+	deps := runReviewDeps{
+		promptForAgentsFn: func(_ context.Context, eligible []agentChoice) ([]string, error) {
+			return []string{eligible[0].Name, eligible[1].Name}, nil
+		},
+		promptForRunContextFn: func(_ context.Context) (string, error) {
+			return "focus on auth", nil
+		},
+		runMultiAgentFn: func(_ context.Context, tasks []MultiAgentTask, _ io.Writer) (MultiRunResult, error) {
+			for _, task := range tasks {
+				gotPrompts = append(gotPrompts, task.Prompt)
+			}
+			return MultiRunResult{Runs: []AgentRunResult{
+				{Name: tasks[0].Name, Status: AgentRunDone},
+				{Name: tasks[1].Name, Status: AgentRunDone},
+			}}, nil
+		},
+	}
+
+	reviewCmd := newReviewCmdWithDeps(deps)
+	if err := reviewCmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if len(gotPrompts) != 2 {
+		t.Fatalf("expected 2 prompts, got %d", len(gotPrompts))
+	}
+	want := "always flag side effects\n\nFor this review: focus on auth"
+	for i, prompt := range gotPrompts {
+		if prompt != want {
+			t.Errorf("task[%d].Prompt =\n%q\nwant:\n%q", i, prompt, want)
+		}
 	}
 }
 
@@ -839,11 +978,14 @@ func TestRunReview_PromptOnlyConfigSkipsVerification(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rootCmd := NewRootCmd()
+	// Stub the run-context prompt — no TTY in tests.
+	deps := runReviewDeps{
+		promptForRunContextFn: func(_ context.Context) (string, error) { return "", nil },
+	}
+	reviewCmd := newReviewCmdWithDeps(deps)
 	buf := &bytes.Buffer{}
-	rootCmd.SetOut(buf)
-	rootCmd.SetArgs([]string{"review"})
-	if err := rootCmd.Execute(); err != nil {
+	reviewCmd.SetOut(buf)
+	if err := reviewCmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	_, markerExists, markerErr := ReadPendingReviewMarker(context.Background())
@@ -884,6 +1026,8 @@ func TestPromptForAgent_SingleEligibleSkipsPicker(t *testing.T) {
 			called = true
 			return "", nil
 		},
+		// Stub run-context prompt — no TTY in tests.
+		promptForRunContextFn: func(_ context.Context) (string, error) { return "", nil },
 	}
 
 	reviewCmd := newReviewCmdWithDeps(deps)
@@ -915,6 +1059,8 @@ func TestPromptForAgent_FlagOverrideSkipsPicker(t *testing.T) {
 			called = true
 			return "", nil
 		},
+		// Stub run-context prompt — no TTY in tests.
+		promptForRunContextFn: func(_ context.Context) (string, error) { return "", nil },
 	}
 
 	reviewCmd := newReviewCmdWithDeps(deps)
@@ -989,6 +1135,8 @@ func TestRunReview_MultiAgentNoFlagTriggersPicker(t *testing.T) {
 			// Alphabetical ordering; pick the second one.
 			return eligible[1].Name, nil
 		},
+		// Stub run-context prompt — no TTY in tests.
+		promptForRunContextFn: func(_ context.Context) (string, error) { return "", nil },
 	}
 
 	reviewCmd := newReviewCmdWithDeps(deps)
@@ -1038,6 +1186,8 @@ func TestPromptForAgents_CallsInjection(t *testing.T) {
 			}
 			return []string{eligible[0].Name, eligible[1].Name}, nil
 		},
+		// Stub run-context prompt — no TTY in tests.
+		promptForRunContextFn: func(_ context.Context) (string, error) { return "", nil },
 		runMultiAgentFn: func(_ context.Context, tasks []MultiAgentTask, _ io.Writer) (MultiRunResult, error) {
 			multiCalled = true
 			if len(tasks) != 2 {
