@@ -26,6 +26,30 @@ import (
 // floods stdout.
 const previewRateWindow = 100 * time.Millisecond
 
+// agentBuffer is a thread-safe byte accumulator. The orchestrator
+// goroutine writes via the io.Writer path (for stdout tee-ing); the TUI
+// reads via Snapshot() on Ctrl+O drill-in. One per task.
+type agentBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *agentBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n, err := b.buf.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("agentBuffer write: %w", err)
+	}
+	return n, nil
+}
+
+func (b *agentBuffer) Snapshot() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]byte(nil), b.buf.Bytes()...)
+}
+
 // multiReviewOrchestrator owns the lifecycle of an N-agent parallel review:
 // writes the shared pending marker, spawns one goroutine per agent, drives
 // cancellation, cleans up on exit. When stdout is a terminal, it drives a
@@ -132,7 +156,16 @@ func (o *multiReviewOrchestrator) Run(ctx context.Context, tasks []MultiAgentTas
 		}
 	}()
 
-	// 6. Optional bubbletea program. Only spin up the TUI when out is a
+	// 6. Shared per-agent buffers. Each task's tee writes into its buffer,
+	// which doubles as the FinalOutput source after Wait and as the TUI's
+	// read target for Ctrl+O drill-in. Allocated before the TUI so the
+	// model can observe the same underlying bytes.
+	buffers := make([]*agentBuffer, len(tasks))
+	for i := range buffers {
+		buffers[i] = &agentBuffer{}
+	}
+
+	// 7. Optional bubbletea program. Only spin up the TUI when out is a
 	// real terminal — piping to a file or CI log pipe should get the
 	// plain io.Writer dump instead of escape-code garbage.
 	var program *tea.Program
@@ -151,14 +184,14 @@ func (o *multiReviewOrchestrator) Run(ctx context.Context, tasks []MultiAgentTas
 		// subprocesses via exec.CommandContext, and the 5-second watchdog
 		// above escalates to SIGKILL if anything is still alive.
 		program = tea.NewProgram(
-			newReviewTUIModel(tasks, cancelRun),
+			newReviewTUIModel(tasks, cancelRun, buffers),
 			tea.WithOutput(out),
 			tea.WithoutSignalHandler(),
 		)
 	}
 	send := sendFunc(program)
 
-	// 7. Spawn one goroutine per task. Each goroutine also posts state +
+	// 8. Spawn one goroutine per task. Each goroutine also posts state +
 	// preview messages to the TUI (no-op when program is nil).
 	var wg sync.WaitGroup
 	results := make([]AgentRunResult, len(tasks))
@@ -166,11 +199,11 @@ func (o *multiReviewOrchestrator) Run(ctx context.Context, tasks []MultiAgentTas
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = runSingleAgentTask(runCtx, task, setCmd, i, send)
+			results[i] = runSingleAgentTask(runCtx, task, setCmd, i, send, buffers[i])
 		}()
 	}
 
-	// 8. If we have a TUI, run program in the foreground while a small
+	// 9. If we have a TUI, run program in the foreground while a small
 	// goroutine waits for all agents to finish and then signals quit.
 	// Without a TUI, just wait for the goroutines to finish synchronously.
 	if program != nil {
@@ -193,7 +226,7 @@ func (o *multiReviewOrchestrator) Run(ctx context.Context, tasks []MultiAgentTas
 		close(allDone)
 	}
 
-	// 9. Dump per-agent outputs + summary. Runs after the TUI exits so
+	// 10. Dump per-agent outputs + summary. Runs after the TUI exits so
 	// the final table paint stays above the full responses.
 	dumpMultiAgentResults(out, tasks, results, cancelled.load())
 
@@ -218,11 +251,13 @@ func sendFunc(program *tea.Program) func(msg tea.Msg) {
 // an empty task list — a programmer error the caller should surface.
 var errNoMultiAgentTasks = errors.New("orchestrator: no tasks")
 
-// runSingleAgentTask launches one headless agent subprocess, buffers its
-// stdout/stderr, and classifies the exit. Called once per task by Run.
-// send posts lifecycle + preview messages to the TUI; a no-op sender is
-// used when the caller output isn't a terminal.
-func runSingleAgentTask(ctx context.Context, task MultiAgentTask, setCmd func(int, *exec.Cmd), idx int, send func(tea.Msg)) AgentRunResult {
+// runSingleAgentTask launches one headless agent subprocess, tees its
+// stdout/stderr into the provided shared buffer, and classifies the exit.
+// Called once per task by Run. send posts lifecycle + preview messages to
+// the TUI; a no-op sender is used when the caller output isn't a terminal.
+// buffer doubles as the FinalOutput source and as the TUI's read target
+// for Ctrl+O drill-in.
+func runSingleAgentTask(ctx context.Context, task MultiAgentTask, setCmd func(int, *exec.Cmd), idx int, send func(tea.Msg), buffer *agentBuffer) AgentRunResult {
 	startTime := time.Now()
 
 	cmd, err := task.Agent.LaunchHeadlessCmd(ctx, task.Prompt)
@@ -237,8 +272,7 @@ func runSingleAgentTask(ctx context.Context, task MultiAgentTask, setCmd func(in
 	}
 	setCmd(idx, cmd)
 
-	var buf bytes.Buffer
-	tee := newPreviewTeeWriter(&buf, send, task.Name)
+	tee := newPreviewTeeWriter(buffer, send, task.Name)
 	cmd.Stdout = tee
 	cmd.Stderr = tee
 	// WaitDelay protects against subprocesses whose children hold stdio
@@ -325,7 +359,7 @@ func runSingleAgentTask(ctx context.Context, task MultiAgentTask, setCmd func(in
 		Status:         status,
 		ExitCode:       exitCode,
 		Duration:       duration,
-		FinalOutput:    buf.Bytes(),
+		FinalOutput:    buffer.Snapshot(),
 		Err:            runErr,
 		TokenUsage:     tokenUsage,
 		TranscriptPath: transcriptPath,

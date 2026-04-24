@@ -16,7 +16,7 @@ func TestTUIModel_InitialViewAllQueued(t *testing.T) {
 	t.Parallel()
 	m := newReviewTUIModel([]MultiAgentTask{
 		{Name: "a"}, {Name: "b"}, {Name: "c"},
-	}, nil)
+	}, nil, nil)
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 20))
 
 	// Force quit quickly so FinalOutput terminates. The model exits on
@@ -42,7 +42,7 @@ func TestTUIModel_InitialViewAllQueued(t *testing.T) {
 // with Status=AgentRunRunning causes the view to reflect "running".
 func TestTUIModel_TransitionsToRunningOnMsg(t *testing.T) {
 	t.Parallel()
-	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}}, nil)
+	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}}, nil, nil)
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 20))
 	tm.Send(agentStateMsg{Name: "a", Status: AgentRunRunning})
 	teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
@@ -58,7 +58,7 @@ func TestTUIModel_TransitionsToRunningOnMsg(t *testing.T) {
 // state, the model returns tea.Quit without an explicit Quit call.
 func TestTUIModel_DoneQuits(t *testing.T) {
 	t.Parallel()
-	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}}, nil)
+	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}}, nil, nil)
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 20))
 	tm.Send(agentStateMsg{Name: "a", Status: AgentRunDone, Duration: time.Second})
 	tm.WaitFinished(t, teatest.WithFinalTimeout(time.Second))
@@ -68,7 +68,7 @@ func TestTUIModel_DoneQuits(t *testing.T) {
 // terminal width is truncated in the rendered view.
 func TestTUIModel_PreviewTruncates(t *testing.T) {
 	t.Parallel()
-	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}}, nil)
+	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}}, nil, nil)
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(60, 20))
 	longLine := strings.Repeat("x", 300)
 	tm.Send(agentPreviewMsg{Name: "a", Line: longLine})
@@ -88,6 +88,99 @@ func TestTUIModel_PreviewTruncates(t *testing.T) {
 	}
 }
 
+// TestTUIModel_CtrlOEntersDetailMode pins that Ctrl+O switches the TUI
+// into the full-screen drill-in view and renders the active agent's
+// buffered stdout.
+func TestTUIModel_CtrlOEntersDetailMode(t *testing.T) {
+	t.Parallel()
+	buf := &agentBuffer{}
+	if _, err := buf.Write([]byte("some content\n")); err != nil {
+		t.Fatalf("buf.Write: %v", err)
+	}
+	m := newReviewTUIModel(
+		[]MultiAgentTask{{Name: "a"}},
+		nil,
+		[]*agentBuffer{buf},
+	)
+	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 20))
+	tm.Send(tea.KeyMsg{Type: tea.KeyCtrlO})
+	tm.Send(agentStateMsg{Name: "a", Status: AgentRunDone, Duration: time.Second})
+	out, readErr := io.ReadAll(tm.FinalOutput(t, teatest.WithFinalTimeout(500*time.Millisecond)))
+	if readErr != nil {
+		t.Fatalf("read FinalOutput: %v", readErr)
+	}
+	view := string(out)
+	if !strings.Contains(view, "agent 1 of 1") {
+		t.Errorf("expected detail view header; got:\n%s", view)
+	}
+	if !strings.Contains(view, "some content") {
+		t.Errorf("expected buffer content in detail view; got:\n%s", view)
+	}
+}
+
+// TestTUIModel_EscExitsDetailMode pins that Esc returns the TUI to the
+// dashboard. After Esc the final repaint must be in dashboard format
+// (the "N of M complete" footer), not the detail-mode header.
+func TestTUIModel_EscExitsDetailMode(t *testing.T) {
+	t.Parallel()
+	buf := &agentBuffer{}
+	if _, err := buf.Write([]byte("content\n")); err != nil {
+		t.Fatalf("buf.Write: %v", err)
+	}
+	m := newReviewTUIModel(
+		[]MultiAgentTask{{Name: "a"}},
+		nil,
+		[]*agentBuffer{buf},
+	)
+	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 20))
+	tm.Send(tea.KeyMsg{Type: tea.KeyCtrlO})
+	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(agentStateMsg{Name: "a", Status: AgentRunDone, Duration: time.Second})
+	out, readErr := io.ReadAll(tm.FinalOutput(t, teatest.WithFinalTimeout(500*time.Millisecond)))
+	if readErr != nil {
+		t.Fatalf("read FinalOutput: %v", readErr)
+	}
+	view := string(out)
+	if strings.Contains(view, "agent 1 of 1") {
+		t.Errorf("detail header should not be in final output after Esc; got:\n%s", view)
+	}
+	if !strings.Contains(view, "1 of 1 complete") {
+		t.Errorf("dashboard footer missing after Esc; got:\n%s", view)
+	}
+}
+
+// TestTUIModel_RightArrowSwitchesAgent pins that Right arrow in detail
+// mode advances detailIdx so the next agent's buffer is rendered.
+func TestTUIModel_RightArrowSwitchesAgent(t *testing.T) {
+	t.Parallel()
+	bufA := &agentBuffer{}
+	if _, err := bufA.Write([]byte("A-content\n")); err != nil {
+		t.Fatalf("bufA.Write: %v", err)
+	}
+	bufB := &agentBuffer{}
+	if _, err := bufB.Write([]byte("B-content\n")); err != nil {
+		t.Fatalf("bufB.Write: %v", err)
+	}
+	m := newReviewTUIModel(
+		[]MultiAgentTask{{Name: "a"}, {Name: "b"}},
+		nil,
+		[]*agentBuffer{bufA, bufB},
+	)
+	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 20))
+	tm.Send(tea.KeyMsg{Type: tea.KeyCtrlO})
+	tm.Send(tea.KeyMsg{Type: tea.KeyRight})
+	tm.Send(agentStateMsg{Name: "a", Status: AgentRunDone, Duration: time.Second})
+	tm.Send(agentStateMsg{Name: "b", Status: AgentRunDone, Duration: time.Second})
+	out, readErr := io.ReadAll(tm.FinalOutput(t, teatest.WithFinalTimeout(500*time.Millisecond)))
+	if readErr != nil {
+		t.Fatalf("read FinalOutput: %v", readErr)
+	}
+	view := string(out)
+	if !strings.Contains(view, "agent 2 of 2") {
+		t.Errorf("right arrow should switch to agent 2 of 2; got:\n%s", view)
+	}
+}
+
 // TestTUIModel_KeyCtrlCCallsOnCancel pins the fix for the raw-mode Ctrl+C
 // bug: when bubbletea delivers KeyCtrlC to the model, the onCancel hook
 // must fire so the orchestrator can tear down subprocesses. Without this,
@@ -96,7 +189,7 @@ func TestTUIModel_PreviewTruncates(t *testing.T) {
 func TestTUIModel_KeyCtrlCCallsOnCancel(t *testing.T) {
 	t.Parallel()
 	called := false
-	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}}, func() { called = true })
+	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}}, func() { called = true }, nil)
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 20))
 	tm.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
 	// Send a terminal state so the model quits and the test finishes.

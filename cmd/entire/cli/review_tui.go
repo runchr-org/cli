@@ -26,6 +26,7 @@ type reviewTUIModel struct {
 	spinner    spinner.Model
 	startTime  time.Time
 	termWidth  int
+	termHeight int
 	allDone    bool
 	cancelling bool
 	// onCancel, if non-nil, is invoked the first time the user triggers
@@ -34,6 +35,17 @@ type reviewTUIModel struct {
 	// still tears down subprocesses — bubbletea intercepts byte 0x03 before
 	// it can reach the orchestrator's signal.Notify handler.
 	onCancel func()
+	// buffers holds one shared tee-buffer per task, aligned with tasks by
+	// index. The TUI snapshots the active agent's buffer on every repaint
+	// while detailMode is on. nil when cancellation/test harnesses don't
+	// need drill-in.
+	buffers []*agentBuffer
+	// detailMode toggles the full-screen transcript view entered via
+	// Ctrl+O. While on, arrow keys navigate between agents and scroll the
+	// buffer; Esc returns to the dashboard.
+	detailMode   bool
+	detailIdx    int
+	detailScroll int
 }
 
 // rowState is the per-agent render state. Mutated only from Update via the
@@ -92,7 +104,9 @@ func stripANSI(s string) string {
 // onCancel, if non-nil, is invoked the first time the user presses Ctrl+C
 // or 'q' inside the TUI so the orchestrator can tear down subprocesses.
 // Pass nil when cancellation wiring isn't needed (e.g. in unit tests).
-func newReviewTUIModel(tasks []MultiAgentTask, onCancel func()) reviewTUIModel {
+// buffers, when non-nil, enables the Ctrl+O drill-in: one entry per task,
+// aligned by index, sharing the same tees the orchestrator feeds.
+func newReviewTUIModel(tasks []MultiAgentTask, onCancel func(), buffers []*agentBuffer) reviewTUIModel {
 	rows := make([]rowState, len(tasks))
 	for i, t := range tasks {
 		rows[i] = rowState{name: t.Name, status: AgentRunQueued}
@@ -100,12 +114,14 @@ func newReviewTUIModel(tasks []MultiAgentTask, onCancel func()) reviewTUIModel {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	return reviewTUIModel{
-		tasks:     tasks,
-		rows:      rows,
-		spinner:   sp,
-		startTime: time.Now(),
-		termWidth: 80,
-		onCancel:  onCancel,
+		tasks:      tasks,
+		rows:       rows,
+		spinner:    sp,
+		startTime:  time.Now(),
+		termWidth:  80,
+		termHeight: 24,
+		onCancel:   onCancel,
+		buffers:    buffers,
 	}
 }
 
@@ -128,7 +144,43 @@ func (m reviewTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.termWidth = msg.Width
+		m.termHeight = msg.Height
 	case tea.KeyMsg:
+		// Detail-mode key handling is a separate state: arrow keys
+		// navigate + scroll, Esc exits, Ctrl+O cycles agents. Ctrl+C is
+		// deliberately ignored here — the user must Esc back to the
+		// dashboard before cancelling so they don't accidentally kill a
+		// run while scrolling. Guarded on len(m.tasks) > 0 so an empty
+		// task list (defensive — shouldn't occur in practice) can't hit
+		// a modulo-by-zero panic.
+		if m.detailMode && len(m.tasks) > 0 {
+			switch msg.Type { //nolint:exhaustive // only navigation keys matter in detail mode; every other key is a no-op
+			case tea.KeyEsc:
+				m.detailMode = false
+			case tea.KeyCtrlO, tea.KeyRight:
+				m.detailIdx = (m.detailIdx + 1) % len(m.tasks)
+				m.detailScroll = 0
+			case tea.KeyLeft:
+				m.detailIdx = (m.detailIdx - 1 + len(m.tasks)) % len(m.tasks)
+				m.detailScroll = 0
+			case tea.KeyUp:
+				m.detailScroll++
+			case tea.KeyDown:
+				if m.detailScroll > 0 {
+					m.detailScroll--
+				}
+			}
+			return m, nil
+		}
+		// Dashboard: Ctrl+O enters the drill-in view. Requires buffers
+		// to be wired — without them the detail view has nothing to
+		// render.
+		if msg.Type == tea.KeyCtrlO && len(m.buffers) > 0 {
+			m.detailMode = true
+			m.detailIdx = 0
+			m.detailScroll = 0
+			return m, nil
+		}
 		// Ctrl+C (or 'q') flips the cancelling banner immediately for
 		// user feedback and fires the orchestrator-supplied cancel hook.
 		// The hook must be called from here — bubbletea puts the terminal
@@ -200,10 +252,14 @@ func truncatePreview(line string, termWidth int) string {
 }
 
 // View renders the full status table. Called on every Update cycle.
+// Dispatches to detailView when the Ctrl+O drill-in is active.
 func (m reviewTUIModel) View() string {
+	if m.detailMode {
+		return m.detailView()
+	}
 	var sb strings.Builder
 	sb.WriteString("Running ")
-	fmt.Fprintf(&sb, "%d agents — Ctrl+C to cancel all\n\n", len(m.rows))
+	fmt.Fprintf(&sb, "%d agents — Ctrl+C to cancel · Ctrl+O to view agent\n\n", len(m.rows))
 	if m.cancelling {
 		sb.WriteString("Cancelling — sending SIGTERM to subprocesses…\n\n")
 	}
@@ -233,6 +289,56 @@ func (m reviewTUIModel) View() string {
 		}
 	}
 	fmt.Fprintf(&sb, "%d of %d complete\n", completed, len(m.rows))
+	return sb.String()
+}
+
+// detailView renders a full-screen, scrollable slice of the active
+// agent's stdout buffer. The header shows the agent name, position in
+// the list, and available keybindings. Scroll offset counts lines back
+// from the newest: detailScroll=0 pins the tail (the most recent output),
+// positive values page upward through history.
+func (m reviewTUIModel) detailView() string {
+	task := m.tasks[m.detailIdx]
+	var data []byte
+	if m.detailIdx < len(m.buffers) && m.buffers[m.detailIdx] != nil {
+		data = m.buffers[m.detailIdx].Snapshot()
+	}
+	lines := strings.Split(stripANSI(string(data)), "\n")
+
+	viewport := m.termHeight - 3
+	if viewport < 5 {
+		viewport = 5
+	}
+
+	// Clamp scroll so pressing Up past the top of the buffer doesn't
+	// leave start/end inverted.
+	maxScroll := len(lines) - viewport
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.detailScroll > maxScroll {
+		m.detailScroll = maxScroll
+	}
+
+	end := len(lines) - m.detailScroll
+	if end > len(lines) {
+		end = len(lines)
+	}
+	start := end - viewport
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "< %s > (agent %d of %d) — Esc: back | ←/→: switch | ↑/↓: scroll\n",
+		task.Name, m.detailIdx+1, len(m.tasks))
+	sb.WriteString(strings.Repeat("─", 60) + "\n")
+	for _, line := range lines[start:end] {
+		sb.WriteString(line + "\n")
+	}
 	return sb.String()
 }
 
