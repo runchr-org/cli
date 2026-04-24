@@ -107,6 +107,15 @@ func restoreV3(ctx context.Context, t cursorTarget, data []byte) error {
 	}
 	defer db.Close()
 
+	// Force DELETE journal mode so all writes land in the main DB file,
+	// not in a WAL sidecar. Without this modernc.org/sqlite defaults to WAL
+	// mode; rows would sit in store.db-wal and other SQLite clients (e.g.
+	// cursor-agent itself) may fail to read them back when the main file is
+	// still the initial empty page.
+	if _, err := db.ExecContext(ctx, "PRAGMA journal_mode=DELETE;"); err != nil {
+		return fmt.Errorf("set journal_mode: %w", err)
+	}
+
 	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE meta  (key TEXT PRIMARY KEY, value TEXT);
 		CREATE TABLE blobs (id  TEXT PRIMARY KEY, data BLOB);
