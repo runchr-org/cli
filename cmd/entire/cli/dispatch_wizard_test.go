@@ -352,6 +352,18 @@ func TestRunDispatchWizard_ProceedsWhenCurrentBranchCannotBeResolved(t *testing.
 		getDispatchWizardCurrentBranch = oldGetCurrentBranch
 	})
 
+	// Stub form execution so the test does not block on a TTY when run from a
+	// terminal. The "run dispatch wizard" error wrapper only exists after the
+	// wizard proceeds past branch resolution, so the assertion below is
+	// sufficient to prove form execution was reached.
+	oldRunForm := runDispatchWizardForm
+	runDispatchWizardForm = func(*huh.Form) error {
+		return errors.New("form execution stubbed")
+	}
+	t.Cleanup(func() {
+		runDispatchWizardForm = oldRunForm
+	})
+
 	cmd := &cobra.Command{}
 	cmd.SetContext(context.Background())
 

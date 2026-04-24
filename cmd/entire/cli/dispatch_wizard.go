@@ -26,6 +26,7 @@ var listDispatchWizardRepos = discoverAuthenticatedDispatchWizardRepos
 var listDispatchWizardRepoResources = defaultListDispatchWizardRepoResources
 var resolveDispatchWizardTopLevel = resolveGitTopLevel
 var getDispatchWizardCurrentBranch = GetCurrentBranch
+var runDispatchWizardForm = func(form *huh.Form) error { return form.Run() }
 
 func defaultListDispatchWizardRepoResources(ctx context.Context) ([]api.Repository, error) {
 	client, err := NewAuthenticatedAPIClient(false)
@@ -351,7 +352,7 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 
 	fmt.Fprintln(cmd.OutOrStdout())
 
-	if err := form.Run(); err != nil {
+	if err := runDispatchWizardForm(form); err != nil {
 		if handled := handleFormCancellation(cmd.OutOrStdout(), "dispatch", err); handled == nil {
 			return dispatchpkg.Options{}, errDispatchCancelled
 		}
