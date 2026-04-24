@@ -4,6 +4,11 @@
 package cli
 
 import (
+	"fmt"
+	"io"
+	"strings"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/spf13/cobra"
 )
 
@@ -29,4 +34,24 @@ func shouldSkipDriftWarning(cmd *cobra.Command) bool {
 		}
 	}
 	return false
+}
+
+// emitStaleHooksWarning renders the user-facing stale-hooks warning to w.
+// Two lines, yellow when w is a TTY, no-op when drifts is empty. Callers
+// (the root PersistentPreRun, status.go, setup.go) are responsible for the
+// skip rules (hidden commands, non-TTY stderr, dev build, etc.) — this
+// renderer is pure.
+func emitStaleHooksWarning(w io.Writer, drifts []agent.DriftReport) {
+	if len(drifts) == 0 {
+		return
+	}
+	names := make([]string, 0, len(drifts))
+	for _, r := range drifts {
+		names = append(names, string(r.Agent))
+	}
+	joined := strings.Join(names, ", ")
+
+	sty := newStatusStyles(w)
+	fmt.Fprintln(w, sty.render(sty.yellow, fmt.Sprintf("Action required: agent hooks need updating (%s)", joined)))
+	fmt.Fprintln(w, sty.render(sty.yellow, "  Run: entire enable --force"))
 }
