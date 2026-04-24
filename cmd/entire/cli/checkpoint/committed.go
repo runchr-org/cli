@@ -1727,13 +1727,19 @@ func (s *GitStore) copyMetadataDir(metadataDir, basePath string, entries map[str
 }
 
 // isOpaqueAgentArchive reports whether a tree path belongs to an agent-contributed
-// opaque archive. These wrap binary blobs (e.g. SQLite store.db) as base64 strings
-// inside JSON, so redaction's secret-pattern substitutions would corrupt them.
+// opaque archive. These carry binary blobs (e.g. SQLite rows) as base64 substrings,
+// either inside one JSON document (v2: .cursor-chat.json) or inside JSONL rows
+// (v3: cursor-chat.jsonl). Either way the redactor's secret-pattern substitutions
+// would corrupt the base64 payload, so we skip redaction and trust the upstream
+// producer (the cursor DB content is chat text; secrets in there belong to the
+// user and weren't written by us).
+//
 // Kept here (rather than behind an interface) because the checkpoint package
 // otherwise has no reason to know about specific agent file formats; the list
 // stays short as long as agents prefer binary-friendly archive formats.
 func isOpaqueAgentArchive(treePath string) bool {
-	return strings.HasSuffix(treePath, ".cursor-chat.json")
+	return strings.HasSuffix(treePath, ".cursor-chat.json") ||
+		strings.HasSuffix(treePath, "cursor-chat.jsonl")
 }
 
 // createRedactedBlobFromFile reads a file, applies secrets redaction, and creates a git blob.

@@ -3,107 +3,234 @@ package cursor
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
+
+	_ "modernc.org/sqlite" // pure-Go SQLite driver registered as "sqlite"
 )
 
-// ChatArchive is the portable archive format for Cursor agent chat sessions.
-// Shared by cursor-export / cursor-import and by the CheckpointContributor
-// that embeds chat data into committed checkpoints.
-//
-// Version 2 stores store.db (and its WAL/SHM sidecars) as opaque base64 blobs
-// rather than exploding them into SQL rows. This keeps the archive bit-exact
-// and removes any SQLite runtime dependency from the shipped CLI.
+// Archive v3 ships cursor's `store.db` as a JSONL dump of its two tables
+// (meta + blobs). Each line is a JSON object carrying one row. Restore
+// replays the rows into a fresh SQLite file, so cursor opens the same
+// content-addressable DAG it wrote. Plain-text content gives git's pack
+// compression something to chew on and keeps per-checkpoint size down
+// to a few kB versus ~340 kB for the v2 opaque-base64 format.
+const (
+	archiveFormat = "cursor-chat-export"
+
+	// ChatArchiveFilename is the filename used inside a session's metadata
+	// directory to carry cursor's JSONL dump. A single archive belongs to
+	// exactly one session, so we don't repeat the session id in the name.
+	ChatArchiveFilename = "cursor-chat.jsonl"
+
+	// ChatArchiveFilenameV2 is the legacy opaque-base64 format still readable
+	// on restore (the metadata branch may contain pre-v3 checkpoints until
+	// they age out).
+	ChatArchiveFilenameV2 = ".cursor-chat.json"
+)
+
+// ChatArchive is the v2 archive shape kept around for backward-compatible
+// reads of already-pushed checkpoints. New checkpoints use JSONL (v3).
 type ChatArchive struct {
 	Format         string            `json:"format"`
 	Version        int               `json:"version"`
 	AgentID        string            `json:"agentId"`
-	DBPath         string            `json:"db_path"`
-	DBBytes        string            `json:"db_bytes"`
+	DBPath         string            `json:"db_path,omitempty"`
+	DBBytes        string            `json:"db_bytes,omitempty"`
 	DBWALBytes     string            `json:"db_wal_bytes,omitempty"`
 	DBSHMBytes     string            `json:"db_shm_bytes,omitempty"`
 	TranscriptPath string            `json:"transcript_path,omitempty"`
 	Transcript     []json.RawMessage `json:"transcript,omitempty"`
 }
 
-const (
-	archiveFormat  = "cursor-chat-export"
-	archiveVersion = 2
-)
-
-// ExportChatArchive exports a Cursor chat session as a JSON archive.
-// agentID is the Cursor conversation UUID. The ctx is reserved for future I/O
-// cancellation; current operations are synchronous file reads.
-func ExportChatArchive(_ context.Context, agentID string) ([]byte, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("getting home directory: %w", err)
-	}
-	cursorDir := filepath.Join(homeDir, ".cursor")
-	chatsDir := filepath.Join(cursorDir, "chats")
-	projectsDir := filepath.Join(cursorDir, "projects")
-
-	dbPath, err := findOne(filepath.Join(chatsDir, "*", agentID, "store.db"))
-	if err != nil {
-		return nil, fmt.Errorf("finding store.db for agent %s: %w", agentID, err)
-	}
-	if dbPath == "" {
-		return nil, fmt.Errorf("no store.db found for agent %q (searched %s/*/%s/store.db)", agentID, chatsDir, agentID)
-	}
-
-	archive := ChatArchive{
-		Format:  archiveFormat,
-		Version: archiveVersion,
-		AgentID: agentID,
-		DBPath:  dbPath,
-	}
-
-	if archive.DBBytes, err = readBase64(dbPath); err != nil {
-		return nil, fmt.Errorf("reading store.db: %w", err)
-	}
-	if wal, err := readBase64(dbPath + "-wal"); err == nil {
-		archive.DBWALBytes = wal
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("reading store.db-wal: %w", err)
-	}
-	if shm, err := readBase64(dbPath + "-shm"); err == nil {
-		archive.DBSHMBytes = shm
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("reading store.db-shm: %w", err)
-	}
-
-	// Cursor 2026.04+ writes transcripts under a nested <agent-id>/<agent-id>.jsonl
-	// layout. Older versions used a flat <agent-id>.jsonl. Probe nested first, then fall back.
-	transcriptPath, err := findOne(filepath.Join(projectsDir, "*", "agent-transcripts", agentID, agentID+".jsonl"))
-	if err != nil {
-		return nil, fmt.Errorf("searching for transcript (nested): %w", err)
-	}
-	if transcriptPath == "" {
-		transcriptPath, err = findOne(filepath.Join(projectsDir, "*", "agent-transcripts", agentID+".jsonl"))
-		if err != nil {
-			return nil, fmt.Errorf("searching for transcript (flat): %w", err)
-		}
-	}
-	if transcriptPath != "" {
-		archive.TranscriptPath = transcriptPath
-		entries, err := ReadTranscriptFile(transcriptPath)
-		if err != nil {
-			return nil, fmt.Errorf("reading transcript: %w", err)
-		}
-		archive.Transcript = entries
-	}
-
-	data, err := json.Marshal(archive)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling archive: %w", err)
-	}
-	return data, nil
+// jsonlLine is one row in the v3 archive. `t` discriminates meta vs blob;
+// other fields apply conditionally. Stored sorted by (t, id) so git pack
+// deltas across checkpoints capture only the newly added blob rows.
+type jsonlLine struct {
+	T    string          `json:"t"`
+	K    string          `json:"k,omitempty"`
+	V    json.RawMessage `json:"v,omitempty"`
+	ID   string          `json:"id,omitempty"`
+	Data string          `json:"data,omitempty"`
 }
 
+// ExportChatArchive reads the live cursor store.db for agentID, absorbs any
+// pending WAL frames, and returns a JSONL dump of its meta + blobs tables.
+// Returns (nil, os.ErrNotExist) if cursor has no DB yet for this agent.
+func ExportChatArchive(ctx context.Context, agentID string) ([]byte, error) {
+	dbPath, err := findStoreDB(agentID)
+	if err != nil {
+		return nil, err
+	}
+
+	workDir, err := os.MkdirTemp("", "entire-cursor-export-*")
+	if err != nil {
+		return nil, fmt.Errorf("temp dir: %w", err)
+	}
+	defer os.RemoveAll(workDir)
+
+	stagedPath := filepath.Join(workDir, "store.db")
+	if err := copyDBWithSidecars(dbPath, stagedPath); err != nil {
+		return nil, fmt.Errorf("staging store.db: %w", err)
+	}
+
+	return dumpJSONL(ctx, stagedPath)
+}
+
+// findStoreDB searches ~/.cursor/chats/*/<agentID>/store.db. Returns
+// os.ErrNotExist (wrapped) if cursor hasn't created a DB yet.
+func findStoreDB(agentID string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("home dir: %w", err)
+	}
+	chatsDir := filepath.Join(home, ".cursor", "chats")
+	dbPath, err := findOne(filepath.Join(chatsDir, "*", agentID, "store.db"))
+	if err != nil {
+		return "", fmt.Errorf("glob store.db: %w", err)
+	}
+	if dbPath == "" {
+		return "", fmt.Errorf("no store.db for agent %q: %w", agentID, os.ErrNotExist)
+	}
+	return dbPath, nil
+}
+
+// copyDBWithSidecars copies store.db plus its -wal and -shm sidecars into
+// dst (dst is the target store.db path). Sidecars get the same stem. The
+// copy lets us checkpoint WAL without touching cursor's live files, which
+// cursor may still have open.
+func copyDBWithSidecars(src, dst string) error {
+	if err := copyFile(src, dst); err != nil {
+		return err
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := copyFile(src+suffix, dst+suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("copying %s: %w", suffix, err)
+		}
+	}
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src) //nolint:gosec // cursor-managed path
+	if err != nil {
+		return fmt.Errorf("open %s: %w", src, err)
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // dst is our own temp path
+	if err != nil {
+		return fmt.Errorf("create %s: %w", dst, err)
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return fmt.Errorf("copying bytes: %w", err)
+	}
+	return nil
+}
+
+// dumpJSONL opens dbPath (a copy), runs wal_checkpoint, and emits JSONL.
+func dumpJSONL(ctx context.Context, dbPath string) ([]byte, error) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite: %w", err)
+	}
+	defer db.Close()
+
+	// Consolidate any pending WAL frames into the main DB so our SELECTs see
+	// the latest state. TRUNCATE resets the WAL file to size 0 on disk; we
+	// discard the copy anyway, but the PRAGMA also makes the DB reads cheaper.
+	if _, err := db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);"); err != nil {
+		return nil, fmt.Errorf("wal_checkpoint: %w", err)
+	}
+
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+
+	if err := writeMetaLines(ctx, db, enc); err != nil {
+		return nil, err
+	}
+	if err := writeBlobLines(ctx, db, enc); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func writeMetaLines(ctx context.Context, db *sql.DB, enc *json.Encoder) error {
+	rows, err := db.QueryContext(ctx, "SELECT key, value FROM meta ORDER BY key")
+	if err != nil {
+		return fmt.Errorf("select meta: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return fmt.Errorf("scan meta: %w", err)
+		}
+		// Cursor stores meta.value as hex-encoded ASCII JSON. Decode so the
+		// archive is human-readable and redactor-friendly; restore re-encodes.
+		decoded, err := hex.DecodeString(value)
+		if err != nil {
+			return fmt.Errorf("hex-decode meta[%s]: %w", key, err)
+		}
+		if !json.Valid(decoded) {
+			return fmt.Errorf("meta[%s] value is not valid JSON after hex decode", key)
+		}
+		if err := enc.Encode(jsonlLine{T: "meta", K: key, V: json.RawMessage(decoded)}); err != nil {
+			return fmt.Errorf("encode meta line: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate meta: %w", err)
+	}
+	return nil
+}
+
+func writeBlobLines(ctx context.Context, db *sql.DB, enc *json.Encoder) error {
+	// Pull rows and sort in Go by id — gives deterministic output regardless
+	// of sqlite row ordering and helps git pack dedupe across checkpoints.
+	rows, err := db.QueryContext(ctx, "SELECT id, data FROM blobs")
+	if err != nil {
+		return fmt.Errorf("select blobs: %w", err)
+	}
+	defer rows.Close()
+
+	type blobRow struct {
+		id   string
+		data []byte
+	}
+	var collected []blobRow
+	for rows.Next() {
+		var r blobRow
+		if err := rows.Scan(&r.id, &r.data); err != nil {
+			return fmt.Errorf("scan blob: %w", err)
+		}
+		collected = append(collected, r)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate blobs: %w", err)
+	}
+	sort.Slice(collected, func(i, j int) bool { return collected[i].id < collected[j].id })
+	for _, r := range collected {
+		if err := enc.Encode(jsonlLine{
+			T:    "blob",
+			ID:   r.id,
+			Data: base64.StdEncoding.EncodeToString(r.data),
+		}); err != nil {
+			return fmt.Errorf("encode blob line: %w", err)
+		}
+	}
+	return nil
+}
+
+// findOne returns the first glob match, or "" if none matched.
 func findOne(pattern string) (string, error) {
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
@@ -115,15 +242,8 @@ func findOne(pattern string) (string, error) {
 	return matches[0], nil
 }
 
-func readBase64(path string) (string, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // path comes from known cursor dirs
-	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", path, err)
-	}
-	return base64.StdEncoding.EncodeToString(data), nil
-}
-
-// ReadTranscriptFile reads a JSONL transcript file and returns the parsed entries.
+// ReadTranscriptFile reads a JSONL transcript file and returns parsed entries.
+// Kept exported for any legacy caller; the v3 archive no longer bundles a transcript.
 func ReadTranscriptFile(path string) ([]json.RawMessage, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // path comes from known cursor dirs
 	if err != nil {

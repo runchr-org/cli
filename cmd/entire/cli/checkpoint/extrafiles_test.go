@@ -15,48 +15,69 @@ import (
 )
 
 // TestCreateRedactedBlob_OpaqueArchive_NotRedacted verifies that files
-// recognized as opaque agent archives (e.g. .cursor-chat.json wrapping a
-// base64-encoded SQLite blob) bypass the redaction pass. Without this,
-// random byte sequences inside the base64 payload can match secret patterns
-// and get replaced with "REDACTED", corrupting the archive so its consumer
-// fails to base64-decode the blob.
+// recognized as opaque agent archives bypass the redaction pass. Covers both
+// the legacy v2 shape (.cursor-chat.json wrapping a base64 SQLite blob) and
+// the current v3 shape (cursor-chat.jsonl, per-row JSONL with base64 blob
+// payloads). Without the bypass, random byte sequences inside the base64
+// payload can match a secret pattern and get replaced with "REDACTED",
+// corrupting the archive so its consumer fails to base64-decode the blob.
 func TestCreateRedactedBlob_OpaqueArchive_NotRedacted(t *testing.T) {
 	t.Parallel()
 
-	tempDir := t.TempDir()
-	repo, err := git.PlainInit(tempDir, false)
-	if err != nil {
-		t.Fatalf("git init: %v", err)
-	}
-
 	// A "secret-looking" token that the redactor would otherwise hit.
 	secretLike := "AKIAIOSFODNN7EXAMPLE"
-	original := []byte(`{"format":"cursor-chat-export","version":2,"db_bytes":"` + secretLike + `"}`)
-
-	filePath := filepath.Join(tempDir, "session.cursor-chat.json")
-	if err := os.WriteFile(filePath, original, 0o600); err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name     string
+		filename string
+		treePath string
+		content  []byte
+	}{
+		{
+			name:     "v2_single_json",
+			filename: "session.cursor-chat.json",
+			treePath: "metadata/session.cursor-chat.json",
+			content:  []byte(`{"format":"cursor-chat-export","version":2,"db_bytes":"` + secretLike + `"}`),
+		},
+		{
+			name:     "v3_jsonl",
+			filename: "cursor-chat.jsonl",
+			treePath: "metadata/session/cursor-chat.jsonl",
+			content:  []byte(`{"t":"blob","id":"xx","data":"` + secretLike + `"}` + "\n"),
+		},
 	}
-
-	hash, _, err := createRedactedBlobFromFile(repo, filePath, "metadata/session.cursor-chat.json")
-	if err != nil {
-		t.Fatalf("createRedactedBlobFromFile: %v", err)
-	}
-	blob, err := repo.BlobObject(hash)
-	if err != nil {
-		t.Fatalf("BlobObject: %v", err)
-	}
-	reader, err := blob.Reader()
-	if err != nil {
-		t.Fatalf("blob reader: %v", err)
-	}
-	defer reader.Close()
-	got := make([]byte, blob.Size)
-	if _, err := reader.Read(got); err != nil {
-		t.Fatalf("read blob: %v", err)
-	}
-	if string(got) != string(original) {
-		t.Errorf("blob contents mutated by redaction:\ngot:  %s\nwant: %s", got, original)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tempDir := t.TempDir()
+			repo, err := git.PlainInit(tempDir, false)
+			if err != nil {
+				t.Fatalf("git init: %v", err)
+			}
+			filePath := filepath.Join(tempDir, tc.filename)
+			if err := os.WriteFile(filePath, tc.content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			hash, _, err := createRedactedBlobFromFile(repo, filePath, tc.treePath)
+			if err != nil {
+				t.Fatalf("createRedactedBlobFromFile: %v", err)
+			}
+			blob, err := repo.BlobObject(hash)
+			if err != nil {
+				t.Fatalf("BlobObject: %v", err)
+			}
+			reader, err := blob.Reader()
+			if err != nil {
+				t.Fatalf("blob reader: %v", err)
+			}
+			defer reader.Close()
+			got := make([]byte, blob.Size)
+			if _, err := reader.Read(got); err != nil {
+				t.Fatalf("read blob: %v", err)
+			}
+			if string(got) != string(tc.content) {
+				t.Errorf("blob contents mutated by redaction:\ngot:  %s\nwant: %s", got, tc.content)
+			}
+		})
 	}
 }
 

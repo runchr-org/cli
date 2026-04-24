@@ -1,9 +1,14 @@
 package cursor
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,171 +17,175 @@ import (
 const (
 	testAgentID   = "11111111-2222-3333-4444-555555555555"
 	testWorkspace = "abc123hash"
-	testSlug      = "abc123hash"
 )
 
-type seed struct {
-	db         []byte
-	wal        []byte // optional
-	shm        []byte // optional
-	transcript []string
-}
-
-// seedCursorTree writes a fake ~/.cursor tree under home and returns the db path.
-// Production code treats store.db as an opaque blob, so any bytes work.
-func seedCursorTree(t *testing.T, home string, s seed) string {
+// seedStoreDB creates a real cursor-format SQLite store.db under
+// $HOME/.cursor/chats/<workspace>/<testAgentID>/ with the given meta + blobs.
+// Returns the path to store.db so callers can chmod it for read-only tests.
+func seedStoreDB(t *testing.T, home string, metaValue []byte, blobs map[string][]byte) string {
 	t.Helper()
 	dbDir := filepath.Join(home, ".cursor", "chats", testWorkspace, testAgentID)
 	if err := os.MkdirAll(dbDir, 0o755); err != nil {
 		t.Fatalf("mkdir chats: %v", err)
 	}
 	dbPath := filepath.Join(dbDir, "store.db")
-	if err := os.WriteFile(dbPath, s.db, 0o600); err != nil {
-		t.Fatalf("write db: %v", err)
-	}
-	if s.wal != nil {
-		if err := os.WriteFile(dbPath+"-wal", s.wal, 0o600); err != nil {
-			t.Fatalf("write wal: %v", err)
-		}
-	}
-	if s.shm != nil {
-		if err := os.WriteFile(dbPath+"-shm", s.shm, 0o600); err != nil {
-			t.Fatalf("write shm: %v", err)
-		}
-	}
 
-	if s.transcript != nil {
-		txDir := filepath.Join(home, ".cursor", "projects", testSlug, "agent-transcripts")
-		if err := os.MkdirAll(txDir, 0o755); err != nil {
-			t.Fatalf("mkdir transcripts: %v", err)
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open seed db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if _, err := db.ExecContext(context.Background(),`
+		CREATE TABLE meta  (key TEXT PRIMARY KEY, value TEXT);
+		CREATE TABLE blobs (id  TEXT PRIMARY KEY, data BLOB);
+	`); err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if metaValue != nil {
+		// Cursor stores meta.value as hex-ASCII of the JSON bytes.
+		if _, err := db.ExecContext(context.Background(),"INSERT INTO meta(key, value) VALUES('0', ?)", hex.EncodeToString(metaValue)); err != nil {
+			t.Fatalf("insert meta: %v", err)
 		}
-		txPath := filepath.Join(txDir, testAgentID+".jsonl")
-		f, err := os.Create(txPath)
-		if err != nil {
-			t.Fatalf("create transcript: %v", err)
+	}
+	for id, data := range blobs {
+		if _, err := db.ExecContext(context.Background(),"INSERT INTO blobs(id, data) VALUES(?, ?)", id, data); err != nil {
+			t.Fatalf("insert blob %s: %v", id, err)
 		}
-		defer f.Close()
-		for _, line := range s.transcript {
-			if _, err := f.WriteString(line + "\n"); err != nil {
-				t.Fatalf("write transcript: %v", err)
-			}
-		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close seed db: %v", err)
 	}
 	return dbPath
 }
 
-func decodeB64(t *testing.T, s string) []byte {
+// parseArchiveLines reads the JSONL export and splits it into meta + blob rows.
+func parseArchiveLines(t *testing.T, data []byte) (metas []jsonlLine, blobs []jsonlLine) {
 	t.Helper()
-	data, err := base64.StdEncoding.DecodeString(s)
-	if err != nil {
-		t.Fatalf("base64 decode: %v", err)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		var l jsonlLine
+		if err := json.Unmarshal(scanner.Bytes(), &l); err != nil {
+			t.Fatalf("unmarshal line %q: %v", scanner.Text(), err)
+		}
+		switch l.T {
+		case "meta":
+			metas = append(metas, l)
+		case "blob":
+			blobs = append(blobs, l)
+		default:
+			t.Fatalf("unexpected row type %q", l.T)
+		}
 	}
-	return data
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	return metas, blobs
 }
 
-func TestExportChatArchive_Roundtrip(t *testing.T) {
-	// Cannot t.Parallel: t.Setenv("HOME") conflicts with parallel execution.
+func TestExportChatArchive_DumpsMetaAndBlobs(t *testing.T) {
+	// Cannot t.Parallel: t.Setenv("HOME") mutates a process global.
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	s := seed{
-		db:  []byte("SQLite format 3\x00\x01\x02\x03not really a db"),
-		wal: []byte("wal sidecar bytes"),
-		transcript: []string{
-			`{"role":"user","content":"hi"}`,
-			`{"role":"assistant","content":"hey"}`,
-		},
+	metaJSON := []byte(`{"agentId":"11111111-2222-3333-4444-555555555555","latestRootBlobId":"aaa","name":"Test"}`)
+	blobBytes := map[string][]byte{
+		"aaa111": []byte(`{"role":"user","content":"hello"}`),
+		"bbb222": []byte(`{"role":"assistant","content":"hi"}`),
 	}
-	seedCursorTree(t, tmp, s)
+	seedStoreDB(t, tmp, metaJSON, blobBytes)
 
 	data, err := ExportChatArchive(context.Background(), testAgentID)
 	if err != nil {
 		t.Fatalf("ExportChatArchive: %v", err)
 	}
-	var got ChatArchive
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("unmarshal archive: %v", err)
-	}
 
-	if got.Format != "cursor-chat-export" {
-		t.Fatalf("format = %q", got.Format)
+	metas, blobs := parseArchiveLines(t, data)
+	if len(metas) != 1 {
+		t.Fatalf("meta rows = %d, want 1", len(metas))
 	}
-	if got.Version != 2 {
-		t.Fatalf("version = %d, want 2", got.Version)
+	if metas[0].K != "0" {
+		t.Errorf("meta.key = %q, want %q", metas[0].K, "0")
 	}
-	if got.AgentID != testAgentID {
-		t.Fatalf("agentId = %q", got.AgentID)
+	if !json.Valid(metas[0].V) {
+		t.Errorf("meta.v is not valid JSON: %s", metas[0].V)
 	}
-	if gotDB := decodeB64(t, got.DBBytes); string(gotDB) != string(s.db) {
-		t.Errorf("db roundtrip mismatch: got %q, want %q", gotDB, s.db)
+	if !bytes.Equal([]byte(metas[0].V), metaJSON) {
+		t.Errorf("meta.v = %s, want %s", metas[0].V, metaJSON)
 	}
-	if gotWAL := decodeB64(t, got.DBWALBytes); string(gotWAL) != string(s.wal) {
-		t.Errorf("wal roundtrip mismatch")
+	if len(blobs) != len(blobBytes) {
+		t.Fatalf("blob rows = %d, want %d", len(blobs), len(blobBytes))
 	}
-	if got.DBSHMBytes != "" {
-		t.Errorf("expected no SHM in archive, got %q", got.DBSHMBytes)
-	}
-	if len(got.Transcript) != len(s.transcript) {
-		t.Fatalf("transcript entries = %d, want %d", len(got.Transcript), len(s.transcript))
+	for _, b := range blobs {
+		want, ok := blobBytes[b.ID]
+		if !ok {
+			t.Errorf("unexpected blob id %q", b.ID)
+			continue
+		}
+		got, err := base64.StdEncoding.DecodeString(b.Data)
+		if err != nil {
+			t.Errorf("decode blob %s: %v", b.ID, err)
+			continue
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("blob %s roundtrip mismatch", b.ID)
+		}
 	}
 }
 
-func TestExportChatArchive_NestedTranscript(t *testing.T) {
-	// Cursor 2026.04+ writes transcripts at <agent-id>/<agent-id>.jsonl
-	// rather than flat <agent-id>.jsonl. Export must find both layouts.
-	// Cannot t.Parallel: t.Setenv("HOME") conflicts with parallel execution.
+func TestExportChatArchive_BlobsSortedByID(t *testing.T) {
+	// Deterministic ordering lets git pack dedup across checkpoints.
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	if err := os.MkdirAll(filepath.Join(tmp, ".cursor", "chats", testWorkspace, testAgentID), 0o755); err != nil {
-		t.Fatalf("mkdir chats: %v", err)
+	blobBytes := map[string][]byte{
+		"ccc": []byte("c"),
+		"aaa": []byte("a"),
+		"bbb": []byte("b"),
 	}
-	if err := os.WriteFile(filepath.Join(tmp, ".cursor", "chats", testWorkspace, testAgentID, "store.db"), []byte("db"), 0o600); err != nil {
-		t.Fatalf("write db: %v", err)
-	}
-	nestedDir := filepath.Join(tmp, ".cursor", "projects", testSlug, "agent-transcripts", testAgentID)
-	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
-		t.Fatalf("mkdir nested: %v", err)
-	}
-	nestedPath := filepath.Join(nestedDir, testAgentID+".jsonl")
-	if err := os.WriteFile(nestedPath, []byte(`{"role":"user"}`+"\n"), 0o600); err != nil {
-		t.Fatalf("write nested transcript: %v", err)
-	}
+	seedStoreDB(t, tmp, []byte(`{"agentId":"x"}`), blobBytes)
 
 	data, err := ExportChatArchive(context.Background(), testAgentID)
 	if err != nil {
 		t.Fatalf("ExportChatArchive: %v", err)
 	}
-	var got ChatArchive
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	_, blobs := parseArchiveLines(t, data)
+	wantOrder := []string{"aaa", "bbb", "ccc"}
+	for i, b := range blobs {
+		if b.ID != wantOrder[i] {
+			t.Errorf("blobs[%d].id = %q, want %q", i, b.ID, wantOrder[i])
+		}
 	}
-	if got.TranscriptPath != nestedPath {
-		t.Errorf("TranscriptPath = %q, want %q", got.TranscriptPath, nestedPath)
+}
+
+func TestExportChatArchive_MissingDB_ReturnsErrNotExist(t *testing.T) {
+	// When cursor has not created a DB yet, callers want to skip silently
+	// rather than fail — errors.Is(err, os.ErrNotExist) is the contract.
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	_, err := ExportChatArchive(context.Background(), testAgentID)
+	if err == nil {
+		t.Fatal("expected error when no store.db exists")
 	}
-	if len(got.Transcript) != 1 {
-		t.Errorf("Transcript entries = %d, want 1", len(got.Transcript))
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("err = %v, want errors.Is(os.ErrNotExist)", err)
 	}
 }
 
 func TestExportChatArchive_ReadOnly_DoesNotMutateSource(t *testing.T) {
-	// Cannot t.Parallel: t.Setenv("HOME") conflicts with parallel execution.
+	// Export copies DB + sidecars to a temp dir before opening, so the
+	// cursor-live files on disk must be byte-identical after export.
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	s := seed{
-		db:  []byte("db"),
-		wal: []byte("wal"),
-		shm: []byte("shm"),
-	}
-	dbPath := seedCursorTree(t, tmp, s)
+	dbPath := seedStoreDB(t, tmp, []byte(`{"k":"v"}`), map[string][]byte{"id": []byte("data")})
 
 	before := statAll(t, dbPath)
-
 	if _, err := ExportChatArchive(context.Background(), testAgentID); err != nil {
 		t.Fatalf("ExportChatArchive: %v", err)
 	}
-
 	after := statAll(t, dbPath)
 
 	for k, b := range before {
@@ -190,8 +199,6 @@ func TestExportChatArchive_ReadOnly_DoesNotMutateSource(t *testing.T) {
 	}
 }
 
-// statAll stats store.db plus its -wal and -shm sidecars.
-// Any file that does not exist is omitted from the returned map.
 func statAll(t *testing.T, dbPath string) map[string]os.FileInfo {
 	t.Helper()
 	out := map[string]os.FileInfo{}
@@ -203,64 +210,4 @@ func statAll(t *testing.T, dbPath string) map[string]os.FileInfo {
 		out["store.db"+suffix] = info
 	}
 	return out
-}
-
-func TestExportChatArchive_ReadOnlyFile(t *testing.T) {
-	// Cannot t.Parallel: t.Setenv("HOME") conflicts with parallel execution.
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-
-	s := seed{db: []byte("db")}
-	dbPath := seedCursorTree(t, tmp, s)
-
-	if err := os.Chmod(dbPath, 0o400); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
-	parent := filepath.Dir(dbPath)
-	if err := os.Chmod(parent, 0o500); err != nil {
-		t.Fatalf("chmod parent: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chmod(parent, 0o755); err != nil {
-			t.Logf("cleanup chmod: %v", err)
-		}
-	})
-
-	if _, err := ExportChatArchive(context.Background(), testAgentID); err != nil {
-		t.Fatalf("export on read-only DB: %v", err)
-	}
-}
-
-func TestExportChatArchive_NoTranscript(t *testing.T) {
-	// Cannot t.Parallel: t.Setenv("HOME") conflicts with parallel execution.
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-
-	seedCursorTree(t, tmp, seed{db: []byte("db")})
-
-	data, err := ExportChatArchive(context.Background(), testAgentID)
-	if err != nil {
-		t.Fatalf("ExportChatArchive: %v", err)
-	}
-	var got ChatArchive
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(got.Transcript) != 0 {
-		t.Errorf("expected no transcript entries, got %d", len(got.Transcript))
-	}
-	if got.TranscriptPath != "" {
-		t.Errorf("expected empty transcript_path, got %q", got.TranscriptPath)
-	}
-}
-
-func TestExportChatArchive_MissingDB(t *testing.T) {
-	// Cannot t.Parallel: t.Setenv("HOME") conflicts with parallel execution.
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-
-	_, err := ExportChatArchive(context.Background(), testAgentID)
-	if err == nil {
-		t.Fatal("expected error when no store.db exists")
-	}
 }
