@@ -346,6 +346,14 @@ type UpdateCommittedOptions struct {
 	// reuses these hashes. Used by finalizeAllTurnCheckpoints to avoid
 	// re-compressing identical content N times.
 	PrecomputedBlobs *PrecomputedTranscriptBlobs
+
+	// ExtraFiles are agent-contributed files (e.g. cursor-chat.jsonl) to
+	// overwrite in the session's metadata path. Keys are relative paths
+	// within the session subdirectory. Nil or empty leaves any existing
+	// extras untouched. Used by finalizeAllTurnCheckpoints to land cursor's
+	// DB state captured at turn end, which is fresher than the mid-turn
+	// commit's initial ExtraFiles snapshot.
+	ExtraFiles map[string][]byte
 }
 
 // PrecomputedTranscriptBlobs holds blob hashes for a transcript that was

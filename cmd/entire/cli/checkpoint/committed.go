@@ -1397,6 +1397,21 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 		}
 	}
 
+	// Overwrite agent-contributed extras (e.g. cursor-chat.jsonl) with the fresh
+	// snapshot supplied by the caller. Missing keys are untouched — the existing
+	// entries map preserves whatever was committed previously.
+	for relPath, content := range opts.ExtraFiles {
+		blobHash, err := CreateBlobFromContent(s.repo, content)
+		if err != nil {
+			return fmt.Errorf("failed to create blob for extra file %s: %w", relPath, err)
+		}
+		entries[sessionPath+relPath] = object.TreeEntry{
+			Name: sessionPath + relPath,
+			Mode: filemode.Regular,
+			Hash: blobHash,
+		}
+	}
+
 	// Build checkpoint subtree and splice into root (O(depth) tree surgery)
 	newTreeHash, err := s.spliceCheckpointSubtree(ctx, rootTreeHash, opts.CheckpointID, basePath, entries)
 	if err != nil {

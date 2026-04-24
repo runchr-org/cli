@@ -2762,6 +2762,19 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 
 	precomputed := precomputeTranscriptBlobsForFinalize(logCtx, repo, redactedTranscript, state)
 
+	// Capture a live snapshot of agent-contributed archives (e.g. cursor's
+	// store.db) once per turn so every checkpoint finalize replays the
+	// end-of-turn state, not the stale bytes that mid-turn condensation
+	// landed earlier.
+	liveExtras, extrasErr := contributeLiveExtras(ctx, state.SessionID)
+	if extrasErr != nil {
+		logging.Debug(logCtx, "finalize: live extras refresh failed",
+			slog.String("session_id", state.SessionID),
+			slog.String("error", extrasErr.Error()),
+		)
+		liveExtras = nil
+	}
+
 	// Resolve the agent and try external compaction once before the loop —
 	// external compaction is invariant across checkpoints (same session/transcript).
 	// Internal compaction must remain per-checkpoint due to per-checkpoint startLine.
@@ -2791,6 +2804,7 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 			Prompts:          prompts,
 			Agent:            state.AgentType,
 			PrecomputedBlobs: precomputed,
+			ExtraFiles:       liveExtras,
 		}
 
 		// Generate compact transcript for v2 /main
