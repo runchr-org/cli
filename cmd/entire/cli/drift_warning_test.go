@@ -34,7 +34,6 @@ func TestShouldSkipDriftWarning(t *testing.T) {
 		{"configure", configure, true},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			if got := shouldSkipDriftWarning(tc.cmd); got != tc.want {
@@ -112,7 +111,6 @@ func TestDriftWarningPreRun(t *testing.T) {
 		{"visible non-TTY stderr", &cobra.Command{Use: "rewind"}},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			if out := run(tc.cmd); out != "" {
 				t.Errorf("expected no output for %s, got %q", tc.name, out)
