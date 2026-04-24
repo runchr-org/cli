@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -80,4 +81,42 @@ func TestEmitStaleHooksWarning(t *testing.T) {
 			t.Errorf("expected comma-separated list, got: %q", got)
 		}
 	})
+}
+
+// TestDriftWarningPreRun stubs the drift checker so we can prove the skip
+// rules actually gate output — without a stub, zero agents are drifted in
+// the test environment and every path produces empty output trivially.
+// Not parallel: overrides package-level checkHookDriftForWarning.
+func TestDriftWarningPreRun(t *testing.T) {
+	origCheck := checkHookDriftForWarning
+	t.Cleanup(func() { checkHookDriftForWarning = origCheck })
+	checkHookDriftForWarning = func(context.Context) []agent.DriftReport {
+		return []agent.DriftReport{{Agent: types.AgentName("claude-code")}}
+	}
+
+	run := func(c *cobra.Command) string {
+		var buf bytes.Buffer
+		c.SetErr(&buf)
+		c.SetContext(t.Context())
+		driftWarningPreRun(c, nil)
+		return buf.String()
+	}
+
+	cases := []struct {
+		name string
+		cmd  *cobra.Command
+	}{
+		{"hidden command", &cobra.Command{Use: "hooks", Hidden: true}},
+		{"enable command", &cobra.Command{Use: "enable"}},
+		{"configure command", &cobra.Command{Use: "configure"}},
+		{"visible non-TTY stderr", &cobra.Command{Use: "rewind"}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if out := run(tc.cmd); out != "" {
+				t.Errorf("expected no output for %s, got %q", tc.name, out)
+			}
+		})
+	}
 }

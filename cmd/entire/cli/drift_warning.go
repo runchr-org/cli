@@ -4,11 +4,13 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/spf13/cobra"
 )
 
@@ -54,4 +56,33 @@ func emitStaleHooksWarning(w io.Writer, drifts []agent.DriftReport) {
 	sty := newStatusStyles(w)
 	fmt.Fprintln(w, sty.render(sty.yellow, fmt.Sprintf("Action required: agent hooks need updating (%s)", joined)))
 	fmt.Fprintln(w, sty.render(sty.yellow, "  Run: entire enable --force"))
+}
+
+// checkHookDriftForWarning indirects agent.CheckHookDrift so tests can stub
+// the drift list. Production callers never reassign it.
+var checkHookDriftForWarning = func(ctx context.Context) []agent.DriftReport {
+	return agent.CheckHookDrift(ctx)
+}
+
+// driftWarningPreRun is wired as the root command's PersistentPreRun. It
+// emits the stale-hooks warning on stderr when:
+//   - cmd passes shouldSkipDriftWarning (not hidden, not enable/configure),
+//   - stderr is an actual terminal (don't pollute scripted / CI stderr),
+//   - checkHookDriftForWarning returns a non-empty list.
+//
+// All other conditions return silently. Cheap: CheckHookDrift itself bails
+// early when the floor is still "0.0.0" (the default).
+func driftWarningPreRun(cmd *cobra.Command, _ []string) {
+	if shouldSkipDriftWarning(cmd) {
+		return
+	}
+	w := cmd.ErrOrStderr()
+	if !interactive.IsTerminalWriter(w) {
+		return
+	}
+	drifts := checkHookDriftForWarning(cmd.Context())
+	if len(drifts) == 0 {
+		return
+	}
+	emitStaleHooksWarning(w, drifts)
 }

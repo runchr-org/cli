@@ -41,6 +41,7 @@ func NewRootCmd() *cobra.Command {
 		CompletionOptions: cobra.CompletionOptions{
 			HiddenDefaultCmd: true,
 		},
+		PersistentPreRun: driftWarningPreRun,
 		PersistentPostRun: func(cmd *cobra.Command, _ []string) {
 			// Skip for hidden commands (walk parent chain — Cobra doesn't propagate Hidden)
 			for c := cmd; c != nil; c = c.Parent() {
