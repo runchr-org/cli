@@ -35,33 +35,48 @@ func shouldSkipDriftWarning(cmd *cobra.Command) bool {
 	return false
 }
 
-// emitStaleHooksWarning renders the user-facing stale-hooks warning to w.
-// Two lines, yellow when w is a TTY, no-op when drifts is empty. Callers
-// (the root PersistentPreRun, status.go, setup.go) are responsible for the
-// skip rules (hidden commands, non-TTY stderr, dev build, etc.) — this
-// renderer is pure.
-func emitStaleHooksWarning(w io.Writer, drifts []agent.DriftReport) {
+// staleHooksWarningLines returns the two yellow-styled warning lines for a
+// non-empty drifts list (or nil for an empty one). The caller supplies a
+// statusStyles built from its own output writer so that color is decided
+// by the real destination writer, not by whatever buffer a helper routes
+// through on the way there.
+func staleHooksWarningLines(sty statusStyles, drifts []agent.DriftReport) []string {
 	if len(drifts) == 0 {
-		return
+		return nil
 	}
 	names := make([]string, 0, len(drifts))
 	for _, r := range drifts {
 		names = append(names, string(r.Agent))
 	}
 	joined := strings.Join(names, ", ")
+	return []string{
+		sty.render(sty.yellow, fmt.Sprintf("Action required: agent hooks need updating (%s)", joined)),
+		sty.render(sty.yellow, "  Run: entire enable --force"),
+	}
+}
 
-	sty := newStatusStyles(w)
-	fmt.Fprintln(w, sty.render(sty.yellow, fmt.Sprintf("Action required: agent hooks need updating (%s)", joined)))
-	fmt.Fprintln(w, sty.render(sty.yellow, "  Run: entire enable --force"))
+// emitStaleHooksWarning writes the two-line stale-hooks warning to w.
+// Yellow when w is a TTY, no-op when drifts is empty. The root
+// PersistentPreRun is the only caller today; the status card uses
+// staleHooksWarningLines directly so it can reuse the card's own
+// statusStyles and indent each line under its 2-space gutter.
+func emitStaleHooksWarning(w io.Writer, drifts []agent.DriftReport) {
+	for _, line := range staleHooksWarningLines(newStatusStyles(w), drifts) {
+		fmt.Fprintln(w, line)
+	}
 }
 
 // checkHookDriftForWarning indirects agent.CheckHookDrift so tests can stub
 // the drift list. Production callers never reassign it.
 var checkHookDriftForWarning = agent.CheckHookDrift
 
+// isTerminalWriterFn indirects interactive.IsTerminalWriter so tests can
+// simulate a TTY stderr without shuffling real file descriptors.
+var isTerminalWriterFn = interactive.IsTerminalWriter
+
 // driftWarningPreRun is wired as the root command's PersistentPreRun. It
 // emits the stale-hooks warning on stderr when:
-//   - cmd passes shouldSkipDriftWarning (not hidden, not enable/configure),
+//   - cmd passes shouldSkipDriftWarning (not hidden, not `status`),
 //   - stderr is an actual terminal (don't pollute scripted / CI stderr),
 //   - checkHookDriftForWarning returns a non-empty list.
 //
@@ -72,7 +87,7 @@ func driftWarningPreRun(cmd *cobra.Command, _ []string) {
 		return
 	}
 	w := cmd.ErrOrStderr()
-	if !interactive.IsTerminalWriter(w) {
+	if !isTerminalWriterFn(w) {
 		return
 	}
 	drifts := checkHookDriftForWarning(cmd.Context())

@@ -183,18 +183,8 @@ func formatSettingsStatusShort(ctx context.Context, s *EntireSettings, sty statu
 		}
 
 		if drift := agent.CheckHookDrift(ctx); len(drift) > 0 {
-			b.WriteString("\n")
-			var buf strings.Builder
-			emitStaleHooksWarning(&buf, drift)
-			// emitStaleHooksWarning writes its own two lines terminated by
-			// newlines. Indent each to match the status card's two-space
-			// gutter, then trim the trailing newline the caller appends.
-			trimmed := strings.TrimRight(buf.String(), "\n")
-			for i, line := range strings.Split(trimmed, "\n") {
-				if i > 0 {
-					b.WriteString("\n")
-				}
-				b.WriteString("  ")
+			for _, line := range staleHooksWarningLines(sty, drift) {
+				b.WriteString("\n  ")
 				b.WriteString(line)
 			}
 		}

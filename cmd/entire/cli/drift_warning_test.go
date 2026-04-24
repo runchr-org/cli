@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -83,16 +84,23 @@ func TestEmitStaleHooksWarning(t *testing.T) {
 	})
 }
 
-// TestDriftWarningPreRun stubs the drift checker so we can prove the skip
-// rules actually gate output — without a stub, zero agents are drifted in
-// the test environment and every path produces empty output trivially.
-// Not parallel: overrides package-level checkHookDriftForWarning.
+// TestDriftWarningPreRun stubs the drift checker and the TTY check so
+// every gate in driftWarningPreRun can be exercised deterministically.
+// Not parallel: overrides package-level checkHookDriftForWarning and
+// isTerminalWriterFn.
 func TestDriftWarningPreRun(t *testing.T) {
 	origCheck := checkHookDriftForWarning
-	t.Cleanup(func() { checkHookDriftForWarning = origCheck })
+	origTTY := isTerminalWriterFn
+	t.Cleanup(func() {
+		checkHookDriftForWarning = origCheck
+		isTerminalWriterFn = origTTY
+	})
+
 	checkHookDriftForWarning = func(context.Context) []agent.DriftReport {
 		return []agent.DriftReport{{Agent: types.AgentName("claude-code")}}
 	}
+	// Default to "not a TTY" so skip-path cases don't need to override.
+	isTerminalWriterFn = func(io.Writer) bool { return false }
 
 	run := func(c *cobra.Command) string {
 		var buf bytes.Buffer
@@ -102,7 +110,8 @@ func TestDriftWarningPreRun(t *testing.T) {
 		return buf.String()
 	}
 
-	cases := []struct {
+	// Skip paths — all expect no output.
+	skipCases := []struct {
 		name string
 		cmd  *cobra.Command
 	}{
@@ -110,11 +119,26 @@ func TestDriftWarningPreRun(t *testing.T) {
 		{"status command", &cobra.Command{Use: "status"}},
 		{"visible non-TTY stderr", &cobra.Command{Use: "rewind"}},
 	}
-	for _, tc := range cases {
+	for _, tc := range skipCases {
 		t.Run(tc.name, func(t *testing.T) {
 			if out := run(tc.cmd); out != "" {
 				t.Errorf("expected no output for %s, got %q", tc.name, out)
 			}
 		})
 	}
+
+	// Positive path — visible command with simulated TTY stderr emits both lines.
+	t.Run("visible TTY stderr emits warning", func(t *testing.T) {
+		isTerminalWriterFn = func(io.Writer) bool { return true }
+		t.Cleanup(func() {
+			isTerminalWriterFn = func(io.Writer) bool { return false }
+		})
+		out := run(&cobra.Command{Use: "rewind"})
+		if !strings.Contains(out, "Action required: agent hooks need updating (claude-code)") {
+			t.Errorf("expected first warning line in output, got %q", out)
+		}
+		if !strings.Contains(out, "Run: entire enable --force") {
+			t.Errorf("expected second warning line in output, got %q", out)
+		}
+	})
 }
