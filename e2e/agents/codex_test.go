@@ -7,6 +7,17 @@ import (
 	"testing"
 )
 
+func TestCodexHomeParentDirForHome_UsesHomeCache(t *testing.T) {
+	t.Parallel()
+
+	home := filepath.Join(string(filepath.Separator), "home", "runner")
+	got := codexHomeParentDirForHome(home)
+	want := filepath.Join(home, ".cache", "entire", "e2e", "codex")
+	if got != want {
+		t.Fatalf("codex home parent = %q, want %q", got, want)
+	}
+}
+
 func TestSeedCodexHome_WritesAPIKeyAuth(t *testing.T) {
 	home := t.TempDir()
 	projectDir := filepath.Join(t.TempDir(), "repo")

@@ -63,11 +63,30 @@ func (c *Codex) IsTransientError(out Output, err error) bool {
 // codexHome creates an isolated CODEX_HOME for a test run.
 // Auth still works via OPENAI_API_KEY env var or symlinked auth.json.
 func codexHome() (string, func(), error) {
-	dir, err := os.MkdirTemp("", "codex-home-*")
+	parent, err := codexHomeParentDir()
+	if err != nil {
+		return "", nil, err
+	}
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return "", nil, fmt.Errorf("create codex home parent: %w", err)
+	}
+	dir, err := os.MkdirTemp(parent, "codex-home-*")
 	if err != nil {
 		return "", nil, err
 	}
 	return dir, func() { _ = os.RemoveAll(dir) }, nil
+}
+
+func codexHomeParentDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("get user home for codex home: %w", err)
+	}
+	return codexHomeParentDirForHome(home), nil
+}
+
+func codexHomeParentDirForHome(home string) string {
+	return filepath.Join(home, ".cache", "entire", "e2e", "codex")
 }
 
 func (c *Codex) RunPrompt(ctx context.Context, dir string, prompt string, opts ...Option) (Output, error) {
