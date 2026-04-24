@@ -8,13 +8,14 @@ import (
 	"os"
 
 	dispatchpkg "github.com/entireio/cli/cmd/entire/cli/dispatch"
+	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
 
 var runDispatch = dispatchpkg.Run
 var renderDispatchMarkdown = dispatchpkg.RenderMarkdown
-var dispatchTerminalMode = isTerminalWriter
+var dispatchTerminalMode = interactive.IsTerminalWriter
 var runInteractiveDispatch = defaultRunInteractiveDispatch
 var renderTerminalMarkdown = defaultRenderTerminalMarkdown
 
@@ -45,7 +46,7 @@ Examples:
 				err  error
 			)
 
-			if shouldRunDispatchWizard(cmd.Flags().NFlag(), isTerminalStdin(os.Stdin), isTerminalWriter(cmd.OutOrStdout())) {
+			if shouldRunDispatchWizard(cmd.Flags().NFlag(), isTerminalStdin(os.Stdin), interactive.IsTerminalWriter(cmd.OutOrStdout())) {
 				opts, err = runDispatchWizard(cmd)
 			} else {
 				opts, err = parseDispatchFlags(cmd, flagLocal, flagSince, flagUntil, flagAllBranches, flagRepos, flagVoice, flagInsecureHTTPAuth)
