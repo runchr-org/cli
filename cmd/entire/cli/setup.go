@@ -316,11 +316,6 @@ func runManageAgents(ctx context.Context, w io.Writer, opts EnableOptions, selec
 		fmt.Fprintf(w, "Enabled agents: %s\n\n", strings.Join(displayNames, ", "))
 	}
 
-	if drift := agent.CheckHookDrift(ctx); len(drift) > 0 {
-		emitStaleHooksWarning(w, drift)
-		fmt.Fprintln(w)
-	}
-
 	// Build pre-selection set from installed agents
 	installedSet := make(map[types.AgentName]struct{}, len(installedNames))
 	for _, name := range installedNames {

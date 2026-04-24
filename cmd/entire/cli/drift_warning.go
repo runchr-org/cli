@@ -18,15 +18,13 @@ import (
 //   - cmd is nil (defensive).
 //   - cmd or any ancestor has Hidden=true (internal / machine-invoked commands
 //     like `entire hooks`, `entire migrate`, dev helpers).
-//   - cmd.Name() is "enable" or "configure" — those run the shared setup
-//     flow, which prints the same warning via emitStaleHooksWarning itself,
-//     and `enable --force` is the fix so a second warning is noise.
+//   - cmd.Name() is "status" — the status card calls emitStaleHooksWarning
+//     inline so the warning renders integrated with the rest of the card.
 func shouldSkipDriftWarning(cmd *cobra.Command) bool {
 	if cmd == nil {
 		return true
 	}
-	switch cmd.Name() {
-	case "enable", "configure":
+	if cmd.Name() == "status" {
 		return true
 	}
 	for c := cmd; c != nil; c = c.Parent() {

@@ -186,9 +186,17 @@ func formatSettingsStatusShort(ctx context.Context, s *EntireSettings, sty statu
 			b.WriteString("\n")
 			var buf strings.Builder
 			emitStaleHooksWarning(&buf, drift)
-			// emitStaleHooksWarning adds trailing \n; trim to fit inline under
-			// the status card (the caller already appends its own newlines).
-			b.WriteString(strings.TrimRight(buf.String(), "\n"))
+			// emitStaleHooksWarning writes its own two lines terminated by
+			// newlines. Indent each to match the status card's two-space
+			// gutter, then trim the trailing newline the caller appends.
+			trimmed := strings.TrimRight(buf.String(), "\n")
+			for i, line := range strings.Split(trimmed, "\n") {
+				if i > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString("  ")
+				b.WriteString(line)
+			}
 		}
 	}
 
