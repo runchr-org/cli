@@ -13,6 +13,8 @@ import (
 // Compile-time pin: ClaudeCodeAgent must satisfy SkillDiscoverer.
 var _ agent.SkillDiscoverer = (*claudecode.ClaudeCodeAgent)(nil)
 
+const prReviewToolkitInvocation = "/pr-review-toolkit:review-pr"
+
 func withFakeHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -60,8 +62,8 @@ Review the PR.
 	if len(skills) != 1 {
 		t.Fatalf("skills count = %d, want 1", len(skills))
 	}
-	if skills[0].Name != "/pr-review-toolkit:review-pr" {
-		t.Errorf("skills[0].Name = %q, want /pr-review-toolkit:review-pr", skills[0].Name)
+	if skills[0].Name != prReviewToolkitInvocation {
+		t.Errorf("skills[0].Name = %q, want %s", skills[0].Name, prReviewToolkitInvocation)
 	}
 	if skills[0].Description != "Full PR review" {
 		t.Errorf("skills[0].Description = %q", skills[0].Description)
@@ -159,8 +161,8 @@ allowed-tools: ["Bash", "Read"]
 	if len(skills) != 1 {
 		t.Fatalf("expected 1 plugin command, got %d: %+v", len(skills), skills)
 	}
-	if skills[0].Name != "/pr-review-toolkit:review-pr" {
-		t.Errorf("Name = %q, want /pr-review-toolkit:review-pr", skills[0].Name)
+	if skills[0].Name != prReviewToolkitInvocation {
+		t.Errorf("Name = %q, want %s", skills[0].Name, prReviewToolkitInvocation)
 	}
 	if skills[0].Description != "Comprehensive PR review using specialized agents" {
 		t.Errorf("Description = %q", skills[0].Description)
@@ -249,6 +251,41 @@ func TestDiscoverReviewSkills_SkipsReadme(t *testing.T) {
 	}
 	if len(skills) != 0 {
 		t.Errorf("README.md should be skipped, got %+v", skills)
+	}
+}
+
+// TestDiscoverReviewSkills_DedupesAcrossVersions verifies that when the
+// same plugin is cached under multiple version directories (e.g., after
+// an update leaves the old content-hash version alongside the new one),
+// the discovery walker emits each invocation name exactly once.
+func TestDiscoverReviewSkills_DedupesAcrossVersions(t *testing.T) {
+	home := withFakeHome(t)
+	pluginRoot := filepath.Join(home, ".claude", "plugins", "cache",
+		"fake-market", "pr-review-toolkit")
+	content := `---
+description: "Comprehensive PR review using specialized agents"
+---
+`
+	for _, version := range []string{"cf62a6c02dc0", "unknown"} {
+		cmdDir := filepath.Join(pluginRoot, version, "commands")
+		if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(cmdDir, "review-pr.md"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	a := &claudecode.ClaudeCodeAgent{}
+	skills, err := a.DiscoverReviewSkills(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("expected 1 dedup'd skill, got %d: %+v", len(skills), skills)
+	}
+	if skills[0].Name != prReviewToolkitInvocation {
+		t.Errorf("Name = %q, want %s", skills[0].Name, prReviewToolkitInvocation)
 	}
 }
 

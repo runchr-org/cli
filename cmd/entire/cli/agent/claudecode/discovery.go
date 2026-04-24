@@ -42,10 +42,32 @@ func (c *ClaudeCodeAgent) DiscoverReviewSkills(ctx context.Context) ([]agent.Dis
 	found = append(found, scanUserSkills(ctx, filepath.Join(home, ".claude", "skills"))...)
 	found = append(found, scanFlatMarkdownDir(ctx, filepath.Join(home, ".claude", "commands"), "")...)
 	found = append(found, scanFlatMarkdownDir(ctx, filepath.Join(home, ".claude", "agents"), "")...)
+	found = dedupeDiscoveredSkills(found)
 	if len(found) == 0 {
 		return nil, nil
 	}
 	return found, nil
+}
+
+// dedupeDiscoveredSkills collapses entries sharing the same invocation
+// Name. Arises when the same plugin is cached under multiple marketplaces
+// or multiple versions (e.g. pr-review-toolkit cached as both `unknown`
+// and a content-hash version directory). First-seen wins; ordering is
+// otherwise preserved.
+func dedupeDiscoveredSkills(in []agent.DiscoveredSkill) []agent.DiscoveredSkill {
+	if len(in) < 2 {
+		return in
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]agent.DiscoveredSkill, 0, len(in))
+	for _, s := range in {
+		if _, dup := seen[s.Name]; dup {
+			continue
+		}
+		seen[s.Name] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 // scanPluginCache walks <root>/<marketplace>/<plugin>/<version>/{skills,commands,agents}/
