@@ -85,16 +85,17 @@ func TestEmitStaleHooksWarning(t *testing.T) {
 	})
 }
 
-// TestDriftWarningPreRun stubs the drift checker and the TTY check so
-// every gate in driftWarningPreRun can be exercised deterministically.
-// Not parallel: overrides package-level checkHookDriftForWarning and
-// isTerminalWriterFn.
+// TestDriftWarningPreRun stubs the drift checker, TTY check, and git-repo
+// check so every gate in driftWarningPreRun can be exercised deterministically.
+// Not parallel: overrides package-level stubs.
 func TestDriftWarningPreRun(t *testing.T) {
 	origCheck := checkHookDriftForWarning
 	origTTY := isTerminalWriterFn
+	origRepo := inGitRepoFn
 	t.Cleanup(func() {
 		checkHookDriftForWarning = origCheck
 		isTerminalWriterFn = origTTY
+		inGitRepoFn = origRepo
 	})
 
 	checkHookDriftForWarning = func(context.Context) []agent.DriftReport {
@@ -102,6 +103,8 @@ func TestDriftWarningPreRun(t *testing.T) {
 	}
 	// Default to "not a TTY" so skip-path cases don't need to override.
 	isTerminalWriterFn = func(io.Writer) bool { return false }
+	// Default to "inside a git repo" — most cases exercise behavior there.
+	inGitRepoFn = func(context.Context) bool { return true }
 
 	run := func(c *cobra.Command) string {
 		var buf bytes.Buffer
@@ -188,6 +191,38 @@ func TestDriftWarningPreRun(t *testing.T) {
 		c.Flags().BoolP("force", "f", false, "")
 		if out := run(c); !strings.Contains(out, "Action required") {
 			t.Errorf("expected warning for enable without --force, got %q", out)
+		}
+	})
+
+	// Explicit --force=false from a wrapper should NOT suppress the warning;
+	// flag.Changed is true but the remediation is not actually in flight.
+	t.Run("enable --force=false emits warning", func(t *testing.T) {
+		isTerminalWriterFn = func(io.Writer) bool { return true }
+		t.Cleanup(func() {
+			isTerminalWriterFn = func(io.Writer) bool { return false }
+		})
+		c := &cobra.Command{Use: "enable"}
+		c.Flags().BoolP("force", "f", false, "")
+		if err := c.Flags().Set("force", "false"); err != nil {
+			t.Fatalf("set force=false: %v", err)
+		}
+		if out := run(c); !strings.Contains(out, "Action required") {
+			t.Errorf("expected warning for enable --force=false, got %q", out)
+		}
+	})
+
+	// Outside a git worktree the pre-run must skip entirely — otherwise
+	// a non-repo dir with a stray .claude/ could warn and then the
+	// command would bail with "not a git repository".
+	t.Run("outside git repo skips", func(t *testing.T) {
+		isTerminalWriterFn = func(io.Writer) bool { return true }
+		inGitRepoFn = func(context.Context) bool { return false }
+		t.Cleanup(func() {
+			isTerminalWriterFn = func(io.Writer) bool { return false }
+			inGitRepoFn = func(context.Context) bool { return true }
+		})
+		if out := run(&cobra.Command{Use: "rewind"}); out != "" {
+			t.Errorf("expected no output outside git repo, got %q", out)
 		}
 	})
 }
