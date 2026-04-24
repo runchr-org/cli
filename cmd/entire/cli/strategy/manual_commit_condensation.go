@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -145,6 +146,8 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 	}
 	extractSessionDataSpan.End()
 	extractDuration := time.Since(extractStart)
+
+	refreshLiveExtras(ctx, logCtx, ag, state, sessionData)
 
 	// Backfill session state token usage from the freshly-extracted transcript.
 	// Copilot CLI writes session.shutdown after the hooks return, so by condensation
@@ -1029,6 +1032,73 @@ func (s *ManualCommitStrategy) extractSessionDataFromLiveTranscript(ctx context.
 	}
 
 	return data, nil
+}
+
+// refreshLiveExtras replaces stale shadow-branch copies of agent-contributed
+// files with a fresh snapshot from the agent. On a mid-turn commit, the shadow
+// branch still carries the prior TurnEnd's archive (or none at all), so the
+// committed checkpoint would otherwise miss the current turn's state. No-op
+// when the agent doesn't implement CheckpointContributor.
+func refreshLiveExtras(ctx context.Context, logCtx context.Context, ag agent.Agent, state *SessionState, sessionData *ExtractedSessionData) {
+	if ag == nil {
+		return
+	}
+	live, err := contributeLiveExtras(ctx, ag, state.SessionID)
+	if err != nil {
+		logging.Warn(logCtx, "agent live extras refresh failed",
+			slog.String("session_id", state.SessionID),
+			slog.String("agent_type", string(state.AgentType)),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	if len(live) == 0 {
+		return
+	}
+	if sessionData.ExtraFiles == nil {
+		sessionData.ExtraFiles = make(map[string][]byte, len(live))
+	}
+	maps.Copy(sessionData.ExtraFiles, live)
+}
+
+// contributeLiveExtras invokes the agent's CheckpointContributor to refresh its
+// agent-specific archive files in the session metadata dir, then reads those
+// files back into a map suitable for ExtraFiles. No-op if the agent does not
+// implement CheckpointContributor. Used by CondenseSession to get a live
+// snapshot of cursor's DB on mid-turn commits, when the shadow branch still
+// holds the prior TurnEnd's archive (or nothing at all).
+func contributeLiveExtras(ctx context.Context, ag agent.Agent, sessionID string) (map[string][]byte, error) {
+	contributor, ok := ag.(agent.CheckpointContributor)
+	if !ok {
+		return map[string][]byte{}, nil
+	}
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("worktree root: %w", err)
+	}
+	metadataDirAbs := filepath.Join(worktreeRoot, paths.SessionMetadataDirFromSessionID(sessionID))
+	if mkErr := os.MkdirAll(metadataDirAbs, 0o750); mkErr != nil {
+		return nil, fmt.Errorf("ensure metadata dir: %w", mkErr)
+	}
+	if err := contributor.ContributeCheckpointFiles(ctx, sessionID, metadataDirAbs); err != nil {
+		return nil, fmt.Errorf("contribute: %w", err)
+	}
+	entries, err := os.ReadDir(metadataDirAbs)
+	if err != nil {
+		return nil, fmt.Errorf("read metadata dir: %w", err)
+	}
+	extras := map[string][]byte{}
+	for _, e := range entries {
+		if e.IsDir() || standardMetadataFiles[e.Name()] {
+			continue
+		}
+		content, readErr := os.ReadFile(filepath.Join(metadataDirAbs, e.Name())) //nolint:gosec // our own metadata dir
+		if readErr != nil {
+			return nil, fmt.Errorf("read %s: %w", e.Name(), readErr)
+		}
+		extras[e.Name()] = content
+	}
+	return extras, nil
 }
 
 // standardMetadataFiles is the set of files written by the framework during SaveStep.
