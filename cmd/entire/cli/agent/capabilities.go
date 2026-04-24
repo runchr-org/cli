@@ -175,7 +175,7 @@ func AsSessionBaseDirProvider(ag Agent) (SessionBaseDirProvider, bool) {
 // the interface. This is a built-in-only capability (drift detection lives in
 // the host CLI, not in external agent protocols), so no CapabilityDeclarer gate
 // applies.
-func AsHookVersionSupport(ag Agent) (HookVersionSupport, bool) { //nolint:ireturn // type-assertion helper must return interface
+func AsHookVersionSupport(ag Agent) (HookVersionSupport, bool) {
 	if ag == nil {
 		return nil, false
 	}

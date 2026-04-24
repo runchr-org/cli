@@ -4,7 +4,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -60,9 +59,7 @@ func emitStaleHooksWarning(w io.Writer, drifts []agent.DriftReport) {
 
 // checkHookDriftForWarning indirects agent.CheckHookDrift so tests can stub
 // the drift list. Production callers never reassign it.
-var checkHookDriftForWarning = func(ctx context.Context) []agent.DriftReport {
-	return agent.CheckHookDrift(ctx)
-}
+var checkHookDriftForWarning = agent.CheckHookDrift
 
 // driftWarningPreRun is wired as the root command's PersistentPreRun. It
 // emits the stale-hooks warning on stderr when:
