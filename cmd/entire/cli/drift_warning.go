@@ -23,16 +23,11 @@ import (
 //     warning).
 //   - cmd or any ancestor has Hidden=true (internal / machine-invoked commands
 //     like `entire hooks`, `entire migrate`, dev helpers).
-//   - cmd.Name() is "status" — the status card calls emitStaleHooksWarning
-//     inline so the warning renders integrated with the rest of the card.
 func shouldSkipDriftWarning(cmd *cobra.Command) bool {
 	if cmd == nil {
 		return true
 	}
-	switch cmd.Name() {
-	case "entire", "status":
-		// "entire" is the root command (bare `entire` prints help or runs
-		// first-time setup); "status" renders the warning inline.
+	if cmd.Name() == "entire" {
 		return true
 	}
 	for c := cmd; c != nil; c = c.Parent() {
@@ -43,35 +38,23 @@ func shouldSkipDriftWarning(cmd *cobra.Command) bool {
 	return false
 }
 
-// staleHooksWarningLines returns the two yellow-styled warning lines for a
-// non-empty drifts list (or nil for an empty one). The caller supplies a
-// statusStyles built from its own output writer so that color is decided
-// by the real destination writer, not by whatever buffer a helper routes
-// through on the way there.
-func staleHooksWarningLines(sty statusStyles, drifts []agent.DriftReport) []string {
+// emitStaleHooksWarning writes the two-line stale-hooks warning to w.
+// Yellow when w is a TTY, no-op when drifts is empty. The root
+// PersistentPreRun is the sole caller — every visible command goes
+// through it, including `entire status`.
+func emitStaleHooksWarning(w io.Writer, drifts []agent.DriftReport) {
 	if len(drifts) == 0 {
-		return nil
+		return
 	}
 	names := make([]string, 0, len(drifts))
 	for _, r := range drifts {
 		names = append(names, string(r.Agent))
 	}
 	joined := strings.Join(names, ", ")
-	return []string{
-		sty.render(sty.yellow, fmt.Sprintf("Action required: agent hooks need updating (%s)", joined)),
-		sty.render(sty.yellow, "  Run: entire enable --force"),
-	}
-}
 
-// emitStaleHooksWarning writes the two-line stale-hooks warning to w.
-// Yellow when w is a TTY, no-op when drifts is empty. The root
-// PersistentPreRun is the only caller today; the status card uses
-// staleHooksWarningLines directly so it can reuse the card's own
-// statusStyles and indent each line under its 2-space gutter.
-func emitStaleHooksWarning(w io.Writer, drifts []agent.DriftReport) {
-	for _, line := range staleHooksWarningLines(newStatusStyles(w), drifts) {
-		fmt.Fprintln(w, line)
-	}
+	sty := newStatusStyles(w)
+	fmt.Fprintln(w, sty.render(sty.yellow, fmt.Sprintf("Action required: agent hooks need updating (%s)", joined)))
+	fmt.Fprintln(w, sty.render(sty.yellow, "  Run: entire enable --force"))
 }
 
 // checkHookDriftForWarning indirects agent.CheckHookDrift so tests can stub

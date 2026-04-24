@@ -33,7 +33,6 @@ func TestShouldSkipDriftWarning(t *testing.T) {
 		{"hidden-ancestor", hiddenChild, true},
 		{"enable", enable, false},
 		{"configure", configure, false},
-		{"status", &cobra.Command{Use: "status"}, true},
 		{"root", &cobra.Command{Use: "entire"}, true},
 	}
 	for _, tc := range cases {
@@ -120,7 +119,6 @@ func TestDriftWarningPreRun(t *testing.T) {
 		cmd  *cobra.Command
 	}{
 		{"hidden command", &cobra.Command{Use: "hooks", Hidden: true}},
-		{"status command", &cobra.Command{Use: "status"}},
 		{"visible non-TTY stderr", &cobra.Command{Use: "rewind"}},
 	}
 	for _, tc := range skipCases {
