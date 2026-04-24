@@ -1123,6 +1123,15 @@ type changedFilesResult struct {
 	Deleted []string // Files that were deleted (need to be excluded from checkpoint tree)
 }
 
+// FilterGitIgnoredFiles is the exported form of filterGitIgnoredFiles. It lets
+// callers outside this package (notably cmd/entire/cli lifecycle handling)
+// drop gitignored entries before deciding whether a turn had any non-ignored
+// deltas. Fails closed (returns nil) on git errors — a missing checkpoint is
+// preferable to leaked secrets.
+func FilterGitIgnoredFiles(ctx context.Context, repo *git.Repository, files []string) []string {
+	return filterGitIgnoredFiles(ctx, repo, files)
+}
+
 // filterGitIgnoredFiles removes gitignored files from the list using `git check-ignore`.
 // This prevents secrets in gitignored files (e.g., .env) from leaking into shadow branch
 // commits when agents report them as modified/new in their transcripts.

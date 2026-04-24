@@ -19,6 +19,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -503,6 +504,16 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	// and should not be re-added to FilesTouched by SaveStep. A file is "committed"
 	// if it exists in HEAD with the same content as the working tree.
 	relModifiedFiles = filterToUncommittedFiles(ctx, relModifiedFiles, repoRoot)
+
+	// Drop gitignored entries before deciding whether to save a shadow checkpoint.
+	// After a mid-turn commit, git status often reports untracked-but-ignored noise
+	// (e.g. .DS_Store) that would otherwise keep totalChanges > 0 and force a
+	// shadow checkpoint with no real delta beyond metadata dir bookkeeping.
+	if repo, repoErr := openRepository(ctx); repoErr == nil {
+		relModifiedFiles = checkpoint.FilterGitIgnoredFiles(ctx, repo, relModifiedFiles)
+		relNewFiles = checkpoint.FilterGitIgnoredFiles(ctx, repo, relNewFiles)
+		relDeletedFiles = checkpoint.FilterGitIgnoredFiles(ctx, repo, relDeletedFiles)
+	}
 	normalizeSpan.End()
 
 	// Check if there are any changes
