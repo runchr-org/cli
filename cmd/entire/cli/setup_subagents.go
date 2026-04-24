@@ -183,7 +183,6 @@ const codexSearchSubagentTemplate = `
 name = "entire-search"
 description = "Search Entire checkpoint history and transcripts with ` + "`entire search --json`" + `. Use when the user asks about previous work, commits, sessions, prompts, or historical context in this repository."
 sandbox_mode = "read-only"
-model_reasoning_effort = "medium"
 developer_instructions = """
 You are the Entire search specialist for this repository.
 
