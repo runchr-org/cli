@@ -87,10 +87,11 @@ type cancelMsg struct{}
 // periodic state updates just for the timer.
 type tickMsg time.Time
 
-// ansiRe matches standard CSI escape sequences. Agent stdout is rarely
-// colored but users can pipe through `--color=always` wrappers — strip
-// them so the TUI's own styling remains consistent.
-var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+// ansiRe matches standard CSI escape sequences, including private-mode
+// forms like `\x1b[?25l` (cursor hide) that codex uses. Agent stdout is
+// rarely colored but users can pipe through `--color=always` wrappers —
+// strip them so the TUI's own styling remains consistent.
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]`)
 
 // stripANSI removes CSI color codes from s so preview lines don't inject
 // escape sequences into the TUI render.
@@ -157,6 +158,10 @@ func (m reviewTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.Type { //nolint:exhaustive // only navigation keys matter in detail mode; every other key is a no-op
 			case tea.KeyEsc:
 				m.detailMode = false
+				// Exit alt-screen so the dashboard re-renders over the
+				// primary screen buffer, leaving the drill-in history out
+				// of terminal scrollback.
+				return m, tea.ExitAltScreen
 			case tea.KeyCtrlO, tea.KeyRight:
 				m.detailIdx = (m.detailIdx + 1) % len(m.tasks)
 				m.detailScroll = 0
@@ -174,12 +179,14 @@ func (m reviewTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Dashboard: Ctrl+O enters the drill-in view. Requires buffers
 		// to be wired — without them the detail view has nothing to
-		// render.
+		// render. Enter alt-screen so the full-screen transcript view
+		// doesn't leave scrollback artifacts when the buffer grows mid-
+		// view; dashboard stays on the primary screen.
 		if msg.Type == tea.KeyCtrlO && len(m.buffers) > 0 {
 			m.detailMode = true
 			m.detailIdx = 0
 			m.detailScroll = 0
-			return m, nil
+			return m, tea.EnterAltScreen
 		}
 		// Ctrl+C (or 'q') flips the cancelling banner immediately for
 		// user feedback and fires the orchestrator-supplied cancel hook.
@@ -332,12 +339,30 @@ func (m reviewTUIModel) detailView() string {
 		end = start
 	}
 
+	maxLineWidth := m.termWidth
+	if maxLineWidth < 20 {
+		maxLineWidth = 20
+	}
+
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "< %s > (agent %d of %d) — Esc: back | ←/→: switch | ↑/↓: scroll\n",
 		task.Name, m.detailIdx+1, len(m.tasks))
-	sb.WriteString(strings.Repeat("─", 60) + "\n")
+	sb.WriteString(strings.Repeat("─", min(60, maxLineWidth)) + "\n")
+	rendered := 0
 	for _, line := range lines[start:end] {
+		// Truncate wide lines so they can't wrap and throw off bubbletea's
+		// frame-line count. Scroll with ↑/↓ if you need to see the tail.
+		if len(line) > maxLineWidth {
+			line = line[:maxLineWidth-1] + "…"
+		}
 		sb.WriteString(line + "\n")
+		rendered++
+	}
+	// Pad to fixed viewport height so every frame returns the same line
+	// count — required for bubbletea's inline frame diff (even in alt-
+	// screen, a stable line count avoids repaint flicker).
+	for i := rendered; i < viewport; i++ {
+		sb.WriteByte('\n')
 	}
 	return sb.String()
 }
