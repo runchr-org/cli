@@ -103,13 +103,15 @@ func runResume(ctx context.Context, cmd *cobra.Command, branchName string, force
 			return fmt.Errorf("branch '%s' not found locally or on origin", branchName)
 		}
 
-		// Ask user if they want to fetch from remote
-		shouldFetch, err := promptFetchFromRemote(branchName)
-		if err != nil {
-			return err
-		}
-		if !shouldFetch {
-			return nil
+		// Ask user if they want to fetch from remote (--force skips the prompt)
+		if !force {
+			shouldFetch, err := promptFetchFromRemote(branchName)
+			if err != nil {
+				return err
+			}
+			if !shouldFetch {
+				return nil
+			}
 		}
 
 		// Fetch and checkout the remote branch

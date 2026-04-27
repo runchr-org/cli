@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -310,6 +311,7 @@ func TestParseGitHubRelease(t *testing.T) {
 }
 
 func TestUpdateCommand(t *testing.T) {
+	const plainBinPath = "/usr/local/bin/entire"
 	tests := []struct {
 		name           string
 		currentVersion string
@@ -355,13 +357,13 @@ func TestUpdateCommand(t *testing.T) {
 		{
 			name:           "unknown path stable falls back to stable curl command",
 			currentVersion: "1.0.0",
-			execPath:       func() (string, error) { return "/usr/local/bin/entire", nil },
+			execPath:       func() (string, error) { return plainBinPath, nil },
 			want:           "curl -fsSL https://entire.io/install.sh | bash",
 		},
 		{
 			name:           "unknown path nightly falls back to nightly curl command",
 			currentVersion: "1.0.1-nightly.202604101200.abc1234",
-			execPath:       func() (string, error) { return "/usr/local/bin/entire", nil },
+			execPath:       func() (string, error) { return plainBinPath, nil },
 			want:           "curl -fsSL https://entire.io/install.sh | bash -s -- --channel nightly",
 		},
 		{
@@ -392,6 +394,10 @@ func setupCheckAndNotifyTest(t *testing.T, serverURL string) (*cobra.Command, *b
 
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+
+	// Prevent MaybeAutoUpdate from opening an interactive prompt when the
+	// test binary runs in a real terminal (dev laptop, not just CI).
+	t.Setenv("ENTIRE_TEST_TTY", "0")
 
 	origURL := githubAPIURL
 	githubAPIURL = serverURL
@@ -486,6 +492,49 @@ func TestCheckAndNotify_NoNotificationWhenUpToDate(t *testing.T) {
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no output when up to date, got %q", buf.String())
+	}
+}
+
+func TestCheckAndNotify_InstallerFailureKeepsCacheFresh(t *testing.T) {
+	server := newVersionServer(t, "v2.0.0")
+	cmd, buf := setupCheckAndNotifyTest(t, server.URL)
+
+	// Simulate an interactive user who accepts the upgrade prompt, and an
+	// installer that fails (e.g. brew upgrade blew up mid-run).
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	useBrewExecutable(t)
+
+	origConfirm := confirmUpdate
+	confirmUpdate = func() (bool, error) { return true, nil }
+	t.Cleanup(func() { confirmUpdate = origConfirm })
+
+	origRun := runInstaller
+	runInstaller = func(_ context.Context, _ string) error { return errors.New("boom") }
+	t.Cleanup(func() { runInstaller = origRun })
+
+	origIsTerminalOut := isTerminalOut
+	isTerminalOut = func(_ io.Writer) bool { return true }
+	t.Cleanup(func() { isTerminalOut = origIsTerminalOut })
+
+	CheckAndNotify(context.Background(), cmd.OutOrStdout(), "1.0.0")
+
+	// User sees the failure message with a manual-retry hint.
+	if !strings.Contains(buf.String(), "Try again later running:") {
+		t.Errorf("missing retry hint in output: %q", buf.String())
+	}
+
+	// Cache must remain bumped: we don't want to re-prompt every invocation
+	// while the upstream issue is still in place. The user already has the
+	// hint with the exact command to run manually.
+	cache, err := loadCache()
+	if err != nil {
+		t.Fatalf("loadCache() error = %v", err)
+	}
+	if cache.LastCheckTime.IsZero() {
+		t.Errorf("cache LastCheckTime was reset after installer failure; want fresh bump")
+	}
+	if time.Since(cache.LastCheckTime) > time.Minute {
+		t.Errorf("cache LastCheckTime not fresh after installer failure: %v", cache.LastCheckTime)
 	}
 }
 

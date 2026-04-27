@@ -58,6 +58,20 @@ func TestFetchURL(t *testing.T) {
 			settingsJSON: `{"enabled":true}`,
 			wantURL:      "git@github.com:acme/app.git",
 		},
+		{
+			name:         "token drops ssh port when coercing ssh origin to https",
+			originURL:    "ssh://git@git.example.com:2222/acme/app.git",
+			settingsJSON: `{"enabled":true}`,
+			token:        "secret-token",
+			wantURL:      "https://git.example.com/acme/app.git",
+		},
+		{
+			name:         "token preserves https port when source is already https",
+			originURL:    "https://git.example.com:8443/acme/app.git",
+			settingsJSON: `{"enabled":true}`,
+			token:        "secret-token",
+			wantURL:      "https://git.example.com:8443/acme/app.git",
+		},
 	}
 
 	for _, tt := range tests {
@@ -68,7 +82,7 @@ func TestFetchURL(t *testing.T) {
 			writeSettings(t, repoDir, tt.settingsJSON)
 			t.Chdir(repoDir)
 			if tt.token != "" {
-				t.Setenv(checkpointTokenEnvVar, tt.token)
+				t.Setenv(CheckpointTokenEnvVar, tt.token)
 			}
 
 			got, err := FetchURL(context.Background())
@@ -162,7 +176,7 @@ func TestFetchURL_EdgeCases(t *testing.T) {
 			writeSettings(t, repoDir, tt.settingsJSON)
 			t.Chdir(repoDir)
 			if tt.token != "" {
-				t.Setenv(checkpointTokenEnvVar, tt.token)
+				t.Setenv(CheckpointTokenEnvVar, tt.token)
 			}
 
 			got, err := FetchURL(context.Background())
@@ -216,6 +230,15 @@ func TestPushURL(t *testing.T) {
 			wantEnabled:  false,
 		},
 		{
+			name:         "token forces https for origin fallback when no checkpoint remote is configured",
+			originURL:    "git@github.com:acme/app.git",
+			pushRemote:   "origin",
+			settingsJSON: `{"enabled":true}`,
+			token:        "push-token",
+			wantURL:      "https://github.com/acme/app.git",
+			wantEnabled:  false,
+		},
+		{
 			name:         "configured checkpoint remote with https push remote uses https",
 			originURL:    "https://github.com/acme/app.git",
 			pushRemote:   "origin",
@@ -247,6 +270,24 @@ func TestPushURL(t *testing.T) {
 			settingsJSON: `{"enabled":true,"strategy_options":{"checkpoint_remote":{"provider":"github","repo":"acme/checkpoints"}}}`,
 			token:        "push-token",
 			wantURL:      "https://github.com/acme/checkpoints.git",
+			wantEnabled:  true,
+		},
+		{
+			name:         "token drops ssh port when coercing ssh origin to https",
+			originURL:    "ssh://git@git.example.com:2222/acme/app.git",
+			pushRemote:   "origin",
+			settingsJSON: `{"enabled":true,"strategy_options":{"checkpoint_remote":{"provider":"github","repo":"acme/checkpoints"}}}`,
+			token:        "push-token",
+			wantURL:      "https://git.example.com/acme/checkpoints.git",
+			wantEnabled:  true,
+		},
+		{
+			name:         "token preserves https port when source is already https",
+			originURL:    "https://git.example.com:8443/acme/app.git",
+			pushRemote:   "origin",
+			settingsJSON: `{"enabled":true,"strategy_options":{"checkpoint_remote":{"provider":"github","repo":"acme/checkpoints"}}}`,
+			token:        "push-token",
+			wantURL:      "https://git.example.com:8443/acme/checkpoints.git",
 			wantEnabled:  true,
 		},
 		{
@@ -288,7 +329,7 @@ func TestPushURL(t *testing.T) {
 			writeSettings(t, repoDir, tt.settingsJSON)
 			t.Chdir(repoDir)
 			if tt.token != "" {
-				t.Setenv(checkpointTokenEnvVar, tt.token)
+				t.Setenv(CheckpointTokenEnvVar, tt.token)
 			}
 
 			gotURL, gotEnabled, err := PushURL(context.Background(), tt.pushRemote)

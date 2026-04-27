@@ -309,7 +309,7 @@ func ghFlagsProvided(opts GitHubBootstrapOptions) bool {
 
 // confirmCreateGitHubRepo asks the user whether they want to also create
 // a matching GitHub repository. Interactive-only; callers gate on
-// CanPromptInteractively.
+// interactive.CanPromptInteractively.
 func confirmCreateGitHubRepo() (bool, error) {
 	confirmed := true
 	form := NewAccessibleForm(

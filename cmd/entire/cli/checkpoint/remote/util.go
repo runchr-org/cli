@@ -12,10 +12,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
 
-const (
-	originRemote          = "origin"
-	checkpointTokenEnvVar = "ENTIRE_CHECKPOINT_TOKEN"
-)
+const originRemote = "origin"
 
 const (
 	ProtocolSSH   = gitremote.ProtocolSSH
@@ -33,7 +30,7 @@ type Info = gitremote.Info
 // If ENTIRE_CHECKPOINT_TOKEN is set and a checkpoint remote is configured, HTTPS is
 // forced so the token can be used even when origin is configured via SSH.
 func FetchURL(ctx context.Context) (string, error) {
-	withToken := strings.TrimSpace(os.Getenv(checkpointTokenEnvVar)) != ""
+	withToken := strings.TrimSpace(os.Getenv(CheckpointTokenEnvVar)) != ""
 
 	originURL, originErr := GetRemoteURL(ctx, originRemote)
 	if originErr != nil {
@@ -162,10 +159,17 @@ func PushURL(ctx context.Context, pushRemoteName string) (string, bool, error) {
 		}
 		return "", true, fmt.Errorf("no push URL found: %w", err)
 	}
-	if strings.TrimSpace(os.Getenv(checkpointTokenEnvVar)) != "" {
+	if strings.TrimSpace(os.Getenv(CheckpointTokenEnvVar)) != "" {
+		// Keep the port only when the source was already HTTPS. SSH ports
+		// (e.g., :2222) don't map to HTTPS ports on the same host.
+		port := ""
+		if pushInfo.Protocol == ProtocolHTTPS {
+			port = pushInfo.Port
+		}
 		pushInfo = &Info{
 			Protocol: ProtocolHTTPS,
 			Host:     pushInfo.Host,
+			Port:     port,
 			Owner:    pushInfo.Owner,
 			Repo:     pushInfo.Repo,
 		}
@@ -241,9 +245,14 @@ func ExtractOwnerFromRemoteURL(rawURL string) string {
 func deriveCheckpointURLFromInfo(info *Info, config *settings.CheckpointRemoteConfig) (string, error) {
 	switch info.Protocol {
 	case ProtocolSSH:
+		// SCP-style (git@host:repo) doesn't support ports. When a non-default
+		// port is set (e.g., from ssh://git@host:2222/...), use the ssh:// URL form.
+		if info.Port != "" {
+			return fmt.Sprintf("ssh://git@%s/%s.git", info.HostPort(), config.Repo), nil
+		}
 		return fmt.Sprintf("git@%s:%s.git", info.Host, config.Repo), nil
 	case ProtocolHTTPS:
-		return fmt.Sprintf("https://%s/%s.git", info.Host, config.Repo), nil
+		return fmt.Sprintf("https://%s/%s.git", info.HostPort(), config.Repo), nil
 	default:
 		return "", fmt.Errorf("unsupported protocol %q in origin remote", info.Protocol)
 	}
@@ -257,7 +266,13 @@ func deriveTokenOriginURL(originURL string) (string, bool) {
 	if info.Host == "" || info.Owner == "" || info.Repo == "" {
 		return "", false
 	}
-	return fmt.Sprintf("https://%s/%s/%s.git", info.Host, info.Owner, info.Repo), true
+	// Keep the port only when the source was already HTTPS. SSH ports
+	// (e.g., :2222) don't map to HTTPS ports on the same host.
+	hostPort := info.Host
+	if info.Protocol == ProtocolHTTPS {
+		hostPort = info.HostPort()
+	}
+	return fmt.Sprintf("https://%s/%s/%s.git", hostPort, info.Owner, info.Repo), true
 }
 
 func providerHost(provider string) (string, bool) {
@@ -289,10 +304,27 @@ func logFallback(ctx context.Context, operation, fallbackURL, reason string, err
 
 func resolvePushFallbackURL(ctx context.Context, pushRemoteName, originURL string) (string, error) {
 	if originURL != "" {
+		if strings.TrimSpace(os.Getenv(CheckpointTokenEnvVar)) != "" {
+			if tokenURL, ok := deriveTokenOriginURL(originURL); ok {
+				return tokenURL, nil
+			}
+		}
 		return originURL, nil
 	}
-	if pushRemoteName == "" || pushRemoteName == originRemote {
+	if pushRemoteName == "" {
+		return "", fmt.Errorf("no push remote specified and remote %q not found", originRemote)
+	}
+	if pushRemoteName == originRemote {
 		return "", fmt.Errorf("remote %q not found", originRemote)
 	}
-	return GetRemoteURL(ctx, pushRemoteName)
+	pushURL, err := GetRemoteURL(ctx, pushRemoteName)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(os.Getenv(CheckpointTokenEnvVar)) != "" {
+		if tokenURL, ok := deriveTokenOriginURL(pushURL); ok {
+			return tokenURL, nil
+		}
+	}
+	return pushURL, nil
 }

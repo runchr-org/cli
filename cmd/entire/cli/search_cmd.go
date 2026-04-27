@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
+	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/search"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -66,7 +67,7 @@ branch:<name>, repo:<owner/name>, and repo:* to search all accessible repos.`,
 			}
 
 			w := cmd.OutOrStdout()
-			isTerminal := isTerminalWriter(w)
+			isTerminal := interactive.IsTerminalWriter(w)
 			hasFilters := authorFlag != "" || dateFlag != "" || branchFlag != "" || len(repos) > 0
 
 			// Fast-fail: no query + non-interactive mode = error (before auth/git checks)

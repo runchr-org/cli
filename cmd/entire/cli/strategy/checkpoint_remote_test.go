@@ -53,6 +53,18 @@ func TestDeriveCheckpointURL(t *testing.T) {
 			want:           "git@github.example.com:org/checkpoints.git",
 		},
 		{
+			name:           "HTTPS with non-standard port",
+			pushRemoteURL:  "https://git.example.com:8443/org/main-repo.git",
+			checkpointRepo: "org/checkpoints",
+			want:           "https://git.example.com:8443/org/checkpoints.git",
+		},
+		{
+			name:           "SSH protocol with non-standard port",
+			pushRemoteURL:  "ssh://git@git.example.com:2222/org/main-repo.git",
+			checkpointRepo: "org/checkpoints",
+			want:           "ssh://git@git.example.com:2222/org/checkpoints.git",
+		},
+		{
 			name:           "invalid push remote",
 			pushRemoteURL:  "not-a-url",
 			checkpointRepo: "org/checkpoints",
@@ -92,7 +104,7 @@ func TestIsURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tt.want, isURL(tt.val))
+			assert.Equal(t, tt.want, remote.IsURL(tt.val))
 		})
 	}
 }

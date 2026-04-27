@@ -17,11 +17,23 @@ const (
 )
 
 // Info holds the parsed components of a git remote URL.
+// Host is the hostname only (never includes a port). Port is empty unless the
+// source URL specified an explicit non-default port. Callers that need the
+// combined "host[:port]" form should use HostPort.
 type Info struct {
 	Protocol string
 	Host     string
+	Port     string
 	Owner    string
 	Repo     string
+}
+
+// HostPort returns Host, or "Host:Port" when Port is non-empty.
+func (i *Info) HostPort() string {
+	if i.Port == "" {
+		return i.Host
+	}
+	return i.Host + ":" + i.Port
 }
 
 // GetRemoteURL returns the URL configured for the named git remote.
@@ -73,7 +85,7 @@ func ParseURL(rawURL string) (*Info, error) {
 		return nil, err
 	}
 
-	return &Info{Protocol: u.Scheme, Host: u.Hostname(), Owner: owner, Repo: repo}, nil
+	return &Info{Protocol: u.Scheme, Host: u.Hostname(), Port: u.Port(), Owner: owner, Repo: repo}, nil
 }
 
 // RedactURL removes credentials and query parameters from a URL for safe logging.

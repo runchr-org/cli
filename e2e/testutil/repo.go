@@ -47,9 +47,24 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 	// Always use os.MkdirTemp instead of t.TempDir(). Go's t.TempDir()
 	// creates nested subdirectories (TestName.../001/) whose structure
 	// confuses some agents' (e.g. opencode) working-directory resolution.
-	dir, err := os.MkdirTemp("", "e2e-repo-*")
+	//
+	// Codex refuses to operate from /tmp (e.g. "Refusing to create helper
+	// binaries under temporary dir"), so for codex we place the repo under
+	// $HOME/.cache/entire-e2e-repos/ instead.
+	root := ""
+	if agent.Name() == "codex" {
+		cache, cerr := os.UserCacheDir()
+		if cerr != nil {
+			t.Fatalf("resolve user cache dir: %v", cerr)
+		}
+		root = filepath.Join(cache, "entire-e2e-repos")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatalf("create e2e repo root %q: %v", root, err)
+		}
+	}
+	dir, err := os.MkdirTemp(root, "e2e-repo-*")
 	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
+		t.Fatalf("create temporary e2e repo under %q: %v", root, err)
 	}
 	if keepRepos {
 		t.Logf("E2E_KEEP_REPOS: repo will be preserved at %s", dir)
@@ -94,10 +109,11 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 	}
 	// commit_linking=always ensures the prepare-commit-msg hook adds the
 	// Entire-Checkpoint trailer unconditionally. This is needed because
-	// interactive agents run inside tmux (hasTTY()=true) but can't respond to
-	// prompts, and content detection may fail on the first checkpoint when no
-	// shadow branch exists yet. Prompt-mode agents still exercise the !hasTTY()
-	// fast path since they have no TTY regardless of this setting.
+	// interactive agents run inside tmux (CanPromptInteractively()=true) but
+	// can't respond to prompts, and content detection may fail on the first
+	// checkpoint when no shadow branch exists yet. Prompt-mode agents still
+	// exercise the !CanPromptInteractively() fast path since they have no TTY
+	// regardless of this setting.
 	PatchSettings(t, dir, map[string]any{"log_level": "debug", "commit_linking": "always"})
 
 	// Copilot CLI blocks on a "No copilot instructions found" notice in fresh

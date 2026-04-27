@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 
 	"github.com/go-git/go-git/v6"
@@ -40,7 +41,7 @@ func pushBranchIfNeeded(ctx context.Context, target, branchName string) error {
 
 	// Only check remote tracking refs when target is a remote name (not a URL).
 	// URLs don't have tracking refs, so we always attempt the push and let git handle it.
-	if !isURL(target) && !hasUnpushedSessionsCommon(repo, target, localRef.Hash(), branchName) {
+	if !remote.IsURL(target) && !hasUnpushedSessionsCommon(repo, target, localRef.Hash(), branchName) {
 		return nil
 	}
 
@@ -49,9 +50,9 @@ func pushBranchIfNeeded(ctx context.Context, target, branchName string) error {
 
 // hasUnpushedSessionsCommon checks if the local branch differs from the remote.
 // Returns true if there's any difference that needs syncing (local ahead, remote ahead, or diverged).
-func hasUnpushedSessionsCommon(repo *git.Repository, remote string, localHash plumbing.Hash, branchName string) bool {
-	// Check for remote tracking ref: refs/remotes/<remote>/<branch>
-	remoteRefName := plumbing.NewRemoteReferenceName(remote, branchName)
+func hasUnpushedSessionsCommon(repo *git.Repository, remoteName string, localHash plumbing.Hash, branchName string) bool {
+	// Check for remote tracking ref: refs/remotes/<remoteName>/<branch>
+	remoteRefName := plumbing.NewRemoteReferenceName(remoteName, branchName)
 	remoteRef, err := repo.Reference(remoteRefName, true)
 	if err != nil {
 		// Remote branch doesn't exist yet - we have content to push
@@ -67,7 +68,7 @@ func hasUnpushedSessionsCommon(repo *git.Repository, remote string, localHash pl
 // The target can be a remote name or a URL.
 func doPushBranch(ctx context.Context, target, branchName string) error {
 	displayTarget := target
-	if isURL(target) {
+	if remote.IsURL(target) {
 		displayTarget = "checkpoint remote"
 	}
 
@@ -111,7 +112,7 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 // printCheckpointRemoteHint prints a hint when a push to a checkpoint URL fails.
 // Only prints when the target is a URL (not the user's default remote).
 func printCheckpointRemoteHint(target string) {
-	if !isURL(target) {
+	if !remote.IsURL(target) {
 		return
 	}
 	fmt.Fprintln(os.Stderr, "[entire] A checkpoint remote is configured in Entire settings (.entire/settings.json or .entire/settings.local.json) but could not be reached.")
@@ -132,7 +133,7 @@ var checkpointsV2MigrationHintOnce sync.Once
 // Uses sync.Once to avoid duplicates when multiple branches/refs are pushed in a
 // single pre-push invocation.
 func printSettingsCommitHint(ctx context.Context, target string) {
-	if !isURL(target) {
+	if !remote.IsURL(target) {
 		return
 	}
 	settingsHintOnce.Do(func() {
@@ -259,18 +260,13 @@ func finishPush(ctx context.Context, stop func(string), result pushResult, targe
 }
 
 // tryPushSessionsCommon attempts to push the sessions branch.
-func tryPushSessionsCommon(ctx context.Context, remote, branchName string) (pushResult, error) {
+func tryPushSessionsCommon(ctx context.Context, remoteName, branchName string) (pushResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	// Use --no-verify to prevent recursive hook calls.
-	// Use --porcelain for machine-readable, locale-independent output.
-	cmd := CheckpointGitCommand(ctx, remote, "push", "--no-verify", "--porcelain", remote, branchName)
-
-	output, err := cmd.CombinedOutput()
-	outputStr := string(output)
+	result, err := remote.Push(ctx, remoteName, branchName)
+	outputStr := result.Output
 	if err != nil {
-		// Check if it's a non-fast-forward error (we can try to recover)
 		if strings.Contains(outputStr, "non-fast-forward") ||
 			strings.Contains(outputStr, "rejected") {
 			return pushResult{}, errors.New("non-fast-forward")
@@ -289,7 +285,7 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	fetchTarget, err := ResolveFetchTarget(ctx, target)
+	fetchTarget, err := remote.ResolveFetchTarget(ctx, target)
 	if err != nil {
 		return fmt.Errorf("resolve fetch target: %w", err)
 	}
@@ -299,7 +295,7 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 	// ref.
 	var fetchedRefName plumbing.ReferenceName
 	var refSpec string
-	usedTempRef := isURL(fetchTarget)
+	usedTempRef := remote.IsURL(fetchTarget)
 	if usedTempRef {
 		tmpRef := "refs/entire-fetch-tmp/" + branchName
 		refSpec = fmt.Sprintf("+refs/heads/%s:%s", branchName, tmpRef)
@@ -313,9 +309,11 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 	// Use --filter=blob:none for a partial fetch that downloads only commits
 	// and trees, skipping blobs. The merge only needs the tree structure to
 	// combine entries; blobs are already local or fetched on demand.
-	fetchArgs := AppendFetchFilterArgs(ctx, []string{"fetch", "--no-tags", fetchTarget, refSpec})
-	fetchCmd := CheckpointGitCommand(ctx, fetchTarget, fetchArgs...)
-	if output, err := fetchCmd.CombinedOutput(); err != nil {
+	if output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
+		Remote:   fetchTarget,
+		RefSpecs: []string{refSpec},
+		NoTags:   true,
+	}); fetchErr != nil {
 		return fmt.Errorf("fetch failed: %s", output)
 	}
 
@@ -489,11 +487,6 @@ func startProgressDots(w io.Writer) func(suffix string) {
 		<-stopped // Wait for goroutine to finish before writing suffix
 		fmt.Fprintln(w, suffix)
 	}
-}
-
-// isURL returns true if the target looks like a URL rather than a git remote name.
-func isURL(target string) bool {
-	return strings.Contains(target, "://") || strings.Contains(target, "@")
 }
 
 // createMergeCommitCommon creates a merge commit with multiple parents.

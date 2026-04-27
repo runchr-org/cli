@@ -46,6 +46,21 @@ func TestParseURL(t *testing.T) {
 			wantInfo: &Info{Protocol: ProtocolSSH, Host: "github.com", Owner: "org", Repo: "repo"},
 		},
 		{
+			name:     "HTTPS with non-standard port",
+			url:      "https://git.example.com:8443/org/repo.git",
+			wantInfo: &Info{Protocol: ProtocolHTTPS, Host: "git.example.com", Port: "8443", Owner: "org", Repo: "repo"},
+		},
+		{
+			name:     "SSH protocol with non-standard port",
+			url:      "ssh://git@git.example.com:2222/org/repo.git",
+			wantInfo: &Info{Protocol: ProtocolSSH, Host: "git.example.com", Port: "2222", Owner: "org", Repo: "repo"},
+		},
+		{
+			name:     "HTTPS standard port not appended",
+			url:      "https://github.com/org/repo.git",
+			wantInfo: &Info{Protocol: ProtocolHTTPS, Host: "github.com", Owner: "org", Repo: "repo"},
+		},
+		{
 			name:    "empty string",
 			url:     "",
 			wantErr: true,

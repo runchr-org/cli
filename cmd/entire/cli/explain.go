@@ -22,6 +22,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
+	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -1980,8 +1981,7 @@ func formatSessionInfo(session *strategy.Session, sourceRef string, checkpoints 
 // outputWithPager outputs content through a pager if stdout is a terminal and content is long.
 func outputWithPager(w io.Writer, content string) {
 	// Check if we're writing to stdout and it's a terminal
-	//nolint:gosec // G115: uintptr->int is safe for fd on 64-bit platforms
-	if f, ok := w.(*os.File); ok && f == os.Stdout && term.IsTerminal(int(f.Fd())) {
+	if f, ok := w.(*os.File); ok && f == os.Stdout && interactive.IsTerminalWriter(w) {
 		// Get terminal height
 		_, height, err := term.GetSize(int(f.Fd())) //nolint:gosec // G115: same as above
 		if err != nil {

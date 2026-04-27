@@ -46,13 +46,9 @@ func tryPushRef(ctx context.Context, target string, refName plumbing.ReferenceNa
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	// Use --no-verify to prevent recursive hook calls (this runs inside pre-push).
-	// Use --porcelain for machine-readable, locale-independent output.
 	refSpec := fmt.Sprintf("%s:%s", refName, refName)
-	cmd := CheckpointGitCommand(ctx, target, "push", "--no-verify", "--porcelain", target, refSpec)
-
-	output, err := cmd.CombinedOutput()
-	outputStr := string(output)
+	result, err := remote.Push(ctx, target, refSpec)
+	outputStr := result.Output
 	if err != nil {
 		if strings.Contains(outputStr, "non-fast-forward") ||
 			strings.Contains(outputStr, "rejected") {
@@ -67,7 +63,7 @@ func tryPushRef(ctx context.Context, target string, refName plumbing.ReferenceNa
 // doPushRef pushes a custom ref with fetch+merge recovery on conflict.
 func doPushRef(ctx context.Context, target string, refName plumbing.ReferenceName) error {
 	displayTarget := target
-	if isURL(target) {
+	if remote.IsURL(target) {
 		displayTarget = "checkpoint remote"
 	}
 
@@ -116,7 +112,7 @@ func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.Refer
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	fetchTarget, err := ResolveFetchTarget(ctx, target)
+	fetchTarget, err := remote.ResolveFetchTarget(ctx, target)
 	if err != nil {
 		return fmt.Errorf("resolve fetch target: %w", err)
 	}
@@ -126,13 +122,11 @@ func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.Refer
 	tmpRefName := plumbing.ReferenceName("refs/entire-fetch-tmp/" + tmpRefSuffix)
 	refSpec := fmt.Sprintf("+%s:%s", refName, tmpRefName)
 
-	// Use --filter=blob:none for a partial fetch that downloads only commits
-	// and trees, skipping blobs. The merge only needs the tree structure to
-	// combine entries; blobs are already local or fetched on demand.
-	fetchArgs := AppendFetchFilterArgs(ctx, []string{"fetch", "--no-tags", fetchTarget, refSpec})
-	fetchCmd := CheckpointGitCommand(ctx, fetchTarget, fetchArgs...)
-	fetchCmd.Env = append(fetchCmd.Env, "GIT_TERMINAL_PROMPT=0")
-	if output, err := fetchCmd.CombinedOutput(); err != nil {
+	if output, err := remote.Fetch(ctx, remote.FetchOptions{
+		Remote:   fetchTarget,
+		RefSpecs: []string{refSpec},
+		NoTags:   true,
+	}); err != nil {
 		return fmt.Errorf("fetch failed: %s", output)
 	}
 
@@ -213,9 +207,7 @@ func detectRemoteOnlyArchives(ctx context.Context, target string, repo *git.Repo
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	cmd := CheckpointGitCommand(ctx, target, "ls-remote", target, paths.V2FullRefPrefix+"*")
-	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0")
-	output, err := cmd.Output()
+	output, err := remote.LsRemote(ctx, target, paths.V2FullRefPrefix+"*")
 	if err != nil {
 		return nil, fmt.Errorf("ls-remote failed: %w", err)
 	}
@@ -257,10 +249,11 @@ func handleRotationConflict(ctx context.Context, target, fetchTarget string, rep
 	// Fetch the latest archived generation
 	archiveTmpRef := plumbing.ReferenceName("refs/entire-fetch-tmp/archive-" + latestArchive)
 	archiveRefSpec := fmt.Sprintf("+%s:%s", archiveRefName, archiveTmpRef)
-	fetchArgs := AppendFetchFilterArgs(ctx, []string{"fetch", "--no-tags", fetchTarget, archiveRefSpec})
-	fetchCmd := CheckpointGitCommand(ctx, fetchTarget, fetchArgs...)
-	fetchCmd.Env = append(fetchCmd.Env, "GIT_TERMINAL_PROMPT=0")
-	if output, fetchErr := fetchCmd.CombinedOutput(); fetchErr != nil {
+	if output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
+		Remote:   fetchTarget,
+		RefSpecs: []string{archiveRefSpec},
+		NoTags:   true,
+	}); fetchErr != nil {
 		return fmt.Errorf("fetch archived generation failed: %s", output)
 	}
 	defer func() {

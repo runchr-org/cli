@@ -152,7 +152,7 @@ func benchSetupPrepareCommitMsgRepo(b *testing.B, fileCount, sessionCount int) (
 		b.Fatalf("write commit msg: %v", err)
 	}
 
-	// Set ENTIRE_TEST_TTY=0 so hasTTY() returns false (simulates agent subprocess).
+	// Set ENTIRE_TEST_TTY=0 so interactive.CanPromptInteractively() returns false (simulates agent subprocess).
 	// This avoids interactive TTY prompts during benchmarks.
 	b.Setenv("ENTIRE_TEST_TTY", "0")
 
