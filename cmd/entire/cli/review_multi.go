@@ -187,16 +187,34 @@ func (o *multiReviewOrchestrator) Run(ctx context.Context, tasks []MultiAgentTas
 		// enough to render the "cancelling" banner and drain subprocess
 		// output. Opt out so cancellation is driven explicitly.
 		//
-		// Passing cancelRun as the model's onCancel is what actually tears
-		// down subprocesses when Ctrl+C is pressed inside the TUI. In raw
-		// mode the terminal captures byte 0x03 and bubbletea hands it to
-		// the model as tea.KeyCtrlC, so the SIGINT never reaches the
-		// orchestrator's signal.Notify goroutine. The model calls
-		// onCancel() which cancels runCtx, SIGTERM propagates to the
-		// subprocesses via exec.CommandContext, and the 5-second watchdog
-		// above escalates to SIGKILL if anything is still alive.
+		// In raw mode the terminal captures byte 0x03 and bubbletea hands
+		// it to the model as tea.KeyCtrlC, so the SIGINT never reaches
+		// the orchestrator's signal.Notify goroutine above. Routing the
+		// model's onCancel through tuiCancel makes an in-TUI Ctrl+C
+		// behave exactly like an out-of-TUI SIGINT: cancel runCtx (which
+		// SIGTERMs subprocesses via exec.CommandContext), set the
+		// cancelled flag so callers see Cancelled=true, and arm the same
+		// 5s SIGKILL watchdog that escalates if subprocesses ignore
+		// SIGTERM. Without this routing, in-TUI cancels reported
+		// Cancelled=false and stuck subprocesses never got force-killed.
+		var tuiCancelOnce sync.Once
+		tuiCancel := func() {
+			tuiCancelOnce.Do(func() {
+				cancelled.store(true)
+				cancelRun()
+				go func() {
+					watchdog := time.NewTimer(5 * time.Second)
+					defer watchdog.Stop()
+					select {
+					case <-watchdog.C:
+						forceKillAll(snapshotCmds())
+					case <-allDone:
+					}
+				}()
+			})
+		}
 		program = tea.NewProgram(
-			newReviewTUIModel(tasks, cancelRun, buffers),
+			newReviewTUIModel(tasks, tuiCancel, buffers),
 			tea.WithOutput(out),
 			tea.WithoutSignalHandler(),
 		)
