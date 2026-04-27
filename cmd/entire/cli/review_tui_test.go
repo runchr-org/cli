@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/exp/teatest"
@@ -197,6 +198,26 @@ func TestTUIModel_KeyCtrlCCallsOnCancel(t *testing.T) {
 	tm.WaitFinished(t, teatest.WithFinalTimeout(500*time.Millisecond))
 	if !called {
 		t.Error("onCancel was not called on Ctrl+C")
+	}
+}
+
+// TestTruncatePreview_RuneSafe pins that multi-byte UTF-8 input doesn't
+// get split mid-rune. The previous byte-slice implementation could
+// truncate inside a multi-byte sequence and emit an invalid UTF-8 byte
+// followed by the ellipsis, which broke TUI rendering for non-ASCII
+// narrative output (e.g., codex output containing em-dashes or
+// CJK characters).
+func TestTruncatePreview_RuneSafe(t *testing.T) {
+	t.Parallel()
+	// 100 em-dashes (3 bytes each in UTF-8) — any byte-aligned slice
+	// that doesn't land on a rune boundary corrupts the output.
+	in := strings.Repeat("—", 100)
+	got := truncatePreview(in, 60)
+	if !utf8.ValidString(got) {
+		t.Errorf("truncatePreview produced invalid UTF-8: %q", got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("expected ellipsis suffix on truncated output; got %q", got)
 	}
 }
 

@@ -9,6 +9,8 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/entireio/cli/cmd/entire/cli/stringutil"
 )
 
 // reviewTUIModel renders the multi-agent status table: one row per agent
@@ -257,17 +259,17 @@ func (m reviewTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // truncatePreview ANSI-strips line then trims to fit terminal width minus
 // the row-prefix padding. A 20-char floor guards against absurdly narrow
-// terminals where trimming would leave nothing meaningful.
+// terminals where trimming would leave nothing meaningful. Rune-based
+// truncation via stringutil.TruncateRunes keeps multi-byte UTF-8 (e.g.
+// non-ASCII narrative output from codex/gemini) from being split mid-
+// rune, which would otherwise emit invalid bytes into the TUI render.
 func truncatePreview(line string, termWidth int) string {
 	stripped := stripANSI(line)
 	maxLine := termWidth - 18
 	if maxLine < 20 {
 		maxLine = 20
 	}
-	if len(stripped) > maxLine {
-		stripped = stripped[:maxLine-1] + "…"
-	}
-	return stripped
+	return stringutil.TruncateRunes(stripped, maxLine, "…")
 }
 
 // View renders the full status table. Called on every Update cycle.
