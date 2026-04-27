@@ -153,7 +153,7 @@ func TestActivityModel_FooterDocumentsVisibleControlsOnly(t *testing.T) {
 	m.sty = newActivityStylesWithWidth(m.width, true)
 
 	footer := m.renderFooter()
-	for _, want := range []string{"↑/↓/j/k", " scroll", "home/end/g/G", " top/bottom", "q", " quit"} {
+	for _, want := range []string{"↑/↓,j/k", " scroll", "home/end,g/G", " top/bottom", "q", " quit"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer missing %q: %q", want, footer)
 		}
