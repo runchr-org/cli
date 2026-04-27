@@ -2,6 +2,7 @@ package codex_test
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -10,6 +11,30 @@ import (
 )
 
 var _ agent.HeadlessLauncher = (*codex.CodexAgent)(nil)
+
+// LaunchHeadlessCmd must be infallible at construction time even when
+// the codex binary isn't on PATH — missing-binary errors surface at
+// cmd.Run() instead, so unit tests and CI runners without codex
+// installed still verify the argv contract. Regression: an earlier
+// implementation called exec.LookPath up front, breaking CI.
+func TestCodexAgent_LaunchHeadlessCmd_NoBinaryOnPath(t *testing.T) {
+	t.Setenv("PATH", "/nonexistent")
+	// Defensive: confirm the binary really isn't reachable in the
+	// scrubbed PATH so a polluted runner can't make this test pass for
+	// the wrong reason.
+	if _, err := os.Stat("/nonexistent/codex"); err == nil {
+		t.Skip("PATH-scrub didn't take effect on this runner")
+	}
+
+	a := &codex.CodexAgent{}
+	cmd, err := a.LaunchHeadlessCmd(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("LaunchHeadlessCmd must not return an error when binary is missing; got %v", err)
+	}
+	if cmd == nil {
+		t.Fatal("returned nil cmd")
+	}
+}
 
 func TestCodexAgent_LaunchHeadlessCmd(t *testing.T) {
 	t.Parallel()

@@ -2,6 +2,7 @@ package claudecode_test
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -11,6 +12,27 @@ import (
 
 // Compile-time pin — ClaudeCodeAgent must satisfy HeadlessLauncher.
 var _ agent.HeadlessLauncher = (*claudecode.ClaudeCodeAgent)(nil)
+
+// LaunchHeadlessCmd must be infallible at construction time even when
+// the claude binary isn't on PATH — missing-binary errors surface at
+// cmd.Run() instead, so unit tests and CI runners without claude
+// installed still verify the argv contract. Regression: an earlier
+// implementation called exec.LookPath up front, breaking CI.
+func TestClaudeCodeAgent_LaunchHeadlessCmd_NoBinaryOnPath(t *testing.T) {
+	t.Setenv("PATH", "/nonexistent")
+	if _, err := os.Stat("/nonexistent/claude"); err == nil {
+		t.Skip("PATH-scrub didn't take effect on this runner")
+	}
+
+	a := &claudecode.ClaudeCodeAgent{}
+	cmd, err := a.LaunchHeadlessCmd(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("LaunchHeadlessCmd must not return an error when binary is missing; got %v", err)
+	}
+	if cmd == nil {
+		t.Fatal("returned nil cmd")
+	}
+}
 
 func TestClaudeCodeAgent_LaunchHeadlessCmd(t *testing.T) {
 	t.Parallel()

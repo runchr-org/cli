@@ -282,6 +282,13 @@ type Launcher interface {
 //   - Stdin MAY be set by the agent when the prompt must be piped (e.g.
 //     codex, gemini). Stdout and Stderr are always left unwired so the
 //     caller can pipe/capture them.
+//   - Binary lookup is deferred to *exec.Cmd.Start. Implementations
+//     pass the bare binary name to exec.CommandContext rather than
+//     calling exec.LookPath up front, so construction is infallible
+//     and unit tests can verify argv shape without the binary on PATH.
+//     Missing-binary errors surface from cmd.Run() / cmd.Start() at
+//     execution time, where the orchestrator already classifies them
+//     as AgentRunFailed.
 //   - UserPromptSubmit hook must fire during the run so the pending-review
 //     marker adoption pipeline works.
 //   - Subprocess must terminate on its own once the prompt completes. The

@@ -2,7 +2,6 @@ package claudecode
 
 import (
 	"context"
-	"fmt"
 	"os/exec"
 )
 
@@ -12,10 +11,14 @@ import (
 // the run so pending-review marker adoption works. Stdio is left unwired
 // for the caller to assign (orchestrator uses teeWriters to capture
 // stdout into both a final-response buffer and a preview channel).
+//
+// Binary lookup is deferred to *exec.Cmd.Start: passing the bare name
+// "claude" lets exec.CommandContext stash an "executable not found"
+// error on cmd.Err that surfaces when the orchestrator runs the
+// command. This keeps construction infallible so unit tests can verify
+// argv shape without requiring the claude binary on PATH.
+//
+//nolint:unparam // interface signature requires (*exec.Cmd, error); construction is infallible by design (binary lookup deferred to Cmd.Start).
 func (c *ClaudeCodeAgent) LaunchHeadlessCmd(ctx context.Context, initialPrompt string) (*exec.Cmd, error) {
-	bin, err := exec.LookPath("claude")
-	if err != nil {
-		return nil, fmt.Errorf("claude binary not on PATH: %w", err)
-	}
-	return exec.CommandContext(ctx, bin, "--print", initialPrompt), nil
+	return exec.CommandContext(ctx, "claude", "--print", initialPrompt), nil
 }
