@@ -113,8 +113,19 @@ func (m activityModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:iretu
 		return m, nil
 
 	case tea.KeyMsg:
-		if msg.Type == tea.KeyEscape || msg.Type == tea.KeyCtrlC || msg.String() == "q" {
+		switch msg.String() {
+		case tuiEscKey, tea.KeyCtrlC.String(), "q":
 			return m, tea.Quit
+		case "home", "g":
+			if m.ready {
+				m.viewport.GotoTop()
+			}
+			return m, nil
+		case "end", "G":
+			if m.ready {
+				m.viewport.GotoBottom()
+			}
+			return m, nil
 		}
 
 	case tea.WindowSizeMsg:

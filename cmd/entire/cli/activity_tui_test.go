@@ -1,0 +1,157 @@
+package cli
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+func testActivityTUIModel() activityModel {
+	vp := viewport.New(80, 3)
+	vp.SetContent(strings.Join([]string{
+		"line 1",
+		"line 2",
+		"line 3",
+		"line 4",
+		"line 5",
+		"line 6",
+	}, "\n"))
+
+	return activityModel{
+		viewport: vp,
+		ready:    true,
+		width:    80,
+		height:   4,
+	}
+}
+
+func updateActivityModel(t *testing.T, m activityModel, msg tea.Msg) (activityModel, tea.Cmd) {
+	t.Helper()
+
+	updated, cmd := m.Update(msg)
+	result, ok := updated.(activityModel)
+	if !ok {
+		t.Fatalf("Update returned %T, want activityModel", updated)
+	}
+	return result, cmd
+}
+
+func activityRuneKey(r rune) tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+}
+
+func TestActivityModel_ScrollKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{name: "arrow down", key: tea.KeyMsg{Type: tea.KeyDown}},
+		{name: "vim down", key: activityRuneKey('j')},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			m, _ := updateActivityModel(t, testActivityTUIModel(), tt.key)
+			if m.viewport.YOffset != 1 {
+				t.Fatalf("YOffset = %d, want 1", m.viewport.YOffset)
+			}
+		})
+	}
+}
+
+func TestActivityModel_ScrollUpKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{name: "arrow up", key: tea.KeyMsg{Type: tea.KeyUp}},
+		{name: "vim up", key: activityRuneKey('k')},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			m := testActivityTUIModel()
+			m.viewport.SetYOffset(2)
+			m, _ = updateActivityModel(t, m, tt.key)
+			if m.viewport.YOffset != 1 {
+				t.Fatalf("YOffset = %d, want 1", m.viewport.YOffset)
+			}
+		})
+	}
+}
+
+func TestActivityModel_TopBottomKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		key      tea.KeyMsg
+		wantTop  bool
+		wantDesc string
+	}{
+		{name: "home", key: tea.KeyMsg{Type: tea.KeyHome}, wantTop: true, wantDesc: "top"},
+		{name: "vim top", key: activityRuneKey('g'), wantTop: true, wantDesc: "top"},
+		{name: "end", key: tea.KeyMsg{Type: tea.KeyEnd}, wantDesc: "bottom"},
+		{name: "vim bottom", key: activityRuneKey('G'), wantDesc: "bottom"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			m := testActivityTUIModel()
+			if tt.wantTop {
+				m.viewport.GotoBottom()
+			}
+			m, _ = updateActivityModel(t, m, tt.key)
+
+			if tt.wantTop && !m.viewport.AtTop() {
+				t.Fatalf("viewport should be at %s, YOffset = %d", tt.wantDesc, m.viewport.YOffset)
+			}
+			if !tt.wantTop && !m.viewport.AtBottom() {
+				t.Fatalf("viewport should be at %s, YOffset = %d", tt.wantDesc, m.viewport.YOffset)
+			}
+		})
+	}
+}
+
+func TestActivityModel_QuitKeys(t *testing.T) {
+	t.Parallel()
+
+	quitKeys := []tea.KeyMsg{
+		activityRuneKey('q'),
+		{Type: tea.KeyCtrlC},
+		{Type: tea.KeyEsc},
+	}
+
+	for _, key := range quitKeys {
+		_, cmd := updateActivityModel(t, testActivityTUIModel(), key)
+		if cmd == nil {
+			t.Fatalf("key %v: expected quit command, got nil", key)
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Fatalf("key %v: expected QuitMsg", key)
+		}
+	}
+}
+
+func TestActivityModel_HDoesNotQuit(t *testing.T) {
+	t.Parallel()
+
+	_, cmd := updateActivityModel(t, testActivityTUIModel(), activityRuneKey('h'))
+	if cmd != nil {
+		if _, ok := cmd().(tea.QuitMsg); ok {
+			t.Fatal("h should not quit activity")
+		}
+	}
+}
