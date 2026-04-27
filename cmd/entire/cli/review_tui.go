@@ -86,10 +86,6 @@ type agentPreviewMsg struct {
 	Line string
 }
 
-// cancelMsg toggles the "cancelling" banner. The orchestrator posts it
-// when it starts to SIGTERM subprocesses after a user Ctrl+C.
-type cancelMsg struct{}
-
 // tickMsg fires every 100ms; drives per-row duration counters for rows
 // still in AgentRunRunning. Avoids the need for the orchestrator to push
 // periodic state updates just for the timer.
@@ -239,8 +235,6 @@ func (m reviewTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
-	case cancelMsg:
-		m.cancelling = true
 	case tickMsg:
 		now := time.Now()
 		for i, r := range m.rows {
