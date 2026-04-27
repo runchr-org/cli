@@ -39,11 +39,9 @@ Examples:
 			if _, err := paths.WorktreeRoot(cmd.Context()); err != nil {
 				return errors.New("not a git repository")
 			}
-			// Cobra stops at the first PersistentPreRun(E) walking from the
-			// executed command toward root, so root's driftWarningPreRun
-			// would be silently shadowed here. Call it explicitly after the
-			// git-repo check so we don't warn then bail with "not a git
-			// repository".
+			// Cobra doesn't propagate PersistentPreRun past the first match;
+			// call root's drift warning explicitly so `entire sessions *`
+			// stays covered.
 			driftWarningPreRun(cmd, args)
 			return nil
 		},

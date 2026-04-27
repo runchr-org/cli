@@ -18,11 +18,10 @@ import (
 // shouldSkipDriftWarning returns true when the stale-hooks warning should
 // NOT be emitted for cmd. Rules (any triggers skip):
 //   - cmd is nil (defensive).
-//   - cmd is the root command itself (bare `entire`, which prints help or
-//     runs the first-time setup flow — neither is the right surface for a
-//     warning).
-//   - cmd or any ancestor has Hidden=true (internal / machine-invoked commands
-//     like `entire hooks`, `entire migrate`, dev helpers).
+//   - cmd is the root command itself (bare `entire` prints help or runs
+//     first-time setup; neither is the right surface for the warning).
+//   - cmd or any ancestor has Hidden=true (internal / machine-invoked
+//     commands: `entire hooks`, `entire migrate`, dev helpers).
 func shouldSkipDriftWarning(cmd *cobra.Command) bool {
 	if cmd == nil {
 		return true
@@ -38,6 +37,14 @@ func shouldSkipDriftWarning(cmd *cobra.Command) bool {
 	return false
 }
 
+// staleHooksHeader is the first warning line; %s is the comma-joined
+// drifted-agent list. staleHooksFix is the second line. Both are
+// referenced verbatim from tests.
+const (
+	staleHooksHeader = "Action required: agent hooks need updating (%s)"
+	staleHooksFix    = "  Run: entire enable --force"
+)
+
 // emitStaleHooksWarning writes the two-line stale-hooks warning to w.
 // Yellow when w is a TTY, no-op when drifts is empty. The root
 // PersistentPreRun is the sole caller — every visible command goes
@@ -50,11 +57,10 @@ func emitStaleHooksWarning(w io.Writer, drifts []agent.DriftReport) {
 	for _, r := range drifts {
 		names = append(names, string(r.Agent))
 	}
-	joined := strings.Join(names, ", ")
 
 	sty := newStatusStyles(w)
-	fmt.Fprintln(w, sty.render(sty.yellow, fmt.Sprintf("Action required: agent hooks need updating (%s)", joined)))
-	fmt.Fprintln(w, sty.render(sty.yellow, "  Run: entire enable --force"))
+	fmt.Fprintln(w, sty.render(sty.yellow, fmt.Sprintf(staleHooksHeader, strings.Join(names, ", "))))
+	fmt.Fprintln(w, sty.render(sty.yellow, staleHooksFix))
 }
 
 // checkHookDriftForWarning indirects agent.CheckHookDrift so tests can stub
@@ -65,9 +71,7 @@ var checkHookDriftForWarning = agent.CheckHookDrift
 // simulate a TTY stderr without shuffling real file descriptors.
 var isTerminalWriterFn = interactive.IsTerminalWriter
 
-// inGitRepoFn indirects the "am I inside a git worktree?" check so tests
-// can flip it without a real fs layout. Production path delegates to
-// paths.WorktreeRoot and treats any error as "not in a repo".
+// inGitRepoFn indirects the git-repo check so tests can stub it.
 var inGitRepoFn = func(ctx context.Context) bool {
 	_, err := paths.WorktreeRoot(ctx)
 	return err == nil

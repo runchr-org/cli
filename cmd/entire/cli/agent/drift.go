@@ -10,10 +10,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 )
 
-// devVersion is the sentinel versioninfo.Version value for local/unreleased
-// builds — never produce drift warnings when running one of these.
-const devVersion = "dev"
-
 // DriftReport describes a single agent whose installed hook config was
 // stamped by a CLI version older than MinCompatibleCLIVersion (or is
 // missing a stamp entirely; that case normalizes to "v0.0.0" and only
@@ -36,7 +32,7 @@ type DriftReport struct {
 // Returns nil for dev builds (Version == "dev") since developers run
 // unreleased binaries that can't meaningfully be compared.
 func CheckHookDrift(ctx context.Context) []DriftReport {
-	if versioninfo.Version == devVersion {
+	if versioninfo.Version == versioninfo.DevVersion {
 		return nil
 	}
 
@@ -58,6 +54,10 @@ func CheckHookDrift(ctx context.Context) []DriftReport {
 			continue
 		}
 
+		// Discard the ok flag: when ReadHookMeta returns false, meta.CLIVersion
+		// is "" which normalizeSemver coerces to "v0.0.0" — the same lowest
+		// rung as a present-but-unparseable stamp, which is exactly what we
+		// want for drift comparison.
 		meta, _ := hv.ReadHookMeta(ctx)
 		if semver.Compare(normalizeSemver(meta.CLIVersion), requiredNorm) < 0 {
 			reports = append(reports, DriftReport{
@@ -75,7 +75,7 @@ func CheckHookDrift(ctx context.Context) []DriftReport {
 // unparseable strings degrade to "v0.0.0" so they sort lowest.
 func normalizeSemver(v string) string {
 	v = strings.TrimSpace(v)
-	if v == "" || v == devVersion {
+	if v == "" || v == versioninfo.DevVersion {
 		return "v0.0.0"
 	}
 	if !strings.HasPrefix(v, "v") {

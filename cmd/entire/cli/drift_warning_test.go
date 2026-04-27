@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -112,6 +113,14 @@ func TestDriftWarningPreRun(t *testing.T) {
 		driftWarningPreRun(c, nil)
 		return buf.String()
 	}
+	// withTTY flips isTerminalWriterFn to true for the calling subtest only.
+	withTTY := func(t *testing.T) {
+		t.Helper()
+		isTerminalWriterFn = func(io.Writer) bool { return true }
+		t.Cleanup(func() {
+			isTerminalWriterFn = func(io.Writer) bool { return false }
+		})
+	}
 
 	// Skip paths — all expect no output.
 	skipCases := []struct {
@@ -131,16 +140,14 @@ func TestDriftWarningPreRun(t *testing.T) {
 
 	// Positive path — visible command with simulated TTY stderr emits both lines.
 	t.Run("visible TTY stderr emits warning", func(t *testing.T) {
-		isTerminalWriterFn = func(io.Writer) bool { return true }
-		t.Cleanup(func() {
-			isTerminalWriterFn = func(io.Writer) bool { return false }
-		})
+		withTTY(t)
 		out := run(&cobra.Command{Use: "rewind"})
-		if !strings.Contains(out, "Action required: agent hooks need updating (claude-code)") {
-			t.Errorf("expected first warning line in output, got %q", out)
+		want := fmt.Sprintf(staleHooksHeader, "claude-code")
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output, got %q", want, out)
 		}
-		if !strings.Contains(out, "Run: entire enable --force") {
-			t.Errorf("expected second warning line in output, got %q", out)
+		if !strings.Contains(out, strings.TrimSpace(staleHooksFix)) {
+			t.Errorf("expected %q in output, got %q", staleHooksFix, out)
 		}
 	})
 
@@ -169,10 +176,7 @@ func TestDriftWarningPreRun(t *testing.T) {
 	}
 	for _, tc := range forceSkipCases {
 		t.Run(tc.name, func(t *testing.T) {
-			isTerminalWriterFn = func(io.Writer) bool { return true }
-			t.Cleanup(func() {
-				isTerminalWriterFn = func(io.Writer) bool { return false }
-			})
+			withTTY(t)
 			if out := run(tc.cmd()); out != "" {
 				t.Errorf("expected no output for %s, got %q", tc.name, out)
 			}
@@ -181,10 +185,7 @@ func TestDriftWarningPreRun(t *testing.T) {
 
 	// enable WITHOUT --force still gets the warning (flag present but unset).
 	t.Run("enable without --force emits warning", func(t *testing.T) {
-		isTerminalWriterFn = func(io.Writer) bool { return true }
-		t.Cleanup(func() {
-			isTerminalWriterFn = func(io.Writer) bool { return false }
-		})
+		withTTY(t)
 		c := &cobra.Command{Use: "enable"}
 		c.Flags().BoolP("force", "f", false, "")
 		if out := run(c); !strings.Contains(out, "Action required") {
@@ -195,10 +196,7 @@ func TestDriftWarningPreRun(t *testing.T) {
 	// Explicit --force=false from a wrapper should NOT suppress the warning;
 	// flag.Changed is true but the remediation is not actually in flight.
 	t.Run("enable --force=false emits warning", func(t *testing.T) {
-		isTerminalWriterFn = func(io.Writer) bool { return true }
-		t.Cleanup(func() {
-			isTerminalWriterFn = func(io.Writer) bool { return false }
-		})
+		withTTY(t)
 		c := &cobra.Command{Use: "enable"}
 		c.Flags().BoolP("force", "f", false, "")
 		if err := c.Flags().Set("force", "false"); err != nil {
@@ -213,10 +211,9 @@ func TestDriftWarningPreRun(t *testing.T) {
 	// a non-repo dir with a stray .claude/ could warn and then the
 	// command would bail with "not a git repository".
 	t.Run("outside git repo skips", func(t *testing.T) {
-		isTerminalWriterFn = func(io.Writer) bool { return true }
+		withTTY(t)
 		inGitRepoFn = func(context.Context) bool { return false }
 		t.Cleanup(func() {
-			isTerminalWriterFn = func(io.Writer) bool { return false }
 			inGitRepoFn = func(context.Context) bool { return true }
 		})
 		if out := run(&cobra.Command{Use: "rewind"}); out != "" {
