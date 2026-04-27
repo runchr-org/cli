@@ -226,8 +226,8 @@ func (m activityModel) renderFooter() string {
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 	sep := helpStyle.Render(" · ")
 
-	help := keyStyle.Render("↑/↓,j/k") + helpStyle.Render(" scroll") +
-		sep + keyStyle.Render("home/end,g/G") + helpStyle.Render(" top/bottom") +
+	help := keyStyle.Render("↑/↓, j/k") + helpStyle.Render(" scroll") +
+		sep + keyStyle.Render("home/end, g/G") + helpStyle.Render(" top/bottom") +
 		sep + keyStyle.Render("q") + helpStyle.Render(" quit")
 
 	if m.viewport.TotalLineCount() <= m.viewport.Height {
