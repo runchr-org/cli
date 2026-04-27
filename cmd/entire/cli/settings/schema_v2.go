@@ -1,0 +1,164 @@
+// This file defines schema v2 of the Entire settings file: a typed,
+// concern-grouped replacement for the legacy EntireSettings struct.
+//
+// The two shapes coexist during migration. Existing callers continue using
+// Load()/EntireSettings; new code can opt into LoadV2()/Settings. A future
+// phase migrates call sites and retires the legacy struct.
+//
+// Key differences from legacy:
+//   - Explicit "schema" version marker (vs. implicit/unmarked)
+//   - Typed checkpoints config (vs. untyped strategy_options map)
+//   - Backend selection is structured: primary + optional mirrors
+//   - Concerns grouped: logging, checkpoints, hooks, features
+//   - Deprecated keys (checkpoints_v2 alias, push_v2_refs) are not
+//     represented in the new shape; the synthesizer translates them.
+//
+// Migration mapping is implemented in synthesizeFromLegacy (see load_v2.go).
+
+package settings
+
+// CurrentSchemaVersion is the schema version emitted by v2 writers.
+// Files marked with this version are parsed via the v2 path; older files
+// are loaded via the legacy parser and synthesized into Settings on the fly.
+const CurrentSchemaVersion = 2
+
+// Settings is the schema-v2 representation of .entire/settings.json.
+//
+// All fields are JSON-omitempty where defaults are well-defined so that
+// hand-written settings files stay minimal. Pointer types are used where
+// "unset" must be distinguishable from "explicit false" (e.g. Telemetry,
+// SignCommits, PushSessions).
+type Settings struct {
+	// Schema identifies the settings file schema version. Always 2 in this struct.
+	Schema int `json:"schema"`
+
+	// Enabled indicates whether Entire is active. When false, CLI commands
+	// show a disabled message and hooks exit silently. Defaults to true.
+	Enabled bool `json:"enabled"`
+
+	// LocalDev indicates whether to use "go run" instead of the "entire"
+	// binary. Used during development when the binary is not installed.
+	LocalDev bool `json:"local_dev,omitempty"`
+
+	// Logging configures runtime logging.
+	Logging LoggingConfig `json:"logging,omitempty"`
+
+	// Checkpoints configures permanent checkpoint storage and related ops.
+	Checkpoints CheckpointsConfig `json:"checkpoints,omitempty"`
+
+	// Hooks configures git hook behavior.
+	Hooks HooksConfig `json:"hooks,omitempty"`
+
+	// Features toggles optional behaviors.
+	Features FeaturesConfig `json:"features,omitempty"`
+
+	// Redaction configures PII redaction beyond the default secret detection.
+	Redaction *RedactionSettings `json:"redaction,omitempty"`
+
+	// Telemetry controls anonymous usage analytics.
+	// nil = not asked yet, true = opted in, false = opted out.
+	Telemetry *bool `json:"telemetry,omitempty"`
+
+	// SummaryGeneration configures provider selection and timeout for
+	// `entire explain --generate`.
+	SummaryGeneration *SummaryGenerationConfig `json:"summary_generation,omitempty"`
+}
+
+// LoggingConfig configures runtime logging verbosity.
+type LoggingConfig struct {
+	// Level is the logging verbosity (debug, info, warn, error).
+	// Can be overridden by ENTIRE_LOG_LEVEL. Defaults to "info" when unset.
+	Level string `json:"level,omitempty"`
+}
+
+// CheckpointsConfig configures checkpoint storage and related operations.
+//
+// Primary serves all reads and is the authoritative writer. Mirrors receive
+// best-effort fan-out writes (warn on failure, never serve reads). This
+// shape replaces the legacy strategy_options{checkpoints_version, gmeta, ...}
+// soup with explicit, typed selection.
+type CheckpointsConfig struct {
+	// Primary is the authoritative checkpoint backend.
+	// Reads always come from Primary. Writes that fail here are fatal.
+	Primary BackendConfig `json:"primary"`
+
+	// Mirrors are best-effort write targets.
+	// Mirror failures are logged but do not fail the operation. Mirrors
+	// never serve reads — they are export targets, not sources of truth.
+	Mirrors []BackendConfig `json:"mirrors,omitempty"`
+
+	// Remote configures the GitHub remote that hosts the checkpoint
+	// metadata branch. Optional; when unset, the default origin is used.
+	Remote *CheckpointRemoteConfig `json:"remote,omitempty"`
+
+	// FullTranscriptRetentionDays is the retention window (in days) for
+	// archived raw-transcript generations. Zero/negative falls back to
+	// the documented default (60 days).
+	FullTranscriptRetentionDays int `json:"full_transcript_retention_days,omitempty"`
+
+	// SignCommits controls whether checkpoint commits are signed.
+	// nil/true = sign (default), false = skip signing.
+	SignCommits *bool `json:"sign_commits,omitempty"`
+
+	// FilteredFetches enables --filter=blob:none on checkpoint fetches.
+	FilteredFetches bool `json:"filtered_fetches,omitempty"`
+
+	// PushSessions controls whether session refs are pushed to remotes.
+	// nil = push (default), explicit false = do not push.
+	PushSessions *bool `json:"push_sessions,omitempty"`
+}
+
+// BackendConfig identifies and configures a single checkpoint backend.
+//
+// The Type field selects the backend implementation (e.g. "v1", "v2",
+// "gmeta"). Backend-specific configuration is added as additional fields
+// here as backends are introduced (e.g. an "s3" backend would carry
+// bucket/region; today every supported backend needs only Type).
+type BackendConfig struct {
+	// Type is the backend identifier. Recognized values: "v1", "v2", "gmeta".
+	Type string `json:"type"`
+}
+
+// HooksConfig configures git hook behavior.
+type HooksConfig struct {
+	// CommitLinking controls how commits are linked to agent sessions.
+	// "always" = auto-link without prompting, "prompt" = ask each commit.
+	// Defaults to "prompt" when unset.
+	CommitLinking string `json:"commit_linking,omitempty"`
+
+	// AbsoluteGitHookPath embeds the full binary path in git hooks instead
+	// of bare "entire". Needed for GUI git clients (Xcode, Tower, etc.)
+	// that don't source shell profiles and can't find "entire" on PATH.
+	AbsoluteGitHookPath bool `json:"absolute_git_hook_path,omitempty"`
+}
+
+// FeaturesConfig toggles optional product behaviors.
+type FeaturesConfig struct {
+	// Summarize enables AI-generated checkpoint summaries.
+	Summarize bool `json:"summarize,omitempty"`
+
+	// ExternalAgents enables discovery and registration of external agent
+	// plugins (entire-agent-* binaries on $PATH).
+	ExternalAgents bool `json:"external_agents,omitempty"`
+
+	// Vercel marks the repository as using Vercel; the metadata branch
+	// then includes a vercel.json that disables deployments for Entire branches.
+	Vercel bool `json:"vercel,omitempty"`
+}
+
+// SummaryGenerationConfig configures `entire explain --generate`.
+//
+// Replaces legacy SummaryGenerationSettings + the top-level
+// SummaryTimeoutSeconds field, grouping all summary-generation knobs.
+type SummaryGenerationConfig struct {
+	// Provider is the agent name for summary generation
+	// (e.g. "claude-code", "codex", "gemini").
+	Provider string `json:"provider,omitempty"`
+
+	// Model is an optional model hint passed to the selected provider.
+	Model string `json:"model,omitempty"`
+
+	// TimeoutSeconds is an optional hard deadline for summary generation.
+	// Zero or negative means "unset" — the caller picks the default.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+}
