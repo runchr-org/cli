@@ -1147,6 +1147,15 @@ func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(
 	if err := store.UpdateCheckpointSummary(ctx, checkpointID, combined); err != nil {
 		return fmt.Errorf("persisting combined attribution: %w", err)
 	}
+	if settings.IsGmetaEnabled(logCtx) {
+		gmetaStore := checkpoint.NewGmetaStore(repo)
+		if err := gmetaStore.UpdateCheckpointSummary(ctx, checkpointID, combined); err != nil {
+			logging.Warn(logCtx, "gmeta combined attribution update failed",
+				slog.String("checkpoint_id", checkpointID.String()),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
 
 	return nil
 }
@@ -2714,6 +2723,11 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		v2Store = checkpoint.NewV2GitStore(repo, v2URL)
 	}
 
+	var gmetaStore *checkpoint.GmetaStore
+	if settings.IsGmetaEnabled(logCtx) {
+		gmetaStore = checkpoint.NewGmetaStore(repo)
+	}
+
 	precomputed := precomputeTranscriptBlobsForFinalize(logCtx, repo, redactedTranscript, state)
 
 	// Resolve the agent and try external compaction once before the loop —
@@ -2780,6 +2794,15 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 					continue
 				}
 				logging.Warn(logCtx, "v2 dual-write update failed", attrs...)
+			}
+		}
+
+		if gmetaStore != nil {
+			if gmetaErr := gmetaStore.UpdateCommitted(logCtx, updateOpts); gmetaErr != nil {
+				logging.Warn(logCtx, "gmeta update failed",
+					slog.String("checkpoint_id", cpIDStr),
+					slog.String("error", gmetaErr.Error()),
+				)
 			}
 		}
 
