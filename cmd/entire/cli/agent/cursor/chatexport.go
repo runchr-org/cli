@@ -120,6 +120,8 @@ func copyDBWithSidecars(src, dst string) error {
 }
 
 func copyFile(src, dst string) error {
+	// Real byte copy, not a hardlink — sqlite's wal_checkpoint(TRUNCATE) and any
+	// other writes during dump must not touch cursor's live store.db/-wal/-shm.
 	in, err := os.Open(src) //nolint:gosec // cursor-managed path
 	if err != nil {
 		return fmt.Errorf("open %s: %w", src, err)

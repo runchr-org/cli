@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // WorkspaceHash returns the Cursor workspace hash for a project path.
@@ -24,11 +23,13 @@ func WorkspaceHash(projectPath string) string {
 }
 
 // WorkspaceSlug returns the Cursor project slug for a project path.
-// Cursor stores per-project transcript JSONLs under a path-flattened slug
-// (leading slash stripped, remaining slashes replaced with dashes), not MD5.
-// For example: /private/tmp/foo -> private-tmp-foo.
+// Cursor stores per-project transcript JSONLs under a slug derived by stripping
+// the leading slash and replacing every non-alphanumeric character with a dash
+// (e.g. dots and underscores too — not just slashes). Delegates to the same
+// helper cursor's own session-dir resolver uses, so write paths stay aligned
+// with cursor's read paths even when the workspace path contains "." or "_".
 func WorkspaceSlug(projectPath string) string {
-	return strings.ReplaceAll(strings.TrimPrefix(projectPath, "/"), "/", "-")
+	return sanitizePathForCursor(projectPath)
 }
 
 // RestoreCheckpointFiles rebuilds cursor's store.db for this session from the

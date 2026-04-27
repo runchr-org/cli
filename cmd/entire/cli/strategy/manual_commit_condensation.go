@@ -147,7 +147,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 	extractSessionDataSpan.End()
 	extractDuration := time.Since(extractStart)
 
-	refreshLiveExtras(ctx, logCtx, state, sessionData)
+	refreshLiveExtras(ctx, state, sessionData)
 
 	// Backfill session state token usage from the freshly-extracted transcript.
 	// Copilot CLI writes session.shutdown after the hooks return, so by condensation
@@ -1043,10 +1043,10 @@ func (s *ManualCommitStrategy) extractSessionDataFromLiveTranscript(ctx context.
 // same repo (cursor + claude-code both fire session-start on the same id, the
 // later one wins on state.AgentType even if the other agent is doing the
 // actual work).
-func refreshLiveExtras(ctx context.Context, logCtx context.Context, state *SessionState, sessionData *ExtractedSessionData) {
+func refreshLiveExtras(ctx context.Context, state *SessionState, sessionData *ExtractedSessionData) {
 	live, err := contributeLiveExtras(ctx, state.SessionID)
 	if err != nil {
-		logging.Warn(logCtx, "agent live extras refresh failed",
+		logging.Warn(logging.WithComponent(ctx, "checkpoint"), "agent live extras refresh failed",
 			slog.String("session_id", state.SessionID),
 			slog.String("agent_type", string(state.AgentType)),
 			slog.String("error", err.Error()),

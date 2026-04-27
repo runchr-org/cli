@@ -423,17 +423,8 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 	}
 	filePaths.Metadata = "/" + sessionPath + paths.MetadataFileName
 
-	// Write agent-contributed extra files
-	for relPath, content := range opts.ExtraFiles {
-		blobHash, err := CreateBlobFromContent(s.repo, content)
-		if err != nil {
-			return filePaths, fmt.Errorf("failed to create blob for extra file %s: %w", relPath, err)
-		}
-		entries[sessionPath+relPath] = object.TreeEntry{
-			Name: sessionPath + relPath,
-			Mode: filemode.Regular,
-			Hash: blobHash,
-		}
+	if err := writeExtraFilesToEntries(s.repo, entries, sessionPath, opts.ExtraFiles); err != nil {
+		return filePaths, err
 	}
 
 	return filePaths, nil
@@ -1400,16 +1391,8 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 	// Overwrite agent-contributed extras (e.g. cursor-chat.jsonl) with the fresh
 	// snapshot supplied by the caller. Missing keys are untouched — the existing
 	// entries map preserves whatever was committed previously.
-	for relPath, content := range opts.ExtraFiles {
-		blobHash, err := CreateBlobFromContent(s.repo, content)
-		if err != nil {
-			return fmt.Errorf("failed to create blob for extra file %s: %w", relPath, err)
-		}
-		entries[sessionPath+relPath] = object.TreeEntry{
-			Name: sessionPath + relPath,
-			Mode: filemode.Regular,
-			Hash: blobHash,
-		}
+	if err := writeExtraFilesToEntries(s.repo, entries, sessionPath, opts.ExtraFiles); err != nil {
+		return err
 	}
 
 	// Build checkpoint subtree and splice into root (O(depth) tree surgery)
@@ -1737,6 +1720,25 @@ func (s *GitStore) copyMetadataDir(metadataDir, basePath string, entries map[str
 	})
 	if err != nil {
 		return fmt.Errorf("failed to walk metadata directory: %w", err)
+	}
+	return nil
+}
+
+// writeExtraFilesToEntries adds agent-contributed extras (e.g. cursor-chat.jsonl)
+// as blobs in the entries map under sessionPath. Reused by both WriteCommitted
+// (initial write) and UpdateCommitted (refresh on Finalize); v1 and v2 stores
+// share the helper so the loop body stays in one place.
+func writeExtraFilesToEntries(repo *git.Repository, entries map[string]object.TreeEntry, sessionPath string, extras map[string][]byte) error {
+	for relPath, content := range extras {
+		blobHash, err := CreateBlobFromContent(repo, content)
+		if err != nil {
+			return fmt.Errorf("failed to create blob for extra file %s: %w", relPath, err)
+		}
+		entries[sessionPath+relPath] = object.TreeEntry{
+			Name: sessionPath + relPath,
+			Mode: filemode.Regular,
+			Hash: blobHash,
+		}
 	}
 	return nil
 }

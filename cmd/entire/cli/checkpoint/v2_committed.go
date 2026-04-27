@@ -135,17 +135,8 @@ func (s *V2GitStore) updateCommittedMain(ctx context.Context, opts UpdateCommitt
 		}
 	}
 
-	// Overwrite agent-contributed extras with the fresh snapshot.
-	for relPath, content := range opts.ExtraFiles {
-		blobHash, err := CreateBlobFromContent(s.repo, content)
-		if err != nil {
-			return 0, fmt.Errorf("failed to create blob for extra file %s: %w", relPath, err)
-		}
-		entries[sessionPath+relPath] = object.TreeEntry{
-			Name: sessionPath + relPath,
-			Mode: filemode.Regular,
-			Hash: blobHash,
-		}
+	if err := writeExtraFilesToEntries(s.repo, entries, sessionPath, opts.ExtraFiles); err != nil {
+		return 0, err
 	}
 
 	// Replace compact transcript if provided
