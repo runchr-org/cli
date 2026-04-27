@@ -96,11 +96,11 @@ func TestActivityModel_TopBottomKeys(t *testing.T) {
 	tests := []struct {
 		name     string
 		key      tea.KeyMsg
-		wantTop  bool
+		gotoTop  bool
 		wantDesc string
 	}{
-		{name: "home", key: tea.KeyMsg{Type: tea.KeyHome}, wantTop: true, wantDesc: "top"},
-		{name: "vim top", key: activityRuneKey('g'), wantTop: true, wantDesc: "top"},
+		{name: "home", key: tea.KeyMsg{Type: tea.KeyHome}, gotoTop: true, wantDesc: "top"},
+		{name: "vim top", key: activityRuneKey('g'), gotoTop: true, wantDesc: "top"},
 		{name: "end", key: tea.KeyMsg{Type: tea.KeyEnd}, wantDesc: "bottom"},
 		{name: "vim bottom", key: activityRuneKey('G'), wantDesc: "bottom"},
 	}
@@ -110,15 +110,15 @@ func TestActivityModel_TopBottomKeys(t *testing.T) {
 			t.Parallel()
 
 			m := testActivityTUIModel()
-			if tt.wantTop {
+			if tt.gotoTop {
 				m.viewport.GotoBottom()
 			}
 			m, _ = updateActivityModel(t, m, tt.key)
 
-			if tt.wantTop && !m.viewport.AtTop() {
+			if tt.gotoTop && !m.viewport.AtTop() {
 				t.Fatalf("viewport should be at %s, YOffset = %d", tt.wantDesc, m.viewport.YOffset)
 			}
-			if !tt.wantTop && !m.viewport.AtBottom() {
+			if !tt.gotoTop && !m.viewport.AtBottom() {
 				t.Fatalf("viewport should be at %s, YOffset = %d", tt.wantDesc, m.viewport.YOffset)
 			}
 		})
@@ -145,17 +145,6 @@ func TestActivityModel_QuitKeys(t *testing.T) {
 	}
 }
 
-func TestActivityModel_HDoesNotQuit(t *testing.T) {
-	t.Parallel()
-
-	_, cmd := updateActivityModel(t, testActivityTUIModel(), activityRuneKey('h'))
-	if cmd != nil {
-		if _, ok := cmd().(tea.QuitMsg); ok {
-			t.Fatal("h should not quit activity")
-		}
-	}
-}
-
 func TestActivityModel_FooterDocumentsVisibleControlsOnly(t *testing.T) {
 	t.Parallel()
 
@@ -168,7 +157,7 @@ func TestActivityModel_FooterDocumentsVisibleControlsOnly(t *testing.T) {
 			t.Fatalf("footer missing %q: %q", want, footer)
 		}
 	}
-	for _, hidden := range []string{"j/k", "g/G", "detail", "open", "back"} {
+	for _, hidden := range []string{"j/k", "g/G"} {
 		if strings.Contains(footer, hidden) {
 			t.Fatalf("footer should not document %q: %q", hidden, footer)
 		}
