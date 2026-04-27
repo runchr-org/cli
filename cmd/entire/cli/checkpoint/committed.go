@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -1765,8 +1766,16 @@ func (s *GitStore) copyMetadataDir(metadataDir, basePath string, entries map[str
 // as blobs in the entries map under sessionPath. Reused by both WriteCommitted
 // (initial write) and UpdateCommitted (refresh on Finalize); v1 and v2 stores
 // share the helper so the loop body stays in one place.
+//
+// Rejects relPaths that would escape the session directory (absolute paths,
+// "..", or any path separator) so a malicious or buggy contributor can't
+// overwrite files outside its own namespace or replace standard checkpoint
+// metadata files.
 func writeExtraFilesToEntries(repo *git.Repository, entries map[string]object.TreeEntry, sessionPath string, extras map[string][]byte) error {
 	for relPath, content := range extras {
+		if err := validateExtraFileRelPath(relPath); err != nil {
+			return err
+		}
 		blobHash, err := CreateBlobFromContent(repo, content)
 		if err != nil {
 			return fmt.Errorf("failed to create blob for extra file %s: %w", relPath, err)
@@ -1776,6 +1785,25 @@ func writeExtraFilesToEntries(repo *git.Repository, entries map[string]object.Tr
 			Mode: filemode.Regular,
 			Hash: blobHash,
 		}
+	}
+	return nil
+}
+
+// validateExtraFileRelPath rejects any relPath that could escape the session
+// subdirectory. Agent-contributed extras live in a flat namespace; we don't
+// allow nested directories or traversal segments.
+func validateExtraFileRelPath(relPath string) error {
+	if relPath == "" {
+		return errors.New("extra file relPath is empty")
+	}
+	if path.IsAbs(relPath) || strings.HasPrefix(relPath, "/") {
+		return fmt.Errorf("extra file relPath is absolute: %q", relPath)
+	}
+	if strings.ContainsAny(relPath, "/\\") {
+		return fmt.Errorf("extra file relPath contains a path separator: %q", relPath)
+	}
+	if relPath == "." || relPath == ".." || strings.Contains(relPath, "..") {
+		return fmt.Errorf("extra file relPath contains a traversal segment: %q", relPath)
 	}
 	return nil
 }
