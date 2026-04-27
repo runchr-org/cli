@@ -86,8 +86,10 @@ func (f *fakeHeadlessAgent) LaunchHeadlessCmd(ctx context.Context, _ string) (*e
 	return exec.CommandContext(ctx, "sh", "-c", script), nil
 }
 
-// shellQuote wraps s in single quotes with embedded single quotes escaped
-// via the conventional '\'' trick. Output is always a valid sh word.
+// shellQuote wraps s in single quotes, escaping any embedded single quote
+// by closing the quoted run, emitting a backslash-quoted single quote,
+// and reopening — the standard POSIX-sh idiom (see the implementation
+// for the literal escape sequence). Output is always a valid sh word.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

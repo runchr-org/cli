@@ -227,16 +227,28 @@ func TestTruncatePreview_RuneSafe(t *testing.T) {
 // durations on every tick.
 func TestTUIModel_TickUsesPerRowRunStart(t *testing.T) {
 	t.Parallel()
+	// asReviewTUIModel asserts the type or fails the test loudly — Update
+	// returns tea.Model (interface) but reviewTUIModel is the only
+	// concrete type the model returns from itself, so a panic here would
+	// indicate a real regression worth exposing as a test failure.
+	asReviewTUIModel := func(m tea.Model) reviewTUIModel {
+		t.Helper()
+		concrete, ok := m.(reviewTUIModel)
+		if !ok {
+			t.Fatalf("Update returned %T, want reviewTUIModel", m)
+		}
+		return concrete
+	}
+
 	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}, {Name: "b"}}, nil, nil)
 	// Pretend the TUI started 10 minutes ago — that's the upper bound
 	// the buggy implementation would report; with the fix, durations
 	// reflect the per-row runStart we set just now.
 	m.startTime = time.Now().Add(-10 * time.Minute)
-	updated, _ := m.Update(agentStateMsg{Name: "a", Status: AgentRunRunning})
-	updated, _ = updated.(reviewTUIModel).Update(agentStateMsg{Name: "b", Status: AgentRunRunning})
-	updated, _ = updated.(reviewTUIModel).Update(tickMsg(time.Now()))
-	final := updated.(reviewTUIModel)
-	for _, r := range final.rows {
+	step1, _ := m.Update(agentStateMsg{Name: "a", Status: AgentRunRunning})
+	step2, _ := asReviewTUIModel(step1).Update(agentStateMsg{Name: "b", Status: AgentRunRunning})
+	step3, _ := asReviewTUIModel(step2).Update(tickMsg(time.Now()))
+	for _, r := range asReviewTUIModel(step3).rows {
 		if r.duration > time.Second {
 			t.Errorf("row %s duration = %s; should be near-zero (since runStart was set this tick), not relative to TUI startTime", r.name, r.duration)
 		}
