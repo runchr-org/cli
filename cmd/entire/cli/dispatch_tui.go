@@ -58,8 +58,6 @@ var newDispatchProgram = func(model tea.Model, outW io.Writer, altScreen bool) d
 	return tea.NewProgram(model, options...)
 }
 
-const tuiEscKey = "esc"
-
 func defaultRunInteractiveDispatch(ctx context.Context, outW io.Writer, opts dispatchpkg.Options) (string, error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

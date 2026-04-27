@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func testActivityTUIModel() activityModel {
@@ -152,14 +153,21 @@ func TestActivityModel_FooterDocumentsVisibleControlsOnly(t *testing.T) {
 	m.sty = newActivityStylesWithWidth(m.width, true)
 
 	footer := m.renderFooter()
-	for _, want := range []string{"↑/↓", " scroll", "home/end", " top/bottom", "q", " quit"} {
+	for _, want := range []string{"↑/↓/j/k", " scroll", "home/end/g/G", " top/bottom", "q", " quit"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer missing %q: %q", want, footer)
 		}
 	}
-	for _, hidden := range []string{"j/k", "g/G"} {
-		if strings.Contains(footer, hidden) {
-			t.Fatalf("footer should not document %q: %q", hidden, footer)
-		}
+}
+
+func TestActivityModel_FooterScrollPercentFitsWidth(t *testing.T) {
+	t.Parallel()
+
+	m := testActivityTUIModel()
+	m.sty = newActivityStylesWithWidth(m.width, true)
+
+	footer := m.renderFooter()
+	if got := lipgloss.Width(footer); got != m.width {
+		t.Fatalf("footer width = %d, want %d: %q", got, m.width, footer)
 	}
 }

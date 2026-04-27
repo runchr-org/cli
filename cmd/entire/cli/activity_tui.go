@@ -226,16 +226,21 @@ func (m activityModel) renderFooter() string {
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 	sep := helpStyle.Render(" · ")
 
-	scrollPct := ""
-	if m.viewport.TotalLineCount() > m.viewport.Height {
-		pct := int(m.viewport.ScrollPercent() * 100)
-		scrollPct = sep + helpStyle.Render(strings.Repeat(" ", max(0, m.width-40))+padLeft(pct)+"%")
+	help := keyStyle.Render("↑/↓/j/k") + helpStyle.Render(" scroll") +
+		sep + keyStyle.Render("home/end/g/G") + helpStyle.Render(" top/bottom") +
+		sep + keyStyle.Render("q") + helpStyle.Render(" quit")
+
+	if m.viewport.TotalLineCount() <= m.viewport.Height {
+		return help
 	}
 
-	return keyStyle.Render("↑/↓") + helpStyle.Render(" scroll") +
-		sep + keyStyle.Render("home/end") + helpStyle.Render(" top/bottom") +
-		sep + keyStyle.Render("q") + helpStyle.Render(" quit") +
-		scrollPct
+	pct := helpStyle.Render(padLeft(int(m.viewport.ScrollPercent()*100)) + "%")
+	gap := m.width - lipgloss.Width(help) - lipgloss.Width(sep) - lipgloss.Width(pct)
+	if gap < 1 {
+		gap = 1
+	}
+
+	return help + sep + helpStyle.Render(strings.Repeat(" ", gap)) + pct
 }
 
 func newActivityStylesWithWidth(width int, useColor bool) activityStyles {
