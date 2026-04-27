@@ -232,7 +232,8 @@ func (m activityModel) renderFooter() string {
 		scrollPct = sep + helpStyle.Render(strings.Repeat(" ", max(0, m.width-40))+padLeft(pct)+"%")
 	}
 
-	return keyStyle.Render("↑↓") + helpStyle.Render(" scroll") +
+	return keyStyle.Render("↑/↓") + helpStyle.Render(" scroll") +
+		sep + keyStyle.Render("home/end") + helpStyle.Render(" top/bottom") +
 		sep + keyStyle.Render("q") + helpStyle.Render(" quit") +
 		scrollPct
 }

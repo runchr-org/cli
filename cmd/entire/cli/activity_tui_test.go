@@ -155,3 +155,22 @@ func TestActivityModel_HDoesNotQuit(t *testing.T) {
 		}
 	}
 }
+
+func TestActivityModel_FooterDocumentsVisibleControlsOnly(t *testing.T) {
+	t.Parallel()
+
+	m := testActivityTUIModel()
+	m.sty = newActivityStylesWithWidth(m.width, true)
+
+	footer := m.renderFooter()
+	for _, want := range []string{"↑/↓", " scroll", "home/end", " top/bottom", "q", " quit"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("footer missing %q: %q", want, footer)
+		}
+	}
+	for _, hidden := range []string{"j/k", "g/G", "detail", "open", "back"} {
+		if strings.Contains(footer, hidden) {
+			t.Fatalf("footer should not document %q: %q", hidden, footer)
+		}
+	}
+}
