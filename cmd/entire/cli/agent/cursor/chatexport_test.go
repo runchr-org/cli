@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -128,8 +129,67 @@ func TestExportChatArchive_DumpsMetaAndBlobs(t *testing.T) {
 			t.Errorf("decode blob %s: %v", b.ID, err)
 			continue
 		}
-		if !bytes.Equal(got, want) {
-			t.Errorf("blob %s roundtrip mismatch", b.ID)
+		// Cursor chat-message blobs go through secret redaction, which round-trips
+		// the JSON via Marshal and may reorder keys. Compare structurally instead
+		// of byte-equal.
+		var gotDoc, wantDoc any
+		if uerr := json.Unmarshal(got, &gotDoc); uerr != nil {
+			t.Errorf("blob %s decoded bytes are not JSON: %v", b.ID, uerr)
+			continue
+		}
+		if uerr := json.Unmarshal(want, &wantDoc); uerr != nil {
+			t.Errorf("blob %s seed bytes are not JSON: %v", b.ID, uerr)
+			continue
+		}
+		if !reflect.DeepEqual(gotDoc, wantDoc) {
+			t.Errorf("blob %s roundtrip mismatch:\n got:  %s\n want: %s", b.ID, got, want)
+		}
+	}
+}
+
+func TestExportChatArchive_RedactsBlobContent(t *testing.T) {
+	// Cursor chat blobs may carry user-pasted secrets in their content fields.
+	// The export pipeline must run them through the same redactor the main
+	// transcript uses; cursor.go's redactBlobData targets {role, content} JSON
+	// shapes (string and array variants) and leaves merkle tree nodes alone.
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	// High-entropy token shaped like a typical OpenAI/Anthropic API key — the
+	// AKIA-style AWS test key has too little entropy to trip the threshold.
+	secret := "sk-proj-aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890aBcDeFgHiJkLmNoPq"
+	stringContent := []byte(`{"role":"user","content":"key=` + secret + `"}`)
+	arrayContent := []byte(`{"role":"assistant","content":[{"type":"text","text":"token: ` + secret + `"}]}`)
+	treeNode := []byte(`{"latestRootBlobId":"958e728654e1e5e7b019e874d9045f53ba89b36af97e785f023ea8963e961c45"}`)
+
+	seedStoreDB(t, tmp, []byte(`{"agentId":"x"}`), map[string][]byte{
+		"chat-string": stringContent,
+		"chat-array":  arrayContent,
+		"tree-node":   treeNode,
+	})
+
+	data, err := ExportChatArchive(context.Background(), testAgentID)
+	if err != nil {
+		t.Fatalf("ExportChatArchive: %v", err)
+	}
+	_, blobs := parseArchiveLines(t, data)
+
+	for _, b := range blobs {
+		raw, err := base64.StdEncoding.DecodeString(b.Data)
+		if err != nil {
+			t.Fatalf("decode %s: %v", b.ID, err)
+		}
+		if b.ID == "tree-node" {
+			if !bytes.Equal(raw, treeNode) {
+				t.Errorf("tree node bytes mutated by redaction:\n got:  %s\n want: %s", raw, treeNode)
+			}
+			continue
+		}
+		if bytes.Contains(raw, []byte(secret)) {
+			t.Errorf("blob %s leaked secret %q after redaction:\n%s", b.ID, secret, raw)
+		}
+		if !bytes.Contains(raw, []byte("REDACTED")) {
+			t.Errorf("blob %s expected REDACTED placeholder after redaction:\n%s", b.ID, raw)
 		}
 	}
 }

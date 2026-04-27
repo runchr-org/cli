@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/entireio/cli/redact"
+
 	_ "modernc.org/sqlite" // pure-Go SQLite driver registered as "sqlite"
 )
 
@@ -39,16 +41,21 @@ const (
 
 // ChatArchive is the v2 archive shape kept around for backward-compatible
 // reads of already-pushed checkpoints. New checkpoints use JSONL (v3).
+//
+// DBPath and TranscriptPath were absolute filesystem paths captured at v2
+// export time. v3 export does not populate them (the format is JSONL, not
+// this struct). Old archives on the metadata branch may still carry those
+// paths until they age out — restore code reads them but never writes them.
 type ChatArchive struct {
 	Format         string            `json:"format"`
 	Version        int               `json:"version"`
 	AgentID        string            `json:"agentId"`
-	DBPath         string            `json:"db_path,omitempty"`
-	DBBytes        string            `json:"db_bytes,omitempty"`
-	DBWALBytes     string            `json:"db_wal_bytes,omitempty"`
-	DBSHMBytes     string            `json:"db_shm_bytes,omitempty"`
-	TranscriptPath string            `json:"transcript_path,omitempty"`
-	Transcript     []json.RawMessage `json:"transcript,omitempty"`
+	DBPath         string            `json:"db_path,omitempty"`         // legacy v2; never set by v3.
+	DBBytes        string            `json:"db_bytes,omitempty"`        // legacy v2; never set by v3.
+	DBWALBytes     string            `json:"db_wal_bytes,omitempty"`    // legacy v2; never set by v3.
+	DBSHMBytes     string            `json:"db_shm_bytes,omitempty"`    // legacy v2; never set by v3.
+	TranscriptPath string            `json:"transcript_path,omitempty"` // legacy v2; never set by v3.
+	Transcript     []json.RawMessage `json:"transcript,omitempty"`      // legacy v2; never set by v3.
 }
 
 // jsonlLine is one row in the v3 archive. `t` discriminates meta vs blob;
@@ -221,15 +228,66 @@ func writeBlobLines(ctx context.Context, db *sql.DB, enc *json.Encoder) error {
 	}
 	sort.Slice(collected, func(i, j int) bool { return collected[i].id < collected[j].id })
 	for _, r := range collected {
+		redacted := redactBlobData(r.data)
 		if err := enc.Encode(jsonlLine{
 			T:    "blob",
 			ID:   r.id,
-			Data: base64.StdEncoding.EncodeToString(r.data),
+			Data: base64.StdEncoding.EncodeToString(redacted),
 		}); err != nil {
 			return fmt.Errorf("encode blob line: %w", err)
 		}
 	}
 	return nil
+}
+
+// redactBlobData strips secrets out of cursor chat-message blobs before they
+// go into a checkpoint. Cursor's blobs come in three shapes:
+//
+//  1. {"role": "...", "content": "<text>"} — user/system messages.
+//  2. {"role": "assistant", "content": [{"type":"text","text":"..."}, ...]} — typed parts.
+//  3. Merkle tree nodes — JSON metadata referencing child blob IDs.
+//
+// Shapes (1) and (2) carry user prompts and assistant replies that may
+// include API keys, credentials, etc. that the user pasted into the chat.
+// We run those text fields through the same redactor the main transcript
+// uses. Shape (3) is left untouched: blob-id refs are content-addressed
+// SHA256 hashes that must roundtrip exactly to keep the DAG intact.
+//
+// If the blob isn't valid JSON (cursor occasionally wraps assistant frames
+// in a binary envelope around an inner JSON message) we return the bytes
+// unchanged. The opaque-archive redaction bypass in the checkpoint walker
+// already keeps git from corrupting these on commit; we just don't get
+// chat-text redaction for those frames, which mirrors the v2 behavior.
+func redactBlobData(data []byte) []byte {
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return data
+	}
+	if _, hasRole := doc["role"]; !hasRole {
+		return data
+	}
+	switch content := doc["content"].(type) {
+	case string:
+		doc["content"] = redact.String(content)
+	case []any:
+		for i, item := range content {
+			obj, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if text, isStr := obj["text"].(string); isStr {
+				obj["text"] = redact.String(text)
+				content[i] = obj
+			}
+		}
+	default:
+		return data
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return data
+	}
+	return out
 }
 
 // findOne returns the first glob match, or "" if none matched.

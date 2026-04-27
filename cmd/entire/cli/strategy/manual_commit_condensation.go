@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"os"
@@ -1193,11 +1194,19 @@ func extractExtraFilesFromTree(tree *object.Tree, metadataDir string) map[string
 		if standardMetadataFiles[relPath] {
 			return nil
 		}
-		content, err := f.Contents()
+		// Read via Reader, not Contents(): Contents() returns string, which loses
+		// raw bytes for any non-UTF8 file. ExtraFiles is typed as []byte so we
+		// stream the blob through io.ReadAll to preserve exact bytes.
+		reader, err := f.Reader()
 		if err != nil {
 			return nil //nolint:nilerr // best-effort: skip files we can't read
 		}
-		extras[relPath] = []byte(content)
+		content, err := io.ReadAll(reader)
+		_ = reader.Close()
+		if err != nil {
+			return nil //nolint:nilerr // best-effort: skip files we can't read
+		}
+		extras[relPath] = content
 		return nil
 	})
 
