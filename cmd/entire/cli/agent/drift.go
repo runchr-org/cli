@@ -14,47 +14,34 @@ import (
 // builds — never produce drift warnings when running one of these.
 const devVersion = "dev"
 
-// zeroSemver is the default compatibility floor — when MinCompatibleCLIVersion
-// normalizes to this value, drift detection is globally disabled.
-const zeroSemver = "v0.0.0"
-
-// DriftReport describes a single agent whose installed hook config was stamped
-// by a CLI version older than the agent's declared MinCompatibleCLIVersion
-// (or is missing a stamp entirely).
+// DriftReport describes a single agent whose installed hook config was
+// stamped by a CLI version older than MinCompatibleCLIVersion (or is
+// missing a stamp entirely; that case normalizes to "v0.0.0" and only
+// reports when the floor has been raised above "0.0.0").
 type DriftReport struct {
 	// Agent is the registry name of the drifted agent.
 	Agent types.AgentName
-	// Installed is the CLI version recorded in the agent's config. Empty when Missing.
+	// Installed is the CLI version recorded in the agent's config. Empty
+	// string means the stamp was missing or unreadable.
 	Installed string
-	// Required is the agent's MinCompatibleCLIVersion.
+	// Required is MinCompatibleCLIVersion at the time of the check.
 	Required string
-	// Missing is true when the config has no entireMeta stamp at all. Treated
-	// as drift so re-running `entire enable --force` stamps existing installs.
-	Missing bool
 }
 
-// CheckHookDrift walks every registered agent with hooks currently installed
-// and returns reports for any whose stamp is missing or below their declared
-// MinCompatibleCLIVersion. Returns nil for dev builds (Version == "dev") since
-// developers run unreleased binaries that can't meaningfully be compared.
+// CheckHookDrift walks every registered agent with hooks currently
+// installed and returns reports for any whose stamp normalizes below
+// MinCompatibleCLIVersion. Missing/unreadable stamps normalize to
+// "v0.0.0" and so report only when the floor is above "0.0.0".
 //
-// The check is intentionally cheap — it does a filesystem read per installed
-// agent — so `entire status` and `entire enable` can call it on every run
-// without concern.
+// Returns nil for dev builds (Version == "dev") since developers run
+// unreleased binaries that can't meaningfully be compared.
 func CheckHookDrift(ctx context.Context) []DriftReport {
 	if versioninfo.Version == devVersion {
 		return nil
 	}
 
-	// A floor of "0.0.0" (the default) means drift warnings are off
-	// globally: we've shipped the stamp mechanism but not yet raised
-	// the bar on any agent. Bail before touching the registry or the
-	// filesystem — this path runs on every visible command via
-	// PersistentPreRun.
 	required := MinCompatibleCLIVersion
-	if normalizeSemver(required) == zeroSemver {
-		return nil
-	}
+	requiredNorm := normalizeSemver(required)
 
 	var reports []DriftReport
 	for _, name := range List() {
@@ -71,17 +58,8 @@ func CheckHookDrift(ctx context.Context) []DriftReport {
 			continue
 		}
 
-		meta, found := hv.ReadHookMeta(ctx)
-		if !found {
-			reports = append(reports, DriftReport{
-				Agent:    name,
-				Required: required,
-				Missing:  true,
-			})
-			continue
-		}
-
-		if semver.Compare(normalizeSemver(meta.CLIVersion), normalizeSemver(required)) < 0 {
+		meta, _ := hv.ReadHookMeta(ctx)
+		if semver.Compare(normalizeSemver(meta.CLIVersion), requiredNorm) < 0 {
 			reports = append(reports, DriftReport{
 				Agent:     name,
 				Installed: meta.CLIVersion,
@@ -93,18 +71,18 @@ func CheckHookDrift(ctx context.Context) []DriftReport {
 }
 
 // normalizeSemver coerces a version string into the form expected by
-// golang.org/x/mod/semver (leading "v", valid semver). Empty/"dev" becomes
-// zeroSemver; unparseable strings also degrade to zeroSemver so they sort lowest.
+// golang.org/x/mod/semver (leading "v", valid semver). Empty/"dev" /
+// unparseable strings degrade to "v0.0.0" so they sort lowest.
 func normalizeSemver(v string) string {
 	v = strings.TrimSpace(v)
 	if v == "" || v == devVersion {
-		return zeroSemver
+		return "v0.0.0"
 	}
 	if !strings.HasPrefix(v, "v") {
 		v = "v" + v
 	}
 	if !semver.IsValid(v) {
-		return zeroSemver
+		return "v0.0.0"
 	}
 	return v
 }
