@@ -256,9 +256,21 @@ func (o *multiReviewOrchestrator) Run(ctx context.Context, tasks []MultiAgentTas
 		close(allDone)
 	}
 
-	// 10. Dump per-agent outputs + summary. Runs after the TUI exits so
-	// the final table paint stays above the full responses.
-	dumpMultiAgentResults(out, tasks, results, cancelled.load())
+	// 10. Dump per-agent outputs. Runs after the TUI exits so the final
+	// table paint stays above the full responses.
+	dumpPerAgentReviews(out, tasks, results, cancelled.load())
+	dumpRunCounts(out, results)
+
+	// 11. Optional cross-agent synthesis. Opt-in (default N) so a stray
+	// extra LLM call doesn't surprise users on every multi-agent run.
+	// Skipped silently when stdin isn't a TTY (CI, piped output) — there
+	// is no user to prompt.
+	maybeSynthesizeCombinedVerdict(ctx, out, tasks, results, cancelled.load())
+
+	// 12. Run-summary footer (commit hint + transcript paths). Printed
+	// after any synthesis so the "Run git commit" line is the last thing
+	// the user sees before their shell prompt.
+	dumpRunFooter(out, results, cancelled.load())
 
 	return MultiRunResult{
 		Runs:      results,
@@ -575,9 +587,11 @@ func extractCodexFinal(cleaned string) string {
 	return strings.Join(lines[lastCodexMarker+1:tokensUsedIdx], "\n")
 }
 
-// dumpMultiAgentResults prints per-agent headers + FinalOutput, then a
-// summary line, then transcript paths for successful agents.
-func dumpMultiAgentResults(out io.Writer, tasks []MultiAgentTask, results []AgentRunResult, cancelled bool) {
+// dumpPerAgentReviews prints a "─────── <agent> review ───────" header
+// followed by the filtered narrative for each agent. Failed agents show
+// their exit code; cancelled agents are noted without dumping their
+// (typically truncated, noisy) buffered stdout.
+func dumpPerAgentReviews(out io.Writer, tasks []MultiAgentTask, results []AgentRunResult, _ bool) {
 	for i, r := range results {
 		fmt.Fprintf(out, "\n─────── %s review ───────\n", tasks[i].Name)
 		switch r.Status {
@@ -605,7 +619,12 @@ func dumpMultiAgentResults(out io.Writer, tasks []MultiAgentTask, results []Agen
 			return
 		}
 	}
+}
 
+// dumpRunCounts prints the "N agents done in <wall-clock> (S succeeded,
+// F failed, C cancelled)" line. Always emits regardless of cancel state
+// so users see what completed before the SIGINT landed.
+func dumpRunCounts(out io.Writer, results []AgentRunResult) {
 	var nSucc, nFail, nCancel int
 	for _, r := range results {
 		switch r.Status {
@@ -622,6 +641,18 @@ func dumpMultiAgentResults(out io.Writer, tasks []MultiAgentTask, results []Agen
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "%d agents done in %s (%d succeeded, %d failed, %d cancelled)\n",
 		len(results), computeTotalDuration(results), nSucc, nFail, nCancel)
+}
+
+// dumpRunFooter prints the commit hint (when at least one agent
+// succeeded and the run wasn't cancelled) and the per-agent transcript
+// paths. Last thing emitted on a run.
+func dumpRunFooter(out io.Writer, results []AgentRunResult, cancelled bool) {
+	var nSucc int
+	for _, r := range results {
+		if r.Status == AgentRunDone {
+			nSucc++
+		}
+	}
 	if !cancelled && nSucc > 0 {
 		fmt.Fprintln(out, "  Run `git commit` to attach the review to the next checkpoint.")
 	}
