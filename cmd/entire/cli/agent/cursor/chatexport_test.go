@@ -160,12 +160,21 @@ func TestExportChatArchive_RedactsBlobContent(t *testing.T) {
 	secret := "sk-proj-aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890aBcDeFgHiJkLmNoPq"
 	stringContent := []byte(`{"role":"user","content":"key=` + secret + `"}`)
 	arrayContent := []byte(`{"role":"assistant","content":[{"type":"text","text":"token: ` + secret + `"}]}`)
+	// Tool-use shape: secret hides inside a nested input object. A top-level-only
+	// redactor would miss this — recursive walk must catch it.
+	toolUseContent := []byte(`{"role":"assistant","content":[{"type":"tool_use","name":"Write","input":{"path":"foo.txt","contents":"# api: ` + secret + `"}}]}`)
+	// Cursor-wrapped binary frame: real cursor DBs put user prompts inside a
+	// protobuf-like envelope. The bytes aren't JSON but the secret is in the
+	// clear. Falls through to redact.Bytes byte-level scrubbing.
+	wrappedFrame := append([]byte{0x0a, 0x8a, 0x01}, []byte("user input: "+secret+" trailing")...)
 	treeNode := []byte(`{"latestRootBlobId":"958e728654e1e5e7b019e874d9045f53ba89b36af97e785f023ea8963e961c45"}`)
 
 	seedStoreDB(t, tmp, []byte(`{"agentId":"x"}`), map[string][]byte{
-		"chat-string": stringContent,
-		"chat-array":  arrayContent,
-		"tree-node":   treeNode,
+		"chat-string":     stringContent,
+		"chat-array":      arrayContent,
+		"chat-tool-use":   toolUseContent,
+		"wrapped-binary":  wrappedFrame,
+		"tree-node":       treeNode,
 	})
 
 	data, err := ExportChatArchive(context.Background(), testAgentID)

@@ -243,51 +243,65 @@ func writeBlobLines(ctx context.Context, db *sql.DB, enc *json.Encoder) error {
 // redactBlobData strips secrets out of cursor chat-message blobs before they
 // go into a checkpoint. Cursor's blobs come in three shapes:
 //
-//  1. {"role": "...", "content": "<text>"} — user/system messages.
-//  2. {"role": "assistant", "content": [{"type":"text","text":"..."}, ...]} — typed parts.
-//  3. Merkle tree nodes — JSON metadata referencing child blob IDs.
+//  1. {"role": "...", "content": "<text>"} or content as typed array — chat
+//     messages and tool calls. Walk the JSON tree, redacting every string
+//     value (covers nested input.contents on tool_use parts).
+//  2. Merkle tree nodes — top-level JSON without a "role" key, referencing
+//     child blob IDs by content-addressed SHA256. Left untouched so the
+//     DAG roundtrips exactly.
+//  3. Cursor-wrapped frames (protobuf-like envelope around the inner
+//     payload, e.g. user prompts can land in a length-prefixed wire format,
+//     and assistant replies sometimes ride inside an encrypted prefix).
+//     Not JSON, but the secret-bearing text appears in cleartext within the
+//     wrapper. Fall back to redact.Bytes for byte-level scrubbing.
 //
-// Shapes (1) and (2) carry user prompts and assistant replies that may
-// include API keys, credentials, etc. that the user pasted into the chat.
-// We run those text fields through the same redactor the main transcript
-// uses. Shape (3) is left untouched: blob-id refs are content-addressed
-// SHA256 hashes that must roundtrip exactly to keep the DAG intact.
-//
-// If the blob isn't valid JSON (cursor occasionally wraps assistant frames
-// in a binary envelope around an inner JSON message) we return the bytes
-// unchanged. The opaque-archive redaction bypass in the checkpoint walker
-// already keeps git from corrupting these on commit; we just don't get
-// chat-text redaction for those frames, which mirrors the v2 behavior.
+// The opaque-archive redaction bypass in the checkpoint walker already keeps
+// git from corrupting these on commit; redactBlobData is what gives us the
+// chat-content secret scrubbing the bypass would otherwise prevent.
 func redactBlobData(data []byte) []byte {
 	var doc map[string]any
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return data
+	if err := json.Unmarshal(data, &doc); err == nil {
+		if _, hasRole := doc["role"]; !hasRole {
+			return data
+		}
+		redactJSONStrings(doc)
+		out, err := json.Marshal(doc)
+		if err != nil {
+			return data
+		}
+		return out
 	}
-	if _, hasRole := doc["role"]; !hasRole {
-		return data
-	}
-	switch content := doc["content"].(type) {
-	case string:
-		doc["content"] = redact.String(content)
-	case []any:
-		for i, item := range content {
-			obj, ok := item.(map[string]any)
-			if !ok {
+	// Cursor-wrapped binary frame: scrub at the byte level. Slightly less
+	// surgical than the JSON walk above (replaces every secret-pattern match
+	// in raw bytes, including inside any embedded JSON the wrapper carries)
+	// but correct for the user-prompt protobuf frames we observed in the
+	// real cursor DB.
+	return redact.Bytes(data)
+}
+
+// redactJSONStrings walks v in place and applies redact.String to every
+// string value reachable through map values or array elements. Used by
+// redactBlobData to scrub chat-message JSON, where any string value is
+// potentially user-supplied prompt or tool-call argument content.
+func redactJSONStrings(v any) {
+	switch value := v.(type) {
+	case map[string]any:
+		for k, child := range value {
+			if s, ok := child.(string); ok {
+				value[k] = redact.String(s)
 				continue
 			}
-			if text, isStr := obj["text"].(string); isStr {
-				obj["text"] = redact.String(text)
-				content[i] = obj
-			}
+			redactJSONStrings(child)
 		}
-	default:
-		return data
+	case []any:
+		for i, child := range value {
+			if s, ok := child.(string); ok {
+				value[i] = redact.String(s)
+				continue
+			}
+			redactJSONStrings(child)
+		}
 	}
-	out, err := json.Marshal(doc)
-	if err != nil {
-		return data
-	}
-	return out
 }
 
 // findOne returns the first glob match, or "" if none matched.
