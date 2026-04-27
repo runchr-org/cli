@@ -447,8 +447,8 @@ func TestLoadV2_NoFiles(t *testing.T) {
 	if got.Schema != CurrentSchemaVersion || !got.Enabled {
 		t.Fatalf("defaults wrong: %+v", got)
 	}
-	if got.Checkpoints.Primary.Type != "" {
-		t.Fatalf("expected empty primary when no files present, got %q", got.Checkpoints.Primary.Type)
+	if got.Checkpoints.Primary.Type != BackendTypeV1 {
+		t.Fatalf("expected default primary v1 when no files present, got %q", got.Checkpoints.Primary.Type)
 	}
 }
 
@@ -512,28 +512,44 @@ func TestLoadV2_V2MainAndLocalOverride(t *testing.T) {
 	}
 }
 
-func TestLoadV2_MixedShapesRejected_V2MainLegacyLocal(t *testing.T) {
+// TestLoadV2_V2MainLegacyLocal covers the common migration scenario:
+// the tracked settings.json has been migrated to schema 2, but the
+// gitignored settings.local.json is still in legacy shape. The legacy
+// override translates to v2 fields without forcing the user to migrate
+// the local file first.
+func TestLoadV2_V2MainLegacyLocal(t *testing.T) {
 	setupSettingsDir(t,
-		`{"schema": 2, "enabled": true}`,
+		`{"schema": 2, "enabled": true, "checkpoints": {"primary": {"type": "v2"}}}`,
 		`{"log_level": "`+debugLevel+`"}`,
 	)
-	_, err := LoadV2(context.Background())
-	if err == nil {
-		t.Fatal("expected error for mixed shapes")
+	got, err := LoadV2(context.Background())
+	if err != nil {
+		t.Fatalf("LoadV2: %v", err)
 	}
-	if !strings.Contains(err.Error(), "mixed schema") {
-		t.Fatalf("unexpected error: %v", err)
+	if got.Checkpoints.Primary.Type != BackendTypeV2 {
+		t.Fatalf("Primary.Type = %q, want v2 (preserved from main)", got.Checkpoints.Primary.Type)
+	}
+	if got.Logging.Level != debugLevel {
+		t.Fatalf("Logging.Level = %q, want %q (from legacy local)", got.Logging.Level, debugLevel)
 	}
 }
 
-func TestLoadV2_MixedShapesRejected_LegacyMainV2Local(t *testing.T) {
+// TestLoadV2_LegacyMainV2Local covers the inverse: legacy main, v2 local.
+// Less common but should also work without rejection.
+func TestLoadV2_LegacyMainV2Local(t *testing.T) {
 	setupSettingsDir(t,
-		`{"enabled": true}`,
+		`{"enabled": true, "strategy_options": {"checkpoints_v2": true}}`,
 		`{"schema": 2, "logging": {"level": "`+debugLevel+`"}}`,
 	)
-	_, err := LoadV2(context.Background())
-	if err == nil {
-		t.Fatal("expected error for mixed shapes")
+	got, err := LoadV2(context.Background())
+	if err != nil {
+		t.Fatalf("LoadV2: %v", err)
+	}
+	if got.Checkpoints.Primary.Type != BackendTypeV2 {
+		t.Fatalf("Primary.Type = %q, want v2 (synthesized from main)", got.Checkpoints.Primary.Type)
+	}
+	if got.Logging.Level != debugLevel {
+		t.Fatalf("Logging.Level = %q, want %q (from v2 local)", got.Logging.Level, debugLevel)
 	}
 }
 
@@ -649,5 +665,262 @@ func TestSynthesizeFromLegacy_RoundTripFromBytes(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("round-trip mismatch:\n got: %+v\nwant: %+v", got, want)
+	}
+}
+
+// TestLoadV2_PartialCheckpointsOverride is the regression test for the
+// finding that wholesale top-level group replacement could silently erase
+// the primary backend. The local override here only specifies mirrors;
+// primary, retention, and other fields must be preserved from the main file.
+func TestLoadV2_PartialCheckpointsOverride(t *testing.T) {
+	setupSettingsDir(t,
+		`{
+			"schema": 2,
+			"checkpoints": {
+				"primary": {"type": "v2"},
+				"full_transcript_retention_days": 90,
+				"filtered_fetches": true
+			}
+		}`,
+		`{
+			"schema": 2,
+			"checkpoints": {"mirrors": [{"type": "gmeta"}]}
+		}`,
+	)
+	got, err := LoadV2(context.Background())
+	if err != nil {
+		t.Fatalf("LoadV2: %v", err)
+	}
+	if got.Checkpoints.Primary.Type != BackendTypeV2 {
+		t.Fatalf("Primary.Type = %q, want v2 (preserved)", got.Checkpoints.Primary.Type)
+	}
+	if got.Checkpoints.FullTranscriptRetentionDays != 90 {
+		t.Fatalf("FullTranscriptRetentionDays = %d, want 90 (preserved)", got.Checkpoints.FullTranscriptRetentionDays)
+	}
+	if !got.Checkpoints.FilteredFetches {
+		t.Fatal("FilteredFetches = false, want true (preserved)")
+	}
+	if len(got.Checkpoints.Mirrors) != 1 || got.Checkpoints.Mirrors[0].Type != BackendTypeGmeta {
+		t.Fatalf("Mirrors = %v, want [{gmeta}] (added by override)", got.Checkpoints.Mirrors)
+	}
+}
+
+// TestLoadV2_PartialNestedFieldsPreserved is a stronger version of the
+// above that exercises every nested group with a partial override. Acts
+// as a sanity check on the assumption that Go's json decoder preserves
+// struct fields not mentioned in the JSON.
+func TestLoadV2_PartialNestedFieldsPreserved(t *testing.T) {
+	setupSettingsDir(t,
+		`{
+			"schema": 2,
+			"enabled": true,
+			"logging": {"level": "info"},
+			"checkpoints": {
+				"primary": {"type": "v2"},
+				"full_transcript_retention_days": 60
+			},
+			"hooks": {"commit_linking": "always", "absolute_git_hook_path": true},
+			"features": {"summarize": true, "external_agents": true}
+		}`,
+		`{
+			"schema": 2,
+			"hooks": {"commit_linking": "prompt"},
+			"features": {"vercel": true}
+		}`,
+	)
+	got, err := LoadV2(context.Background())
+	if err != nil {
+		t.Fatalf("LoadV2: %v", err)
+	}
+	if got.Hooks.CommitLinking != CommitLinkingPrompt {
+		t.Fatalf("Hooks.CommitLinking = %q, want prompt (overridden)", got.Hooks.CommitLinking)
+	}
+	if !got.Hooks.AbsoluteGitHookPath {
+		t.Fatal("Hooks.AbsoluteGitHookPath = false, want true (preserved)")
+	}
+	if !got.Features.Vercel {
+		t.Fatal("Features.Vercel = false, want true (overridden)")
+	}
+	if !got.Features.Summarize {
+		t.Fatal("Features.Summarize = false, want true (preserved)")
+	}
+	if !got.Features.ExternalAgents {
+		t.Fatal("Features.ExternalAgents = false, want true (preserved)")
+	}
+	if got.Checkpoints.Primary.Type != BackendTypeV2 {
+		t.Fatalf("Primary.Type = %q, want v2 (preserved)", got.Checkpoints.Primary.Type)
+	}
+	if got.Checkpoints.FullTranscriptRetentionDays != 60 {
+		t.Fatalf("FullTranscriptRetentionDays = %d, want 60 (preserved)", got.Checkpoints.FullTranscriptRetentionDays)
+	}
+	if got.Logging.Level != "info" {
+		t.Fatalf("Logging.Level = %q, want info (preserved)", got.Logging.Level)
+	}
+}
+
+// TestLoadV2_LegacyOverridePartial verifies that a legacy override only
+// touches the v2 fields it explicitly mentions, leaving the rest of the v2
+// base intact. Mirror of TestLoadV2_PartialCheckpointsOverride for the
+// legacy-shape override path.
+func TestLoadV2_LegacyOverridePartial(t *testing.T) {
+	setupSettingsDir(t,
+		`{
+			"schema": 2,
+			"checkpoints": {"primary": {"type": "v2"}, "filtered_fetches": true},
+			"hooks": {"commit_linking": "always"}
+		}`,
+		`{"log_level": "`+debugLevel+`"}`,
+	)
+	got, err := LoadV2(context.Background())
+	if err != nil {
+		t.Fatalf("LoadV2: %v", err)
+	}
+	if got.Logging.Level != debugLevel {
+		t.Fatalf("Logging.Level = %q, want %q", got.Logging.Level, debugLevel)
+	}
+	if got.Checkpoints.Primary.Type != BackendTypeV2 {
+		t.Fatalf("Primary.Type = %q, want v2 (preserved)", got.Checkpoints.Primary.Type)
+	}
+	if !got.Checkpoints.FilteredFetches {
+		t.Fatal("FilteredFetches = false, want true (preserved)")
+	}
+	if got.Hooks.CommitLinking != CommitLinkingAlways {
+		t.Fatalf("Hooks.CommitLinking = %q, want always (preserved)", got.Hooks.CommitLinking)
+	}
+}
+
+// TestLoadV2_LegacyOverridePartialStrategyOptions is the legacy-override
+// counterpart for strategy_options-keyed fields that map onto Checkpoints.
+func TestLoadV2_LegacyOverridePartialStrategyOptions(t *testing.T) {
+	setupSettingsDir(t,
+		`{
+			"schema": 2,
+			"checkpoints": {
+				"primary": {"type": "v1"},
+				"full_transcript_retention_days": 30,
+				"filtered_fetches": true
+			}
+		}`,
+		`{"strategy_options": {"checkpoints_v2": true}}`,
+	)
+	got, err := LoadV2(context.Background())
+	if err != nil {
+		t.Fatalf("LoadV2: %v", err)
+	}
+	if got.Checkpoints.Primary.Type != BackendTypeV2 {
+		t.Fatalf("Primary.Type = %q, want v2 (overridden)", got.Checkpoints.Primary.Type)
+	}
+	if got.Checkpoints.FullTranscriptRetentionDays != 30 {
+		t.Fatalf("FullTranscriptRetentionDays = %d, want 30 (preserved)", got.Checkpoints.FullTranscriptRetentionDays)
+	}
+	if !got.Checkpoints.FilteredFetches {
+		t.Fatal("FilteredFetches = false, want true (preserved)")
+	}
+}
+
+// TestSettings_Validate covers the semantic validation rules.
+func TestSettings_Validate(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		s       *Settings
+		wantErr string
+	}{
+		{
+			name:    "nil settings",
+			s:       nil,
+			wantErr: "nil",
+		},
+		{
+			name: "wrong schema",
+			s: &Settings{
+				Schema:      1,
+				Checkpoints: CheckpointsConfig{Primary: BackendConfig{Type: BackendTypeV1}},
+			},
+			wantErr: "schema",
+		},
+		{
+			name: "empty primary type",
+			s: &Settings{
+				Schema: CurrentSchemaVersion,
+			},
+			wantErr: "checkpoints.primary.type",
+		},
+		{
+			name: "unknown primary type",
+			s: &Settings{
+				Schema:      CurrentSchemaVersion,
+				Checkpoints: CheckpointsConfig{Primary: BackendConfig{Type: "totally-fake"}},
+			},
+			wantErr: "checkpoints.primary.type",
+		},
+		{
+			name: "unknown mirror type",
+			s: &Settings{
+				Schema: CurrentSchemaVersion,
+				Checkpoints: CheckpointsConfig{
+					Primary: BackendConfig{Type: BackendTypeV2},
+					Mirrors: []BackendConfig{{Type: "unknown-backend"}},
+				},
+			},
+			wantErr: "checkpoints.mirrors[0].type",
+		},
+		{
+			name: "summary model without provider",
+			s: &Settings{
+				Schema:            CurrentSchemaVersion,
+				Checkpoints:       CheckpointsConfig{Primary: BackendConfig{Type: BackendTypeV1}},
+				SummaryGeneration: &SummaryGenerationConfig{Model: "sonnet"},
+			},
+			wantErr: "summary_generation.model",
+		},
+		{
+			name: "valid: defaults",
+			s:    defaultSettings(),
+		},
+		{
+			name: "valid: full v2 with gmeta mirror",
+			s: &Settings{
+				Schema: CurrentSchemaVersion,
+				Checkpoints: CheckpointsConfig{
+					Primary: BackendConfig{Type: BackendTypeV2},
+					Mirrors: []BackendConfig{{Type: BackendTypeGmeta}},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := tt.s.Validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Validate() = nil, want error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate() error %q, want to contain %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestLoadV2_RejectsInvalidV2 verifies that LoadV2 surfaces validation
+// errors as load-time failures rather than letting them through to first use.
+func TestLoadV2_RejectsInvalidV2(t *testing.T) {
+	setupSettingsDir(t, `{
+		"schema": 2,
+		"checkpoints": {"primary": {"type": "totally-fake"}}
+	}`, "")
+	_, err := LoadV2(context.Background())
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "checkpoints.primary.type") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

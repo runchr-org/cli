@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 
@@ -28,14 +27,20 @@ const (
 	legacyKeyGmeta                       = "gmeta"
 	legacyKeyPushSessions                = "push_sessions"
 	legacyKeyFullTranscriptRetentionDays = "full_transcript_generation_retention_days"
+	legacyKeyCheckpointsV2               = "checkpoints_v2"
+	legacyKeyCheckpointsVersion          = "checkpoints_version"
+	legacyKeyCheckpointRemote            = "checkpoint_remote"
+	legacyKeyFilteredFetches             = "filtered_fetches"
+	legacyKeySummarize                   = "summarize"
 )
 
 // LoadV2 loads settings as the v2 shape. Files declaring "schema": 2 are
 // parsed natively; older files are loaded via the legacy parser and
-// synthesized. The local override file is merged the same way.
+// synthesized. Mixed shapes (one file v2, one legacy) are supported: the
+// legacy file is translated field-by-field on top of the v2 base.
 //
-// Returns Settings with sensible defaults populated (Schema=2, Enabled=true)
-// if neither settings file exists.
+// Returns Settings with documented defaults if neither settings file exists.
+// Validates the result before returning so semantic errors surface at load time.
 func LoadV2(ctx context.Context) (*Settings, error) {
 	mainAbs, err := paths.AbsPath(ctx, EntireSettingsFile)
 	if err != nil {
@@ -55,25 +60,14 @@ func LoadV2(ctx context.Context) (*Settings, error) {
 		return nil, fmt.Errorf("reading local settings file: %w", localErr)
 	}
 
-	switch {
-	case mainData == nil && localData == nil:
-		return defaultSettings(), nil
-
-	case hasMixedShapes(mainData, localData):
-		return nil, errors.New("mixed schema versions in settings files; run `entire migrate-config` to convert all settings to schema 2")
-
-	case isSchemaV2(mainData) || isSchemaV2(localData):
-		return loadFromV2Files(mainData, localData)
-
-	default:
-		// Both files (if present) are legacy shape. Defer to the legacy
-		// loader to handle merging, then synthesize into v2.
-		legacy, err := loadMergedSettings(mainAbs, localAbs)
-		if err != nil {
-			return nil, err
-		}
-		return synthesizeFromLegacy(legacy), nil
+	settings, err := buildSettings(mainData, localData, mainAbs, localAbs)
+	if err != nil {
+		return nil, err
 	}
+	if err := settings.Validate(); err != nil {
+		return nil, fmt.Errorf("settings invalid: %w", err)
+	}
+	return settings, nil
 }
 
 // LoadV2FromBytes parses a single settings document from raw bytes.
@@ -83,14 +77,89 @@ func LoadV2FromBytes(data []byte) (*Settings, error) {
 	if len(data) == 0 {
 		return defaultSettings(), nil
 	}
+	var (
+		settings *Settings
+		err      error
+	)
 	if isSchemaV2(data) {
-		return parseV2Bytes(data)
+		settings, err = parseV2Bytes(data)
+	} else {
+		var legacy *EntireSettings
+		legacy, err = LoadFromBytes(data)
+		if err == nil {
+			settings = synthesizeFromLegacy(legacy)
+		}
 	}
-	legacy, err := LoadFromBytes(data)
 	if err != nil {
 		return nil, err
 	}
+	if err := settings.Validate(); err != nil {
+		return nil, fmt.Errorf("settings invalid: %w", err)
+	}
+	return settings, nil
+}
+
+// buildSettings constructs the merged Settings from raw main and local
+// bytes. Each file may independently be v2 or legacy; this is what makes
+// incremental migration of the gitignored local override safe.
+//
+// When both files are legacy, we delegate to the legacy loadMergedSettings
+// so the legacy granular-merge behavior (PII fields, summary_generation
+// provider/model interaction) is preserved verbatim before synthesis.
+func buildSettings(mainData, localData []byte, mainAbs, localAbs string) (*Settings, error) {
+	if mainData == nil && localData == nil {
+		return defaultSettings(), nil
+	}
+	if !isSchemaV2(mainData) && !isSchemaV2(localData) {
+		legacy, err := loadMergedSettings(mainAbs, localAbs)
+		if err != nil {
+			return nil, err
+		}
+		return synthesizeFromLegacy(legacy), nil
+	}
+
+	// At least one file is v2. Establish the base from the main file (v2
+	// or synthesized legacy), then apply the local file as the right kind
+	// of override.
+	base, err := buildBase(mainData)
+	if err != nil {
+		return nil, err
+	}
+	if localData != nil {
+		if err := applyOverride(base, localData); err != nil {
+			return nil, err
+		}
+	}
+	return base, nil
+}
+
+// buildBase parses the main file into a Settings, choosing between the v2
+// parser and the legacy synthesizer based on shape.
+func buildBase(data []byte) (*Settings, error) {
+	if data == nil {
+		return defaultSettings(), nil
+	}
+	if isSchemaV2(data) {
+		settings, err := parseV2Bytes(data)
+		if err != nil {
+			return nil, fmt.Errorf("parsing settings file: %w", err)
+		}
+		return settings, nil
+	}
+	legacy, err := LoadFromBytes(data)
+	if err != nil {
+		return nil, fmt.Errorf("parsing settings file: %w", err)
+	}
 	return synthesizeFromLegacy(legacy), nil
+}
+
+// applyOverride merges an override file (v2 or legacy) onto an existing v2
+// base. Routes to the appropriate per-shape applier.
+func applyOverride(base *Settings, data []byte) error {
+	if isSchemaV2(data) {
+		return mergeV2Override(base, data)
+	}
+	return applyLegacyOverride(base, data)
 }
 
 // readSettingsFileIfExists returns the file contents, or (nil, nil) if the
@@ -122,38 +191,9 @@ func isSchemaV2(data []byte) bool {
 	return probe.Schema >= CurrentSchemaVersion
 }
 
-// hasMixedShapes reports whether main and local settings files declare
-// different schema shapes (one v2, one legacy). Returns false when either
-// file is missing — only the both-present-different-shape case is mixed.
-func hasMixedShapes(mainData, localData []byte) bool {
-	if mainData == nil || localData == nil {
-		return false
-	}
-	return isSchemaV2(mainData) != isSchemaV2(localData)
-}
-
-// loadFromV2Files parses one or both files as schema-v2 JSON and applies the
-// local override on top of the main settings. At least one of the inputs is
-// guaranteed by the caller to be a v2 document.
-func loadFromV2Files(mainData, localData []byte) (*Settings, error) {
-	settings := defaultSettings()
-	if mainData != nil {
-		parsed, err := parseV2Bytes(mainData)
-		if err != nil {
-			return nil, fmt.Errorf("parsing settings file: %w", err)
-		}
-		settings = parsed
-	}
-	if localData != nil {
-		if err := mergeV2Override(settings, localData); err != nil {
-			return nil, fmt.Errorf("merging local settings: %w", err)
-		}
-	}
-	return settings, nil
-}
-
-// parseV2Bytes parses a single schema-v2 JSON document into Settings.
-// Strict decoding rejects unknown fields so typos become loud failures.
+// parseV2Bytes parses a single schema-v2 JSON document into a fresh Settings
+// (with defaults). Strict decoding rejects unknown fields so typos become
+// loud failures.
 func parseV2Bytes(data []byte) (*Settings, error) {
 	settings := defaultSettings()
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -164,75 +204,141 @@ func parseV2Bytes(data []byte) (*Settings, error) {
 	return settings, nil
 }
 
-// mergeV2Override applies local overrides on top of an existing Settings.
-// Only top-level fields explicitly present in the override JSON are
-// replaced; absent fields preserve the base. Per-field merge of nested
-// groups is intentionally not done — the legacy code only got more
-// granular for redaction/PII, and we will revisit when a real call site
-// needs it.
+// mergeV2Override merges a schema-v2 override on top of an existing
+// Settings. Decoding into the live struct in place gives us field-level
+// granular merge for free: Go's json package leaves struct fields not
+// mentioned in the JSON unchanged, including nested fields. So an override
+// of {"checkpoints": {"mirrors": [...]}} preserves base.Checkpoints.Primary
+// and the rest of base.Checkpoints, only replacing Mirrors.
+//
+// Caveats: pointer fields and slices are decoded by value-replacement, not
+// granular merge. If a user wants to change one field of base.Redaction
+// they must spell out enough of the override to reconstruct the desired
+// shape. This matches what JSON decoding naturally does and is consistent
+// with how config tooling generally behaves.
 func mergeV2Override(base *Settings, data []byte) error {
-	var presence map[string]json.RawMessage
-	if err := json.Unmarshal(data, &presence); err != nil {
-		return fmt.Errorf("parsing local settings: %w", err)
-	}
-	if _, ok := presence["schema"]; !ok {
-		// Defensive: the v2 path is only entered when at least one file
-		// declares schema 2; a local-only override without it would have
-		// taken the legacy branch in LoadV2.
-		return errors.New("local settings file is missing required schema field")
-	}
-
-	if err := decodeOverrideField(presence, "enabled", &base.Enabled); err != nil {
-		return err
-	}
-	if err := decodeOverrideField(presence, "local_dev", &base.LocalDev); err != nil {
-		return err
-	}
-	if err := decodeOverrideField(presence, "logging", &base.Logging); err != nil {
-		return err
-	}
-	if err := decodeOverrideField(presence, "checkpoints", &base.Checkpoints); err != nil {
-		return err
-	}
-	if err := decodeOverrideField(presence, "hooks", &base.Hooks); err != nil {
-		return err
-	}
-	if err := decodeOverrideField(presence, "features", &base.Features); err != nil {
-		return err
-	}
-	if err := decodeOverrideField(presence, "redaction", &base.Redaction); err != nil {
-		return err
-	}
-	if err := decodeOverrideField(presence, "telemetry", &base.Telemetry); err != nil {
-		return err
-	}
-	if err := decodeOverrideField(presence, "summary_generation", &base.SummaryGeneration); err != nil {
-		return err
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(base); err != nil {
+		return fmt.Errorf("merging local settings: %w", err)
 	}
 	return nil
 }
 
-// decodeOverrideField decodes the named override field into dst if present
-// in the parsed top-level map. No-op when the key is absent, preserving
-// the base value.
-func decodeOverrideField(presence map[string]json.RawMessage, key string, dst any) error {
-	raw, ok := presence[key]
+// applyLegacyOverride merges a legacy-shape override on top of an existing
+// v2 Settings. Translates each legacy key present in the override to its
+// v2 destination. Fields not present in the override are left untouched —
+// this is what makes "v2 main + legacy local" usable without forcing the
+// user to migrate the local file before the main one.
+func applyLegacyOverride(base *Settings, data []byte) error {
+	legacy, err := LoadFromBytes(data)
+	if err != nil {
+		return fmt.Errorf("parsing local settings: %w", err)
+	}
+
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(data, &present); err != nil {
+		return fmt.Errorf("parsing local settings: %w", err)
+	}
+
+	overlay := synthesizeFromLegacy(legacy)
+	applyTopLevelLegacyKeys(base, overlay, present)
+
+	soRaw, ok := present["strategy_options"]
 	if !ok {
 		return nil
 	}
-	if err := json.Unmarshal(raw, dst); err != nil {
-		return fmt.Errorf("parsing %s override: %w", key, err)
+	var so map[string]json.RawMessage
+	if err := json.Unmarshal(soRaw, &so); err != nil {
+		return fmt.Errorf("parsing local strategy_options: %w", err)
 	}
+	applyStrategyOptionLegacyKeys(base, overlay, so)
 	return nil
 }
 
+// applyTopLevelLegacyKeys copies overlay → base for top-level legacy keys
+// present in the override. Each branch maps one legacy key to its v2
+// destination.
+func applyTopLevelLegacyKeys(base, overlay *Settings, present map[string]json.RawMessage) {
+	if _, ok := present["enabled"]; ok {
+		base.Enabled = overlay.Enabled
+	}
+	if _, ok := present["local_dev"]; ok {
+		base.LocalDev = overlay.LocalDev
+	}
+	if _, ok := present["log_level"]; ok {
+		base.Logging.Level = overlay.Logging.Level
+	}
+	if _, ok := present["commit_linking"]; ok {
+		base.Hooks.CommitLinking = overlay.Hooks.CommitLinking
+	}
+	if _, ok := present["absolute_git_hook_path"]; ok {
+		base.Hooks.AbsoluteGitHookPath = overlay.Hooks.AbsoluteGitHookPath
+	}
+	if _, ok := present["external_agents"]; ok {
+		base.Features.ExternalAgents = overlay.Features.ExternalAgents
+	}
+	if _, ok := present["vercel"]; ok {
+		base.Features.Vercel = overlay.Features.Vercel
+	}
+	if _, ok := present["telemetry"]; ok {
+		base.Telemetry = overlay.Telemetry
+	}
+	if _, ok := present["sign_checkpoint_commits"]; ok {
+		base.Checkpoints.SignCommits = overlay.Checkpoints.SignCommits
+	}
+	if _, ok := present["redaction"]; ok {
+		base.Redaction = overlay.Redaction
+	}
+	_, hasSummaryGen := present["summary_generation"]
+	_, hasSummaryTimeout := present["summary_timeout_seconds"]
+	if hasSummaryGen || hasSummaryTimeout {
+		base.SummaryGeneration = overlay.SummaryGeneration
+	}
+}
+
+// applyStrategyOptionLegacyKeys copies overlay → base for strategy_options
+// keys present in the override. Each legacy strategy_options key maps to a
+// specific v2 destination on base.Checkpoints or base.Features.
+func applyStrategyOptionLegacyKeys(base, overlay *Settings, so map[string]json.RawMessage) {
+	if _, ok := so[legacyKeyCheckpointsV2]; ok {
+		base.Checkpoints.Primary = overlay.Checkpoints.Primary
+	}
+	if _, ok := so[legacyKeyCheckpointsVersion]; ok {
+		base.Checkpoints.Primary = overlay.Checkpoints.Primary
+	}
+	if _, ok := so[legacyKeyGmeta]; ok {
+		base.Checkpoints.Mirrors = overlay.Checkpoints.Mirrors
+	}
+	if _, ok := so[legacyKeyCheckpointRemote]; ok {
+		base.Checkpoints.Remote = overlay.Checkpoints.Remote
+	}
+	if _, ok := so[legacyKeyFullTranscriptRetentionDays]; ok {
+		base.Checkpoints.FullTranscriptRetentionDays = overlay.Checkpoints.FullTranscriptRetentionDays
+	}
+	if _, ok := so[legacyKeyFilteredFetches]; ok {
+		base.Checkpoints.FilteredFetches = overlay.Checkpoints.FilteredFetches
+	}
+	if _, ok := so[legacyKeyPushSessions]; ok {
+		base.Checkpoints.PushSessions = overlay.Checkpoints.PushSessions
+	}
+	if _, ok := so[legacyKeySummarize]; ok {
+		base.Features.Summarize = overlay.Features.Summarize
+	}
+}
+
 // defaultSettings returns the zero-value Settings with documented defaults
-// applied (Schema = 2, Enabled = true). Callers should treat this as the
-// starting point before parsing a file or merging overrides.
+// applied (Schema = 2, Enabled = true, Primary = v1). v1 is the default
+// primary for parity with the legacy "no version specified means v1"
+// behavior; users on a fresh repo see V2 only after `entire enable` writes
+// it explicitly.
 func defaultSettings() *Settings {
 	return &Settings{
 		Schema:  CurrentSchemaVersion,
 		Enabled: true,
+		Checkpoints: CheckpointsConfig{
+			Primary: BackendConfig{Type: BackendTypeV1},
+		},
 	}
 }
 

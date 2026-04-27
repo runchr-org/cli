@@ -3,6 +3,11 @@
 
 package settings
 
+import (
+	"errors"
+	"fmt"
+)
+
 // CurrentSchemaVersion is the schema version emitted by v2 writers.
 // Files marked with this version are parsed via the v2 path; older files
 // are loaded via the legacy parser and synthesized into Settings on the fly.
@@ -147,4 +152,46 @@ type SummaryGenerationConfig struct {
 	// TimeoutSeconds is an optional hard deadline for summary generation.
 	// Zero or negative means "unset" — the caller picks the default.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+}
+
+// knownBackendTypes is the set of backend type identifiers Validate accepts.
+// Kept here next to BackendConfig so adding a new backend type is a single
+// place to update.
+var knownBackendTypes = map[string]struct{}{
+	BackendTypeV1:    {},
+	BackendTypeV2:    {},
+	BackendTypeGmeta: {},
+}
+
+// Validate checks the Settings for semantic correctness beyond what JSON
+// decoding catches. Run this after parsing or merging to surface invalid
+// configurations at load time rather than at first use.
+//
+// Current rules:
+//   - Schema must be CurrentSchemaVersion (loaders accept >= but writers
+//     emit exactly the current value; older loaders rejecting newer files
+//     is a separate concern handled by isSchemaV2).
+//   - Checkpoints.Primary.Type must be a known backend.
+//   - Each Mirror's Type must be a known backend.
+//   - SummaryGeneration.Model requires SummaryGeneration.Provider, matching
+//     the legacy SummaryGenerationSettings.Validate semantics.
+func (s *Settings) Validate() error {
+	if s == nil {
+		return errors.New("settings: nil")
+	}
+	if s.Schema != CurrentSchemaVersion {
+		return fmt.Errorf("settings: schema = %d, want %d", s.Schema, CurrentSchemaVersion)
+	}
+	if _, ok := knownBackendTypes[s.Checkpoints.Primary.Type]; !ok {
+		return fmt.Errorf("checkpoints.primary.type = %q: must be one of v1, v2, gmeta", s.Checkpoints.Primary.Type)
+	}
+	for i, m := range s.Checkpoints.Mirrors {
+		if _, ok := knownBackendTypes[m.Type]; !ok {
+			return fmt.Errorf("checkpoints.mirrors[%d].type = %q: must be one of v1, v2, gmeta", i, m.Type)
+		}
+	}
+	if s.SummaryGeneration != nil && s.SummaryGeneration.Model != "" && s.SummaryGeneration.Provider == "" {
+		return fmt.Errorf("summary_generation.model %q set without summary_generation.provider", s.SummaryGeneration.Model)
+	}
+	return nil
 }
