@@ -251,7 +251,7 @@ func TestComposeReviewPrompt_SkillsOnly(t *testing.T) {
 	t.Parallel()
 	prompt := composeReviewPrompt(settings.ReviewConfig{
 		Skills: []string{"/review-pr", "/test-auditor"},
-	}, "")
+	}, "", reviewPromptScope{})
 	if strings.Contains(prompt, "entire-review:finish") {
 		t.Errorf("prompt should not reference finish skill; got: %s", prompt)
 	}
@@ -268,7 +268,7 @@ func TestComposeReviewPrompt_CustomPromptWinsOverSkills(t *testing.T) {
 	prompt := composeReviewPrompt(settings.ReviewConfig{
 		Skills: []string{"/review-pr"},
 		Prompt: custom,
-	}, "")
+	}, "", reviewPromptScope{})
 	if prompt != custom {
 		t.Errorf("composeReviewPrompt = %q, want verbatim custom prompt %q", prompt, custom)
 	}
@@ -278,7 +278,7 @@ func TestComposeReviewPrompt_CustomPromptWinsOverSkills(t *testing.T) {
 // the spawn path with empty config.
 func TestComposeReviewPrompt_EmptyConfigReturnsEmpty(t *testing.T) {
 	t.Parallel()
-	if got := composeReviewPrompt(settings.ReviewConfig{}, ""); got != "" {
+	if got := composeReviewPrompt(settings.ReviewConfig{}, "", reviewPromptScope{}); got != "" {
 		t.Errorf("empty config = %q, want empty", got)
 	}
 }
@@ -321,11 +321,162 @@ func TestComposeReviewPrompt_AppendsRunContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := composeReviewPrompt(tt.cfg, tt.runContext)
+			got := composeReviewPrompt(tt.cfg, tt.runContext, reviewPromptScope{})
 			if got != tt.want {
 				t.Errorf("composeReviewPrompt(%+v, %q) =\n%q\nwant:\n%q", tt.cfg, tt.runContext, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestComposeReviewPrompt_AppendsScopeClause locks the format and
+// presence rules for the scope clause: empty BaseRef omits it; BaseRef
+// alone renders without the branch label; branch+BaseRef renders the
+// full clause after the base prompt.
+func TestComposeReviewPrompt_AppendsScopeClause(t *testing.T) {
+	t.Parallel()
+	cfg := settings.ReviewConfig{Skills: []string{"/review"}}
+	tests := []struct {
+		name           string
+		scope          reviewPromptScope
+		wantContains   []string
+		wantNotContain []string
+	}{
+		{
+			name:           "no BaseRef, no clause",
+			scope:          reviewPromptScope{Branch: "main"},
+			wantNotContain: []string{"Review scope:"},
+		},
+		{
+			name:         "BaseRef only, no branch label",
+			scope:        reviewPromptScope{BaseRef: "main"},
+			wantContains: []string{"Review scope:", "vs base `main`", "git diff main...HEAD"},
+			wantNotContain: []string{
+				"(``)",                   // empty branch label
+				"git status --porcelain", // commits-only — uncommitted is noise
+			},
+		},
+		{
+			name:  "branch + BaseRef",
+			scope: reviewPromptScope{Branch: "hackathon-slides", BaseRef: "audit-traceability"},
+			wantContains: []string{
+				"(`hackathon-slides`)",
+				"vs base `audit-traceability`",
+				"git diff audit-traceability...HEAD",
+				"Do not review uncommitted",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := composeReviewPrompt(cfg, "", tt.scope)
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("missing %q in:\n%s", want, got)
+				}
+			}
+			for _, unwant := range tt.wantNotContain {
+				if strings.Contains(got, unwant) {
+					t.Errorf("unexpected %q in:\n%s", unwant, got)
+				}
+			}
+		})
+	}
+}
+
+// Empty cfg + empty runContext + scope-only should still produce the
+// scope clause (an agent run with no skills configured still gets a
+// useful instruction).
+func TestComposeReviewPrompt_ScopeOnlyNoBase(t *testing.T) {
+	t.Parallel()
+	got := composeReviewPrompt(settings.ReviewConfig{}, "", reviewPromptScope{BaseRef: "main"})
+	if !strings.HasPrefix(got, "Review scope:") {
+		t.Errorf("scope-only should produce clause as full prompt; got:\n%s", got)
+	}
+}
+
+// TestDetectScopeBaseRef_PicksClosestAncestorBranch reproduces the
+// branch-on-branch topology that motivated the scope rework: HEAD is on
+// `feature` which was forked from `intermediate` (forked from `main`).
+// The scope base must resolve to `intermediate`, not `main`, so the
+// review covers only the commits unique to `feature` (mirroring the
+// demo-repo `hackathon-slides` / `audit-traceability` / `main` setup).
+func TestDetectScopeBaseRef_PicksClosestAncestorBranch(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	testutil.InitRepo(t, tmp)
+	testutil.WriteFile(t, tmp, "f.txt", "main")
+	testutil.GitAdd(t, tmp, "f.txt")
+	testutil.GitCommit(t, tmp, "main commit")
+
+	// Fork `intermediate` off main, add a commit there.
+	testutil.GitCheckoutNewBranch(t, tmp, "intermediate")
+	testutil.WriteFile(t, tmp, "f.txt", "intermediate")
+	testutil.GitAdd(t, tmp, "f.txt")
+	testutil.GitCommit(t, tmp, "intermediate commit")
+
+	// Fork `feature` off intermediate, add a commit there.
+	testutil.GitCheckoutNewBranch(t, tmp, "feature")
+	testutil.WriteFile(t, tmp, "f.txt", "feature")
+	testutil.GitAdd(t, tmp, "f.txt")
+	testutil.GitCommit(t, tmp, "feature commit")
+
+	got := detectScopeBaseRef(context.Background(), tmp)
+	if got != "intermediate" {
+		t.Errorf("detectScopeBaseRef = %q, want \"intermediate\" (closest ancestor branch, not main)", got)
+	}
+}
+
+// TestDetectScopeBaseRef_FallsBackToDefaultBaseBranch covers the simple
+// case where the branch was forked directly from the default base —
+// there's no intermediate branch tip to find, so we fall through to
+// detectBaseBranch (which resolves origin/HEAD or main/master).
+func TestDetectScopeBaseRef_FallsBackToDefaultBaseBranch(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	testutil.InitRepo(t, tmp)
+	testutil.WriteFile(t, tmp, "f.txt", "main")
+	testutil.GitAdd(t, tmp, "f.txt")
+	testutil.GitCommit(t, tmp, "main commit")
+
+	testutil.GitCheckoutNewBranch(t, tmp, "feature")
+	testutil.WriteFile(t, tmp, "f.txt", "feature")
+	testutil.GitAdd(t, tmp, "f.txt")
+	testutil.GitCommit(t, tmp, "feature commit")
+
+	got := detectScopeBaseRef(context.Background(), tmp)
+	// detectBaseBranch returns main (or master) for the fallback. Either
+	// is acceptable — the point is we didn't pick "feature" itself.
+	if got != "main" && got != "master" {
+		t.Errorf("detectScopeBaseRef = %q, want \"main\" or \"master\" (fallback)", got)
+	}
+}
+
+// TestDetectScopeBaseRef_SkipsEntireInternalBranches makes sure the
+// `entire/*` shadow branches the strategy creates don't get picked as
+// scope bases — that would produce scope clauses pointed at internal
+// state and produce empty diffs.
+func TestDetectScopeBaseRef_SkipsEntireInternalBranches(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	testutil.InitRepo(t, tmp)
+	testutil.WriteFile(t, tmp, "f.txt", "main")
+	testutil.GitAdd(t, tmp, "f.txt")
+	testutil.GitCommit(t, tmp, "main commit")
+
+	// An entire/* branch with the same tip as main shouldn't be
+	// preferred over main.
+	testutil.CreateBranch(t, tmp, "entire/abc1234-def567")
+
+	testutil.GitCheckoutNewBranch(t, tmp, "feature")
+	testutil.WriteFile(t, tmp, "f.txt", "feature")
+	testutil.GitAdd(t, tmp, "f.txt")
+	testutil.GitCommit(t, tmp, "feature commit")
+
+	got := detectScopeBaseRef(context.Background(), tmp)
+	if strings.HasPrefix(got, "entire/") {
+		t.Errorf("detectScopeBaseRef = %q, must not pick an entire/* internal branch", got)
 	}
 }
 
@@ -363,9 +514,12 @@ func TestRunReview_CallsPromptForRunContextBeforeSpawn(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("marker should exist (non-launchable fallback): ok=%v err=%v", ok, err)
 	}
-	want := "always flag side effects\n\nFor this review: focus on auth refactor"
-	if m.Prompt != want {
-		t.Errorf("marker.Prompt = %q\nwant %q", m.Prompt, want)
+	// Match on the run-context composition pinned by this test; the scope
+	// clause is asserted separately in TestComposeReviewPrompt_AppendsScopeClause
+	// so we don't lock its exact wording here.
+	wantSubstr := "always flag side effects\n\nFor this review: focus on auth refactor"
+	if !strings.Contains(m.Prompt, wantSubstr) {
+		t.Errorf("marker.Prompt missing %q; got:\n%s", wantSubstr, m.Prompt)
 	}
 }
 
@@ -410,10 +564,10 @@ func TestRunReview_MultiAgent_PassesRunContextToAllTasks(t *testing.T) {
 	if len(gotPrompts) != 2 {
 		t.Fatalf("expected 2 prompts, got %d", len(gotPrompts))
 	}
-	want := "always flag side effects\n\nFor this review: focus on auth"
+	wantSubstr := "always flag side effects\n\nFor this review: focus on auth"
 	for i, prompt := range gotPrompts {
-		if prompt != want {
-			t.Errorf("task[%d].Prompt =\n%q\nwant:\n%q", i, prompt, want)
+		if !strings.Contains(prompt, wantSubstr) {
+			t.Errorf("task[%d].Prompt missing %q; got:\n%s", i, wantSubstr, prompt)
 		}
 	}
 }

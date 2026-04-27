@@ -61,7 +61,7 @@ type runReviewDeps struct {
 type MultiAgentTask struct {
 	Agent  agent.HeadlessLauncher // set by dispatcher when routing to multi-agent
 	Name   string                 // agent registry key
-	Prompt string                 // composed via composeReviewPrompt(cfg, runContext)
+	Prompt string                 // composed via composeReviewPrompt(cfg, runContext, scope)
 }
 
 // MultiRunResult is the aggregated result of a multi-agent review. Runs
@@ -753,8 +753,13 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride string, de
 	// what the agent was asked to do (the same string passed to LaunchCmd
 	// below), rather than recomposing on the hook side. When the user has
 	// configured a custom Prompt, it wins verbatim; otherwise Skills are
-	// composed into the default "run these in order" template.
-	prompt := composeReviewPrompt(cfg, runContext)
+	// composed into the default "run these in order" template. The scope
+	// clause pins agents to "commits unique to this branch vs the closest
+	// ancestor branch," excluding work inherited from sibling branches.
+	prompt := composeReviewPrompt(cfg, runContext, reviewPromptScope{
+		Branch:  currentBranch(ctx),
+		BaseRef: detectScopeBaseRef(ctx, worktreeRoot),
+	})
 	if err := WritePendingReviewMarker(ctx, PendingReviewMarker{
 		AgentName:    agentName,
 		Skills:       cfg.Skills,
@@ -926,6 +931,18 @@ func pickSingleAgent(ctx context.Context, cmd *cobra.Command, eligible []agentCh
 // composed into every selected agent's prompt alongside the persistent cfg.
 func dispatchMultiAgent(ctx context.Context, cmd *cobra.Command, s *settings.EntireSettings, selected []string, runContext string, deps runReviewDeps) error {
 	out := cmd.OutOrStdout()
+	// Resolve scope once before composing per-agent prompts. Failures are
+	// non-fatal — composeReviewPrompt drops the scope clause for any
+	// missing field rather than refusing to spawn.
+	repoRoot, rootErr := paths.WorktreeRoot(ctx)
+	if rootErr != nil {
+		logging.Debug(ctx, "multi-agent dispatch: repo root resolve failed; scope clause omitted",
+			slog.String("error", rootErr.Error()))
+	}
+	scope := reviewPromptScope{
+		Branch:  currentBranch(ctx),
+		BaseRef: detectScopeBaseRef(ctx, repoRoot),
+	}
 	tasks := make([]MultiAgentTask, 0, len(selected))
 	for _, name := range selected {
 		cfg := s.Review[name]
@@ -943,7 +960,7 @@ func dispatchMultiAgent(ctx context.Context, cmd *cobra.Command, s *settings.Ent
 		tasks = append(tasks, MultiAgentTask{
 			Agent:  hl,
 			Name:   name,
-			Prompt: composeReviewPrompt(cfg, runContext),
+			Prompt: composeReviewPrompt(cfg, runContext, scope),
 		})
 	}
 
@@ -1176,13 +1193,29 @@ func verifyConfiguredSkillsInstalled(ctx context.Context, ag agent.Agent, cfg se
 	)
 }
 
+// reviewPromptScope is best-effort context about the surface to review.
+// All fields are optional: empty values shrink or omit the scope clause
+// rather than failing. Branch is the short branch name ("" = detached).
+// BaseRef is the upstream comparison point — typically the closest
+// non-self ancestor branch (for branch-on-branch workflows) or the
+// repo's default base branch — used to scope the review to "commits
+// unique to this branch."
+type reviewPromptScope struct {
+	Branch  string
+	BaseRef string
+}
+
 // composeReviewPrompt builds the prompt sent to the agent from a
-// ReviewConfig plus optional per-run context. The base is whichever of
-// cfg.Prompt (persistent) or a skills-composed template is set; per-run
-// context, when non-empty, is appended with a clear marker so the agent
-// can distinguish persistent preferences from per-run intent. Empty
-// cfg + empty runContext returns "".
-func composeReviewPrompt(cfg settings.ReviewConfig, runContext string) string {
+// ReviewConfig plus optional per-run context and scope. The base is
+// whichever of cfg.Prompt (persistent) or a skills-composed template is
+// set; per-run context, when non-empty, is appended with a clear marker
+// so the agent can distinguish persistent preferences from per-run
+// intent. The scope clause, when scope has a BaseRef, pins the review
+// surface to "commits unique to this branch vs the base ref" — making
+// claude and codex agree on what to review and excluding work
+// inherited from sibling branches. Empty cfg + empty runContext +
+// zero scope returns "".
+func composeReviewPrompt(cfg settings.ReviewConfig, runContext string, scope reviewPromptScope) string {
 	var base string
 	if cfg.Prompt != "" {
 		base = cfg.Prompt
@@ -1195,13 +1228,48 @@ func composeReviewPrompt(cfg settings.ReviewConfig, runContext string) string {
 		base = sb.String()
 	}
 
-	if runContext == "" {
+	if runContext != "" {
+		if base == "" {
+			base = runContext
+		} else {
+			base = base + "\n\nFor this review: " + runContext
+		}
+	}
+
+	clause := scopeClause(scope)
+	if clause == "" {
 		return base
 	}
 	if base == "" {
-		return runContext
+		return clause
 	}
-	return base + "\n\nFor this review: " + runContext
+	return base + "\n\n" + clause
+}
+
+// scopeClause renders the scope hint appended to the agent prompt.
+// Returns "" when scope carries no usable information (no BaseRef),
+// since without a comparison point the clause would be lying about what
+// to review.
+//
+// The clause is deliberately commits-only — uncommitted working-tree
+// changes (e.g. regenerated .pyc bytecode, editor lockfiles) are noise
+// that pollutes the review when the user just wants feedback on
+// committed work. Users who want uncommitted work reviewed should
+// either commit it first or say so in the per-run prompt textarea.
+func scopeClause(scope reviewPromptScope) string {
+	if scope.BaseRef == "" {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("Review scope: only the commits unique to this branch")
+	if scope.Branch != "" {
+		fmt.Fprintf(&sb, " (`%s`)", scope.Branch)
+	}
+	fmt.Fprintf(&sb, " vs base `%s`.\n", scope.BaseRef)
+	fmt.Fprintf(&sb, "Use `git diff %s...HEAD` to find the surface to review. ", scope.BaseRef)
+	fmt.Fprintf(&sb, "The three-dot syntax (`%s...HEAD`) excludes commits that came from sibling branches and are already on `%s` — do not review those. ", scope.BaseRef, scope.BaseRef)
+	sb.WriteString("Do not review uncommitted working-tree changes (regenerated bytecode, editor temp files, etc.) unless explicitly asked.")
+	return sb.String()
 }
 
 // currentHeadSHA returns the current HEAD commit hash as a 40-char hex string.
@@ -1216,6 +1284,74 @@ func currentHeadSHA(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("git rev-parse HEAD: %w", err)
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+// currentBranch returns the short branch name, or "" when HEAD is
+// detached or the lookup fails. Best-effort by design: callers use it to
+// label the scope clause, not to drive control flow.
+func currentBranch(ctx context.Context) string {
+	repoRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		return ""
+	}
+	name := gitString(ctx, repoRoot, "rev-parse", "--abbrev-ref", "HEAD")
+	if name == detachedHEADDisplay {
+		return ""
+	}
+	return name
+}
+
+// detectScopeBaseRef finds the most appropriate base for "commits unique
+// to this branch." Strategy:
+//
+//  1. Find local branches whose tip is an ancestor of HEAD~1 (i.e. the
+//     branch's history flows through them, but they're not just HEAD
+//     itself). Skip the current branch and entire/* internal branches.
+//  2. Pick the candidate whose tip is most recently authored — that's
+//     the branch this one was forked from.
+//  3. Fall back to the repo's default base (`detectBaseBranch`, which
+//     resolves origin/HEAD or main/master).
+//
+// Returns "" only when no usable base is found (e.g., orphan branch,
+// missing git remote). Callers treat empty as "skip the scope clause."
+func detectScopeBaseRef(ctx context.Context, repoRoot string) string {
+	// HEAD~1 doesn't exist on root commits — guard for it explicitly
+	// rather than letting later commands fail with confusing output.
+	if !gitOK(ctx, repoRoot, "rev-parse", "--verify", "HEAD~1") {
+		return detectBaseBranch(ctx, repoRoot)
+	}
+	headBranch := gitString(ctx, repoRoot, "rev-parse", "--abbrev-ref", "HEAD")
+	branchesRaw := gitString(ctx, repoRoot, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+	if branchesRaw == "" {
+		return detectBaseBranch(ctx, repoRoot)
+	}
+	type candidate struct {
+		ref      string
+		unixTime int64
+	}
+	var best candidate
+	for _, b := range strings.Split(branchesRaw, "\n") {
+		b = strings.TrimSpace(b)
+		if b == "" || b == headBranch || strings.HasPrefix(b, "entire/") {
+			continue
+		}
+		// Branch tip must be an ancestor of HEAD's parent — ancestor of
+		// HEAD itself would also match the current branch's prior tip.
+		if !gitOK(ctx, repoRoot, "merge-base", "--is-ancestor", b, "HEAD~1") {
+			continue
+		}
+		ts, ok := gitCount(ctx, repoRoot, "log", "-1", "--format=%ct", b)
+		if !ok {
+			continue
+		}
+		if int64(ts) > best.unixTime {
+			best = candidate{ref: b, unixTime: int64(ts)}
+		}
+	}
+	if best.ref != "" {
+		return best.ref
+	}
+	return detectBaseBranch(ctx, repoRoot)
 }
 
 // reviewScope summarizes what's about to be reviewed, surfaced to the user
