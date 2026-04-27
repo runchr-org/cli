@@ -603,55 +603,96 @@ Trailers:
 
 ### `entire review` Command
 
-`entire review` runs a set of configured review skills inside a single agent session. The review session is an immutable fact attached to a checkpoint — no verdict, no status tracking, no empty commits. On the next `git commit`, the review session is condensed into the checkpoint metadata alongside normal sessions, permanently recording that the code was reviewed and which skills were run.
+`entire review` runs a set of configured review skills inside one or more agent sessions. The review session(s) are an immutable fact attached to a checkpoint — no verdict, no status tracking, no empty commits. On the next `git commit`, each review session is condensed into the checkpoint metadata alongside normal sessions, permanently recording that the code was reviewed, by which agents, and which skills they ran.
 
 #### Command Surface
 
 ```
-entire review                          # Normal run: load config, spawn configured agent
+entire review                          # Normal run: load config, pick agent(s), spawn
 entire review --edit                   # Re-open the skills picker before running
 entire review --track-only             # Write the pending-review marker; do not spawn agent
+entire review --agent <name>           # Override the agent picker; run the named agent only
 ```
+
+#### Single-agent vs multi-agent flow
+
+The picker behavior depends on how many agents have a non-empty review config:
+
+- **One eligible agent** → spawn it directly (no picker).
+- **Multiple eligible agents that don't all support headless mode** → single-select picker.
+- **Multiple eligible agents that all implement `agent.HeadlessLauncher` (claude-code, codex, gemini-cli)** → multi-select picker. If the user picks one, the run proceeds as single-agent. Picking 2+ dispatches to the parallel orchestrator.
+
+After agent selection (single or multi), the user gets a per-run prompt textarea (`pickMultiAgent` / `runReview` both call `resolveRunContext`) — empty/Enter-only is treated as "use the persistent config verbatim"; non-empty text is appended to the agent's prompt under a `For this review:` marker so per-run intent is distinguishable from persistent preferences.
+
+In the multi-agent path, `multiReviewOrchestrator.Run` (`cmd/entire/cli/review_multi.go`) spawns N headless subprocesses under a shared cancellation context, renders a Bubble Tea status table when stdout is a TTY, and dumps per-agent results once the run finishes. Ctrl+O during a run drills into any agent's live buffer (alt-screen so the table doesn't tear); Esc returns. Ctrl+C cancels with a 5s SIGKILL watchdog.
+
+#### Cross-agent verdict synthesis
+
+When 2+ agents finished successfully and stdin is a TTY, the orchestrator prompts (default **No**): *"Synthesize a combined verdict across agents?"*. If accepted, it resolves the configured summary provider via `resolveCheckpointSummaryProvider` (the same picker `entire explain` uses) and asks it to produce a unified verdict with sections for common findings, unique findings, disagreements, and priority order. The synthesis prompt is built in `buildVerdictSynthesisPrompt` and the call goes through `agent.TextGenerator.GenerateText`. Output is currently stdout-only — it does **not** persist into checkpoint metadata. Provider failures degrade to a one-line warning rather than blocking the user from committing.
+
+#### Review prompt scope clause
+
+The composed review prompt appends a scope clause that pins agents to "commits unique to this branch vs the closest ancestor branch." `detectScopeBaseRef` (`review.go`) finds the nearest non-self local branch whose tip is an ancestor of `HEAD~1`, preferring the most recently authored tip; falls back to `detectBaseBranch` (origin/HEAD or main/master). This prevents codex's default `origin/main...HEAD` from pulling in commits inherited from sibling branches. Commits-only — uncommitted bytecode and editor temp files are explicitly excluded.
 
 #### Settings Schema
 
-Review skills are configured per-agent in `.entire/settings.json`:
+Review config is per-agent in `.entire/settings.json`:
 
 ```json
 {
   "review": {
-    "claude-code": ["/pr-review-toolkit:review-pr", "/test-auditor"],
-    "codex": ["/codex:adversarial-review"]
+    "claude-code": {
+      "skills": ["/pr-review-toolkit:review-pr", "/test-auditor"]
+    },
+    "codex": {
+      "skills": ["/codex:adversarial-review"],
+      "prompt": "Focus on security regressions this week"
+    }
   }
 }
 ```
 
-The key is the agent name (matching the agent's `Name()` return value). The value is a list of skill invocations passed verbatim to the agent. Settings field: `EntireSettings.Review` in `cmd/entire/cli/settings/settings.go`.
+Each entry is a `ReviewConfig` struct (`cmd/entire/cli/settings/settings.go`):
+
+- `skills`: list of slash-prefixed skill invocations passed verbatim to the agent.
+- `prompt`: optional verbatim prompt that wins over the skills-composed template — used when the user has a long-running review philosophy that doesn't map to slash commands.
+
+A non-empty `prompt` and an empty `skills` is valid (prompt-only config). Both empty causes the picker to refuse to spawn.
 
 #### How It Works
 
-1. `entire review` writes a pending-review marker (scoped to the current worktree) before spawning the agent
-2. The agent's `UserPromptSubmit` lifecycle hook adopts the marker, tagging the session with `Kind = "agent_review"` and recording the configured skills in `ReviewSkills`. The marker is only adopted by a session whose worktree matches — sessions in other worktrees of the same repo leave it untouched
-3. The agent runs the review skills and the session ends naturally
-4. On the next `git commit`, the PostCommit hook condenses the review session into the checkpoint on `entire/checkpoints/v1`, with `Kind` and `ReviewSkills` recorded in `CommittedMetadata`
-5. The `CheckpointSummary` sets `HasReview = true` for O(1) lookup. `HasReview` is an umbrella "any review happened" flag — future review kinds (e.g. manual review) should also set it so callers don't have to disjunction a growing list of booleans
-6. `entire status` and the re-run guard in `entire review` read `HasReview` from the checkpoint metadata (no commit history walking)
+1. `entire review` resolves configured + eligible agents, runs the picker, optionally collects per-run context.
+2. Writes a pending-review marker to `.git/entire-sessions/review-pending.json`. The marker carries:
+   - `agent_name` (single-agent) **or** `agent_names` + `agent_entries` map (multi-agent — each entry is `{skills, prompt}` so the adopting hook records what *that* agent actually ran, not a union)
+   - `starting_sha` (HEAD at invocation; SHA-drift detection discards stale markers)
+   - `worktree_path` (so concurrent worktrees don't race for the marker)
+3. The agent's `UserPromptSubmit` lifecycle hook adopts the marker, tagging its session with `Kind = "agent_review"`, copying its own `ReviewSkills`/`ReviewPrompt` from the per-agent entry (or top-level fields in single-agent mode). Multi-agent adopters leave the marker for sibling agents; the orchestrator owns the final clear.
+4. Each agent runs its review skills and exits.
+5. On the next `git commit`, the PostCommit hook condenses each review session into the checkpoint on `entire/checkpoints/v1`, recording `Kind` + `ReviewSkills` + `ReviewPrompt` in `CommittedMetadata` per session. Multiple agents' reviews land as multiple per-session subfolders in the checkpoint.
+6. `CheckpointSummary.HasReview` flips to true for O(1) "any review happened" lookup. Future review kinds (e.g. manual review) should also set it so callers don't have to disjunction a growing list of booleans.
+7. `entire status` and the re-run guard in `entire review` read `HasReview` from checkpoint metadata.
 
 #### Checkpoint Metadata
 
 Review metadata is stored at two levels on `entire/checkpoints/v1`:
 
-- **`CommittedMetadata` (per-session)**: `kind: "agent_review"`, `review_skills: ["/skill1", "/skill2"]`
-- **`CheckpointSummary` (per-checkpoint)**: `has_review: true` (umbrella; set when any session in the checkpoint has a review-kind `Kind`)
+- **`CommittedMetadata` (per-session)**: `kind: "agent_review"`, `review_skills: ["/skill1", "/skill2"]`, `review_prompt: "..."`. One per agent in a multi-agent run.
+- **`CheckpointSummary` (per-checkpoint)**: `has_review: true` (umbrella; set when any session in the checkpoint has a review-kind `Kind`).
+
+The cross-agent synthesis output is **not** stored in checkpoint metadata today — it's an ephemeral terminal-only convenience. Persisting it is tracked as future work.
 
 #### Key Files
 
-- `cmd/entire/cli/review.go` - Command registration, config picker, agent spawn, re-run guard, pending marker management (including `WorktreePath`-scoped adoption)
-- `cmd/entire/cli/lifecycle.go` - Session adoption: pending-review marker promotes to `Kind=agent_review` on `UserPromptSubmit` when worktrees match
-- `cmd/entire/cli/agent/agent.go` - `Launcher` interface used by `entire review` to spawn agents
-- `cmd/entire/cli/agent/{claudecode,codex,geminicli}/` - Per-agent `Launcher` implementations
-- `cmd/entire/cli/checkpoint/checkpoint.go` - `Kind` and `ReviewSkills` fields on `WriteCommittedOptions`, `CommittedMetadata`, and `HasReview` on `CheckpointSummary`
-- `cmd/entire/cli/settings/settings.go` - `EntireSettings.Review` field (`map[string][]string`) and `ReviewSkillsFor` helper
+- `cmd/entire/cli/review.go` - Command registration, config picker, single-agent spawn, marker schema (`PendingReviewMarker`, `AgentMarkerEntry`), multi-agent dispatch wiring, `composeReviewPrompt` + scope clause + `detectScopeBaseRef`
+- `cmd/entire/cli/review_multi.go` - `multiReviewOrchestrator`, parallel headless spawn, signal handling + SIGKILL watchdog, codex output filter (`filterCodexOutput`, `extractCodexFinal`), result dump helpers (`dumpPerAgentReviews`, `dumpRunCounts`, `dumpRunFooter`)
+- `cmd/entire/cli/review_tui.go` - `reviewTUIModel`, status table rendering, Ctrl+O alt-screen drill-in, per-row run-start timestamps, rune-safe preview truncation
+- `cmd/entire/cli/review_synthesize.go` - Cross-agent verdict synthesis: opt-in prompt, prompt construction, `TextGenerator` invocation
+- `cmd/entire/cli/lifecycle.go` - Session adoption: pending-review marker promotes to `Kind=agent_review` on `UserPromptSubmit` when worktree + agent name match; per-agent entry lookup for multi-agent markers
+- `cmd/entire/cli/agent/agent.go` - `Launcher` (interactive spawn) + `HeadlessLauncher` (parallel review subprocess) capability interfaces
+- `cmd/entire/cli/agent/{claudecode,codex,geminicli}/headless.go` - Per-agent `LaunchHeadlessCmd` implementations; binary lookup deferred to `Cmd.Start` so construction is testable without binaries on PATH
+- `cmd/entire/cli/checkpoint/checkpoint.go` - `Kind`, `ReviewSkills`, `ReviewPrompt` fields on `WriteCommittedOptions` + `CommittedMetadata`, `HasReview` on `CheckpointSummary`
+- `cmd/entire/cli/settings/settings.go` - `EntireSettings.Review` (`map[string]ReviewConfig`) and `ReviewSkillsFor` helper
+- `cmd/entire/cli/explain_summary_provider.go` - `resolveCheckpointSummaryProvider` (shared with `entire explain`) — picks the synthesis agent
 
 # Important Notes
 

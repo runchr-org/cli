@@ -360,9 +360,9 @@ func (m reviewTUIModel) detailView() string {
 	for _, line := range lines[start:end] {
 		// Truncate wide lines so they can't wrap and throw off bubbletea's
 		// frame-line count. Scroll with ↑/↓ if you need to see the tail.
-		if len(line) > maxLineWidth {
-			line = line[:maxLineWidth-1] + "…"
-		}
+		// Rune-based truncation matches the preview path (truncatePreview)
+		// so multi-byte UTF-8 in agent narrative doesn't get split mid-rune.
+		line = stringutil.TruncateRunes(line, maxLineWidth, "…")
 		sb.WriteString(line + "\n")
 		rendered++
 	}

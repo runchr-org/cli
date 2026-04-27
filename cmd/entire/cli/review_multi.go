@@ -501,6 +501,20 @@ var codexNoisePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^-{4,}$`),
 }
 
+// codexExecBlockStart matches codex exec-mode tool-call block headers
+// in either form codex emits:
+//
+//   - bare "exec" on its own line (multi-line variant — the command +
+//     cwd land on the next line)
+//   - "exec <command> in /<cwd>" inline (single-line variant)
+//
+// The bare form is anchored to end-of-line so words like "execution"
+// or "executed" don't match; the inline form requires the conventional
+// ` in /` cwd anchor for the same reason. Without these anchors a
+// previous implementation matched any line starting with "exec",
+// swallowing legitimate narrative like "Examining the file…".
+var codexExecBlockStart = regexp.MustCompile(`^(exec$|exec .+ in /)`)
+
 func isCodexNoise(line string) bool {
 	for _, re := range codexNoisePatterns {
 		if re.MatchString(line) {
@@ -528,7 +542,7 @@ func filterCodexOutput(raw []byte) []byte {
 			}
 			continue
 		}
-		if strings.HasPrefix(line, "exec") {
+		if codexExecBlockStart.MatchString(line) {
 			inExec = true
 			continue
 		}

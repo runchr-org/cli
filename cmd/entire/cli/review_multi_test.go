@@ -346,6 +346,27 @@ tokens used
 	}
 }
 
+// TestFilterCodexOutput_PreservesNarrativeStartingWithExec pins that
+// the exec-block anchor doesn't swallow legitimate narrative whose
+// first word happens to be "exec…" — the previous strings.HasPrefix
+// check matched anything starting with those four bytes, including
+// "Examining" (capital E starts with 'E' so was safe) and "executed"
+// (lowercase, was eaten). Anchoring on either bare `^exec$` or the
+// `exec <cmd> in /` shape codex actually emits keeps narrative intact.
+func TestFilterCodexOutput_PreservesNarrativeStartingWithExec(t *testing.T) {
+	t.Parallel()
+	raw := []byte("codex\nexecuted by the runner.\nexecution succeeded with no findings.\nexec ls in /tmp\n succeeded in 0ms:\nfile.txt\n\nMore narrative.\ntokens used\n100\n")
+	cleaned := string(filterCodexOutput(raw))
+	for _, want := range []string{"executed by the runner.", "execution succeeded with no findings.", "More narrative."} {
+		if !strings.Contains(cleaned, want) {
+			t.Errorf("legitimate narrative %q was filtered out:\n%s", want, cleaned)
+		}
+	}
+	if strings.Contains(cleaned, "exec ls in /tmp") {
+		t.Error("real exec block header should still be stripped")
+	}
+}
+
 // TestApplyOutputFilter_UnknownAgentPassesThrough pins that agents
 // without a registered filter (claude-code, gemini-cli, fakes) get their
 // raw output back unchanged — no accidental mutation via shared slices.

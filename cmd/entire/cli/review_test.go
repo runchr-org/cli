@@ -303,7 +303,10 @@ func TestComposeReviewPrompt_AppendsRunContext(t *testing.T) {
 			name:       "context + skills",
 			cfg:        settings.ReviewConfig{Skills: []string{"/review"}},
 			runContext: "focus on auth",
-			want:       "Please run these review skills in order:\n  1. /review\n\n\nFor this review: focus on auth",
+			// Exactly two newlines between the skills list and "For this
+			// review:" — the skills template's trailing \n is trimmed
+			// before joining so the gap doesn't grow to a hollow three.
+			want: "Please run these review skills in order:\n  1. /review\n\nFor this review: focus on auth",
 		},
 		{
 			name:       "context + persistent prompt",

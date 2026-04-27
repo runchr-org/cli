@@ -201,6 +201,27 @@ func TestTUIModel_KeyCtrlCCallsOnCancel(t *testing.T) {
 	}
 }
 
+// TestDetailView_RuneSafeTruncation pins that the Ctrl+O drill-in
+// renderer truncates each line by runes, not bytes — same failure mode
+// as TestTruncatePreview_RuneSafe but in the detail view's inline
+// truncation. A buffer full of em-dashes wider than the terminal would
+// otherwise have produced invalid UTF-8 in the alt-screen frame.
+func TestDetailView_RuneSafeTruncation(t *testing.T) {
+	t.Parallel()
+	buf := &agentBuffer{}
+	// 200 em-dashes (600 bytes) — comfortably wider than the 80-col
+	// default termWidth so detailView's truncation has to fire.
+	if _, err := buf.Write([]byte(strings.Repeat("—", 200))); err != nil {
+		t.Fatalf("buffer write: %v", err)
+	}
+	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}}, nil, []*agentBuffer{buf})
+	m.detailMode = true
+	rendered := m.View()
+	if !utf8.ValidString(rendered) {
+		t.Errorf("detail view produced invalid UTF-8 (rune-truncation regression):\n%q", rendered)
+	}
+}
+
 // TestTruncatePreview_RuneSafe pins that multi-byte UTF-8 input doesn't
 // get split mid-rune. The previous byte-slice implementation could
 // truncate inside a multi-byte sequence and emit an invalid UTF-8 byte

@@ -1266,7 +1266,12 @@ func composeReviewPrompt(cfg settings.ReviewConfig, runContext string, scope rev
 		if base == "" {
 			base = runContext
 		} else {
-			base = base + "\n\nFor this review: " + runContext
+			// strings.TrimRight strips the trailing newline the skills
+			// template emits before its last entry — without this, joining
+			// with "\n\nFor this review:" produced three consecutive
+			// newlines (the template's \n + the joiner's \n\n) and a
+			// visually hollow gap in the agent prompt.
+			base = strings.TrimRight(base, "\n") + "\n\nFor this review: " + runContext
 		}
 	}
 
