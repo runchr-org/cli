@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -424,6 +426,127 @@ func (p *previewTeeWriter) Write(data []byte) (int, error) {
 	return n, nil
 }
 
+// outputFilter cleans an agent's raw stdout buffer into something
+// suitable for the completion dump. Different agents have wildly
+// different output verbosity; this lets each agent apply its own noise
+// patterns. Nil / missing filter means the agent's output is used as-is.
+type outputFilter func(raw []byte) []byte
+
+var outputFilters = map[string]outputFilter{
+	string(agent.AgentNameCodex): filterCodexOutput,
+	// claude-code, gemini-cli: pass-through for now. Claude's --print
+	// mode already emits only the final message; gemini has no observed
+	// format to filter.
+}
+
+// applyOutputFilter looks up the per-agent filter and runs it, falling
+// back to raw output when no filter exists.
+func applyOutputFilter(agentName string, raw []byte) []byte {
+	filter, ok := outputFilters[agentName]
+	if !ok || filter == nil {
+		return raw
+	}
+	return filter(raw)
+}
+
+// codexNoisePatterns matches lines that codex exec-mode emits as session
+// chrome — headers, separators, hook firings, error logs. Each pattern
+// is anchored to ^ so partial matches mid-line (which could be real
+// narrative content) are left alone.
+var codexNoisePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T.+ ERROR codex_`),
+	regexp.MustCompile(`^hook: `),
+	regexp.MustCompile(`^(workdir|model|provider|approval|sandbox|reasoning|session id): `),
+	regexp.MustCompile(`^OpenAI Codex v`),
+	regexp.MustCompile(`^-{4,}$`),
+}
+
+func isCodexNoise(line string) bool {
+	for _, re := range codexNoisePatterns {
+		if re.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}
+
+// filterCodexOutput strips codex exec-mode noise: session banner lines,
+// `exec <command>\n succeeded in Xms:\n<output>\n\n` tool-call blocks,
+// `hook:` firing messages, and timestamped codex_ error logs. Collapses
+// consecutive blank lines left behind by stripped blocks. Narrative
+// text (including the `codex` / `user` speaker markers downstream
+// extractors rely on) stays intact.
+func filterCodexOutput(raw []byte) []byte {
+	var out strings.Builder
+	lines := strings.Split(string(raw), "\n")
+	inExec := false
+	lastBlank := false
+	for _, line := range lines {
+		if inExec {
+			if strings.TrimSpace(line) == "" {
+				inExec = false
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "exec") {
+			inExec = true
+			continue
+		}
+		if isCodexNoise(line) {
+			continue
+		}
+		blank := strings.TrimSpace(line) == ""
+		if blank && lastBlank {
+			continue
+		}
+		lastBlank = blank
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	return []byte(strings.TrimSpace(out.String()) + "\n")
+}
+
+// extractFinalMessage pulls the agent's last narrative response from the
+// cleaned (post-filter) output. Per-agent heuristics because different
+// agents delimit responses differently. Unknown agents pass through.
+func extractFinalMessage(agentName, cleaned string) string {
+	if agentName == string(agent.AgentNameCodex) {
+		return extractCodexFinal(cleaned)
+	}
+	return cleaned
+}
+
+// codexSpeakerMarker is the literal line codex prints before each
+// assistant turn in exec-mode output. Distinct from agent.AgentNameCodex
+// even though the strings happen to match today — this one is a payload-
+// parsing anchor.
+const codexSpeakerMarker = "codex"
+
+// extractCodexFinal slices out the text between the last `^codex$` line
+// and the `tokens used` marker. Codex emits the final assistant
+// response right before printing token usage, so those two anchors
+// bracket the payload we actually want. Falls back to the full cleaned
+// input if either marker is missing — format drift shouldn't silently
+// eat the response.
+func extractCodexFinal(cleaned string) string {
+	lines := strings.Split(cleaned, "\n")
+	lastCodexMarker := -1
+	tokensUsedIdx := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == codexSpeakerMarker {
+			lastCodexMarker = i
+		}
+		if strings.HasPrefix(line, "tokens used") && lastCodexMarker != -1 {
+			tokensUsedIdx = i
+			break
+		}
+	}
+	if lastCodexMarker == -1 || tokensUsedIdx == -1 {
+		return cleaned
+	}
+	return strings.Join(lines[lastCodexMarker+1:tokensUsedIdx], "\n")
+}
+
 // dumpMultiAgentResults prints per-agent headers + FinalOutput, then a
 // summary line, then transcript paths for successful agents.
 func dumpMultiAgentResults(out io.Writer, tasks []MultiAgentTask, results []AgentRunResult, cancelled bool) {
@@ -444,10 +567,12 @@ func dumpMultiAgentResults(out io.Writer, tasks []MultiAgentTask, results []Agen
 			// explicitly asked to stop — dumping would be adversarial.
 			continue
 		case AgentRunQueued, AgentRunRunning, AgentRunDone:
-			// Done: no header; buffered output follows.
+			// Done: no header; filtered narrative follows.
 			// Queued/Running would indicate a logic bug; fall through.
 		}
-		if _, err := out.Write(r.FinalOutput); err != nil {
+		cleaned := applyOutputFilter(tasks[i].Name, r.FinalOutput)
+		final := extractFinalMessage(tasks[i].Name, string(cleaned))
+		if _, err := fmt.Fprintln(out, strings.TrimSpace(final)); err != nil {
 			// Writer failed mid-dump; further writes will also fail, so stop.
 			return
 		}

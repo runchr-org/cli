@@ -287,3 +287,96 @@ func TestOrchestrator_NoTasks(t *testing.T) {
 		t.Fatal("Run with no tasks should return an error")
 	}
 }
+
+// TestFilterCodexOutput_StripsSessionBanner covers the real noise patterns
+// observed in codex exec-mode output: session banner, workdir/model/etc.
+// headers, the `exec <cmd>\n succeeded in...\n<output>\n\n` tool-call
+// blocks, and hook-firing lines. Narrative text and markers stay intact
+// so the downstream extractor can still find them.
+func TestFilterCodexOutput_StripsSessionBanner(t *testing.T) {
+	t.Parallel()
+	raw := []byte(`OpenAI Codex v0.124.0 (research preview)
+--------
+workdir: /tmp/foo
+model: gpt-5.4
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: none
+session id: 019dbea3-7f20-7922-a962-d9fd85d22ac4
+--------
+user
+Please run these review skills in order: 1. /review
+
+codex
+Using superpowers:using-superpowers first, then code-reviewer.
+exec
+/bin/zsh -lc "sed -n '1,220p' /.../SKILL.md" in /tmp/foo
+ succeeded in 0ms:
+[200 lines of skill content]
+
+codex
+No findings.
+
+Residual risk: ...
+tokens used
+12,826
+`)
+	cleaned := string(filterCodexOutput(raw))
+	if strings.Contains(cleaned, "OpenAI Codex v") {
+		t.Error("session banner should be stripped")
+	}
+	if strings.Contains(cleaned, "workdir:") {
+		t.Error("workdir line should be stripped")
+	}
+	if strings.Contains(cleaned, "/bin/zsh -lc") {
+		t.Error("exec block should be stripped")
+	}
+	if strings.Contains(cleaned, "200 lines of skill content") {
+		t.Error("exec block body should be stripped")
+	}
+	if !strings.Contains(cleaned, "No findings.") {
+		t.Error("narrative content should be preserved")
+	}
+	if !strings.Contains(cleaned, "Using superpowers") {
+		t.Error("narrative content should be preserved")
+	}
+}
+
+// TestApplyOutputFilter_UnknownAgentPassesThrough pins that agents
+// without a registered filter (claude-code, gemini-cli, fakes) get their
+// raw output back unchanged — no accidental mutation via shared slices.
+func TestApplyOutputFilter_UnknownAgentPassesThrough(t *testing.T) {
+	t.Parallel()
+	raw := []byte("some random output\n")
+	got := applyOutputFilter("unknown-agent", raw)
+	if !bytes.Equal(got, raw) {
+		t.Errorf("unknown agent: output %q != input %q", got, raw)
+	}
+}
+
+// TestExtractCodexFinal_WithMarkers pins the marker-based slicing: text
+// between the last `^codex$` line and the `tokens used` marker is the
+// final narrative response.
+func TestExtractCodexFinal_WithMarkers(t *testing.T) {
+	t.Parallel()
+	input := "codex\nNo findings.\n\nResidual risk: something.\ntokens used\n12826\n"
+	got := extractCodexFinal(input)
+	want := "No findings.\n\nResidual risk: something."
+	if strings.TrimSpace(got) != want {
+		t.Errorf("extractCodexFinal =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+// TestExtractCodexFinal_FallsBackWhenMarkersMissing pins the defensive
+// fallback: if codex's output format drifts so the markers aren't found,
+// we return the full cleaned input rather than silently dropping it.
+func TestExtractCodexFinal_FallsBackWhenMarkersMissing(t *testing.T) {
+	t.Parallel()
+	input := "some text without codex marker or tokens used line\n"
+	got := extractCodexFinal(input)
+	if got != input {
+		t.Errorf("extractCodexFinal fallback: got %q; want input unchanged", got)
+	}
+}
