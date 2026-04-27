@@ -93,6 +93,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newHooksCmd())
 	cmd.AddCommand(newVersionCmd())
 	cmd.AddCommand(newExplainCmd())
+	cmd.AddCommand(newWhyCmd())
 	cmd.AddCommand(newDoctorCmd())
 	cmd.AddCommand(newTraceCmd())
 	cmd.AddCommand(newTrailCmd())

@@ -97,6 +97,23 @@ func TestPersistentPostRun_SkipsHiddenParent(t *testing.T) {
 	}
 }
 
+func TestRootCmd_WhyCommandIsHidden(t *testing.T) {
+	t.Parallel()
+
+	root := NewRootCmd()
+
+	cmd, _, err := root.Find([]string{"why"})
+	if err != nil {
+		t.Fatalf("could not find why command: %v", err)
+	}
+	if cmd == nil {
+		t.Fatal("why command not found")
+	}
+	if !cmd.Hidden {
+		t.Fatal("why command should be hidden while the prototype is in progress")
+	}
+}
+
 func TestPersistentPostRun_ParentHiddenWalk(t *testing.T) {
 	t.Parallel()
 
