@@ -902,7 +902,10 @@ func pickMultiAgent(ctx context.Context, cmd *cobra.Command, s *settings.EntireS
 		return "", false, NewSilentError(pickErr)
 	}
 	if len(selected) == 0 {
-		// User cancelled.
+		// User cancelled. SilenceUsage prevents cobra from dumping help
+		// text on a deliberate cancel — the user clicked away from the
+		// picker, they don't need usage instructions.
+		cmd.SilenceUsage = true
 		return "", false, NewSilentError(errors.New("multi-agent picker cancelled"))
 	}
 	if len(selected) == 1 {
@@ -915,8 +918,13 @@ func pickMultiAgent(ctx context.Context, cmd *cobra.Command, s *settings.EntireS
 	if err != nil {
 		return "", false, err
 	}
-	// Route to multi-agent orchestrator.
+	// Route to multi-agent orchestrator. SilenceUsage on dispatch errors
+	// matches the single-agent picker path: failure modes here (resolve
+	// agent, write marker, launcher capability missing) are runtime
+	// problems, not invocation problems, so cobra usage output would be
+	// noise.
 	if err := dispatchMultiAgent(ctx, cmd, s, selected, runContext, deps); err != nil {
+		cmd.SilenceUsage = true
 		return "", true, err
 	}
 	return "", true, nil
