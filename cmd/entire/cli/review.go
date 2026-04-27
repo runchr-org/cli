@@ -62,6 +62,7 @@ type MultiAgentTask struct {
 	Agent  agent.HeadlessLauncher // set by dispatcher when routing to multi-agent
 	Name   string                 // agent registry key
 	Prompt string                 // composed via composeReviewPrompt(cfg, runContext, scope)
+	Skills []string               // configured skills for this agent; carried into the marker so adoption can record them per-agent
 }
 
 // MultiRunResult is the aggregated result of a multi-agent review. Runs
@@ -121,10 +122,24 @@ type PendingReviewMarker struct {
 	// Prompt is the composed review prompt the agent will receive.
 	// Stored on the marker (rather than recomputed on adoption) so session
 	// metadata records exactly what the agent was asked to do.
-	Prompt       string    `json:"prompt,omitempty"`
-	StartingSHA  string    `json:"starting_sha"`
-	StartedAt    time.Time `json:"started_at"`
-	WorktreePath string    `json:"worktree_path,omitempty"`
+	Prompt string `json:"prompt,omitempty"`
+	// AgentEntries carries per-agent skills and prompts for multi-agent
+	// runs. Each agent's hook looks up its own entry by agent name on
+	// adoption so its session records the skills+prompt it actually ran,
+	// not the union or an arbitrary representative. Single-agent markers
+	// leave this empty and use the top-level Skills/Prompt fields.
+	AgentEntries map[string]AgentMarkerEntry `json:"agent_entries,omitempty"`
+	StartingSHA  string                      `json:"starting_sha"`
+	StartedAt    time.Time                   `json:"started_at"`
+	WorktreePath string                      `json:"worktree_path,omitempty"`
+}
+
+// AgentMarkerEntry is the per-agent payload inside a multi-agent
+// PendingReviewMarker. Adoption copies these onto the agent's session
+// state so checkpoint metadata reflects what each agent actually ran.
+type AgentMarkerEntry struct {
+	Skills []string `json:"skills,omitempty"`
+	Prompt string   `json:"prompt,omitempty"`
 }
 
 func pendingMarkerPath(ctx context.Context) (string, error) {
@@ -290,8 +305,18 @@ func adoptPendingReviewMarkerInto(ctx context.Context, s session.State, agentNam
 		}
 	}
 	s.Kind = session.KindAgentReview
-	s.ReviewSkills = m.Skills
-	s.ReviewPrompt = m.Prompt
+	// Per-agent lookup wins for multi-agent markers — each agent's
+	// session records the skills/prompt it actually ran, not a union or
+	// representative. Top-level Skills/Prompt is the single-agent path
+	// and the fallback when an entry is missing (legacy markers, or a
+	// new agent whose hook fired without a registered entry).
+	if entry, ok := m.AgentEntries[string(agentName)]; ok && multiAgent {
+		s.ReviewSkills = entry.Skills
+		s.ReviewPrompt = entry.Prompt
+	} else {
+		s.ReviewSkills = m.Skills
+		s.ReviewPrompt = m.Prompt
+	}
 	if multiAgent {
 		// The orchestrator owns marker cleanup for multi-agent runs; a per-
 		// hook clear here would race the sibling agents still waiting to
@@ -961,6 +986,7 @@ func dispatchMultiAgent(ctx context.Context, cmd *cobra.Command, s *settings.Ent
 			Agent:  hl,
 			Name:   name,
 			Prompt: composeReviewPrompt(cfg, runContext, scope),
+			Skills: cfg.Skills,
 		})
 	}
 

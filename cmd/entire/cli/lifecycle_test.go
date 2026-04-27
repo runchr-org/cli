@@ -1316,6 +1316,68 @@ func TestAdoptMarker_MultiAgent_AgentInList(t *testing.T) {
 	}
 }
 
+// TestAdoptMarker_MultiAgent_PerAgentEntriesWin pins that when the
+// orchestrator populates AgentEntries (each agent's actual skills+
+// prompt), the adopting hook reads its own entry — not the top-level
+// Skills/Prompt fields. This is the bug the multi-agent orchestrator
+// originally exposed: it omitted Skills/Prompt entirely and adoption
+// silently recorded empty metadata, so checkpoints lost the "what was
+// reviewed" trail.
+func TestAdoptMarker_MultiAgent_PerAgentEntriesWin(t *testing.T) {
+	// Cannot t.Parallel — uses the global pending-review marker file.
+	ctx := context.Background()
+	env := setupAdoptionEnv(t)
+
+	if err := WritePendingReviewMarker(ctx, PendingReviewMarker{
+		AgentNames: []string{"claude-code", "codex"},
+		// Top-level Skills/Prompt deliberately omitted — the multi-agent
+		// orchestrator no longer sets them. Per-agent entries are the
+		// source of truth.
+		AgentEntries: map[string]AgentMarkerEntry{
+			"claude-code": {
+				Skills: []string{"/pr-review-toolkit:review-pr"},
+				Prompt: "claude prompt",
+			},
+			"codex": {
+				Skills: []string{"/codex:adversarial-review"},
+				Prompt: "codex prompt",
+			},
+		},
+		StartingSHA:  env.HeadSHA,
+		StartedAt:    time.Now(),
+		WorktreePath: env.WorktreePath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ClearPendingReviewMarker(ctx) }) //nolint:errcheck // test cleanup, best-effort
+
+	// Claude's hook adopts: should see claude's entry, not codex's.
+	claudeState, modified, err := adoptPendingReviewMarkerInto(ctx, session.State{WorktreePath: env.WorktreePath}, agent.AgentNameClaudeCode)
+	if err != nil || !modified {
+		t.Fatalf("claude adopt: modified=%v err=%v", modified, err)
+	}
+	if len(claudeState.ReviewSkills) != 1 || claudeState.ReviewSkills[0] != "/pr-review-toolkit:review-pr" {
+		t.Errorf("claude ReviewSkills = %v, want [/pr-review-toolkit:review-pr]", claudeState.ReviewSkills)
+	}
+	if claudeState.ReviewPrompt != "claude prompt" {
+		t.Errorf("claude ReviewPrompt = %q, want %q", claudeState.ReviewPrompt, "claude prompt")
+	}
+
+	// Codex's hook adopts the same marker independently: should see codex's
+	// entry. Marker stays in place across both adoptions because the
+	// orchestrator owns cleanup.
+	codexState, modified, err := adoptPendingReviewMarkerInto(ctx, session.State{WorktreePath: env.WorktreePath}, agent.AgentNameCodex)
+	if err != nil || !modified {
+		t.Fatalf("codex adopt: modified=%v err=%v", modified, err)
+	}
+	if len(codexState.ReviewSkills) != 1 || codexState.ReviewSkills[0] != "/codex:adversarial-review" {
+		t.Errorf("codex ReviewSkills = %v, want [/codex:adversarial-review]", codexState.ReviewSkills)
+	}
+	if codexState.ReviewPrompt != "codex prompt" {
+		t.Errorf("codex ReviewPrompt = %q, want %q", codexState.ReviewPrompt, "codex prompt")
+	}
+}
+
 // TestAdoptMarker_MultiAgent_AgentNotInList pins that an agent whose name
 // is absent from AgentNames leaves the marker untouched and does not tag
 // its session — protecting sibling agents from stealing the wrong config.

@@ -87,11 +87,21 @@ func (o *multiReviewOrchestrator) Run(ctx context.Context, tasks []MultiAgentTas
 			slog.String("error", headErr.Error()))
 	}
 	agentNames := make([]string, len(tasks))
+	// AgentEntries carries each task's skills+prompt onto the marker so
+	// the adopting hook can record what THIS agent actually ran (not a
+	// union across agents). Without this map, multi-agent sessions
+	// previously persisted with empty ReviewSkills/ReviewPrompt fields.
+	agentEntries := make(map[string]AgentMarkerEntry, len(tasks))
 	for i, t := range tasks {
 		agentNames[i] = t.Name
+		agentEntries[t.Name] = AgentMarkerEntry{
+			Skills: t.Skills,
+			Prompt: t.Prompt,
+		}
 	}
 	if err := WritePendingReviewMarker(ctx, PendingReviewMarker{
 		AgentNames:   agentNames,
+		AgentEntries: agentEntries,
 		StartingSHA:  headSHA,
 		StartedAt:    time.Now().UTC(),
 		WorktreePath: o.worktreePath,
