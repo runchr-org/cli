@@ -684,9 +684,11 @@ func (s *EntireSettings) IsSummarizeEnabled() bool {
 
 // CheckpointRemoteConfig holds the structured checkpoint remote configuration.
 // Stored in strategy_options.checkpoint_remote as {"provider": "github", "repo": "org/repo"}.
+// JSON tags are present so the same type can be serialized directly under
+// the schema-v2 Settings.Checkpoints.Remote field.
 type CheckpointRemoteConfig struct {
-	Provider string // e.g., "github"
-	Repo     string // e.g., "org/checkpoints-repo"
+	Provider string `json:"provider"` // e.g., "github"
+	Repo     string `json:"repo"`     // e.g., "org/checkpoints-repo"
 }
 
 // Owner returns the owner portion of the repo field (before the slash).
