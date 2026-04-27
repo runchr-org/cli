@@ -57,6 +57,12 @@ type rowState struct {
 	tokens   int
 	preview  string
 	exitCode int
+	// runStart is set when the row transitions to AgentRunRunning and
+	// drives the live duration counter on tickMsg. Using m.startTime
+	// (TUI start) instead inflated durations for agents that started
+	// later — e.g., a second-spawned agent showed time-since-TUI rather
+	// than time-since-its-own-start.
+	runStart time.Time
 }
 
 // agentStateMsg is posted by the orchestrator when an agent transitions
@@ -205,6 +211,12 @@ func (m reviewTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentStateMsg:
 		for i, r := range m.rows {
 			if r.name == msg.Name {
+				// Stamp runStart on the queued→running transition so the
+				// live duration counter measures from this agent's actual
+				// launch, not the TUI's startTime.
+				if msg.Status == AgentRunRunning && r.status != AgentRunRunning {
+					m.rows[i].runStart = time.Now()
+				}
 				m.rows[i].status = msg.Status
 				if msg.Duration > 0 {
 					m.rows[i].duration = msg.Duration
@@ -230,8 +242,8 @@ func (m reviewTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		now := time.Now()
 		for i, r := range m.rows {
-			if r.status == AgentRunRunning {
-				m.rows[i].duration = now.Sub(m.startTime)
+			if r.status == AgentRunRunning && !r.runStart.IsZero() {
+				m.rows[i].duration = now.Sub(r.runStart)
 			}
 		}
 		return m, tickEvery()

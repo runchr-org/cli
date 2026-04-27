@@ -199,3 +199,25 @@ func TestTUIModel_KeyCtrlCCallsOnCancel(t *testing.T) {
 		t.Error("onCancel was not called on Ctrl+C")
 	}
 }
+
+// TestTUIModel_TickUsesPerRowRunStart pins that the running-row duration
+// counter measures from each agent's own runStart, not the TUI's
+// startTime — otherwise late-starting agents would render inflated
+// durations on every tick.
+func TestTUIModel_TickUsesPerRowRunStart(t *testing.T) {
+	t.Parallel()
+	m := newReviewTUIModel([]MultiAgentTask{{Name: "a"}, {Name: "b"}}, nil, nil)
+	// Pretend the TUI started 10 minutes ago — that's the upper bound
+	// the buggy implementation would report; with the fix, durations
+	// reflect the per-row runStart we set just now.
+	m.startTime = time.Now().Add(-10 * time.Minute)
+	updated, _ := m.Update(agentStateMsg{Name: "a", Status: AgentRunRunning})
+	updated, _ = updated.(reviewTUIModel).Update(agentStateMsg{Name: "b", Status: AgentRunRunning})
+	updated, _ = updated.(reviewTUIModel).Update(tickMsg(time.Now()))
+	final := updated.(reviewTUIModel)
+	for _, r := range final.rows {
+		if r.duration > time.Second {
+			t.Errorf("row %s duration = %s; should be near-zero (since runStart was set this tick), not relative to TUI startTime", r.name, r.duration)
+		}
+	}
+}
