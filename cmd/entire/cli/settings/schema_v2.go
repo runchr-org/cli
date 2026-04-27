@@ -1,19 +1,5 @@
-// This file defines schema v2 of the Entire settings file: a typed,
-// concern-grouped replacement for the legacy EntireSettings struct.
-//
-// The two shapes coexist during migration. Existing callers continue using
-// Load()/EntireSettings; new code can opt into LoadV2()/Settings. A future
-// phase migrates call sites and retires the legacy struct.
-//
-// Key differences from legacy:
-//   - Explicit "schema" version marker (vs. implicit/unmarked)
-//   - Typed checkpoints config (vs. untyped strategy_options map)
-//   - Backend selection is structured: primary + optional mirrors
-//   - Concerns grouped: logging, checkpoints, hooks, features
-//   - Deprecated keys (checkpoints_v2 alias, push_v2_refs) are not
-//     represented in the new shape; the synthesizer translates them.
-//
-// Migration mapping is implemented in synthesizeFromLegacy (see load_v2.go).
+// Schema-v2 settings types. See synthesizeFromLegacy in load_v2.go for
+// the v1→v2 mapping.
 
 package settings
 

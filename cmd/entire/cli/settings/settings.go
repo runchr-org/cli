@@ -209,13 +209,11 @@ func loadMergedSettings(settingsFileAbs, localSettingsFileAbs string) (*EntireSe
 	}
 
 	// Apply local overrides if they exist
-	localData, err := os.ReadFile(localSettingsFileAbs) //nolint:gosec // path is from AbsPath or constant
+	localData, err := readSettingsFileIfExists(localSettingsFileAbs)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("reading local settings file: %w", err)
-		}
-		// Local file doesn't exist, continue without overrides
-	} else {
+		return nil, fmt.Errorf("reading local settings file: %w", err)
+	}
+	if localData != nil {
 		if err := mergeJSON(settings, localData); err != nil {
 			return nil, fmt.Errorf("merging local settings: %w", err)
 		}

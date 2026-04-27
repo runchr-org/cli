@@ -1,16 +1,5 @@
-// This file implements LoadV2 and the legacy → v2 synthesizer.
-//
-// Loading rules:
-//   - If .entire/settings.json declares "schema": 2, the file is parsed
-//     directly as Settings. A local override file, if present, must also
-//     declare "schema": 2 (mixed-shape settings are rejected with a
-//     descriptive error).
-//   - Otherwise, the legacy Load() path runs and its EntireSettings result
-//     is mapped into Settings via synthesizeFromLegacy.
-//
-// The synthesizer is the single source of truth for legacy → v2 mapping
-// and is the implementation that `entire migrate-config` will reuse to
-// rewrite settings.json into the new shape.
+// Schema-v2 loader and legacy synthesizer.
+// See synthesizeFromLegacy for the v1→v2 mapping.
 
 package settings
 
@@ -30,6 +19,15 @@ const (
 	BackendTypeV1    = "v1"
 	BackendTypeV2    = "v2"
 	BackendTypeGmeta = "gmeta"
+)
+
+// Legacy strategy_options keys read by the synthesizer. The legacy package
+// has no constants for these; defining them here keeps the synthesizer's
+// references typo-proof without modifying legacy accessors.
+const (
+	legacyKeyGmeta                       = "gmeta"
+	legacyKeyPushSessions                = "push_sessions"
+	legacyKeyFullTranscriptRetentionDays = "full_transcript_generation_retention_days"
 )
 
 // LoadV2 loads settings as the v2 shape. Files declaring "schema": 2 are
@@ -57,17 +55,14 @@ func LoadV2(ctx context.Context) (*Settings, error) {
 		return nil, fmt.Errorf("reading local settings file: %w", localErr)
 	}
 
-	mainIsV2 := isSchemaV2(mainData)
-	localIsV2 := isSchemaV2(localData)
-
 	switch {
 	case mainData == nil && localData == nil:
 		return defaultSettings(), nil
 
-	case mixedShapesRejected(mainData, localData, mainIsV2, localIsV2):
+	case hasMixedShapes(mainData, localData):
 		return nil, errors.New("mixed schema versions in settings files; run `entire migrate-config` to convert all settings to schema 2")
 
-	case mainIsV2 || localIsV2:
+	case isSchemaV2(mainData) || isSchemaV2(localData):
 		return loadFromV2Files(mainData, localData)
 
 	default:
@@ -127,12 +122,14 @@ func isSchemaV2(data []byte) bool {
 	return probe.Schema >= CurrentSchemaVersion
 }
 
-// mixedShapesRejected reports the only configuration we treat as an error:
-// exactly one of (main, local) declares schema 2 while the other is legacy.
-// Two missing files or two same-shape files are both fine.
-func mixedShapesRejected(mainData, localData []byte, mainIsV2, localIsV2 bool) bool {
-	bothPresent := mainData != nil && localData != nil
-	return bothPresent && (mainIsV2 != localIsV2)
+// hasMixedShapes reports whether main and local settings files declare
+// different schema shapes (one v2, one legacy). Returns false when either
+// file is missing — only the both-present-different-shape case is mixed.
+func hasMixedShapes(mainData, localData []byte) bool {
+	if mainData == nil || localData == nil {
+		return false
+	}
+	return isSchemaV2(mainData) != isSchemaV2(localData)
 }
 
 // loadFromV2Files parses one or both files as schema-v2 JSON and applies the
@@ -167,53 +164,64 @@ func parseV2Bytes(data []byte) (*Settings, error) {
 	return settings, nil
 }
 
-// mergeV2Override applies local overrides on top of an existing Settings
-// value. Field-level merge semantics: only fields explicitly present in
-// the override JSON change the base.
-//
-// For now this delegates to a full reparse of the local file and replaces
-// top-level groups wholesale. That is enough for the local-override use
-// cases in the codebase today (toggling log level, enabling local_dev).
-// More granular per-field merging can be added when a real call site needs
-// it; the legacy code only got more granular for redaction/PII fields,
-// and we will revisit that if the ergonomics become a problem.
+// mergeV2Override applies local overrides on top of an existing Settings.
+// Only top-level fields explicitly present in the override JSON are
+// replaced; absent fields preserve the base. Per-field merge of nested
+// groups is intentionally not done — the legacy code only got more
+// granular for redaction/PII, and we will revisit when a real call site
+// needs it.
 func mergeV2Override(base *Settings, data []byte) error {
-	override, err := parseV2Bytes(data)
-	if err != nil {
-		return err
-	}
-
 	var presence map[string]json.RawMessage
 	if err := json.Unmarshal(data, &presence); err != nil {
 		return fmt.Errorf("parsing local settings: %w", err)
 	}
+	if _, ok := presence["schema"]; !ok {
+		// Defensive: the v2 path is only entered when at least one file
+		// declares schema 2; a local-only override without it would have
+		// taken the legacy branch in LoadV2.
+		return errors.New("local settings file is missing required schema field")
+	}
 
-	if _, ok := presence["enabled"]; ok {
-		base.Enabled = override.Enabled
+	if err := decodeOverrideField(presence, "enabled", &base.Enabled); err != nil {
+		return err
 	}
-	if _, ok := presence["local_dev"]; ok {
-		base.LocalDev = override.LocalDev
+	if err := decodeOverrideField(presence, "local_dev", &base.LocalDev); err != nil {
+		return err
 	}
-	if _, ok := presence["logging"]; ok {
-		base.Logging = override.Logging
+	if err := decodeOverrideField(presence, "logging", &base.Logging); err != nil {
+		return err
 	}
-	if _, ok := presence["checkpoints"]; ok {
-		base.Checkpoints = override.Checkpoints
+	if err := decodeOverrideField(presence, "checkpoints", &base.Checkpoints); err != nil {
+		return err
 	}
-	if _, ok := presence["hooks"]; ok {
-		base.Hooks = override.Hooks
+	if err := decodeOverrideField(presence, "hooks", &base.Hooks); err != nil {
+		return err
 	}
-	if _, ok := presence["features"]; ok {
-		base.Features = override.Features
+	if err := decodeOverrideField(presence, "features", &base.Features); err != nil {
+		return err
 	}
-	if _, ok := presence["redaction"]; ok {
-		base.Redaction = override.Redaction
+	if err := decodeOverrideField(presence, "redaction", &base.Redaction); err != nil {
+		return err
 	}
-	if _, ok := presence["telemetry"]; ok {
-		base.Telemetry = override.Telemetry
+	if err := decodeOverrideField(presence, "telemetry", &base.Telemetry); err != nil {
+		return err
 	}
-	if _, ok := presence["summary_generation"]; ok {
-		base.SummaryGeneration = override.SummaryGeneration
+	if err := decodeOverrideField(presence, "summary_generation", &base.SummaryGeneration); err != nil {
+		return err
+	}
+	return nil
+}
+
+// decodeOverrideField decodes the named override field into dst if present
+// in the parsed top-level map. No-op when the key is absent, preserving
+// the base value.
+func decodeOverrideField(presence map[string]json.RawMessage, key string, dst any) error {
+	raw, ok := presence[key]
+	if !ok {
+		return nil
+	}
+	if err := json.Unmarshal(raw, dst); err != nil {
+		return fmt.Errorf("parsing %s override: %w", key, err)
 	}
 	return nil
 }
@@ -232,30 +240,12 @@ func defaultSettings() *Settings {
 // legacy → v2 migration. This is the single source of truth for the
 // translation and is reused by `entire migrate-config`.
 //
-// Mappings:
-//   - strategy_options.checkpoints_version=2 OR checkpoints_v2=true
-//     → Checkpoints.Primary.Type = "v2"
-//   - otherwise → Checkpoints.Primary.Type = "v1"
-//   - strategy_options.gmeta=true → append {type: "gmeta"} to Mirrors
-//   - strategy_options.checkpoint_remote → Checkpoints.Remote
-//   - strategy_options.full_transcript_generation_retention_days
-//     → Checkpoints.FullTranscriptRetentionDays
-//   - strategy_options.filtered_fetches → Checkpoints.FilteredFetches
-//   - strategy_options.push_sessions (explicit) → Checkpoints.PushSessions
-//   - strategy_options.summarize.enabled → Features.Summarize
-//   - log_level → Logging.Level
-//   - sign_checkpoint_commits → Checkpoints.SignCommits
-//   - commit_linking → Hooks.CommitLinking
-//   - absolute_git_hook_path → Hooks.AbsoluteGitHookPath
-//   - external_agents → Features.ExternalAgents
-//   - vercel → Features.Vercel
-//   - summary_generation.{provider,model} + summary_timeout_seconds
-//     → SummaryGeneration.{Provider,Model,TimeoutSeconds}
-//
 // Dropped (no v2 destination):
-//   - push_v2_refs (was a dual-write transition knob; v2 ref pushes are now
-//     a property of the v2 backend's CheckpointSyncer, not a settings flag)
-//   - strategy (deprecated tolerator field)
+//   - push_v2_refs: was a dual-write transition knob; v2 ref pushes will
+//     be a property of the v2 backend's CheckpointSyncer, not a settings flag.
+//   - strategy: deprecated tolerator field.
+//
+// See the function body for field-by-field mapping.
 func synthesizeFromLegacy(s *EntireSettings) *Settings {
 	if s == nil {
 		return defaultSettings()
@@ -325,40 +315,40 @@ func legacyPrimaryBackend(s *EntireSettings) string {
 	return BackendTypeV1
 }
 
-// legacyGmetaEnabled checks the legacy strategy_options.gmeta flag. The
-// flag itself does not exist on this branch yet (it ships with the gmeta
-// mainport), but the synthesizer recognizes it ahead of time so settings
-// files written by that branch round-trip cleanly through Phase 0.
+// legacyGmetaEnabled checks the strategy_options.gmeta flag. The flag does
+// not exist on this branch (it ships with the gmeta mainport), but the
+// synthesizer recognizes it ahead of time so settings files written by
+// that branch round-trip cleanly.
 func legacyGmetaEnabled(s *EntireSettings) bool {
 	if s.StrategyOptions == nil {
 		return false
 	}
-	val, ok := s.StrategyOptions["gmeta"].(bool)
+	val, ok := s.StrategyOptions[legacyKeyGmeta].(bool)
 	return ok && val
 }
 
 // legacyFullTranscriptRetention returns the configured retention only when
-// the legacy key is explicitly set; the legacy accessor returns a default
-// when unset, which we suppress here so the v2 file stays minimal.
+// the legacy key is explicitly set; the legacy accessor would return a
+// default for unset values, which we suppress here so the v2 file stays
+// minimal.
 func legacyFullTranscriptRetention(s *EntireSettings) int {
 	if s.StrategyOptions == nil {
 		return 0
 	}
-	if _, ok := s.StrategyOptions["full_transcript_generation_retention_days"]; !ok {
+	if _, ok := s.StrategyOptions[legacyKeyFullTranscriptRetentionDays]; !ok {
 		return 0
 	}
 	return s.GetFullTranscriptGenerationRetentionDays()
 }
 
 // legacyPushSessions extracts the explicit push_sessions boolean if set;
-// otherwise returns nil so the v2 file stays minimal. The legacy semantics
-// were "explicit false disables, otherwise default behavior", which we
-// preserve by using a *bool here.
+// otherwise returns nil so the v2 file stays minimal. Tri-state preserves
+// the legacy "explicit false disables, otherwise default" semantics.
 func legacyPushSessions(s *EntireSettings) *bool {
 	if s.StrategyOptions == nil {
 		return nil
 	}
-	val, ok := s.StrategyOptions["push_sessions"]
+	val, ok := s.StrategyOptions[legacyKeyPushSessions]
 	if !ok {
 		return nil
 	}
