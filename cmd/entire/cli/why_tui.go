@@ -16,6 +16,9 @@ import (
 type whyTUIStyles struct {
 	statusStyles
 
+	time           lipgloss.Style
+	author         lipgloss.Style
+	agentID        lipgloss.Style
 	lineNo         lipgloss.Style
 	commit         lipgloss.Style
 	checkpoint     lipgloss.Style
@@ -32,7 +35,17 @@ type whyTUIModel struct {
 	width    int
 	height   int
 	ready    bool
+
+	metadataWidth int
 }
+
+const (
+	whyTUITimeMaxWidth       = 10
+	whyTUIAuthorMaxWidth     = 16
+	whyTUIAgentsMaxWidth     = 10
+	whyTUICommitWidth        = 10
+	whyTUICheckpointMaxWidth = 12
+)
 
 var runWhyTUI = defaultRunWhyTUI
 
@@ -66,6 +79,9 @@ func newWhyTUIStyles(ss statusStyles) whyTUIStyles {
 		return s
 	}
 
+	s.time = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	s.author = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	s.agentID = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	s.lineNo = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	s.commit = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	s.checkpoint = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
@@ -150,6 +166,7 @@ func (m whyTUIModel) refreshViewport() whyTUIModel {
 		m.viewport.Width = m.width
 		m.viewport.Height = vpHeight
 	}
+	m.metadataWidth = m.computeMetadataWidth()
 	m.viewport.SetContent(m.renderRows())
 	return m.ensureSelectedVisible()
 }
@@ -238,20 +255,76 @@ func (m whyTUIModel) renderGutter(rowIndex int, row whyBlameRow) string {
 	hash := plumbing.NewHash(row.CommitHash)
 	info := m.commitInfoForRow(row)
 	lineNo := fmt.Sprintf("%*d", whyLineColumnWidth(m.data.Rows), row.FinalLine)
-	commit := whyStaticCommit(hash)
-	checkpointID := whyStaticCheckpoint(info)
+	metadata := m.renderBlameMetadata(rowIndex, row, hash, info)
+	lineColumn := whyTUIColumn(lineNo, whyLineColumnWidth(m.data.Rows), m.styles.lineNo, m.styles.colorEnabled)
 
-	if !m.styles.colorEnabled {
-		return fmt.Sprintf("%s %s %-*s %-*s | ", marker, lineNo, whyCommitColumnWidth, commit, whyCheckpointColumnWidth, checkpointID)
+	return fmt.Sprintf("%s %s | %s | ", marker, metadata, lineColumn)
+}
+
+func (m whyTUIModel) renderBlameMetadata(rowIndex int, row whyBlameRow, hash plumbing.Hash, info whyCommitInfo) string {
+	if !m.shouldShowBlameMetadata(rowIndex, row) {
+		return strings.Repeat(" ", m.metadataWidth)
 	}
 
-	return fmt.Sprintf(
-		"%s %s %s %s | ",
-		marker,
-		m.styles.render(m.styles.lineNo, lineNo),
-		m.styles.render(m.styles.commit, fmt.Sprintf("%-*s", whyCommitColumnWidth, commit)),
-		m.styles.render(m.styles.checkpoint, fmt.Sprintf("%-*s", whyCheckpointColumnWidth, checkpointID)),
-	)
+	metadata := m.renderBlameMetadataCompact(row, hash, info)
+	padding := max(m.metadataWidth-lipgloss.Width(metadata), 0)
+	return metadata + strings.Repeat(" ", padding)
+}
+
+func (m whyTUIModel) shouldShowBlameMetadata(rowIndex int, row whyBlameRow) bool {
+	if len(m.data.Blocks) == 0 || row.BlockIndex < 0 || row.BlockIndex >= len(m.data.Blocks) {
+		return true
+	}
+	return m.data.Blocks[row.BlockIndex].StartRow == rowIndex
+}
+
+func (m whyTUIModel) renderBlameMetadataCompact(row whyBlameRow, hash plumbing.Hash, info whyCommitInfo) string {
+	agent := whyStaticAgent(info)
+	agentStyle := m.styles.agentID
+	if m.styles.colorEnabled && agent != "-" {
+		agentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(whyAgentDisplay(agent).Color))
+	}
+
+	parts := []struct {
+		value string
+		style lipgloss.Style
+	}{
+		{value: whyTUITime(row, info), style: m.styles.time},
+		{value: whyTUIAuthor(row, info), style: m.styles.author},
+		{value: whyTUIAgents(info), style: agentStyle},
+		{value: whyTUICommit(hash), style: m.styles.commit},
+		{value: whyTUICheckpoint(info), style: m.styles.checkpoint},
+	}
+
+	rendered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if !m.styles.colorEnabled {
+			rendered = append(rendered, part.value)
+			continue
+		}
+		rendered = append(rendered, part.style.Render(part.value))
+	}
+	return strings.Join(rendered, " ")
+}
+
+func (m whyTUIModel) computeMetadataWidth() int {
+	width := 0
+	for i, row := range m.data.Rows {
+		if !m.shouldShowBlameMetadata(i, row) {
+			continue
+		}
+		hash := plumbing.NewHash(row.CommitHash)
+		info := m.commitInfoForRow(row)
+		metadata := strings.Join([]string{
+			whyTUITime(row, info),
+			whyTUIAuthor(row, info),
+			whyTUIAgents(info),
+			whyTUICommit(hash),
+			whyTUICheckpoint(info),
+		}, " ")
+		width = max(width, lipgloss.Width(metadata))
+	}
+	return width
 }
 
 func (m whyTUIModel) gutterWidth() int {
@@ -259,14 +332,11 @@ func (m whyTUIModel) gutterWidth() int {
 		return 0
 	}
 	sample := fmt.Sprintf(
-		"%s %*d %-*s %-*s | ",
+		"%s %s | %*d | ",
 		">",
+		strings.Repeat("x", m.metadataWidth),
 		whyLineColumnWidth(m.data.Rows),
 		1,
-		whyCommitColumnWidth,
-		strings.Repeat("x", whyCommitColumnWidth),
-		whyCheckpointColumnWidth,
-		strings.Repeat("x", whyCheckpointColumnWidth),
 	)
 	return lipgloss.Width(sample)
 }
@@ -336,6 +406,53 @@ func whyAgentDisplay(agent string) agentDisplay {
 		return agentDisplayMap[agentUnknown]
 	}
 	return display
+}
+
+func whyTUIColumn(value string, width int, style lipgloss.Style, colorEnabled bool) string {
+	value = truncateDisplayWidth(value, width, "...")
+	value += strings.Repeat(" ", max(width-lipgloss.Width(value), 0))
+	if !colorEnabled {
+		return value
+	}
+	return style.Render(value)
+}
+
+func whyTUITime(row whyBlameRow, info whyCommitInfo) string {
+	value := "-"
+	if !info.AuthorTime.IsZero() {
+		value = timeAgo(info.AuthorTime)
+	} else if !row.AuthorTime.IsZero() {
+		value = timeAgo(row.AuthorTime)
+	}
+	return truncateDisplayWidth(value, whyTUITimeMaxWidth, "...")
+}
+
+func whyTUIAuthor(row whyBlameRow, info whyCommitInfo) string {
+	return truncateDisplayWidth(whyStaticAuthor(row, info), whyTUIAuthorMaxWidth, "...")
+}
+
+func whyTUIAgents(info whyCommitInfo) string {
+	agent := whyStaticAgent(info)
+	if agent == "-" {
+		return "-"
+	}
+	id := normalizeAgentString(agent)
+	if id == agentUnknown {
+		return "(" + truncateDisplayWidth(agent, max(whyTUIAgentsMaxWidth-2, 0), "...") + ")"
+	}
+	return truncateDisplayWidth("("+id+")", whyTUIAgentsMaxWidth, "...")
+}
+
+func whyTUICommit(hash plumbing.Hash) string {
+	full := hash.String()
+	if len(full) <= whyTUICommitWidth {
+		return full
+	}
+	return full[:whyTUICommitWidth]
+}
+
+func whyTUICheckpoint(info whyCommitInfo) string {
+	return truncateDisplayWidth(whyStaticCheckpoint(info), whyTUICheckpointMaxWidth, "...")
 }
 
 func fitWhyTUILine(line string, width int) string {

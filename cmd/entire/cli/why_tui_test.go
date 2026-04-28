@@ -7,6 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
@@ -182,6 +184,61 @@ func TestWhyTUIModel_SelectedLineRemainsVisible(t *testing.T) {
 	}
 	if m.selected < m.viewport.YOffset || m.selected >= m.viewport.YOffset+m.viewport.Height {
 		t.Fatalf("selected row %d outside viewport offset %d height %d", m.selected, m.viewport.YOffset, m.viewport.Height)
+	}
+}
+
+func TestWhyTUIModel_GutterShowsBlameMetadataColumns(t *testing.T) {
+	t.Parallel()
+
+	hash := plumbing.NewHash("c56b7ac719000000000000000000000000000000")
+	cpID := id.MustCheckpointID("a1b2c3d4e5f6")
+	firstRow := testWhyTUIRow(hash, 15, "first")
+	firstRow.BlockIndex = 0
+	secondRow := testWhyTUIRow(hash, 16, "second")
+	secondRow.BlockIndex = 0
+	data := whyViewData{
+		GitPath: "cmd/main.go",
+		Rows:    []whyBlameRow{firstRow, secondRow},
+		Blocks: []whyBlameBlock{
+			{CommitHash: hash.String(), StartLine: 15, EndLine: 16, StartRow: 0, EndRow: 1},
+		},
+		Commits: map[plumbing.Hash]whyCommitInfo{
+			hash: {
+				Hash:         hash,
+				Author:       "Example Author",
+				AuthorTime:   time.Now().Add(-6 * 24 * time.Hour),
+				CheckpointID: cpID,
+				Checkpoint: whyCheckpointInfo{
+					Agent: types.AgentType("Claude Code"),
+				},
+			},
+		},
+	}
+	m := newWhyTUIModel(data, statusStyles{colorEnabled: false, width: 140})
+
+	gutter := m.renderGutter(0, firstRow)
+	for _, want := range []string{"ago", "Example Author", "(claude)", "c56b7ac719", cpID.String(), "15"} {
+		if !strings.Contains(gutter, want) {
+			t.Fatalf("gutter missing %q: %q", want, gutter)
+		}
+	}
+	if !strings.Contains(gutter, "Example Author (claude) c56b7ac719 "+cpID.String()) {
+		t.Fatalf("gutter should use compact single-space metadata columns: %q", gutter)
+	}
+	for _, unwanted := range []string{"Example Author  ", "(claude)  ", "c56b7ac719  "} {
+		if strings.Contains(gutter, unwanted) {
+			t.Fatalf("gutter contains unnecessary internal spacing %q: %q", unwanted, gutter)
+		}
+	}
+
+	continuation := m.renderGutter(1, secondRow)
+	for _, hidden := range []string{"Example Author", "(claude)", "c56b7ac719", cpID.String()} {
+		if strings.Contains(continuation, hidden) {
+			t.Fatalf("continuation gutter should not repeat %q: %q", hidden, continuation)
+		}
+	}
+	if !strings.Contains(continuation, "16") {
+		t.Fatalf("continuation gutter missing line number: %q", continuation)
 	}
 }
 
