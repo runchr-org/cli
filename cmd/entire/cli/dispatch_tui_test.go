@@ -25,8 +25,6 @@ func (p fakeDispatchProgram) Run() (tea.Model, error) {
 }
 
 func TestDefaultRunInteractiveDispatch_DoesNotUseAltScreen(t *testing.T) {
-	t.Parallel()
-
 	oldProgramFactory := newDispatchProgram
 	newDispatchProgram = func(model tea.Model, _ io.Writer, altScreen bool) dispatchProgram {
 		if altScreen {
@@ -73,8 +71,6 @@ func TestDispatchStatusModel_ViewRendersInlineCard(t *testing.T) {
 }
 
 func TestDefaultRunInteractiveDispatch_ClearsLoadingCardBeforeReturn(t *testing.T) {
-	t.Parallel()
-
 	oldProgramFactory := newDispatchProgram
 	newDispatchProgram = func(model tea.Model, _ io.Writer, _ bool) dispatchProgram {
 		return fakeDispatchProgram{model: model}

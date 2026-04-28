@@ -7,6 +7,9 @@ import (
 	"strings"
 	"time"
 
+	glamour "charm.land/glamour/v2"
+	"charm.land/glamour/v2/ansi"
+	glamourstyles "charm.land/glamour/v2/styles"
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -14,6 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/entireio/cli/cmd/entire/cli/search"
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
+	"github.com/muesli/termenv"
 )
 
 // searchMode tracks whether the user is browsing results or editing the search bar.
@@ -53,20 +57,29 @@ type searchStyles struct {
 	detailBorder lipgloss.Style // border style for detail card
 }
 
+// Search palette mirrors activity's dark-mode CSS variables (Tailwind 400-level).
+// orange-400 is the primary accent (matches Claude in activity); purple-400 frames
+// detail; blue-400 is reserved for links inside markdown snippets.
+const (
+	searchAccentOrange = "#fb923c" // matches agentDisplayMap["claude"] in activity_render.go
+	searchAccentPurple = "#c084fc" // matches agentDisplayMap["kiro"] in activity_render.go
+	searchAccentBlue   = "#60a5fa" // matches agentDisplayMap["gemini"] in activity_render.go
+)
+
 func newSearchStyles(ss statusStyles) searchStyles {
 	s := searchStyles{statusStyles: ss}
 	if !ss.colorEnabled {
 		return s
 	}
-	s.sectionTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("244"))
-	s.label = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	s.selected = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	s.helpKey = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	s.helpSep = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	s.detailTitle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	s.sectionTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(searchAccentOrange))
+	s.label = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
+	s.selected = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(searchAccentOrange))
+	s.helpKey = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
+	s.helpSep = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	s.detailTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(searchAccentPurple))
 	s.detailBorder = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("243")).
+		BorderForeground(lipgloss.Color(searchAccentPurple)).
 		Padding(1, 2)
 	return s
 }
@@ -91,6 +104,11 @@ type searchModel struct {
 	styles       searchStyles
 	detailVP     viewport.Model // full-screen detail view
 	browseVP     viewport.Model // scrollable browse view
+
+	// darkBg is captured once before bubbletea takes over the terminal so the
+	// snippet renderer never re-queries the terminal via OSC during the Update
+	// loop (which would race against bubbletea's stdin reader and stall).
+	darkBg bool
 }
 
 // pageResults returns the slice of results for the current page.
@@ -133,10 +151,10 @@ func newSearchModel(results []search.Result, query string, total int, cfg search
 	ti.CharLimit = 200
 	ti.Width = max(ss.width-6, 30)
 	if ss.colorEnabled {
-		ti.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+		ti.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(searchAccentOrange)).Bold(true)
 		ti.TextStyle = lipgloss.NewStyle()
 		ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-		ti.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+		ti.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(searchAccentOrange))
 	}
 
 	var apiPage int
@@ -154,6 +172,7 @@ func newSearchModel(results []search.Result, query string, total int, cfg search
 		apiPage:   apiPage,
 		styles:    styles,
 		browseVP:  viewport.New(ss.width, 1), // height set on first WindowSizeMsg
+		darkBg:    termenv.HasDarkBackground(),
 	}
 	m = m.refreshBrowseContent()
 	return m
@@ -231,7 +250,7 @@ func (m searchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 
 func (m searchModel) updateSearchMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) { //nolint:ireturn // bubbletea pattern
 	switch msg.String() {
-	case "esc":
+	case tuiEscKey:
 		m.mode = modeBrowse
 		m.input.Blur()
 		m = m.refreshBrowseContent()
@@ -273,7 +292,7 @@ func (m searchModel) updateSearchMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) { //n
 func (m searchModel) updateBrowseMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) { //nolint:ireturn // bubbletea pattern
 	pageLen := len(m.pageResults())
 	switch msg.String() {
-	case "q", "ctrl+c":
+	case "q", "ctrl+c", tuiEscKey, "h":
 		return m, tea.Quit
 	case "up", "k":
 		if m.cursor > 0 {
@@ -284,6 +303,21 @@ func (m searchModel) updateBrowseMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) { //n
 		if m.cursor < pageLen-1 {
 			m.cursor++
 			m = m.refreshBrowseContent()
+		}
+	case "home", "g":
+		m.page = 0
+		m.cursor = 0
+		m = m.refreshBrowseContent()
+		m.browseVP.GotoTop()
+	case "end", "G":
+		if len(m.results) > 0 {
+			lastLoaded := len(m.results) - 1
+			m.page = min(lastLoaded/resultsPerPage, m.totalPages()-1)
+			if pageLen := len(m.pageResults()); pageLen > 0 {
+				m.cursor = pageLen - 1
+			}
+			m = m.refreshBrowseContent()
+			m.browseVP.GotoBottom()
 		}
 	case "n", "right":
 		if m.page < m.totalPages()-1 {
@@ -329,7 +363,7 @@ func (m searchModel) updateBrowseMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) { //n
 
 func (m searchModel) updateDetailMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) { //nolint:ireturn // bubbletea pattern
 	switch msg.String() {
-	case "esc", "backspace":
+	case tuiEscKey, "backspace":
 		m.mode = modeBrowse
 		return m, nil
 	case "q", "ctrl+c":
@@ -416,7 +450,7 @@ func (m searchModel) renderBrowseContent() string {
 	m.viewSearchHeader(&b)
 
 	query := m.input.Value()
-	b.WriteString(pad + m.styles.render(m.styles.agent, "›") + " " + m.styles.render(m.styles.bold, query))
+	b.WriteString(pad + m.styles.render(m.styles.sectionTitle, "›") + " " + m.styles.render(m.styles.bold, query))
 	b.WriteString("\n\n")
 
 	// Loading / error / empty states
@@ -581,9 +615,12 @@ func (m searchModel) renderDetailContent(r search.Result, contentWidth int, show
 	// ── SNIPPET ──
 	if r.Meta.Snippet != "" {
 		writeSection("SNIPPET")
-		if valueWidth > 0 {
+		switch {
+		case showSections:
+			content.WriteString(renderSnippetMarkdown(r.Meta.Snippet, contentWidth, m.darkBg) + "\n")
+		case valueWidth > 0:
 			content.WriteString(wrapText(r.Meta.Snippet, contentWidth) + "\n")
-		} else {
+		default:
 			content.WriteString(r.Meta.Snippet + "\n")
 		}
 	}
@@ -658,7 +695,7 @@ func (m searchModel) viewDetailFull() string {
 	scrollPct := m.styles.render(m.styles.dim, fmt.Sprintf("%3.f%%", m.detailVP.ScrollPercent()*100))
 	help := m.styles.render(m.styles.helpKey, "j/k") + " scroll" +
 		m.styles.render(m.styles.helpSep, " · ") +
-		m.styles.render(m.styles.helpKey, "esc") + " back" +
+		m.styles.render(m.styles.helpKey, tuiEscKey) + " back" +
 		m.styles.render(m.styles.helpSep, " · ") +
 		m.styles.render(m.styles.helpKey, "q") + " quit"
 
@@ -676,14 +713,14 @@ func (m searchModel) viewHelp() string {
 
 	if m.mode == modeSearch {
 		return m.styles.render(m.styles.helpKey, "enter") + " search" + dot +
-			m.styles.render(m.styles.helpKey, "esc") + " cancel" + "\n"
+			m.styles.render(m.styles.helpKey, tuiEscKey) + " cancel" + "\n"
 	}
 
 	pages := m.totalPages()
 
 	left := m.styles.render(m.styles.helpKey, "/") + " search" + dot +
-		m.styles.render(m.styles.helpKey, "j/k") + " navigate" + dot +
-		m.styles.render(m.styles.helpKey, "enter") + " detail"
+		m.styles.render(m.styles.helpKey, "↑/↓, j/k") + " scroll" + dot +
+		m.styles.render(m.styles.helpKey, "home/end, g/G") + " top/bottom"
 	if pages > 1 {
 		left += dot + m.styles.render(m.styles.helpKey, "n/p") + " page"
 	}
@@ -829,6 +866,95 @@ func derefStr(s *string, fallback string) string {
 		return fallback
 	}
 	return *s
+}
+
+// ─── Snippet Markdown ────────────────────────────────────────────────────────
+
+// renderSnippetMarkdown renders a search snippet as markdown using glamour v2.
+// It is used in the full-screen checkpoint detail view where the snippet has
+// room to breathe; the inline detail card keeps plain word-wrapping. On any
+// renderer error or impractically narrow widths it falls back to wrapText.
+//
+// dark must be detected before bubbletea owns the terminal — querying termenv
+// inside the Update loop races against bubbletea's stdin reader and stalls.
+//
+// A fresh TermRenderer is built per call. *TermRenderer carries shared mutable
+// state via ansi.RenderContext.blockStack, so caching the renderer would
+// require serialising every Render call; construction is cheap (just goldmark
+// + ANSI option setup, no chroma init unless a fenced code block forces it),
+// so we just rebuild and avoid the concurrency hazard altogether.
+func renderSnippetMarkdown(snippet string, width int, dark bool) string {
+	if width < 20 {
+		return wrapText(snippet, width)
+	}
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithStyles(snippetMarkdownStyles(dark)),
+		glamour.WithWordWrap(width),
+		glamour.WithPreservedNewLines(),
+	)
+	if err != nil {
+		return wrapText(snippet, width)
+	}
+	rendered, err := renderer.Render(snippet)
+	if err != nil {
+		return wrapText(snippet, width)
+	}
+	return strings.TrimRight(rendered, "\n")
+}
+
+// snippetMarkdownStyles returns a glamour style config tailored for inline
+// snippets. Foreground colours are nilled across every text-bearing element
+// so the snippet inherits the terminal's default foreground colour. ANSI
+// palette numbers like "234" embedded in glamour's stock styles get remapped
+// by terminal themes and produce unreadable colours on cream / Solarized
+// backgrounds — letting the terminal pick the colour avoids that entirely.
+//
+// IMPORTANT: this function copies a package-level glamourstyles var by value,
+// then re-assigns its pointer fields. *Re-assigning* (`= nil`, `= &x`) is
+// safe — it rebinds the local field. *Dereferencing* through the pointer
+// (`*s.Document.Color = "x"`) would mutate the shared global and pollute
+// every other glamour caller in the process. Don't do that.
+func snippetMarkdownStyles(dark bool) ansi.StyleConfig {
+	var s ansi.StyleConfig
+	if dark {
+		s = glamourstyles.DarkStyleConfig
+	} else {
+		s = glamourstyles.LightStyleConfig
+	}
+	zero := uint(0)
+	s.Document.Margin = &zero
+	s.Document.BlockPrefix = ""
+	s.Document.BlockSuffix = ""
+
+	// Null foreground on every primitive that contributes to flowing text so
+	// nothing relies on theme-remappable ANSI palette numbers. Code/CodeBlock
+	// keep their styling because BackgroundColor is enough to differentiate
+	// them visually.
+	s.Document.Color = nil
+	s.Paragraph.Color = nil
+	s.Text.Color = nil
+	s.BlockQuote.Color = nil
+	s.Strong.Color = nil
+	s.Emph.Color = nil
+	s.Strikethrough.Color = nil
+	s.Heading.Color = nil
+	s.H1.Color = nil
+	s.H2.Color = nil
+	s.H3.Color = nil
+	s.H4.Color = nil
+	s.H5.Color = nil
+	s.H6.Color = nil
+	s.Item.Color = nil
+	s.Enumeration.Color = nil
+	s.List.Color = nil
+
+	// Links are the one place we *want* a colour: an underline alone is easy
+	// to miss inline. Use an explicit hex so it survives theme remapping.
+	linkColor := searchAccentBlue
+	s.Link.Color = &linkColor
+	s.LinkText.Color = &linkColor
+
+	return s
 }
 
 // ─── Static Fallback ─────────────────────────────────────────────────────────
