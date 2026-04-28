@@ -2,6 +2,8 @@ package settings
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -1020,4 +1022,121 @@ func TestLoadV2_LegacyOverrideSummaryProviderOnly(t *testing.T) {
 	if got.SummaryGeneration.TimeoutSeconds != 45 {
 		t.Fatalf("TimeoutSeconds = %d, want 45 (preserved)", got.SummaryGeneration.TimeoutSeconds)
 	}
+}
+
+// TestLoadV2_TestdataExamples loads each canonical example file under
+// testdata/ via LoadV2FromBytes and asserts the parsed structure. These
+// examples double as hand-readable documentation of the v2 shape.
+func TestLoadV2_TestdataExamples(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		file  string
+		check func(t *testing.T, s *Settings)
+	}{
+		{
+			name: "minimal",
+			file: "v2-minimal.json",
+			check: func(t *testing.T, s *Settings) {
+				if s.Checkpoints.Primary.Type != BackendTypeV2 {
+					t.Fatalf("Primary.Type = %q, want v2", s.Checkpoints.Primary.Type)
+				}
+				if len(s.Checkpoints.Mirrors) != 0 {
+					t.Fatalf("Mirrors = %v, want empty", s.Checkpoints.Mirrors)
+				}
+			},
+		},
+		{
+			name: "with gmeta mirror",
+			file: "v2-with-gmeta-mirror.json",
+			check: func(t *testing.T, s *Settings) {
+				if len(s.Checkpoints.Mirrors) != 1 || s.Checkpoints.Mirrors[0].Type != BackendTypeGmeta {
+					t.Fatalf("Mirrors = %v, want [{gmeta}]", s.Checkpoints.Mirrors)
+				}
+			},
+		},
+		{
+			name: "with git config",
+			file: "v2-with-git-config.json",
+			check: func(t *testing.T, s *Settings) {
+				if s.Checkpoints.Git == nil {
+					t.Fatal("Git = nil, want populated")
+				}
+				if s.Checkpoints.Git.Provider != "github" || s.Checkpoints.Git.Repo != "myorg/myrepo-checkpoints" {
+					t.Fatalf("Git = %+v", s.Checkpoints.Git)
+				}
+			},
+		},
+		{
+			name: "kitchen sink",
+			file: "v2-kitchen-sink.json",
+			check: func(t *testing.T, s *Settings) {
+				if s.Logging.Level != debugLevel {
+					t.Fatalf("Logging.Level = %q", s.Logging.Level)
+				}
+				if s.Checkpoints.Git == nil || s.Checkpoints.FullTranscriptRetentionDays != 90 {
+					t.Fatalf("Checkpoints = %+v", s.Checkpoints)
+				}
+				if !s.Features.Summarize || !s.Features.ExternalAgents {
+					t.Fatalf("Features = %+v", s.Features)
+				}
+				if s.SummaryGeneration == nil || s.SummaryGeneration.Provider != providerClaudeCC {
+					t.Fatalf("SummaryGeneration = %+v", s.SummaryGeneration)
+				}
+			},
+		},
+		{
+			name: "legacy equivalent",
+			file: "legacy-equivalent.json",
+			check: func(t *testing.T, s *Settings) {
+				if s.Checkpoints.Primary.Type != BackendTypeV2 {
+					t.Fatalf("Primary.Type = %q, want v2 (synthesized)", s.Checkpoints.Primary.Type)
+				}
+				if len(s.Checkpoints.Mirrors) != 1 || s.Checkpoints.Mirrors[0].Type != BackendTypeGmeta {
+					t.Fatalf("Mirrors = %v, want [{gmeta}]", s.Checkpoints.Mirrors)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			data := readTestdataFile(t, tt.file)
+			got, err := LoadV2FromBytes(data)
+			if err != nil {
+				t.Fatalf("LoadV2FromBytes(%s): %v", tt.file, err)
+			}
+			tt.check(t, got)
+		})
+	}
+}
+
+// TestLoadV2_TestdataLegacyEquivalentMatchesKitchenSink verifies that
+// legacy-equivalent.json synthesizes to the same Settings as parsing
+// v2-kitchen-sink.json directly. This pair documents the legacy → v2
+// migration map concretely; if a new legacy key gets added to the
+// synthesizer, both files should be updated and this test will catch
+// drift between them.
+func TestLoadV2_TestdataLegacyEquivalentMatchesKitchenSink(t *testing.T) {
+	t.Parallel()
+	v2, err := LoadV2FromBytes(readTestdataFile(t, "v2-kitchen-sink.json"))
+	if err != nil {
+		t.Fatalf("LoadV2FromBytes(v2-kitchen-sink): %v", err)
+	}
+	legacy, err := LoadV2FromBytes(readTestdataFile(t, "legacy-equivalent.json"))
+	if err != nil {
+		t.Fatalf("LoadV2FromBytes(legacy-equivalent): %v", err)
+	}
+	if !reflect.DeepEqual(v2, legacy) {
+		t.Fatalf("legacy-equivalent does not match v2-kitchen-sink:\n v2:     %+v\n legacy: %+v", v2, legacy)
+	}
+}
+
+func readTestdataFile(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	return data
 }
