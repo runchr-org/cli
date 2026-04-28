@@ -78,6 +78,9 @@ func enrichWhyCommits(ctx context.Context, repo *git.Repository, lookup *whyChec
 		}
 	}
 
+	loopCtx, enrichCommitLoop := perf.StartLoop(ctx, "why_enrich_commit")
+	defer enrichCommitLoop.End()
+
 	for _, block := range blocks {
 		if err := ctx.Err(); err != nil {
 			return infoByCommit
@@ -88,11 +91,15 @@ func enrichWhyCommits(ctx context.Context, repo *git.Repository, lookup *whyChec
 			continue
 		}
 
+		_, iterSpan := enrichCommitLoop.Iteration(loopCtx)
+
 		_, commitObjectSpan := perf.Start(ctx, "why_commit_object")
 		commit, err := repo.CommitObject(hash)
 		if err != nil {
 			commitObjectSpan.RecordError(err)
 			commitObjectSpan.End()
+			iterSpan.RecordError(err)
+			iterSpan.End()
 			continue
 		}
 		commitObjectSpan.End()
@@ -124,6 +131,7 @@ func enrichWhyCommits(ctx context.Context, repo *git.Repository, lookup *whyChec
 		}
 
 		infoByCommit[hash] = info
+		iterSpan.End()
 	}
 
 	return infoByCommit
