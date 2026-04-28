@@ -48,6 +48,10 @@ type whyCheckpointInfo struct {
 	SummaryGenerated bool
 }
 
+type whySessionMetadataAndPromptsReader interface {
+	ReadSessionMetadataAndPrompts(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*checkpoint.SessionContent, error)
+}
+
 func newWhyCheckpointLookup(ctx context.Context, repo *git.Repository) (*whyCheckpointLookup, error) {
 	if repo == nil {
 		var err error
@@ -165,8 +169,8 @@ func readWhyCheckpointInfo(ctx context.Context, lookup *whyCheckpointLookup, cpI
 	}
 	resolveReaderSpan.End()
 
-	_, sessionContentSpan := perf.Start(ctx, "why_checkpoint_read_session")
-	content, err := readLatestSessionContentForExplain(ctx, reader, cpID, summary)
+	_, sessionContentSpan := perf.Start(ctx, "why_checkpoint_read_metadata")
+	content, err := readLatestSessionMetadataAndPromptsForWhy(ctx, reader, cpID, summary)
 	if err != nil && !errors.Is(err, checkpoint.ErrNoTranscript) {
 		sessionContentSpan.RecordError(err)
 		sessionContentSpan.End()
@@ -198,6 +202,26 @@ func readWhyCheckpointInfo(ctx context.Context, lookup *whyCheckpointLookup, cpI
 	}
 	buildInfoSpan.End()
 	return info, nil
+}
+
+func readLatestSessionMetadataAndPromptsForWhy(ctx context.Context, reader checkpoint.CommittedReader, checkpointID id.CheckpointID, summary *checkpoint.CheckpointSummary) (*checkpoint.SessionContent, error) {
+	if summary == nil || len(summary.Sessions) == 0 {
+		return nil, checkpoint.ErrCheckpointNotFound
+	}
+
+	latestIndex := len(summary.Sessions) - 1
+	if metadataReader, ok := reader.(whySessionMetadataAndPromptsReader); ok {
+		content, err := metadataReader.ReadSessionMetadataAndPrompts(ctx, checkpointID, latestIndex)
+		if err != nil {
+			return nil, fmt.Errorf("reading session %d metadata and prompts: %w", latestIndex, err)
+		}
+		return content, nil
+	}
+	content, err := reader.ReadSessionContent(ctx, checkpointID, latestIndex)
+	if err != nil {
+		return nil, fmt.Errorf("reading session %d content: %w", latestIndex, err)
+	}
+	return content, nil
 }
 
 func whyCommitSubject(message string) string {

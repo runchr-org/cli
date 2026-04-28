@@ -150,6 +150,44 @@ func TestWhyEnrichCommits_LocalCheckpointFallsBackToPrompt(t *testing.T) {
 	}
 }
 
+func TestWhyEnrichCommits_LocalCheckpointWithoutTranscriptFallsBackToPrompt(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repoDir := t.TempDir()
+	testutil.InitRepo(t, repoDir)
+	cpID := id.MustCheckpointID("c2b2c3d4e5f6")
+	hash := whyTestCommit(t, repoDir, "linked commit\n\nEntire-Checkpoint: "+cpID.String()+"\n", "package main\n")
+	repo := whyTestOpenRepo(t, repoDir)
+	err := checkpoint.NewGitStore(repo).WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID:     cpID,
+		SessionID:        "session-1",
+		Strategy:         "manual-commit",
+		Branch:           "main",
+		Prompts:          []string{"Prompt without transcript\nsecond line"},
+		FilesTouched:     []string{"file.go"},
+		CheckpointsCount: 1,
+		Agent:            types.AgentType("Claude Code"),
+		Model:            "test-model",
+	})
+	if err != nil {
+		t.Fatalf("failed to write checkpoint: %v", err)
+	}
+	lookup := whyTestCheckpointLookup(repo)
+
+	infoByCommit := enrichWhyCommits(ctx, repo, lookup, []whyBlameBlock{{CommitHash: hash.String()}})
+	info, ok := infoByCommit[hash]
+	if !ok {
+		t.Fatalf("missing info for commit %s", hash)
+	}
+	if !info.Checkpoint.Found {
+		t.Fatal("checkpoint should be marked found")
+	}
+	if info.Summary != "Prompt without transcript" {
+		t.Fatalf("summary = %q, want prompt first line", info.Summary)
+	}
+}
+
 func TestWhyEnrichCommits_CorruptedCheckpointDegradesThatCommitOnly(t *testing.T) {
 	t.Parallel()
 

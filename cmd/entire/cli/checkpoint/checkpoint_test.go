@@ -1310,6 +1310,45 @@ func TestReadSessionContent_ByIndex(t *testing.T) {
 	}
 }
 
+func TestReadSessionMetadataAndPrompts_ReturnsWithoutTranscript(t *testing.T) {
+	t.Parallel()
+
+	repo, _ := setupBranchTestRepo(t)
+	store := NewGitStore(repo)
+	checkpointID := id.MustCheckpointID("d1d2d3d4d5d7")
+	ctx := context.Background()
+
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: checkpointID,
+		SessionID:    "session-meta-only",
+		Strategy:     "manual-commit",
+		Prompts:      []string{"test prompt"},
+		AuthorName:   "Test Author",
+		AuthorEmail:  "test@example.com",
+	})
+	if err != nil {
+		t.Fatalf("WriteCommitted() error = %v", err)
+	}
+
+	if _, err := store.ReadSessionContent(ctx, checkpointID, 0); !errors.Is(err, ErrNoTranscript) {
+		t.Fatalf("ReadSessionContent() error = %v, want ErrNoTranscript", err)
+	}
+
+	content, err := store.ReadSessionMetadataAndPrompts(ctx, checkpointID, 0)
+	if err != nil {
+		t.Fatalf("ReadSessionMetadataAndPrompts() error = %v", err)
+	}
+	if content.Metadata.SessionID != "session-meta-only" {
+		t.Fatalf("session ID = %q, want session-meta-only", content.Metadata.SessionID)
+	}
+	if !strings.Contains(content.Prompts, "test prompt") {
+		t.Fatalf("prompts = %q, want test prompt", content.Prompts)
+	}
+	if len(content.Transcript) != 0 {
+		t.Fatalf("transcript length = %d, want 0", len(content.Transcript))
+	}
+}
+
 // writeSingleSession is a test helper that creates a store with a single session
 // and returns the store and checkpoint ID for further testing.
 func writeSingleSession(t *testing.T, cpIDStr, sessionID, transcript string) (*GitStore, id.CheckpointID) {
