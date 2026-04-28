@@ -161,6 +161,10 @@ type State struct {
 	// AgentType identifies the agent that created this session (e.g., "Claude Code", "Gemini CLI", "Cursor")
 	AgentType types.AgentType `json:"agent_type,omitempty"`
 
+	// AgentMetadata stores low-cardinality agent-specific lifecycle metadata
+	// that should survive condensation. Do not store user prompts or content.
+	AgentMetadata map[string]string `json:"agent_metadata,omitempty"`
+
 	// ModelName is the LLM model used in this session (e.g., "claude-sonnet-4-20250514", "gpt-4o").
 	// Set from hook data when the agent provides it.
 	ModelName string `json:"model_name,omitempty"`

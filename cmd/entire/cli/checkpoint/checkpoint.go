@@ -262,6 +262,10 @@ type WriteCommittedOptions struct {
 	// Agent identifies the agent that created this checkpoint (e.g., "Claude Code", "Cursor")
 	Agent types.AgentType
 
+	// AgentMetadata contains low-cardinality agent-specific metadata used by
+	// restore/resume flows. It must not contain user prompts or transcript content.
+	AgentMetadata map[string]string
+
 	// Model is the LLM model used during the session (e.g., "claude-sonnet-4-20250514")
 	Model string
 
@@ -453,6 +457,10 @@ type CommittedMetadata struct {
 
 	// Agent identifies the agent that created this checkpoint (e.g., "Claude Code", "Cursor")
 	Agent types.AgentType `json:"agent,omitempty"`
+
+	// AgentMetadata contains low-cardinality agent-specific metadata used by
+	// restore/resume flows. It must not contain user prompts or transcript content.
+	AgentMetadata map[string]string `json:"agent_metadata,omitempty"`
 
 	// Model is the LLM model used during the session (e.g., "claude-sonnet-4-20250514").
 	// Always written to metadata (empty string when unknown) so consumers can rely on the field's presence.

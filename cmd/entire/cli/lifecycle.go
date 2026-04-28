@@ -268,6 +268,15 @@ func handleLifecycleTurnStart(ctx context.Context, ag agent.Agent, event *agent.
 		logging.Warn(logCtx, "failed to initialize session state",
 			slog.String("error", err.Error()))
 	}
+	if len(event.Metadata) > 0 {
+		if state, stateErr := strategy.LoadSessionState(ctx, sessionID); stateErr == nil && state != nil {
+			persistEventMetadataToState(event, state)
+			if saveErr := strategy.SaveSessionState(ctx, state); saveErr != nil {
+				logging.Warn(logCtx, "failed to persist event metadata",
+					slog.String("error", saveErr.Error()))
+			}
+		}
+	}
 	initSpan.End()
 
 	return nil
@@ -945,6 +954,17 @@ func persistEventMetadataToState(event *agent.Event, state *strategy.SessionStat
 	// Update ModelName if provided (model is known by turn-end even on first turn)
 	if event.Model != "" {
 		state.ModelName = event.Model
+	}
+	if len(event.Metadata) > 0 {
+		if state.AgentMetadata == nil {
+			state.AgentMetadata = make(map[string]string, len(event.Metadata))
+		}
+		for key, value := range event.Metadata {
+			if key == "" || value == "" {
+				continue
+			}
+			state.AgentMetadata[key] = value
+		}
 	}
 
 	// Persist hook-provided session metrics (e.g., from Cursor hooks)

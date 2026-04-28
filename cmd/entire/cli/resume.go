@@ -880,10 +880,21 @@ func displayRestoredSessions(w io.Writer, sessions []strategy.RestoredSession) e
 		if err != nil {
 			return fmt.Errorf("failed to resolve agent for session %s: %w", sess.SessionID, err)
 		}
-		printSessionCommand(w, sessionAgent.FormatResumeCommand(sess.SessionID), sess.Prompt, isMulti, i == len(sessions)-1)
+		printSessionCommand(w, restoredSessionResumeCommand(sessionAgent, sess), sess.Prompt, isMulti, i == len(sessions)-1)
 	}
 
 	return nil
+}
+
+func restoredSessionResumeCommand(ag agent.Agent, sess strategy.RestoredSession) string {
+	if formatter, ok := ag.(agent.ResumeCommandFormatter); ok {
+		return formatter.FormatResumeCommandForSession(agent.ResumeCommandContext{
+			SessionID: sess.SessionID,
+			Model:     sess.Model,
+			Metadata:  sess.AgentMetadata,
+		})
+	}
+	return ag.FormatResumeCommand(sess.SessionID)
 }
 
 // resumeSingleSession restores a single session (fallback when multi-session restore fails).

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent/cursor"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -807,6 +808,54 @@ func TestDisplayRestoredSessions_CodexShowsResumeCommand(t *testing.T) {
 	wantCommand := "  " + ag.FormatResumeCommand(session.SessionID) + "  # Can you take a look at the go code\n"
 	if !strings.Contains(got, wantCommand) {
 		t.Fatalf("displayRestoredSessions() missing command %q in %q", wantCommand, got)
+	}
+}
+
+func TestDisplayRestoredSessions_CursorAgentShowsResumeCommand(t *testing.T) {
+	t.Parallel()
+
+	session := strategy.RestoredSession{
+		SessionID: "cursor-agent-session",
+		Agent:     "Cursor",
+		Prompt:    "Implement auth",
+		AgentMetadata: map[string]string{
+			cursor.MetadataKeyClient: cursor.MetadataClientAgent,
+		},
+	}
+
+	var output bytes.Buffer
+	if err := displayRestoredSessions(&output, []strategy.RestoredSession{session}); err != nil {
+		t.Fatalf("displayRestoredSessions() error = %v", err)
+	}
+
+	got := output.String()
+	wantCommand := "  agent --resume cursor-agent-session  # Implement auth\n"
+	if !strings.Contains(got, wantCommand) {
+		t.Fatalf("displayRestoredSessions() missing Cursor Agent command %q in %q", wantCommand, got)
+	}
+}
+
+func TestDisplayRestoredSessions_CursorIDEKeepsOpenInstruction(t *testing.T) {
+	t.Parallel()
+
+	session := strategy.RestoredSession{
+		SessionID: "cursor-ide-session",
+		Agent:     "Cursor",
+		Prompt:    "Implement auth",
+		AgentMetadata: map[string]string{
+			cursor.MetadataKeyClient: cursor.MetadataClientIDE,
+		},
+	}
+
+	var output bytes.Buffer
+	if err := displayRestoredSessions(&output, []strategy.RestoredSession{session}); err != nil {
+		t.Fatalf("displayRestoredSessions() error = %v", err)
+	}
+
+	got := output.String()
+	wantCommand := "  Open this project in Cursor.  # Implement auth\n"
+	if !strings.Contains(got, wantCommand) {
+		t.Fatalf("displayRestoredSessions() missing Cursor IDE instruction %q in %q", wantCommand, got)
 	}
 }
 

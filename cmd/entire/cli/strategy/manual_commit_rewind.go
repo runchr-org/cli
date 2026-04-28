@@ -843,10 +843,12 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 		runCheckpointRestorer(ctx, errW, sessionAgent, sessionID, content.ExtraFiles)
 
 		restored = append(restored, RestoredSession{
-			SessionID: sessionID,
-			Agent:     sessionAgent.Type(),
-			Prompt:    promptPreview,
-			CreatedAt: content.Metadata.CreatedAt,
+			SessionID:     sessionID,
+			Agent:         sessionAgent.Type(),
+			Prompt:        promptPreview,
+			CreatedAt:     content.Metadata.CreatedAt,
+			Model:         content.Metadata.Model,
+			AgentMetadata: content.Metadata.AgentMetadata,
 		})
 	}
 

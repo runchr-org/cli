@@ -90,6 +90,7 @@ func (c *CursorAgent) parseSessionStart(stdin io.Reader) (*agent.Event, error) {
 		SessionRef: raw.TranscriptPath,
 		Model:      raw.Model,
 		Timestamp:  time.Now(),
+		Metadata:   cursorClientMetadata(raw.TranscriptPath, raw.ComposerMode),
 	}, nil
 }
 
@@ -105,6 +106,7 @@ func (c *CursorAgent) parseTurnStart(ctx context.Context, stdin io.Reader) (*age
 		Prompt:     raw.Prompt,
 		Model:      raw.Model,
 		Timestamp:  time.Now(),
+		Metadata:   cursorClientMetadata(raw.TranscriptPath, ""),
 	}, nil
 }
 
@@ -120,6 +122,7 @@ func (c *CursorAgent) parseTurnEnd(ctx context.Context, stdin io.Reader) (*agent
 		Model:      raw.Model,
 		TurnCount:  int(intFromJSON(raw.LoopCount)),
 		Timestamp:  time.Now(),
+		Metadata:   cursorClientMetadata(raw.TranscriptPath, ""),
 	}, nil
 }
 
@@ -135,6 +138,7 @@ func (c *CursorAgent) parseSessionEnd(ctx context.Context, stdin io.Reader) (*ag
 		Model:      raw.Model,
 		DurationMs: intFromJSON(raw.DurationMs),
 		Timestamp:  time.Now(),
+		Metadata:   cursorClientMetadata(raw.TranscriptPath, ""),
 	}, nil
 }
 
@@ -150,6 +154,7 @@ func (c *CursorAgent) parsePreCompact(stdin io.Reader) (*agent.Event, error) {
 		ContextTokens:     int(intFromJSON(raw.ContextTokens)),
 		ContextWindowSize: int(intFromJSON(raw.ContextWindowSize)),
 		Timestamp:         time.Now(),
+		Metadata:          cursorClientMetadata(raw.TranscriptPath, ""),
 	}, nil
 }
 
@@ -171,6 +176,14 @@ func (c *CursorAgent) parseSubagentStart(stdin io.Reader) (*agent.Event, error) 
 		TaskDescription: raw.Task,
 		Timestamp:       time.Now(),
 	}, nil
+}
+
+func cursorClientMetadata(transcriptPath, composerMode string) map[string]string {
+	client := MetadataClientAgent
+	if transcriptPath != "" || composerMode != "" {
+		client = MetadataClientIDE
+	}
+	return map[string]string{MetadataKeyClient: client}
 }
 
 func (c *CursorAgent) parseSubagentStop(stdin io.Reader) (*agent.Event, error) {

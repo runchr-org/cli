@@ -235,6 +235,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		AuthorName:                  authorName,
 		AuthorEmail:                 authorEmail,
 		Agent:                       state.AgentType,
+		AgentMetadata:               state.AgentMetadata,
 		Model:                       state.ModelName,
 		TurnID:                      state.TurnID,
 		TranscriptIdentifierAtStart: state.TranscriptIdentifierAtStart,

@@ -38,8 +38,28 @@ func TestParseHookEvent_SessionStart(t *testing.T) {
 	if event.SessionRef != "/tmp/transcript.jsonl" {
 		t.Errorf("expected session_ref '/tmp/transcript.jsonl', got %q", event.SessionRef)
 	}
+	if event.Metadata[MetadataKeyClient] != MetadataClientIDE {
+		t.Errorf("expected cursor client %q, got %q", MetadataClientIDE, event.Metadata[MetadataKeyClient])
+	}
 	if event.Timestamp.IsZero() {
 		t.Error("expected non-zero timestamp")
+	}
+}
+
+func TestParseHookEvent_SessionStart_ClassifiesCursorAgent(t *testing.T) {
+	t.Parallel()
+
+	ag := &CursorAgent{}
+	input := `{"conversation_id": "agent-session", "transcript_path": null, "model": "` + testModel + `"}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameSessionStart, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	require.NotNil(t, event, "expected event, got nil")
+	if event.Metadata[MetadataKeyClient] != MetadataClientAgent {
+		t.Errorf("expected cursor client %q, got %q", MetadataClientAgent, event.Metadata[MetadataKeyClient])
 	}
 }
 
@@ -160,6 +180,9 @@ func TestParseHookEvent_TurnStart_CLINoTranscriptPath(t *testing.T) {
 	}
 	if event.Prompt != "Hello" {
 		t.Errorf("expected prompt 'Hello', got %q", event.Prompt)
+	}
+	if event.Metadata[MetadataKeyClient] != MetadataClientAgent {
+		t.Errorf("expected cursor client %q, got %q", MetadataClientAgent, event.Metadata[MetadataKeyClient])
 	}
 }
 
@@ -309,6 +332,9 @@ func TestParseHookEvent_TurnEnd_IDEWithTranscriptPath(t *testing.T) {
 	require.NotNil(t, event, "expected event, got nil")
 	if event.SessionRef != "/home/user/.cursor/projects/proj/agent-transcripts/ide-session/ide-session.jsonl" {
 		t.Errorf("expected IDE-provided session_ref, got %q", event.SessionRef)
+	}
+	if event.Metadata[MetadataKeyClient] != MetadataClientIDE {
+		t.Errorf("expected cursor client %q, got %q", MetadataClientIDE, event.Metadata[MetadataKeyClient])
 	}
 }
 

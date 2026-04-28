@@ -85,6 +85,60 @@ func TestCursorAgent_FormatResumeCommand(t *testing.T) {
 	}
 }
 
+func TestCursorAgent_FormatResumeCommandForSession(t *testing.T) {
+	t.Parallel()
+
+	ag := &CursorAgent{}
+
+	tests := []struct {
+		name string
+		ctx  agent.ResumeCommandContext
+		want string
+	}{
+		{
+			name: "cursor agent metadata returns CLI resume command",
+			ctx: agent.ResumeCommandContext{
+				SessionID: "session-123",
+				Metadata:  map[string]string{MetadataKeyClient: MetadataClientAgent},
+			},
+			want: "agent --resume session-123",
+		},
+		{
+			name: "cursor ide metadata keeps IDE instruction",
+			ctx: agent.ResumeCommandContext{
+				SessionID: "session-123",
+				Metadata:  map[string]string{MetadataKeyClient: MetadataClientIDE},
+			},
+			want: "Open this project in Cursor.",
+		},
+		{
+			name: "legacy cursor agent model returns CLI resume command",
+			ctx: agent.ResumeCommandContext{
+				SessionID: "session-123",
+				Model:     "gpt-5.2-codex-xhigh-fast",
+			},
+			want: "agent --resume session-123",
+		},
+		{
+			name: "legacy cursor ide model keeps IDE instruction",
+			ctx: agent.ResumeCommandContext{
+				SessionID: "session-123",
+				Model:     "default",
+			},
+			want: "Open this project in Cursor.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ag.FormatResumeCommandForSession(tt.ctx); got != tt.want {
+				t.Errorf("FormatResumeCommandForSession() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // --- GetSessionID ---
 
 func TestCursorAgent_GetSessionID(t *testing.T) {

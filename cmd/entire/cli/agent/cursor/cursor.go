@@ -20,6 +20,16 @@ import (
 
 // Compile-time interface assertion.
 var _ agent.TranscriptPreparer = (*CursorAgent)(nil)
+var _ agent.ResumeCommandFormatter = (*CursorAgent)(nil)
+
+const (
+	// MetadataKeyClient identifies whether a Cursor checkpoint came from the
+	// IDE or the standalone Cursor Agent CLI.
+	MetadataKeyClient = "cursor_client"
+
+	MetadataClientIDE   = "ide"
+	MetadataClientAgent = "agent"
+)
 
 //nolint:gochecknoinits // Agent self-registration is the intended pattern
 func init() {
@@ -227,10 +237,32 @@ func (c *CursorAgent) WriteSession(_ context.Context, session *agent.AgentSessio
 	return nil
 }
 
-// FormatResumeCommand returns an instruction to resume a Cursor session.
-// Cursor is a GUI IDE, so there's no CLI command to resume a session directly.
+// FormatResumeCommand returns the default Cursor IDE resume instruction.
 func (c *CursorAgent) FormatResumeCommand(_ string) string {
 	return "Open this project in Cursor."
+}
+
+// FormatResumeCommandForSession returns the correct resume instruction for
+// Cursor checkpoints. Cursor IDE sessions are resumed by opening the project,
+// while Cursor Agent CLI sessions can be resumed by session ID.
+func (c *CursorAgent) FormatResumeCommandForSession(ctx agent.ResumeCommandContext) string {
+	if isCursorAgentCheckpoint(ctx.Metadata, ctx.Model) {
+		return "agent --resume " + ctx.SessionID
+	}
+	return c.FormatResumeCommand(ctx.SessionID)
+}
+
+func isCursorAgentCheckpoint(metadata map[string]string, model string) bool {
+	switch metadata[MetadataKeyClient] {
+	case MetadataClientAgent:
+		return true
+	case MetadataClientIDE:
+		return false
+	}
+	// Backward compatibility for checkpoints created before cursor_client was
+	// persisted: Cursor IDE historically reports model "default"; Cursor Agent
+	// reports the actual model name.
+	return model != "" && !strings.EqualFold(model, "default")
 }
 
 // sanitizePathForCursor converts a path to Cursor's project directory format.

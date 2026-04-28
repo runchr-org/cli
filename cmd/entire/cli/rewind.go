@@ -1221,6 +1221,6 @@ func printMultiSessionResumeCommands(w, errW io.Writer, sessions []strategy.Rest
 			fmt.Fprintf(errW, "  Warning: could not resolve agent %q for session %s, skipping\n", sess.Agent, sess.SessionID)
 			continue
 		}
-		printSessionCommand(w, ag.FormatResumeCommand(sess.SessionID), sess.Prompt, isMulti, i == len(sessions)-1)
+		printSessionCommand(w, restoredSessionResumeCommand(ag, sess), sess.Prompt, isMulti, i == len(sessions)-1)
 	}
 }

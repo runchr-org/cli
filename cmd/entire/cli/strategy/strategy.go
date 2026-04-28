@@ -292,8 +292,10 @@ func ReadTaskCheckpoint(taskMetadataDir string) (*TaskCheckpoint, error) {
 // Each session may come from a different agent, so callers use this to print
 // per-session resume commands without re-reading the metadata tree.
 type RestoredSession struct {
-	SessionID string
-	Agent     types.AgentType
-	Prompt    string
-	CreatedAt time.Time // From session metadata; used by resume to determine most recent
+	SessionID     string
+	Agent         types.AgentType
+	Prompt        string
+	CreatedAt     time.Time // From session metadata; used by resume to determine most recent
+	Model         string
+	AgentMetadata map[string]string
 }

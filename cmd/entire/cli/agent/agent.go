@@ -77,6 +77,22 @@ type Agent interface {
 	FormatResumeCommand(sessionID string) string
 }
 
+// ResumeCommandContext contains checkpoint metadata that may affect how an
+// agent resumes a restored session.
+type ResumeCommandContext struct {
+	SessionID string
+	Model     string
+	Metadata  map[string]string
+}
+
+// ResumeCommandFormatter is implemented by agents whose resume command depends
+// on checkpoint metadata, while retaining FormatResumeCommand as the default.
+type ResumeCommandFormatter interface {
+	Agent
+
+	FormatResumeCommandForSession(ctx ResumeCommandContext) string
+}
+
 // HookSupport is implemented by agents with lifecycle hooks.
 // This optional interface allows agents like Claude Code and Cursor to
 // install and manage hooks that notify Entire of agent events.

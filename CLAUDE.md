@@ -371,6 +371,7 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 - Builds git trees in-memory using go-git plumbing APIs
 - Rewind restores files from shadow branch commit tree (does not use `git reset`)
 - **Location-independent transcript resolution** - transcript paths are always computed dynamically from the current repo location (via `agent.GetSessionDir` + `agent.ResolveSessionFile`), never stored in checkpoint metadata. This ensures restore/rewind works after repo relocation or across machines.
+- **Agent-specific resume metadata** - low-cardinality fields such as Cursor IDE vs Cursor Agent are stored in session/checkpoint metadata so `resume` can print the right continuation hint without storing user content.
 - **Copilot token scoping** - Copilot CLI `session.shutdown` contains session-wide token aggregates. Checkpoint metadata must stay scoped to `CheckpointTranscriptStart`; condensation may separately backfill full-session Copilot totals into session state for `entire status`.
 - Tracks session state in `.git/entire-sessions/` (shared across worktrees)
 - **Shadow branch migration** - if user does stash/pull/rebase (HEAD changes without commit), shadow branch is automatically moved to new base commit
