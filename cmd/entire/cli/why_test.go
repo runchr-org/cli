@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,30 +12,19 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
-func TestWhyCmd_Flags(t *testing.T) {
+func TestWhyCmd_ModeFlagsAreNotRegistered(t *testing.T) {
 	t.Parallel()
 
 	cmd := newWhyCmd()
 
-	tests := []struct {
-		name      string
-		shorthand string
-	}{
-		{name: "interactive", shorthand: "i"},
-		{name: "no-pager"},
+	if flag := cmd.Flags().Lookup("interactive"); flag != nil {
+		t.Fatal("did not expect --interactive flag to be registered")
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			flag := cmd.Flags().Lookup(tt.name)
-			if flag == nil {
-				t.Fatalf("expected --%s flag to exist", tt.name)
-			}
-			if flag.Shorthand != tt.shorthand {
-				t.Fatalf("--%s shorthand = %q, want %q", tt.name, flag.Shorthand, tt.shorthand)
-			}
-		})
+	if flag := cmd.Flags().ShorthandLookup("i"); flag != nil {
+		t.Fatal("did not expect -i shorthand to be registered")
+	}
+	if flag := cmd.Flags().Lookup("no-pager"); flag != nil {
+		t.Fatal("did not expect --no-pager flag to be registered")
 	}
 }
 
@@ -70,20 +60,22 @@ func TestWhyCmd_NoPathNonInteractiveErrors(t *testing.T) {
 	}
 }
 
-func TestWhyCmd_ExplicitInteractiveRequiresTerminalBeforePath(t *testing.T) {
-	t.Parallel()
+func TestWhyCmd_InteractiveOverviewNotImplementedBeforePathResolution(t *testing.T) {
+	originalCanRunWhyTUI := canRunWhyTUI
+	canRunWhyTUI = func(io.Writer) bool { return true }
+	t.Cleanup(func() { canRunWhyTUI = originalCanRunWhyTUI })
 
-	cmd := newWhyCmd()
-	cmd.SetOut(&bytes.Buffer{})
-	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"--interactive"})
-
-	err := cmd.Execute()
+	err := runWhy(
+		context.Background(),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+		whyOptions{Path: filepath.Join(t.TempDir(), "outside.go")},
+	)
 	if err == nil {
-		t.Fatal("expected explicit interactive command to fail without a terminal")
+		t.Fatal("expected interactive placeholder error")
 	}
-	if !strings.Contains(err.Error(), "interactive mode requires a real terminal") {
-		t.Fatalf("expected interactive terminal error, got: %v", err)
+	if !strings.Contains(err.Error(), "interactive why overview is not implemented yet") {
+		t.Fatalf("expected interactive overview placeholder, got: %v", err)
 	}
 }
 

@@ -14,9 +14,7 @@ import (
 )
 
 type whyOptions struct {
-	Path        string
-	Interactive bool
-	NoPager     bool
+	Path string
 }
 
 func newWhyCmd() *cobra.Command {
@@ -35,30 +33,38 @@ func newWhyCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVarP(&opts.Interactive, "interactive", "i", false, "Force interactive TUI mode")
-	cmd.Flags().BoolVar(&opts.NoPager, "no-pager", false, "Disable pager output")
-
 	return cmd
 }
 
 func runWhy(ctx context.Context, w io.Writer, _ io.Writer, opts whyOptions) error {
 	canUseTUI := canRunWhyTUI(w)
-	if opts.Interactive && !canUseTUI {
-		return errors.New("interactive mode requires a real terminal")
-	}
 	if opts.Path == "" {
 		if !canUseTUI {
 			return errors.New("path required when not running interactively")
 		}
 		return errors.New("interactive file browser is not implemented yet")
 	}
-	if _, _, _, err := resolveWhyPath(ctx, opts.Path); err != nil {
+	if canUseTUI {
+		return errors.New("interactive why overview is not implemented yet")
+	}
+
+	repoRoot, gitPath, _, err := resolveWhyPath(ctx, opts.Path)
+	if err != nil {
 		return err
 	}
-	return errors.New("entire why is not implemented yet")
+
+	data, err := loadWhyViewData(ctx, repoRoot, gitPath)
+	if err != nil {
+		return err
+	}
+
+	outputExplainContent(w, renderWhyStatic(data), false)
+	return nil
 }
 
-func canRunWhyTUI(w io.Writer) bool {
+var canRunWhyTUI = defaultCanRunWhyTUI
+
+func defaultCanRunWhyTUI(w io.Writer) bool {
 	return !IsAccessibleMode() && interactive.IsTerminalWriter(w) && interactive.CanPromptInteractively()
 }
 
@@ -100,4 +106,36 @@ func normalizeWhyPathForRel(path string) string {
 		return filepath.Join(resolvedDir, base)
 	}
 	return cleaned
+}
+
+func loadWhyViewData(ctx context.Context, repoRoot, gitPath string) (whyViewData, error) {
+	blameOutput, err := runGitBlame(ctx, repoRoot, gitPath)
+	if err != nil {
+		return whyViewData{}, err
+	}
+
+	lines, err := parseBlamePorcelain(blameOutput)
+	if err != nil {
+		return whyViewData{}, fmt.Errorf("parse git blame output: %w", err)
+	}
+
+	blocks := collapseWhyBlameBlocks(lines)
+	rows := buildWhyBlameRows(lines, blocks)
+
+	repo, err := openRepository(ctx)
+	if err != nil {
+		return whyViewData{}, fmt.Errorf("open repository: %w", err)
+	}
+
+	lookup, err := newWhyCheckpointLookup(ctx, repo)
+	if err != nil {
+		return whyViewData{}, fmt.Errorf("initialize checkpoint lookup: %w", err)
+	}
+
+	return whyViewData{
+		GitPath: gitPath,
+		Rows:    rows,
+		Blocks:  blocks,
+		Commits: enrichWhyCommits(ctx, repo, lookup, blocks),
+	}, nil
 }
