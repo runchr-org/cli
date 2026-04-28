@@ -76,14 +76,7 @@ external_agents in settings. Run 'entire configure' to see the full list.`,
 }
 
 func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName types.AgentName, force bool) error {
-	// Initialize structured logger so logging.Warn/Info write to .entire/logs/ not stderr.
-	if err := logging.Init(ctx, sessionID); err != nil {
-		// Init failed — logging will use stderr fallback, non-fatal.
-		_ = err
-	}
-	defer logging.Close()
-
-	logCtx := logging.WithComponent(ctx, "attach")
+	logCtx := logging.WithSession(logging.WithComponent(ctx, "attach"), sessionID)
 
 	// Open repository once — shared across all operations.
 	repo, err := openRepository(ctx)

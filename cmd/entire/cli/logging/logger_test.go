@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -19,622 +20,395 @@ const (
 	testSessionID = "2025-01-15-test-session"
 	testComponent = "hooks"
 	testAgent     = "claude-code"
-	levelINFO     = "INFO"
 )
 
-// testLogFilePath returns the expected log file path for a test temp directory.
-func testLogFilePath(tmpDir string) string {
-	return filepath.Join(tmpDir, ".entire", "logs", "entire.log")
+// initGitRepo initialises a git repo in dir so tests that exercise the lazy
+// writer's repo-root resolution can succeed.
+func initGitRepo(t testing.TB, dir string) {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", "init")
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+}
+
+// withTestLogger returns a ctx pre-loaded with a debug-level logger writing to
+// the returned buffer. Cleanup is registered on t.
+//
+// Mirrors loggingtest.New but lives in this package so tests inside `logging`
+// avoid an import cycle with `logging/loggingtest`.
+func withTestLogger(t testing.TB) (context.Context, *bytes.Buffer) {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	logger, closer := New(context.Background(), Options{
+		Output: buf,
+		Level:  slog.LevelDebug,
+	})
+	t.Cleanup(func() {
+		if err := closer(); err != nil {
+			t.Errorf("closer error: %v", err)
+		}
+	})
+	return WithLogger(context.Background(), logger), buf
+}
+
+// firstRecord parses the first JSONL line from buf into a map; fails the test
+// if the buffer is empty or unparseable.
+func firstRecord(t testing.TB, buf *bytes.Buffer) map[string]any {
+	t.Helper()
+	if buf.Len() == 0 {
+		t.Fatal("expected at least one log record, buffer is empty")
+	}
+	rec := map[string]any{}
+	dec := json.NewDecoder(bytes.NewReader(buf.Bytes()))
+	if err := dec.Decode(&rec); err != nil {
+		t.Fatalf("parse log record: %v", err)
+	}
+	return rec
 }
 
 func TestParseLogLevel(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
-		name     string
-		envValue string
-		want     slog.Level
+		input string
+		want  slog.Level
 	}{
-		{"empty defaults to INFO", "", slog.LevelInfo},
-		{"DEBUG lowercase", "debug", slog.LevelDebug},
-		{"DEBUG uppercase", "DEBUG", slog.LevelDebug},
-		{"INFO lowercase", "info", slog.LevelInfo},
-		{"INFO uppercase", "INFO", slog.LevelInfo},
-		{"WARN lowercase", "warn", slog.LevelWarn},
-		{"WARN uppercase", "WARN", slog.LevelWarn},
-		{"ERROR lowercase", "error", slog.LevelError},
-		{"ERROR uppercase", "ERROR", slog.LevelError},
-		{"invalid defaults to INFO", "invalid", slog.LevelInfo},
-		{"warning alias", "warning", slog.LevelWarn},
+		{"DEBUG", slog.LevelDebug},
+		{"debug", slog.LevelDebug},
+		{"INFO", slog.LevelInfo},
+		{"info", slog.LevelInfo},
+		{"WARN", slog.LevelWarn},
+		{"WARNING", slog.LevelWarn},
+		{"ERROR", slog.LevelError},
+		{"", slog.LevelInfo},
+		{"bogus", slog.LevelInfo},
 	}
+	for _, tt := range tests {
+		got := parseLogLevel(tt.input)
+		if got != tt.want {
+			t.Errorf("parseLogLevel(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
 
+func TestResolveLevel(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		env, settings string
+		want          slog.Level
+	}{
+		{"defaults to info", "", "", slog.LevelInfo},
+		{"env wins over settings", "DEBUG", "WARN", slog.LevelDebug},
+		{"settings used when env empty", "", "WARN", slog.LevelWarn},
+		{"invalid env falls back", "bogus", "", slog.LevelInfo},
+		{"invalid settings falls back", "", "bogus", slog.LevelInfo},
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseLogLevel(tt.envValue)
+			t.Parallel()
+			got := ResolveLevel(tt.env, tt.settings)
 			if got != tt.want {
-				t.Errorf("parseLogLevel(%q) = %v, want %v", tt.envValue, got, tt.want)
+				t.Errorf("ResolveLevel(%q, %q) = %v, want %v", tt.env, tt.settings, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestInit_CreatesLogDirectory(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-
-	// Initialize git repo so WorktreeRoot works
-	initGitRepo(t, tmpDir)
-
-	err := Init(context.Background(), testSessionID)
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
-	}
-	defer Close()
-
-	logsDir := filepath.Join(tmpDir, ".entire", "logs")
-	if _, err := os.Stat(logsDir); os.IsNotExist(err) {
-		t.Errorf("Init() did not create .entire/logs/ directory")
-	}
-}
-
-func TestInit_CreatesLogFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-
-	initGitRepo(t, tmpDir)
-
-	err := Init(context.Background(), testSessionID)
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
-	}
-	defer Close()
-
-	if _, err := os.Stat(testLogFilePath(tmpDir)); os.IsNotExist(err) {
-		t.Errorf("Init() did not create log file at %s", testLogFilePath(tmpDir))
-	}
-}
-
-func TestInit_WritesJSONLogs(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-
-	initGitRepo(t, tmpDir)
-
-	sessionID := "2025-01-15-json-test"
-	err := Init(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
-	}
-
-	// Log something
-	Info(context.Background(), "test message", slog.String("key", "value"))
-
-	// Close to flush
-	Close()
-
-	// Read log file
-	content, err := os.ReadFile(testLogFilePath(tmpDir))
-	if err != nil {
-		t.Fatalf("Failed to read log file: %v", err)
-	}
-
-	// Parse as JSON
-	var logEntry map[string]interface{}
-	if err := json.Unmarshal(content, &logEntry); err != nil {
-		t.Errorf("Log output is not valid JSON: %v\nContent: %s", err, content)
-	}
-
-	// Verify expected fields
-	if msg, ok := logEntry["msg"].(string); !ok || msg != "test message" {
-		t.Errorf("Expected msg='test message', got %v", logEntry["msg"])
-	}
-	if key, ok := logEntry["key"].(string); !ok || key != "value" {
-		t.Errorf("Expected key='value', got %v", logEntry["key"])
-	}
-	if _, ok := logEntry["time"]; !ok {
-		t.Error("Expected 'time' field in log entry")
-	}
-	if _, ok := logEntry["level"]; !ok {
-		t.Error("Expected 'level' field in log entry")
-	}
-}
-
-func TestInit_RespectsLogLevel(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-
-	initGitRepo(t, tmpDir)
-
-	// Set log level to WARN
-	t.Setenv(LogLevelEnvVar, "WARN")
-
-	sessionID := "2025-01-15-level-test"
-	err := Init(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
-	}
-
-	ctx := context.Background()
-
-	// These should NOT be logged
-	Debug(ctx, "debug message")
-	Info(ctx, "info message")
-
-	// This SHOULD be logged
-	Warn(ctx, "warn message")
-
-	Close()
-
-	// Read log file
-	content, err := os.ReadFile(testLogFilePath(tmpDir))
-	if err != nil {
-		t.Fatalf("Failed to read log file: %v", err)
-	}
-
-	contentStr := string(content)
-	if strings.Contains(contentStr, "debug message") {
-		t.Error("DEBUG message should not be logged when level is WARN")
-	}
-	if strings.Contains(contentStr, "info message") {
-		t.Error("INFO message should not be logged when level is WARN")
-	}
-	if !strings.Contains(contentStr, "warn message") {
-		t.Error("WARN message should be logged when level is WARN")
-	}
-}
-
-func TestInit_InvalidLogLevelWarns(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-
-	initGitRepo(t, tmpDir)
-
-	// Capture stderr
+func TestNew_OutputBufferOverridesLazyFile(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
-	oldStderr := os.Stderr
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("Failed to create pipe: %v", err)
+	logger, closer := New(context.Background(), Options{Output: &buf, Level: slog.LevelDebug})
+	t.Cleanup(func() {
+		if err := closer(); err != nil {
+			t.Errorf("closer: %v", err)
+		}
+	})
+
+	logger.Info("hello", slog.String("foo", "bar"))
+
+	if !strings.Contains(buf.String(), `"msg":"hello"`) {
+		t.Errorf("expected hello in output, got: %s", buf.String())
 	}
-	os.Stderr = w
-
-	t.Setenv(LogLevelEnvVar, "INVALID_LEVEL")
-
-	sessionID := "2025-01-15-invalid-level"
-	err = Init(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
-	}
-
-	w.Close()
-	os.Stderr = oldStderr
-
-	if _, err := buf.ReadFrom(r); err != nil {
-		t.Fatalf("Failed to read from pipe: %v", err)
-	}
-	stderrOutput := buf.String()
-
-	if !strings.Contains(stderrOutput, "invalid log level") {
-		t.Errorf("Expected warning about invalid log level on stderr, got: %s", stderrOutput)
-	}
-
-	Close()
 }
 
-func TestInit_FallsBackToStderrOnError(t *testing.T) {
+func TestNew_LazyOpensFile(t *testing.T) {
+	// Cannot use t.Parallel: t.Chdir mutates process-global state.
 	tmpDir := t.TempDir()
+	initGitRepo(t, tmpDir)
 	t.Chdir(tmpDir)
 
-	initGitRepo(t, tmpDir)
+	logger, closer := New(context.Background(), Options{Level: slog.LevelDebug})
+	t.Cleanup(func() {
+		if err := closer(); err != nil {
+			t.Errorf("closer: %v", err)
+		}
+	})
 
-	// Make logs directory unwritable (simulate permission error)
-	logsDir := filepath.Join(tmpDir, ".entire", "logs")
-	if err := os.MkdirAll(logsDir, 0o755); err != nil {
-		t.Fatalf("Failed to create logs dir: %v", err)
+	logger.Info("first record")
+	if err := closer(); err != nil {
+		t.Fatalf("closer: %v", err)
 	}
 
-	// Create a directory with the same name as the log file to cause an error
-	if err := os.MkdirAll(testLogFilePath(tmpDir), 0o755); err != nil {
-		t.Fatalf("Failed to create blocking dir: %v", err)
-	}
-
-	// Init should not return error, but fall back to stderr
-	err := Init(context.Background(), testSessionID)
+	logFile := filepath.Join(tmpDir, LogsDir, "entire.log")
+	content, err := os.ReadFile(logFile)
 	if err != nil {
-		t.Errorf("Init() should not error, but got: %v", err)
+		t.Fatalf("read log file: %v", err)
 	}
-
-	// Verify logger still works (writing to stderr)
-	Info(context.Background(), "fallback test")
-
-	Close()
+	if !strings.Contains(string(content), `"msg":"first record"`) {
+		t.Errorf("expected log file to contain message, got: %s", content)
+	}
 }
 
-func TestClose_SafeToCallMultipleTimes(t *testing.T) {
+func TestNew_NoFileWhenNoWrites(t *testing.T) {
+	// Cannot use t.Parallel: t.Chdir mutates process-global state.
 	tmpDir := t.TempDir()
+	initGitRepo(t, tmpDir)
 	t.Chdir(tmpDir)
 
-	initGitRepo(t, tmpDir)
-
-	sessionID := "2025-01-15-close-test"
-	err := Init(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
+	_, closer := New(context.Background(), Options{Level: slog.LevelDebug})
+	if err := closer(); err != nil {
+		t.Fatalf("closer: %v", err)
 	}
 
-	// Should not panic
-	Close()
-	Close()
-	Close()
-}
-
-func TestLogging_BeforeInit(_ *testing.T) {
-	// Reset any global state
-	resetLogger()
-
-	// These should not panic, should use default stderr logger
-	ctx := context.Background()
-	Debug(ctx, "debug before init")
-	Info(ctx, "info before init")
-	Warn(ctx, "warn before init")
-	Error(ctx, "error before init")
-}
-
-// Helper to initialize a git repo for tests
-func initGitRepo(t *testing.T, dir string) {
-	t.Helper()
-	t.Chdir(dir)
-	cmd := "git init && git config user.email 'test@test.com' && git config user.name 'Test'"
-	output, err := execCommand(t, "sh", "-c", cmd)
-	if err != nil {
-		t.Fatalf("Failed to init git repo: %v\nOutput: %s", err, output)
+	logFile := filepath.Join(tmpDir, LogsDir, "entire.log")
+	if _, err := os.Stat(logFile); !os.IsNotExist(err) {
+		t.Errorf("expected log file to not exist when nothing was logged")
 	}
 }
 
-func execCommand(t *testing.T, name string, args ...string) (string, error) {
-	t.Helper()
-	ctx := context.Background()
-	cmd := exec.CommandContext(ctx, name, args...)
-	output, err := cmd.CombinedOutput()
-	return string(output), err
-}
-
-func TestLogging_IncludesContextValues(t *testing.T) {
+func TestNew_FallsBackToStderrOnIOFailure(t *testing.T) {
+	// Cannot use t.Parallel: t.Chdir mutates process-global state.
 	tmpDir := t.TempDir()
+	initGitRepo(t, tmpDir)
 	t.Chdir(tmpDir)
 
-	initGitRepo(t, tmpDir)
-
-	sessionID := "2025-01-15-context-test"
-	err := Init(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
+	entireDir := filepath.Join(tmpDir, ".entire")
+	if err := os.MkdirAll(entireDir, 0o755); err != nil {
+		t.Fatalf("mkdir entire dir: %v", err)
 	}
+	if err := os.Chmod(entireDir, 0o500); err != nil {
+		t.Fatalf("chmod entire dir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(entireDir, 0o755); err != nil {
+			t.Logf("cleanup chmod: %v", err)
+		}
+	})
 
-	// Create context with values
-	// Note: session_id from context is skipped when Init() has already set a global session ID
-	ctx := context.Background()
-	ctx = WithSession(ctx, "context-session-id") // Will be ignored, global takes precedence
-	ctx = WithToolCall(ctx, "toolu_123")
+	logger, closer := New(context.Background(), Options{Level: slog.LevelDebug})
+	t.Cleanup(func() {
+		if err := closer(); err != nil {
+			t.Errorf("closer: %v", err)
+		}
+	})
+
+	// First write triggers the open attempt; should not panic. The lazy writer
+	// emits a warning to stderr and routes the record there.
+	logger.Info("expect stderr fallback")
+}
+
+func TestCloser_Idempotent(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	_, closer := New(context.Background(), Options{Output: &buf, Level: slog.LevelDebug})
+	if err := closer(); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	if err := closer(); err != nil {
+		t.Errorf("second close should be a no-op, got: %v", err)
+	}
+}
+
+func TestLoggerFromContext_FallbackToDefault(t *testing.T) {
+	t.Parallel()
+	if LoggerFromContext(context.Background()) == nil {
+		t.Fatal("expected non-nil fallback for empty ctx")
+	}
+	if LoggerFromContext(nil) == nil { //nolint:staticcheck // testing nil-safety
+		t.Fatal("expected non-nil fallback for nil ctx")
+	}
+}
+
+func TestWithLogger_RoundTrip(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	logger, _ := New(context.Background(), Options{Output: &buf, Level: slog.LevelDebug})
+	ctx := WithLogger(context.Background(), logger)
+
+	got := LoggerFromContext(ctx)
+	if got != logger {
+		t.Errorf("LoggerFromContext returned different logger than WithLogger stored")
+	}
+}
+
+func TestWithSession_BakesAttr(t *testing.T) {
+	t.Parallel()
+	ctx, buf := withTestLogger(t)
+	ctx = WithSession(ctx, testSessionID)
+	Info(ctx, "session check")
+
+	rec := firstRecord(t, buf)
+	if rec["session_id"] != testSessionID {
+		t.Errorf("session_id = %v, want %q", rec["session_id"], testSessionID)
+	}
+}
+
+func TestWithSession_PromotesParentFromExisting(t *testing.T) {
+	t.Parallel()
+	parent, child := "parent-session-id", "child-session-id"
+	ctx, buf := withTestLogger(t)
+	ctx = WithSession(ctx, parent)
+	ctx = WithSession(ctx, child)
+	Info(ctx, "child")
+
+	rec := firstRecord(t, buf)
+	if rec["session_id"] != child {
+		t.Errorf("session_id = %v, want %q", rec["session_id"], child)
+	}
+	if rec["parent_session_id"] != parent {
+		t.Errorf("parent_session_id = %v, want %q", rec["parent_session_id"], parent)
+	}
+}
+
+func TestWithParentSession_AttachesParent(t *testing.T) {
+	t.Parallel()
+	ctx, buf := withTestLogger(t)
+	ctx = WithParentSession(ctx, "explicit-parent")
+	Info(ctx, "explicit")
+
+	rec := firstRecord(t, buf)
+	if rec["parent_session_id"] != "explicit-parent" {
+		t.Errorf("parent_session_id = %v, want explicit-parent", rec["parent_session_id"])
+	}
+}
+
+func TestEnrichmentChain_ComposesAllAttrs(t *testing.T) {
+	t.Parallel()
+	ctx, buf := withTestLogger(t)
+	ctx = WithSession(ctx, "session-1")
 	ctx = WithComponent(ctx, testComponent)
+	ctx = WithToolCall(ctx, "tool-1")
 	ctx = WithAgent(ctx, testAgent)
+	Info(ctx, "all-attrs")
 
-	// Log with context
-	Info(ctx, "context test message")
-
-	Close()
-
-	// Read log file
-	content, err := os.ReadFile(testLogFilePath(tmpDir))
-	if err != nil {
-		t.Fatalf("Failed to read log file: %v", err)
+	rec := firstRecord(t, buf)
+	checks := map[string]string{
+		"session_id":   "session-1",
+		"component":    testComponent,
+		"tool_call_id": "tool-1",
+		"agent":        testAgent,
 	}
-
-	// Parse as JSON
-	var logEntry map[string]interface{}
-	if err := json.Unmarshal(content, &logEntry); err != nil {
-		t.Fatalf("Log output is not valid JSON: %v\nContent: %s", err, content)
-	}
-
-	// session_id comes from Init() when set, not from context (to avoid duplicates)
-	if logEntry["session_id"] != sessionID {
-		t.Errorf("Expected session_id='%s' (from Init), got %v", sessionID, logEntry["session_id"])
-	}
-	if logEntry["tool_call_id"] != "toolu_123" {
-		t.Errorf("Expected tool_call_id='toolu_123', got %v", logEntry["tool_call_id"])
-	}
-	if logEntry["component"] != testComponent {
-		t.Errorf("Expected component='%s', got %v", testComponent, logEntry["component"])
-	}
-	if logEntry["agent"] != testAgent {
-		t.Errorf("Expected agent='%s', got %v", testAgent, logEntry["agent"])
+	for key, want := range checks {
+		if got := rec[key]; got != want {
+			t.Errorf("attr %q = %v, want %v", key, got, want)
+		}
 	}
 }
 
-func TestLogging_ParentSessionID(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-
-	initGitRepo(t, tmpDir)
-
-	sessionID := "2025-01-15-parent-test"
-	err := Init(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
-	}
-
-	// Create parent context, then child context
-	// Note: WithSession sets parent_session_id when there's already a session in context
-	ctx := context.Background()
-	ctx = WithSession(ctx, "parent-session")
-	ctx = WithSession(ctx, "child-session") // This sets parent_session_id to "parent-session"
-
-	Info(ctx, "nested session test")
-
-	Close()
-
-	// Read log file
-	content, err := os.ReadFile(testLogFilePath(tmpDir))
-	if err != nil {
-		t.Fatalf("Failed to read log file: %v", err)
-	}
-
-	// Parse as JSON
-	var logEntry map[string]interface{}
-	if err := json.Unmarshal(content, &logEntry); err != nil {
-		t.Fatalf("Log output is not valid JSON: %v\nContent: %s", err, content)
-	}
-
-	// session_id comes from Init(), context session_id is skipped to avoid duplicates
-	if logEntry["session_id"] != sessionID {
-		t.Errorf("Expected session_id='%s' (from Init), got %v", sessionID, logEntry["session_id"])
-	}
-	// parent_session_id from context is still included
-	if logEntry["parent_session_id"] != "parent-session" {
-		t.Errorf("Expected parent_session_id='parent-session', got %v", logEntry["parent_session_id"])
-	}
-}
-
-func TestLogging_AdditionalAttrs(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-
-	initGitRepo(t, tmpDir)
-
-	sessionID := "2025-01-15-attrs-test"
-	err := Init(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
-	}
-
-	ctx := WithSession(context.Background(), "context-session") // Will be ignored, global takes precedence
-
-	// Log with additional attrs
-	Info(ctx, "attrs test",
-		slog.String("hook", "pre-push"),
-		slog.Int("duration_ms", 150),
-		slog.Bool("success", true),
-	)
-
-	Close()
-
-	// Read log file
-	content, err := os.ReadFile(testLogFilePath(tmpDir))
-	if err != nil {
-		t.Fatalf("Failed to read log file: %v", err)
-	}
-
-	// Parse as JSON
-	var logEntry map[string]interface{}
-	if err := json.Unmarshal(content, &logEntry); err != nil {
-		t.Fatalf("Log output is not valid JSON: %v\nContent: %s", err, content)
-	}
-
-	// session_id comes from Init(), additional attrs work alongside
-	if logEntry["session_id"] != sessionID {
-		t.Errorf("Expected session_id='%s' (from Init), got %v", sessionID, logEntry["session_id"])
-	}
-	if logEntry["hook"] != "pre-push" {
-		t.Errorf("Expected hook='pre-push', got %v", logEntry["hook"])
-	}
-	if logEntry["duration_ms"] != float64(150) {
-		t.Errorf("Expected duration_ms=150, got %v", logEntry["duration_ms"])
-	}
-	if logEntry["success"] != true {
-		t.Errorf("Expected success=true, got %v", logEntry["success"])
-	}
-}
-
-func TestLogDuration(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-
-	initGitRepo(t, tmpDir)
-
-	sessionID := "2025-01-15-duration-test"
-	err := Init(context.Background(), sessionID)
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
-	}
-
-	ctx := WithSession(context.Background(), "context-session") // Will be ignored, global takes precedence
-	ctx = WithComponent(ctx, testComponent)
-
-	// Simulate some work
-	start := time.Now().Add(-100 * time.Millisecond) // Fake 100ms ago
-
-	LogDuration(ctx, slog.LevelInfo, "operation completed", start,
-		slog.String("hook", "pre-push"),
-		slog.Bool("success", true),
-	)
-
-	Close()
-
-	// Read log file
-	content, err := os.ReadFile(testLogFilePath(tmpDir))
-	if err != nil {
-		t.Fatalf("Failed to read log file: %v", err)
-	}
-
-	// Parse as JSON
-	var logEntry map[string]interface{}
-	if err := json.Unmarshal(content, &logEntry); err != nil {
-		t.Fatalf("Log output is not valid JSON: %v\nContent: %s", err, content)
-	}
-
-	// Verify duration_ms is present and reasonable
-	durationMs, ok := logEntry["duration_ms"].(float64)
-	if !ok {
-		t.Fatalf("Expected duration_ms to be a number, got %T: %v", logEntry["duration_ms"], logEntry["duration_ms"])
-	}
-	if durationMs < 90 || durationMs > 200 {
-		t.Errorf("Expected duration_ms around 100, got %v", durationMs)
-	}
-
-	// session_id comes from Init(), not context
-	if logEntry["session_id"] != sessionID {
-		t.Errorf("Expected session_id='%s' (from Init), got %v", sessionID, logEntry["session_id"])
-	}
-	if logEntry["component"] != testComponent {
-		t.Errorf("Expected component='%s', got %v", testComponent, logEntry["component"])
-	}
-	if logEntry["hook"] != "pre-push" {
-		t.Errorf("Expected hook='pre-push', got %v", logEntry["hook"])
-	}
-	if logEntry["success"] != true {
-		t.Errorf("Expected success=true, got %v", logEntry["success"])
-	}
-	if logEntry["level"] != levelINFO {
-		t.Errorf("Expected level='%s', got %v", levelINFO, logEntry["level"])
-	}
-}
-
-func TestLogging_ContextSessionID_WhenNoGlobalSet(t *testing.T) {
-	// Reset any global state to ensure no global session ID
-	resetLogger()
-
-	// Create a buffer to capture output since we won't use Init()
+func TestLevels_FilterRecords(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
-	mu.Lock()
-	logger = createLogger(&buf, slog.LevelInfo)
-	mu.Unlock()
+	logger, closer := New(context.Background(), Options{Output: &buf, Level: slog.LevelWarn})
+	t.Cleanup(func() {
+		if err := closer(); err != nil {
+			t.Errorf("closer: %v", err)
+		}
+	})
+	ctx := WithLogger(context.Background(), logger)
 
-	// Set session_id via context (no global set)
-	ctx := WithSession(context.Background(), "context-only-session")
-	ctx = WithComponent(ctx, testComponent)
+	Debug(ctx, "skip-debug")
+	Info(ctx, "skip-info")
+	Warn(ctx, "include-warn")
+	Error(ctx, "include-error")
 
-	Info(ctx, "context session test")
-
-	// Parse the output
-	var logEntry map[string]interface{}
-	if err := json.Unmarshal(buf.Bytes(), &logEntry); err != nil {
-		t.Fatalf("Log output is not valid JSON: %v\nContent: %s", err, buf.String())
+	output := buf.String()
+	if strings.Contains(output, "skip-debug") || strings.Contains(output, "skip-info") {
+		t.Errorf("expected debug/info to be filtered at warn level, got: %s", output)
 	}
-
-	// When no global session ID is set, context session_id should be used
-	if logEntry["session_id"] != "context-only-session" {
-		t.Errorf("Expected session_id='context-only-session' from context, got %v", logEntry["session_id"])
+	if !strings.Contains(output, "include-warn") || !strings.Contains(output, "include-error") {
+		t.Errorf("expected warn+error to be present, got: %s", output)
 	}
-
-	resetLogger()
 }
 
-func TestLogging_ConcurrentInitAndLog(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-	initGitRepo(t, tmpDir)
+func TestLogDuration_AttachesDurationMS(t *testing.T) {
+	t.Parallel()
+	ctx, buf := withTestLogger(t)
 
-	if err := Init(context.Background(), ""); err != nil {
-		t.Fatalf("Init() error = %v", err)
+	// Use a defer-style call to mirror real usage.
+	func() {
+		defer LogDuration(ctx, slog.LevelInfo, "op", nowFn())
+	}()
+
+	rec := firstRecord(t, buf)
+	if _, ok := rec["duration_ms"]; !ok {
+		t.Errorf("expected duration_ms in record, got: %s", buf.String())
 	}
-	defer Close()
+}
+
+// nowFn is a tiny indirection so we can keep the helper free of time imports
+// at top-level (other tests don't need time directly).
+func nowFn() (now time.Time) { return time.Now() }
+
+func TestLogging_ConcurrentLogToSharedLogger(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	logger, closer := New(context.Background(), Options{
+		// Wrap buf in a synchronised writer so concurrent writes don't trip the
+		// race detector — slog handlers serialise per-write but we still need a
+		// thread-safe sink.
+		Output: &lockedWriter{w: &buf},
+		Level:  slog.LevelDebug,
+	})
+	t.Cleanup(func() {
+		if err := closer(); err != nil {
+			t.Errorf("closer: %v", err)
+		}
+	})
+	ctx := WithLogger(context.Background(), logger)
 
 	const (
-		logGoroutines   = 8
-		initGoroutines  = 4
-		closeGoroutines = 2
-		iterations      = 200
+		goroutines = 16
+		iterations = 200
 	)
 
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 
-	for i := range logGoroutines {
+	for i := range goroutines {
 		wg.Add(1)
 		go func(worker int) {
 			defer wg.Done()
 			<-start
 			for j := range iterations {
-				Info(context.Background(), "concurrent log", slog.Int("worker", worker), slog.Int("iteration", j))
+				Info(ctx, "concurrent log",
+					slog.Int("worker", worker),
+					slog.Int("iteration", j),
+				)
 			}
 		}(i)
 	}
 
-	for range initGoroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			for range iterations {
-				if err := Init(context.Background(), ""); err != nil {
-					t.Errorf("Init() error = %v", err)
-					return
-				}
-			}
-		}()
-	}
-
-	for range closeGoroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			for range iterations {
-				Close()
-			}
-		}()
-	}
-
 	close(start)
 	wg.Wait()
+
+	// Every goroutine emitted iterations records. Count newlines as a sanity
+	// check (one per JSON line).
+	got := strings.Count(buf.String(), "\n")
+	if want := goroutines * iterations; got != want {
+		t.Errorf("expected %d records, got %d", want, got)
+	}
 }
 
-func TestInit_RejectsInvalidSessionIDs(t *testing.T) {
-	tests := []struct {
-		name      string
-		sessionID string
-		wantErr   bool
-	}{
-		{"empty session ID is allowed", "", false},
-		{"path traversal with slash", "../../../tmp/evil", true},
-		{"path traversal with backslash", "..\\..\\tmp\\evil", true},
-		{"contains forward slash", "2025-01-15/session", true},
-		{"contains backslash", "2025-01-15\\session", true},
-		{"valid session ID", "2025-01-15-valid-session", false},
-		{"valid UUID-like ID", "abc123-def456-ghi789", false},
-	}
+// lockedWriter serialises writes to an underlying writer.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Reset logger state before each test
-			resetLogger()
-
-			// Set up git repo for cases that we expect to succeed
-			if !tt.wantErr {
-				tmpDir := t.TempDir()
-				t.Chdir(tmpDir)
-				initGitRepo(t, tmpDir)
-			}
-
-			err := Init(context.Background(), tt.sessionID)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Init(%q) error = %v, wantErr %v", tt.sessionID, err, tt.wantErr)
-			}
-			if err != nil && tt.wantErr {
-				// Verify error message mentions session ID
-				if !strings.Contains(err.Error(), "session ID") {
-					t.Errorf("Init(%q) error should mention 'session ID', got: %v", tt.sessionID, err)
-				}
-			}
-			Close()
-		})
-	}
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }

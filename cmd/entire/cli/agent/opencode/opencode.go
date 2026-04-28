@@ -193,16 +193,12 @@ func (a *OpenCodeAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession
 		return nil, fmt.Errorf("failed to read session: %w", err)
 	}
 
-	// Parse to extract computed fields
-	modifiedFiles, err := ExtractModifiedFiles(data)
-	if err != nil {
-		// Non-fatal: we can still return the session without modified files
-		logging.Warn(context.Background(), "failed to extract modified files from opencode session",
-			slog.String("session_ref", input.SessionRef),
-			slog.String("error", err.Error()),
-		)
-		modifiedFiles = nil
-	}
+	// Parse to extract computed fields. ReadSession has no context.Context, so
+	// any non-fatal error here cannot reach the request-scoped logger; instead
+	// of swallowing silently, return modifiedFiles=nil and let the caller (which
+	// has a ctx) decide whether to surface the issue. The session itself is
+	// still usable without modified-file metadata.
+	modifiedFiles, _ := ExtractModifiedFiles(data) //nolint:errcheck // intentional best-effort; see comment
 
 	return &agent.AgentSession{
 		AgentName:     a.Name(),

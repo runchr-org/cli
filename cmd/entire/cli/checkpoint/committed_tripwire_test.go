@@ -7,7 +7,6 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
-	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/redact"
@@ -27,10 +26,8 @@ func TestWriteStandardCheckpointEntries_RefusesUnexpectedSessionZeroOverwrite(t 
 	}
 	store := NewGitStore(repo)
 
-	if err := logging.Init(context.Background(), ""); err != nil {
-		t.Fatalf("logging.Init() error = %v", err)
-	}
-	defer logging.Close()
+	// Logger lifecycle is owned by main.go in production; tests just need the
+	// no-op fallback (slog.Default) for any logging.X calls inside the tripwire.
 
 	checkpointID, err := id.Generate()
 	if err != nil {

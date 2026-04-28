@@ -289,8 +289,10 @@ func extractTokenUsageFromEvents(events []copilotEvent, preferSessionShutdown bo
 
 			var data sessionShutdownData
 			if err := json.Unmarshal(events[i].Data, &data); err != nil {
-				logging.Debug(context.Background(), "copilot-cli: session.shutdown data unmarshal failed",
-					"err", err)
+				// Malformed session.shutdown event; skip and rely on per-message
+				// totals. CalculateTokenUsage on the agent.Agent interface has no
+				// context.Context, so this path cannot log to the request-scoped
+				// logger; drop the trace rather than emit through a Background ctx.
 				continue
 			}
 

@@ -20,10 +20,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// agentHookLogCleanup stores the cleanup function for agent hook logging.
-// Set by PersistentPreRunE, called by PersistentPostRunE.
-var agentHookLogCleanup func()
-
 // currentHookAgentName stores the agent name for the currently executing hook.
 // Set by newAgentHookVerbCmdWithLogging before calling the handler.
 // This allows handlers to know which agent invoked the hook without guessing.
@@ -53,13 +49,7 @@ func newAgentHooksCmd(agentName types.AgentName, handler agent.HookSupport) *cob
 		Short:  handler.Description() + " hook handlers",
 		Hidden: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			agentHookLogCleanup = initHookLogging(cmd.Context())
-			return nil
-		},
-		PersistentPostRunE: func(_ *cobra.Command, _ []string) error {
-			if agentHookLogCleanup != nil {
-				agentHookLogCleanup()
-			}
+			cmd.SetContext(enrichHookContext(cmd.Context()))
 			return nil
 		},
 	}
@@ -89,10 +79,11 @@ func getHookType(hookName string) string {
 // executeAgentHook runs the core hook execution logic for a given agent and hook name.
 // It handles git repo checks, enabled checks, logging, event parsing, and lifecycle dispatch.
 // Used by both the registered subcommand path and the RunE fallback for external agents.
-// When initLogging is true, it initializes and cleans up hook logging (used by the RunE fallback
-// since it doesn't go through PersistentPreRunE). Built-in agent subcommands pass false since
-// their parent command's PersistentPreRunE already handles logging.
-func executeAgentHook(cmd *cobra.Command, agentName types.AgentName, hookName string, initLogging bool) error {
+// When enrichCtx is true, it enriches cmd.Context() with the discovered session ID
+// (used by the RunE fallback since it doesn't go through PersistentPreRunE).
+// Built-in agent subcommands pass false since their parent command's PersistentPreRunE
+// already handles enrichment.
+func executeAgentHook(cmd *cobra.Command, agentName types.AgentName, hookName string, enrichCtx bool) error {
 	// Skip silently if not in a git repository - hooks shouldn't prevent the agent from working
 	if _, err := paths.WorktreeRoot(cmd.Context()); err != nil {
 		return nil
@@ -104,9 +95,8 @@ func executeAgentHook(cmd *cobra.Command, agentName types.AgentName, hookName st
 		return nil
 	}
 
-	if initLogging {
-		cleanup := initHookLogging(cmd.Context())
-		defer cleanup()
+	if enrichCtx {
+		cmd.SetContext(enrichHookContext(cmd.Context()))
 	}
 
 	// Initialize logging context with agent name

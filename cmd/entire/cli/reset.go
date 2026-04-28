@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/huh"
-	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/spf13/cobra"
 )
@@ -25,12 +24,6 @@ func newResetCmd() *cobra.Command {
 			// to avoid creating .entire/logs in arbitrary directories.
 			if _, err := paths.WorktreeRoot(ctx); err != nil {
 				return errors.New("not a git repository")
-			}
-
-			// Initialize logging
-			logging.SetLogLevelGetter(GetLogLevel)
-			if err := logging.Init(ctx, ""); err == nil {
-				defer logging.Close()
 			}
 
 			strat := GetStrategy(ctx)

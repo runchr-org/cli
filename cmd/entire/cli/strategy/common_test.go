@@ -1059,7 +1059,7 @@ func TestEnsureMetadataBranch(t *testing.T) {
 			t.Fatalf("failed to open repo: %v", err)
 		}
 
-		if err := EnsureMetadataBranch(repo); err != nil {
+		if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 			t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 		}
 
@@ -1123,7 +1123,7 @@ func TestEnsureMetadataBranch(t *testing.T) {
 			t.Fatalf("failed to set ref: %v", err)
 		}
 
-		if err := EnsureMetadataBranch(repo); err != nil {
+		if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 			t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 		}
 
@@ -1145,7 +1145,7 @@ func TestEnsureMetadataBranch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to open repo: %v", err)
 		}
-		if err := EnsureMetadataBranch(repo); err != nil {
+		if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 			t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 		}
 
@@ -1189,7 +1189,7 @@ func TestEnsureMetadataBranch_WritesVercelConfigWhenEnabled(t *testing.T) {
 		t.Fatalf("InitSettings() failed: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 		t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 	}
 
@@ -1279,7 +1279,7 @@ func TestEnsureMetadataBranch_DisconnectedBranchesNotReconciledInEnable(t *testi
 		t.Fatalf("local branch not found: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 		t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 	}
 
@@ -1306,7 +1306,7 @@ func TestEnsureMetadataBranch_DoesNotFastForwardWhenBehind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open repo: %v", err)
 	}
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 		t.Fatalf("first EnsureMetadataBranch() failed: %v", err)
 	}
 
@@ -1346,7 +1346,7 @@ func TestEnsureMetadataBranch_DoesNotFastForwardWhenBehind(t *testing.T) {
 		t.Fatalf("failed to reopen repo: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 		t.Fatalf("second EnsureMetadataBranch() failed: %v", err)
 	}
 

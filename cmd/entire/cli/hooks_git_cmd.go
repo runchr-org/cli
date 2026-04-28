@@ -58,35 +58,23 @@ func (g *gitHookContext) logCompleted(err error) {
 	g.span.RecordError(err)
 }
 
-// initHookLogging initializes logging for hooks by finding the most recent session.
-// Returns a cleanup function that should be deferred.
-// If Entire is not set up or disabled, returns a no-op to avoid creating files.
-func initHookLogging(ctx context.Context) func() {
-	// Don't create any files if Entire is not set up or disabled.
-	// This is checked here as defense-in-depth (also checked in PersistentPreRunE).
+// enrichHookContext attaches the discovered session ID to the ctx-carried
+// logger and configures redaction. The logger and log file are owned by
+// main.go; this just enriches the per-request context.
+//
+// Returns the original ctx unchanged if Entire is not set up or disabled.
+func enrichHookContext(ctx context.Context) context.Context {
 	if !settings.IsSetUpAndEnabled(ctx) {
-		return func() {}
+		return ctx
 	}
-
-	// Set up log level getter so logging can read from settings
-	logging.SetLogLevelGetter(GetLogLevel)
-
-	// Read session ID for the slog attribute (empty string is fine - log file is fixed)
 	sessionID := strategy.FindMostRecentSession(ctx)
-	if err := logging.Init(ctx, sessionID); err != nil {
-		// Init failed - logging will use stderr fallback
-		return func() {}
+	if sessionID != "" {
+		ctx = logging.WithSession(ctx, sessionID)
 	}
-
 	// Configure PII redaction once at startup (reads settings, no-op if disabled).
 	strategy.EnsureRedactionConfigured()
-
-	return logging.Close
+	return ctx
 }
-
-// hookLogCleanup stores the cleanup function for hook logging.
-// Set by PersistentPreRunE, called by PersistentPostRunE.
-var hookLogCleanup func()
 
 func newHooksGitCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -110,13 +98,7 @@ func newHooksGitCmd() *cobra.Command {
 			discoveryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			external.DiscoverAndRegister(discoveryCtx)
-			hookLogCleanup = initHookLogging(ctx)
-			return nil
-		},
-		PersistentPostRunE: func(_ *cobra.Command, _ []string) error {
-			if hookLogCleanup != nil {
-				hookLogCleanup()
-			}
+			cmd.SetContext(enrichHookContext(ctx))
 			return nil
 		},
 	}

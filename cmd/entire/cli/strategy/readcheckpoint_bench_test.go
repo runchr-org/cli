@@ -37,7 +37,7 @@ func benchReadCheckpointMetadata(checkpointCount int) func(*testing.B) {
 		b.ReportMetric(float64(checkpointCount), "total_checkpoints")
 
 		for b.Loop() {
-			info, err := ReadCheckpointMetadata(tree, cpPath)
+			info, err := ReadCheckpointMetadata(b.Context(), tree, cpPath)
 			if err != nil {
 				b.Fatalf("ReadCheckpointMetadata: %v", err)
 			}

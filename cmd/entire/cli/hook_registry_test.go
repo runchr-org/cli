@@ -14,6 +14,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/logging/loggingtest"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
@@ -82,9 +83,9 @@ func TestNewAgentHookVerbCmd_LogsInvocation(t *testing.T) {
 	// Enable debug logging
 	t.Setenv(logging.LogLevelEnvVar, "DEBUG")
 
-	// Initialize logging (normally done by PersistentPreRunE)
-	cleanup := initHookLogging(context.Background())
-	defer cleanup()
+	// Inject a buffer-backed logger via loggingtest to capture the hook's
+	// log output. In production main.go installs the logger via WithLogger.
+	ctx, buf := loggingtest.New(t)
 
 	// Create a transcript file for the hook input
 	transcriptPath := filepath.Join(tmpDir, "transcript.jsonl")
@@ -93,7 +94,7 @@ func TestNewAgentHookVerbCmd_LogsInvocation(t *testing.T) {
 	}
 
 	// Create stdin with session-start hook input
-	hookInput := map[string]interface{}{
+	hookInput := map[string]any{
 		"session_id":      sessionID,
 		"transcript_path": transcriptPath,
 	}
@@ -102,7 +103,8 @@ func TestNewAgentHookVerbCmd_LogsInvocation(t *testing.T) {
 	// Create the command with logging - use session-start hook which is a pass-through
 	cmd := newAgentHookVerbCmdWithLogging(agent.AgentNameClaudeCode, claudecode.HookNameSessionStart)
 
-	// Set stdin
+	// Set stdin and the test ctx
+	cmd.SetContext(ctx)
 	cmd.SetIn(bytes.NewReader(inputJSON))
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(&bytes.Buffer{})
@@ -113,50 +115,25 @@ func TestNewAgentHookVerbCmd_LogsInvocation(t *testing.T) {
 		t.Fatalf("command execution failed: %v", err)
 	}
 
-	// Close logging to flush
-	cleanup()
-
-	// Verify log file was created and contains expected content
-	logFile := filepath.Join(logsDir, "entire.log")
-	content, err := os.ReadFile(logFile)
-	if err != nil {
-		t.Fatalf("failed to read log file: %v", err)
+	records := loggingtest.Records(t, buf)
+	if len(records) == 0 {
+		t.Fatal("expected at least one log record")
 	}
 
-	logContent := string(content)
-	t.Logf("log content: %s", logContent)
-
-	// Parse each log line as JSON
-	lines := strings.Split(strings.TrimSpace(logContent), "\n")
-	if len(lines) == 0 {
-		t.Fatal("expected at least one log line")
-	}
-
-	// Check for hook invocation log and perf span log
 	foundInvocation := false
 	foundPerfSpan := false
-	for _, line := range lines {
-		var entry map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			t.Errorf("failed to parse log line as JSON: %v", err)
-			continue
-		}
-
-		msg, msgOK := entry["msg"].(string)
-
-		// Hook invocation log: msg="hook invoked", hook="session-start"
-		if msgOK && entry["hook"] == claudecode.HookNameSessionStart && strings.Contains(msg, "invoked") {
+	for _, rec := range records {
+		// Hook invocation log: msg contains "invoked", hook="session-start"
+		if rec.Attrs["hook"] == claudecode.HookNameSessionStart && strings.Contains(rec.Msg, "invoked") {
 			foundInvocation = true
-			// Verify component is set
-			if entry["component"] != "hooks" {
-				t.Errorf("expected component='hooks', got %v", entry["component"])
+			if rec.Attrs["component"] != "hooks" {
+				t.Errorf("expected component='hooks', got %v", rec.Attrs["component"])
 			}
 		}
-
 		// Perf span log: msg="perf", op="session-start", duration_ms present
-		if msgOK && msg == "perf" && entry["op"] == claudecode.HookNameSessionStart {
+		if rec.Msg == "perf" && rec.Attrs["op"] == claudecode.HookNameSessionStart {
 			foundPerfSpan = true
-			if _, ok := entry["duration_ms"]; !ok {
+			if _, ok := rec.Attrs["duration_ms"]; !ok {
 				t.Error("expected duration_ms in perf span log")
 			}
 		}
@@ -188,14 +165,11 @@ func TestClaudeCodeHooksCmd_HasLoggingHooks(t *testing.T) {
 
 	require.NotNil(t, claudeCodeCmd, "expected to find claude-code subcommand under hooks")
 
-	// Verify PersistentPreRunE is set
+	// PersistentPreRunE enriches the cobra context with the discovered
+	// session ID. The logger and log file are owned by main.go, so no
+	// PersistentPostRunE cleanup is needed.
 	if claudeCodeCmd.PersistentPreRunE == nil {
-		t.Error("expected PersistentPreRunE to be set for logging initialization")
-	}
-
-	// Verify PersistentPostRunE is set
-	if claudeCodeCmd.PersistentPostRunE == nil {
-		t.Error("expected PersistentPostRunE to be set for logging cleanup")
+		t.Error("expected PersistentPreRunE to be set for ctx enrichment")
 	}
 }
 
@@ -217,14 +191,11 @@ func TestGeminiCLIHooksCmd_HasLoggingHooks(t *testing.T) {
 
 	require.NotNil(t, geminiCmd, "expected to find gemini subcommand under hooks")
 
-	// Verify PersistentPreRunE is set
+	// PersistentPreRunE enriches the cobra context with the discovered
+	// session ID. The logger and log file are owned by main.go, so no
+	// PersistentPostRunE cleanup is needed.
 	if geminiCmd.PersistentPreRunE == nil {
-		t.Error("expected PersistentPreRunE to be set for logging initialization")
-	}
-
-	// Verify PersistentPostRunE is set
-	if geminiCmd.PersistentPostRunE == nil {
-		t.Error("expected PersistentPostRunE to be set for logging cleanup")
+		t.Error("expected PersistentPreRunE to be set for ctx enrichment")
 	}
 }
 

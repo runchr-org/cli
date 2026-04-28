@@ -49,12 +49,6 @@ func newMigrateCmd() *cobra.Command {
 				return NewSilentError(errors.New("not a git repository"))
 			}
 
-			logging.SetLogLevelGetter(GetLogLevel)
-			if initErr := logging.Init(ctx, ""); initErr != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not initialize logging: %v\n", initErr)
-			} else {
-				defer logging.Close()
-			}
 			return runMigrateCheckpointsV2(ctx, cmd, forceFlag)
 		},
 	}

@@ -1,18 +1,20 @@
 // Package logging provides structured logging for the Entire CLI using slog.
 //
-// Usage:
+// The logger lives in context.Context and is initialised once in main.go via
+// New + WithLogger. Commands and hooks enrich the ctx-logger with attrs via
+// WithSession / WithComponent / WithToolCall / WithAgent / WithParentSession.
 //
-//	// Initialize logger for a session (typically at session start)
-//	if err := logging.Init(sessionID); err != nil {
-//	    // handle error
-//	}
-//	defer logging.Close()
+// Usage in main.go:
 //
-//	// Add context values
+//	level := logging.ResolveLevel(os.Getenv(logging.LogLevelEnvVar), settings.LogLevel)
+//	logger, closer := logging.New(ctx, logging.Options{Level: level})
+//	defer closer()
+//	ctx = logging.WithLogger(ctx, logger)
+//	rootCmd.ExecuteContext(ctx)
+//
+// Usage in commands and hooks:
+//
 //	ctx = logging.WithSession(ctx, sessionID)
-//	ctx = logging.WithToolCall(ctx, toolCallID)
-//
-//	// Log with context - session/tool IDs extracted automatically
 //	logging.Info(ctx, "hook invoked",
 //	    slog.String("hook", hookName),
 //	    slog.String("branch", branch),
@@ -32,7 +34,6 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/validation"
 )
 
 // LogLevelEnvVar is the environment variable that controls log level.
@@ -41,138 +42,80 @@ const LogLevelEnvVar = "ENTIRE_LOG_LEVEL"
 // LogsDir is the directory where log files are stored (relative to repo root).
 const LogsDir = ".entire/logs"
 
-var (
-	// logger is the package-level logger instance
-	logger *slog.Logger
+// Closer flushes and closes any IO held by a logger. Idempotent: safe to call
+// multiple times. A no-op closer is returned when there is no IO to clean up.
+type Closer func() error
 
-	// logFile holds the current log file handle for cleanup
-	logFile *os.File
+// Options configures New.
+type Options struct {
+	// Output, if non-nil, is used directly. Tests pass *bytes.Buffer here.
+	// If nil, New returns a logger backed by a lazy writer that opens
+	// .entire/logs/entire.log on first write, falling back to stderr on
+	// failure (with a one-shot stderr warning).
+	Output io.Writer
 
-	// logBufWriter wraps logFile with buffered I/O for performance
-	logBufWriter *bufio.Writer
-
-	// currentSessionID stores the session ID from Init() to include in all logs
-	currentSessionID string
-
-	// mu protects logger, logFile, logBufWriter, and currentSessionID
-	mu sync.RWMutex
-
-	// logLevelGetter is an optional callback to get log level from settings.
-	// Set by SetLogLevelGetter before Init is called.
-	logLevelGetter func() string
-)
-
-// SetLogLevelGetter sets a callback function to get the log level from settings.
-// This allows the logging package to read settings without a circular dependency.
-// The callback is only used if ENTIRE_LOG_LEVEL env var is not set.
-func SetLogLevelGetter(getter func() string) {
-	mu.Lock()
-	defer mu.Unlock()
-	logLevelGetter = getter
+	// Level is the minimum slog level. Use ResolveLevel to compute from
+	// env + settings precedence.
+	Level slog.Level
 }
 
-// Init initializes the logger for a session, writing JSON logs to
-// .entire/logs/entire.log.
+// loggerCtxKey is the private context key for *slog.Logger.
+// Type-distinct from contextKey to avoid collisions.
+type loggerCtxKey struct{}
+
+// New constructs a *slog.Logger and a matching Closer.
 //
-// If sessionID is non-empty, it is stored as an slog attribute on every log line for filtering.
-// If the log file cannot be created, falls back to stderr.
-// Log level is controlled by ENTIRE_LOG_LEVEL environment variable.
-func Init(ctx context.Context, sessionID string) error {
-	// Validate session ID if provided (used only for the slog attribute, not the filename)
-	if sessionID != "" {
-		if err := validation.ValidateSessionID(sessionID); err != nil {
-			return fmt.Errorf("invalid session ID for logging: %w", err)
+// When opts.Output is nil, the logger writes to .entire/logs/entire.log via
+// a lazy writer that opens the file on first write and falls back to stderr
+// on failure.
+//
+// The returned Closer flushes and closes the underlying file (if any). It is
+// idempotent — main.go's defer is the canonical caller.
+func New(ctx context.Context, opts Options) (*slog.Logger, Closer) {
+	if opts.Output != nil {
+		return createLogger(opts.Output, opts.Level), noopCloser
+	}
+	lw := newLazyWriter(ctx)
+	return createLogger(lw, opts.Level), lw.Close
+}
+
+// WithLogger stores l in ctx so LoggerFromContext can retrieve it later.
+func WithLogger(ctx context.Context, l *slog.Logger) context.Context {
+	if l == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, loggerCtxKey{}, l)
+}
+
+// LoggerFromContext returns the logger stored by WithLogger, or slog.Default()
+// when none is present. Never returns nil.
+func LoggerFromContext(ctx context.Context) *slog.Logger {
+	if ctx == nil {
+		return slog.Default()
+	}
+	if l, ok := ctx.Value(loggerCtxKey{}).(*slog.Logger); ok && l != nil {
+		return l
+	}
+	return slog.Default()
+}
+
+// ResolveLevel computes the effective slog.Level using env > settings > Info
+// precedence. Empty inputs are skipped; invalid inputs fall back to Info.
+func ResolveLevel(envValue, settingsValue string) slog.Level {
+	for _, v := range []string{envValue, settingsValue} {
+		if v == "" {
+			continue
 		}
+		if !isValidLogLevel(v) {
+			fmt.Fprintf(os.Stderr, "[entire] Warning: invalid log level %q, defaulting to INFO\n", v)
+			return slog.LevelInfo
+		}
+		return parseLogLevel(v)
 	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	// Close any existing log file (flush buffer first)
-	if logBufWriter != nil {
-		_ = logBufWriter.Flush()
-		logBufWriter = nil
-	}
-	if logFile != nil {
-		_ = logFile.Close()
-		logFile = nil
-	}
-
-	// Get log level from environment first, then settings
-	levelStr := os.Getenv(LogLevelEnvVar)
-	if levelStr == "" && logLevelGetter != nil {
-		levelStr = logLevelGetter()
-	}
-	level := parseLogLevel(levelStr)
-
-	// Warn if invalid level was provided
-	if levelStr != "" && !isValidLogLevel(levelStr) {
-		fmt.Fprintf(os.Stderr, "[entire] Warning: invalid log level %q, defaulting to INFO\n", levelStr)
-	}
-
-	// Determine log file path
-	repoRoot, err := paths.WorktreeRoot(ctx)
-	if err != nil {
-		// Fall back to current directory
-		repoRoot = "."
-	}
-
-	logsPath := filepath.Join(repoRoot, LogsDir)
-	if err := os.MkdirAll(logsPath, 0o750); err != nil {
-		// Fall back to stderr
-		logger = createLogger(os.Stderr, level)
-		return nil
-	}
-
-	logFilePath := filepath.Join(logsPath, "entire.log")
-	f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // fixed filename, not user-controlled
-	if err != nil {
-		// Fall back to stderr
-		logger = createLogger(os.Stderr, level)
-		return nil
-	}
-
-	logFile = f
-	logBufWriter = bufio.NewWriterSize(f, 8192) // 8KB buffer for batched writes
-	logger = createLogger(logBufWriter, level)
-	currentSessionID = sessionID
-
-	return nil
+	return slog.LevelInfo
 }
 
-// Close closes the log file if one is open.
-// Flushes any buffered data before closing.
-// Safe to call multiple times.
-func Close() {
-	mu.Lock()
-	defer mu.Unlock()
-
-	if logBufWriter != nil {
-		_ = logBufWriter.Flush()
-		logBufWriter = nil
-	}
-	if logFile != nil {
-		_ = logFile.Close()
-		logFile = nil
-	}
-	currentSessionID = ""
-}
-
-// resetLogger resets the logger to nil (for testing).
-func resetLogger() {
-	mu.Lock()
-	defer mu.Unlock()
-	logger = nil
-	currentSessionID = ""
-	if logBufWriter != nil {
-		_ = logBufWriter.Flush()
-		logBufWriter = nil
-	}
-	if logFile != nil {
-		_ = logFile.Close()
-		logFile = nil
-	}
-}
+func noopCloser() error { return nil }
 
 // createLogger creates a JSON logger writing to the given writer at the specified level.
 func createLogger(w io.Writer, level slog.Level) *slog.Logger {
@@ -210,122 +153,121 @@ func isValidLogLevel(s string) bool {
 	}
 }
 
-// Debug logs at DEBUG level with context values automatically extracted.
+// Debug logs at DEBUG level using the ctx-carried logger.
 func Debug(ctx context.Context, msg string, attrs ...any) {
 	log(ctx, slog.LevelDebug, msg, attrs...)
 }
 
-// Info logs at INFO level with context values automatically extracted.
+// Info logs at INFO level using the ctx-carried logger.
 func Info(ctx context.Context, msg string, attrs ...any) {
 	log(ctx, slog.LevelInfo, msg, attrs...)
 }
 
-// Warn logs at WARN level with context values automatically extracted.
+// Warn logs at WARN level using the ctx-carried logger.
 func Warn(ctx context.Context, msg string, attrs ...any) {
 	log(ctx, slog.LevelWarn, msg, attrs...)
 }
 
-// Error logs at ERROR level with context values automatically extracted.
+// Error logs at ERROR level using the ctx-carried logger.
 func Error(ctx context.Context, msg string, attrs ...any) {
 	log(ctx, slog.LevelError, msg, attrs...)
 }
 
 // LogDuration logs a message with duration_ms calculated from the start time.
-// The level parameter specifies the log level (use slog.LevelDebug, slog.LevelInfo, etc).
 // Designed for use with defer:
 //
 //	defer logging.LogDuration(ctx, slog.LevelInfo, "operation completed", time.Now())
-//
-// Or with additional attrs:
-//
-//	defer logging.LogDuration(ctx, slog.LevelDebug, "hook executed", start,
-//	    slog.String("hook", hookName),
-//	    slog.Bool("success", true),
-//	)
 func LogDuration(ctx context.Context, level slog.Level, msg string, start time.Time, attrs ...any) {
 	durationMs := time.Since(start).Milliseconds()
-
-	// Prepend duration_ms to attrs
 	allAttrs := make([]any, 0, len(attrs)+1)
 	allAttrs = append(allAttrs, slog.Int64("duration_ms", durationMs))
 	allAttrs = append(allAttrs, attrs...)
-
 	log(ctx, level, msg, allAttrs...)
 }
 
-// log is the internal logging function that extracts context values and logs.
+// log routes a record to the ctx-carried logger.
 //
-// The read lock is held across l.Log so Init/Close cannot close logBufWriter
-// mid-write; do not shrink the lock scope to a snapshot pattern.
+// The logger value in ctx is immutable for the lifetime of the request and the
+// file closer fires only after main.go's defer (i.e., after ExecuteContext
+// returns), so no synchronisation is needed here.
 func log(ctx context.Context, level slog.Level, msg string, attrs ...any) {
-	mu.RLock()
-	defer mu.RUnlock()
-
-	l := logger
-	if l == nil {
-		l = slog.Default()
-	}
-	globalSessionID := currentSessionID
-
-	// Build attributes slice with session ID first (if set)
-	var allAttrs []any
-
-	// Add session ID from Init() if set (always first for consistency)
-	if globalSessionID != "" {
-		allAttrs = append(allAttrs, slog.String("session_id", globalSessionID))
-	}
-
-	// Extract context values, skipping session_id if already added from Init()
-	contextAttrs := attrsFromContext(ctx, globalSessionID)
-	for _, a := range contextAttrs {
-		allAttrs = append(allAttrs, a)
-	}
-
-	// Add caller-provided attributes
-	allAttrs = append(allAttrs, attrs...)
-
-	// Pass nil context to slog as we've already extracted context values as attributes.
-	// slog handlers are expected to handle nil context gracefully.
-	l.Log(nil, level, msg, allAttrs...) //nolint:staticcheck // nil context is intentional - we extract values as attributes
+	LoggerFromContext(ctx).Log(ctx, level, msg, attrs...)
 }
 
-// attrsFromContext extracts logging attributes from a context.
-// If globalSessionID is non-empty, skips adding session_id from context to avoid duplicates.
-func attrsFromContext(ctx context.Context, globalSessionID string) []slog.Attr {
+// lazyWriter opens .entire/logs/entire.log on first write, falling back to
+// stderr if the open fails. Subsequent writes go to the chosen target.
+//
+// Designed so that invocations that emit no log lines (e.g., entire --version)
+// never create the file. Closer is sync.Once-guarded; safe to call multiple
+// times.
+type lazyWriter struct {
+	ctx       context.Context
+	openOnce  sync.Once
+	closeOnce sync.Once
+
+	target  io.Writer
+	flush   func() error
+	closeFn func() error
+}
+
+func newLazyWriter(ctx context.Context) *lazyWriter {
 	if ctx == nil {
-		return nil
+		ctx = context.Background()
 	}
+	return &lazyWriter{ctx: ctx}
+}
 
-	var attrs []slog.Attr
+// Write implements io.Writer. The first call resolves the underlying target
+// (file or stderr); subsequent calls reuse it.
+func (w *lazyWriter) Write(p []byte) (int, error) {
+	w.openOnce.Do(w.resolveTarget)
+	return w.target.Write(p) //nolint:wrapcheck // io.Writer pass-through; wrapping would obscure the underlying error
+}
 
-	// Only add session_id from context if not already set globally
-	if globalSessionID == "" {
-		if v := ctx.Value(sessionIDKey); v != nil {
-			if s, ok := v.(string); ok && s != "" {
-				attrs = append(attrs, slog.String("session_id", s))
-			}
-		}
+func (w *lazyWriter) resolveTarget() {
+	repoRoot, err := paths.WorktreeRoot(w.ctx)
+	if err != nil {
+		w.useStderr(fmt.Errorf("repo root not found: %w", err))
+		return
 	}
-	if v := ctx.Value(parentSessionIDKey); v != nil {
-		if s, ok := v.(string); ok && s != "" {
-			attrs = append(attrs, slog.String("parent_session_id", s))
-		}
+	logsPath := filepath.Join(repoRoot, LogsDir)
+	if err := os.MkdirAll(logsPath, 0o750); err != nil {
+		w.useStderr(fmt.Errorf("mkdir %s: %w", logsPath, err))
+		return
 	}
-	if v := ctx.Value(toolCallIDKey); v != nil {
-		if s, ok := v.(string); ok && s != "" {
-			attrs = append(attrs, slog.String("tool_call_id", s))
-		}
+	logFilePath := filepath.Join(logsPath, "entire.log")
+	f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // fixed filename, not user-controlled
+	if err != nil {
+		w.useStderr(fmt.Errorf("open %s: %w", logFilePath, err))
+		return
 	}
-	if v := ctx.Value(componentKey); v != nil {
-		if s, ok := v.(string); ok && s != "" {
-			attrs = append(attrs, slog.String("component", s))
-		}
-	}
-	if v := ctx.Value(agentKey); v != nil {
-		if s, ok := v.(string); ok && s != "" {
-			attrs = append(attrs, slog.String("agent", s))
-		}
-	}
+	buf := bufio.NewWriterSize(f, 8192)
+	w.target = buf
+	w.flush = buf.Flush
+	w.closeFn = f.Close
+}
 
-	return attrs
+func (w *lazyWriter) useStderr(reason error) {
+	fmt.Fprintf(os.Stderr, "[entire] log file unavailable: %v; logs going to stderr\n", reason)
+	w.target = os.Stderr
+	w.flush = func() error { return nil }
+	w.closeFn = func() error { return nil }
+}
+
+// Close flushes and closes the underlying file. Idempotent.
+func (w *lazyWriter) Close() error {
+	var err error
+	w.closeOnce.Do(func() {
+		// If openOnce never fired (no writes happened), there's nothing to do.
+		if w.flush == nil {
+			return
+		}
+		if ferr := w.flush(); ferr != nil {
+			err = ferr
+		}
+		if cerr := w.closeFn(); cerr != nil && err == nil {
+			err = cerr
+		}
+	})
+	return err
 }

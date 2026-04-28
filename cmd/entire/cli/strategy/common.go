@@ -75,7 +75,7 @@ func EnsureSetup(ctx context.Context) error {
 	if err := vercelconfig.InitSettings(ctx); err != nil {
 		return fmt.Errorf("failed to initialize vercel settings: %w", err)
 	}
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(ctx, repo); err != nil {
 		return fmt.Errorf("failed to ensure metadata branch: %w", err)
 	}
 
@@ -386,7 +386,7 @@ func resolveAgentType(ctxAgentType types.AgentType, state *SessionState) types.A
 // If the remote-tracking branch (origin/entire/checkpoints/v1) exists and the local
 // branch is missing or empty, creates/updates the local branch from it.
 // Otherwise creates an empty orphan.
-func EnsureMetadataBranch(repo *git.Repository) error {
+func EnsureMetadataBranch(ctx context.Context, repo *git.Repository) error {
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 
 	// Check if remote-tracking branch exists (e.g., after clone/fetch)
@@ -416,7 +416,7 @@ func EnsureMetadataBranch(repo *git.Repository) error {
 				// Local has real data and differs from remote — if disconnected
 				// (no common ancestor), reconciliation happens at pre-push time
 				// or via 'entire doctor'. Read paths warn but do not auto-fix.
-				logging.Debug(context.Background(), "metadata branch differs from remote, reconciliation deferred to read/write time",
+				logging.Debug(ctx, "metadata branch differs from remote, reconciliation deferred to read/write time",
 					"local_hash", localRef.Hash().String()[:7],
 					"remote_hash", remoteRef.Hash().String()[:7],
 				)
@@ -572,7 +572,7 @@ func decodeSummaryLiteFromTree(checkpointTree checkpoint.FileReader) (checkpoint
 //
 // Uses streaming json.Decoder and minimal structs to avoid loading large nested
 // objects (Summary, InitialAttribution, TokenUsage) into memory.
-func ReadCheckpointMetadata(tree checkpoint.FileReader, checkpointPath string) (*CheckpointInfo, error) {
+func ReadCheckpointMetadata(ctx context.Context, tree checkpoint.FileReader, checkpointPath string) (*CheckpointInfo, error) {
 	metadataPath := checkpointPath + "/metadata.json"
 	file, err := tree.File(metadataPath)
 	if err != nil {
@@ -584,14 +584,14 @@ func ReadCheckpointMetadata(tree checkpoint.FileReader, checkpointPath string) (
 	normalizePath := func(raw string) string {
 		return strings.TrimPrefix(raw, "/")
 	}
-	return decodeCheckpointInfo(file, tree, checkpointPath, normalizePath)
+	return decodeCheckpointInfo(ctx, file, tree, checkpointPath, normalizePath)
 }
 
 // ReadCheckpointMetadataFromSubtree reads checkpoint metadata from a tree that is
 // already rooted at the checkpoint directory (e.g., after tree.Tree(checkpointID.Path())).
 // checkpointPath is the original sharded path (e.g., "ca/b75de47439") and is used
 // to strip the prefix from absolute session metadata paths stored in the summary.
-func ReadCheckpointMetadataFromSubtree(tree checkpoint.FileReader, checkpointPath string) (*CheckpointInfo, error) {
+func ReadCheckpointMetadataFromSubtree(ctx context.Context, tree checkpoint.FileReader, checkpointPath string) (*CheckpointInfo, error) {
 	file, err := tree.File(paths.MetadataFileName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find %s in checkpoint subtree: %w", paths.MetadataFileName, err)
@@ -603,7 +603,7 @@ func ReadCheckpointMetadataFromSubtree(tree checkpoint.FileReader, checkpointPat
 	normalizePath := func(raw string) string {
 		return strings.TrimPrefix(raw, prefix)
 	}
-	return decodeCheckpointInfo(file, tree, checkpointPath, normalizePath)
+	return decodeCheckpointInfo(ctx, file, tree, checkpointPath, normalizePath)
 }
 
 // decodeCheckpointInfo is the shared implementation for ReadCheckpointMetadata and
@@ -614,6 +614,7 @@ func ReadCheckpointMetadataFromSubtree(tree checkpoint.FileReader, checkpointPat
 // paths that are valid for tree.File() lookups (the transform differs depending on
 // whether tree is a full metadata branch tree or a checkpoint subtree).
 func decodeCheckpointInfo(
+	ctx context.Context,
 	file checkpoint.FileOpener,
 	tree checkpoint.FileReader,
 	checkpointPath string,
@@ -645,7 +646,7 @@ func decodeCheckpointInfo(
 				sessionMetadataPath := normalizePath(sessionPaths.Metadata)
 				sessionMeta, sErr := decodeSessionMetadataLite(tree, sessionMetadataPath)
 				if sErr != nil {
-					logging.Debug(context.Background(), "decodeCheckpointInfo: session metadata decode failed",
+					logging.Debug(ctx, "decodeCheckpointInfo: session metadata decode failed",
 						slog.Int("session_index", i),
 						slog.String("metadata_path", sessionMetadataPath),
 						slog.String("checkpoint_path", checkpointPath),

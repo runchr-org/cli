@@ -98,7 +98,7 @@ func TestReconcileDisconnected_SameHash(t *testing.T) {
 	}
 
 	// Create local branch from remote (same hash)
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 		t.Fatalf("EnsureMetadataBranch failed: %v", err)
 	}
 
@@ -120,7 +120,7 @@ func TestReconcileDisconnected_SharedAncestry(t *testing.T) {
 	}
 
 	// Create local branch from remote (shared base)
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 		t.Fatalf("EnsureMetadataBranch failed: %v", err)
 	}
 
@@ -462,7 +462,7 @@ func TestIsMetadataDisconnected_SameHash(t *testing.T) {
 		t.Fatalf("failed to open repo: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 		t.Fatalf("EnsureMetadataBranch failed: %v", err)
 	}
 
@@ -486,7 +486,7 @@ func TestIsMetadataDisconnected_SharedAncestry(t *testing.T) {
 		t.Fatalf("failed to open repo: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 		t.Fatalf("EnsureMetadataBranch failed: %v", err)
 	}
 

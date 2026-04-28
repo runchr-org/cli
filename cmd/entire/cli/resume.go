@@ -67,15 +67,6 @@ most recent commit with a checkpoint.  You'll be prompted to confirm resuming in
 }
 
 func runResume(ctx context.Context, cmd *cobra.Command, branchName string, force bool) error {
-	// Only initialize logging when inside a git worktree to avoid
-	// creating .entire/logs/ in arbitrary directories.
-	if _, err := paths.WorktreeRoot(ctx); err == nil {
-		logging.SetLogLevelGetter(GetLogLevel)
-		if err := logging.Init(ctx, ""); err == nil {
-			defer logging.Close()
-		}
-	}
-
 	w := cmd.OutOrStdout()
 	errW := cmd.ErrOrStderr()
 
@@ -293,7 +284,7 @@ func resumeFromCurrentBranch(ctx context.Context, w, errW io.Writer, branchName 
 	}
 
 	// Read metadata from checkpoint subtree (paths are relative to checkpoint root)
-	metadata, err := strategy.ReadCheckpointMetadataFromSubtree(ft, checkpointID.Path())
+	metadata, err := strategy.ReadCheckpointMetadataFromSubtree(ctx, ft, checkpointID.Path())
 	if err != nil {
 		logging.Warn(logCtx, "ReadCheckpointMetadataFromSubtree failed, checking remote",
 			slog.String("checkpoint_id", checkpointID.String()),
@@ -357,7 +348,7 @@ func resolveLatestCheckpoint(ctx context.Context, checkpointIDs []id.CheckpointI
 				slog.String("error", pfErr.Error()),
 			)
 		}
-		metadata, metaErr := strategy.ReadCheckpointMetadataFromSubtree(ft, cpID.Path())
+		metadata, metaErr := strategy.ReadCheckpointMetadataFromSubtree(ctx, ft, cpID.Path())
 		if metaErr != nil {
 			logging.Debug(ctx, "resolveLatestCheckpoint: checkpoint metadata read failed",
 				slog.String("checkpoint_id", cpID.String()),
@@ -698,7 +689,7 @@ func checkRemoteMetadata(ctx context.Context, w, errW io.Writer, checkpointID id
 						slog.String("error", pfErr.Error()),
 					)
 				}
-				metadata, metaErr := strategy.ReadCheckpointMetadataFromSubtree(ft, checkpointID.Path())
+				metadata, metaErr := strategy.ReadCheckpointMetadataFromSubtree(ctx, ft, checkpointID.Path())
 				if metaErr == nil {
 					return resumeSession(ctx, w, errW, metadata, false)
 				}
@@ -790,7 +781,7 @@ func tryReadCheckpointFromTree(ctx context.Context, tree *object.Tree, repo *git
 			slog.String("error", pfErr.Error()),
 		)
 	}
-	metadata, err := strategy.ReadCheckpointMetadataFromSubtree(ft, checkpointID.Path())
+	metadata, err := strategy.ReadCheckpointMetadataFromSubtree(ctx, ft, checkpointID.Path())
 	if err != nil {
 		return nil, fmt.Errorf("failed to read checkpoint metadata: %w", err)
 	}
