@@ -231,7 +231,7 @@ func (m searchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 
 func (m searchModel) updateSearchMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) { //nolint:ireturn // bubbletea pattern
 	switch msg.String() {
-	case "esc":
+	case "esc": //nolint:goconst // key names stay inline with Bubble Tea switch labels
 		m.mode = modeBrowse
 		m.input.Blur()
 		m = m.refreshBrowseContent()

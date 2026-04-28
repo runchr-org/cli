@@ -378,7 +378,7 @@ func (m dispatchStatusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case tea.KeyMsg:
 		switch msg.String() {
-		case tea.KeyCtrlC.String(), tuiEscKey, "q":
+		case tea.KeyCtrlC.String(), "esc", "q":
 			if m.cancel != nil {
 				m.cancel()
 			}

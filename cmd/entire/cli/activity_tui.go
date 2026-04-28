@@ -114,7 +114,7 @@ func (m activityModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:iretu
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case tuiEscKey, tea.KeyCtrlC.String(), "q":
+		case "esc", tea.KeyCtrlC.String(), "q":
 			return m, tea.Quit
 		case "home", "g":
 			if m.ready {
@@ -226,21 +226,38 @@ func (m activityModel) renderFooter() string {
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 	sep := helpStyle.Render(" · ")
 
-	help := keyStyle.Render("↑/↓, j/k") + helpStyle.Render(" scroll") +
+	fullHelp := keyStyle.Render("↑/↓, j/k") + helpStyle.Render(" scroll") +
 		sep + keyStyle.Render("home/end, g/G") + helpStyle.Render(" top/bottom") +
 		sep + keyStyle.Render("q") + helpStyle.Render(" quit")
+	standardHelp := keyStyle.Render("↑/↓") + helpStyle.Render(" scroll") +
+		sep + keyStyle.Render("home/end") + helpStyle.Render(" top/bottom") +
+		sep + keyStyle.Render("q") + helpStyle.Render(" quit")
+	shortHelp := keyStyle.Render("↑/↓") + helpStyle.Render(" scroll")
+	quitHelp := keyStyle.Render("q") + helpStyle.Render(" quit")
+	helpChoices := []string{fullHelp, standardHelp, shortHelp, quitHelp}
 
 	if m.viewport.TotalLineCount() <= m.viewport.Height {
-		return help
+		for _, help := range helpChoices {
+			if m.width <= 0 || lipgloss.Width(help) <= m.width {
+				return help
+			}
+		}
+		return ""
 	}
 
 	pct := helpStyle.Render(padLeft(int(m.viewport.ScrollPercent()*100)) + "%")
-	gap := m.width - lipgloss.Width(help) - lipgloss.Width(sep) - lipgloss.Width(pct)
-	if gap < 1 {
-		gap = 1
+	for _, help := range helpChoices {
+		gap := m.width - lipgloss.Width(help) - lipgloss.Width(sep) - lipgloss.Width(pct)
+		if gap >= 1 {
+			return help + sep + helpStyle.Render(strings.Repeat(" ", gap)) + pct
+		}
 	}
 
-	return help + sep + helpStyle.Render(strings.Repeat(" ", gap)) + pct
+	pctWidth := lipgloss.Width(pct)
+	if m.width < pctWidth {
+		return helpStyle.Render(strings.Repeat(" ", max(m.width, 0)))
+	}
+	return helpStyle.Render(strings.Repeat(" ", m.width-pctWidth)) + pct
 }
 
 func newActivityStylesWithWidth(width int, useColor bool) activityStyles {

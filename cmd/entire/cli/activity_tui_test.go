@@ -168,6 +168,32 @@ func TestActivityModel_FooterScrollPercentFitsWidth(t *testing.T) {
 
 	footer := m.renderFooter()
 	if got := lipgloss.Width(footer); got != m.width {
-		t.Fatalf("footer width = %d, want %d: %q", got, m.width, footer)
+		t.Fatalf("wide footer width = %d, want %d: %q", got, m.width, footer)
+	}
+
+	m.width = 50
+	m.sty = newActivityStylesWithWidth(m.width, true)
+
+	footer = m.renderFooter()
+	if got := lipgloss.Width(footer); got != m.width {
+		t.Fatalf("compact footer width = %d, want %d: %q", got, m.width, footer)
+	}
+	for _, want := range []string{"↑/↓ scroll", "home/end top/bottom", "q quit"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("compact footer missing %q: %q", want, footer)
+		}
+	}
+	for _, hidden := range []string{"j/k", "g/G"} {
+		if strings.Contains(footer, hidden) {
+			t.Fatalf("compact footer should drop %q: %q", hidden, footer)
+		}
+	}
+
+	m.width = 20
+	m.sty = newActivityStylesWithWidth(m.width, true)
+
+	footer = m.renderFooter()
+	if got := lipgloss.Width(footer); got != m.width {
+		t.Fatalf("narrow footer width = %d, want %d: %q", got, m.width, footer)
 	}
 }
