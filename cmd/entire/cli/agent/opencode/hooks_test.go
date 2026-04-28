@@ -162,6 +162,48 @@ func TestInstallHooks_TurnStartUsesSyncHook(t *testing.T) {
 	}
 }
 
+// TestInstallHooks_TurnEndBlocksOpenCodeEventLoop documents the structural
+// cause behind issue #952 ("Opencode - Buggy conversation steps"): the
+// turn-end hook is dispatched via Bun.spawnSync, which parks the OpenCode
+// JS event loop until `entire hooks opencode turn-end` returns. While that
+// hook is running (3-4 minutes in the reporter's logs for ~130 modified
+// files), the OpenCode TUI cannot paint and Esc keystrokes are queued
+// behind the sync call.
+//
+// The plugin's own comment explains why sync is currently necessary
+// (see entire_plugin.ts: "opencode run exits on the same idle event,
+// so an async hook would be killed before completing"), so this test
+// is not asserting that sync is wrong — it is pinning the current
+// behavior so any future fix (e.g., mode-aware async-in-TUI dispatch)
+// trips this test and forces an explicit decision about the sync path.
+func TestInstallHooks_TurnEndBlocksOpenCodeEventLoop(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	ag := &OpenCodeAgent{}
+
+	if _, err := ag.InstallHooks(context.Background(), false, false); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	pluginPath := filepath.Join(dir, ".opencode", "plugins", "entire.ts")
+	data, err := os.ReadFile(pluginPath)
+	if err != nil {
+		t.Fatalf("plugin file not created: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, `callHookSync("turn-end", {`) {
+		t.Fatal("plugin file should dispatch turn-end via callHookSync (current behavior)")
+	}
+	if strings.Contains(content, `await callHook("turn-end", {`) {
+		t.Fatal("plugin file should not dispatch turn-end via async callHook")
+	}
+	// The implementation of callHookSync is what actually blocks the JS thread.
+	if !strings.Contains(content, `Bun.spawnSync(hookCmd(hookName), {`) {
+		t.Fatal("callHookSync should use Bun.spawnSync (this is what blocks the OpenCode UI)")
+	}
+}
+
 func TestInstallHooks_MessageUpdatedFallsBackToSessionStart(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
