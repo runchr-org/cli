@@ -114,7 +114,7 @@ func (m activityModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:iretu
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "esc", tea.KeyCtrlC.String(), "q":
+		case tea.KeyEsc.String(), tea.KeyCtrlC.String(), "q":
 			return m, tea.Quit
 		case "home", "g":
 			if m.ready {
