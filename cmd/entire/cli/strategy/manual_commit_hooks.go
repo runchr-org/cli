@@ -60,11 +60,8 @@ func askConfirmTTY(header string, details []string, prompt string, defaultYes bo
 		defaultResult = ttyResultLink
 	}
 
-	// In test mode, don't try to interact with the real TTY — just use the default.
-	// Any non-empty ENTIRE_TEST_TTY value is treated as test mode here. Tests may use
-	// this to simulate "a human is present" for CanPromptInteractively(), but we can't
-	// actually read from the TTY in tests.
-	if os.Getenv("ENTIRE_TEST_TTY") != "" {
+	// In test mode, don't try to interact with the real TTY — use the default.
+	if interactive.UnderTest() {
 		return defaultResult
 	}
 

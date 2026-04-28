@@ -119,6 +119,93 @@ func TestSearchModel_Navigation(t *testing.T) {
 	}
 }
 
+func TestSearchModel_VimNavigationAliases(t *testing.T) {
+	t.Parallel()
+	m := testModel()
+
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if m.cursor != 1 {
+		t.Errorf("after j: cursor = %d, want 1", m.cursor)
+	}
+
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if m.cursor != 0 {
+		t.Errorf("after k: cursor = %d, want 0", m.cursor)
+	}
+}
+
+func TestSearchModel_TopBottomNavigation(t *testing.T) {
+	t.Parallel()
+
+	results := make([]search.Result, 30)
+	for i := range results {
+		results[i] = search.Result{Data: search.CheckpointResult{ID: fmt.Sprintf("id-%02d", i)}}
+	}
+
+	tests := []struct {
+		name        string
+		key         tea.KeyMsg
+		startPage   int
+		startCursor int
+		wantPage    int
+		wantCursor  int
+	}{
+		{
+			name:        "home",
+			key:         tea.KeyMsg{Type: tea.KeyHome},
+			startPage:   1,
+			startCursor: 4,
+			wantPage:    0,
+			wantCursor:  0,
+		},
+		{
+			name:        "g",
+			key:         tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}},
+			startPage:   1,
+			startCursor: 4,
+			wantPage:    0,
+			wantCursor:  0,
+		},
+		{
+			name:        "end",
+			key:         tea.KeyMsg{Type: tea.KeyEnd},
+			startPage:   0,
+			startCursor: 0,
+			wantPage:    1,
+			wantCursor:  4,
+		},
+		{
+			name:        "G",
+			key:         tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}},
+			startPage:   0,
+			startCursor: 0,
+			wantPage:    1,
+			wantCursor:  4,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ss := statusStyles{colorEnabled: false, width: 100}
+			cfg := search.Config{}
+			m := initTestViewport(newSearchModel(results, "q", len(results), cfg, ss))
+			m.page = tt.startPage
+			m.cursor = tt.startCursor
+			m = m.refreshBrowseContent()
+
+			m = updateModel(t, m, tt.key)
+			if m.page != tt.wantPage {
+				t.Errorf("page = %d, want %d", m.page, tt.wantPage)
+			}
+			if m.cursor != tt.wantCursor {
+				t.Errorf("cursor = %d, want %d", m.cursor, tt.wantCursor)
+			}
+		})
+	}
+}
+
 func TestSearchModel_Quit(t *testing.T) {
 	t.Parallel()
 	m := testModel()
@@ -126,6 +213,8 @@ func TestSearchModel_Quit(t *testing.T) {
 	quitKeys := []tea.KeyMsg{
 		{Type: tea.KeyRunes, Runes: []rune{'q'}},
 		{Type: tea.KeyCtrlC},
+		{Type: tea.KeyEsc},
+		{Type: tea.KeyRunes, Runes: []rune{'h'}},
 	}
 
 	for _, key := range quitKeys {
@@ -258,12 +347,73 @@ func TestSearchModel_View(t *testing.T) {
 		t.Error("detail missing files or truncation hint")
 	}
 
-	// Footer
-	if !strings.Contains(view, "navigate") {
-		t.Error("view missing footer help")
-	}
 	if !strings.Contains(view, "2 results") {
 		t.Error("view missing results count in footer")
+	}
+}
+
+func TestSearchModel_BrowseFooterHelp(t *testing.T) {
+	t.Parallel()
+	m := testModel()
+
+	footer := m.viewHelp()
+	wantParts := []string{
+		"/ search",
+		"↑/↓, j/k scroll",
+		"home/end, g/G top/bottom",
+		"q quit",
+	}
+	lastIndex := -1
+	for _, want := range wantParts {
+		idx := strings.Index(footer, want)
+		if idx == -1 {
+			t.Fatalf("footer missing %q: %q", want, footer)
+		}
+		if idx < lastIndex {
+			t.Fatalf("footer control %q rendered out of order: %q", want, footer)
+		}
+		lastIndex = idx
+	}
+
+	for _, unwanted := range []string{"detail", "open", "back", "navigate"} {
+		if strings.Contains(footer, unwanted) {
+			t.Fatalf("footer should not mention %q: %q", unwanted, footer)
+		}
+	}
+	if strings.Contains(footer, "n/p page") {
+		t.Fatalf("single-page footer should not mention paging: %q", footer)
+	}
+}
+
+func TestSearchModel_BrowseFooterHelpIncludesPagingForMultiplePages(t *testing.T) {
+	t.Parallel()
+
+	results := make([]search.Result, 30)
+	for i := range results {
+		results[i] = search.Result{Data: search.CheckpointResult{ID: fmt.Sprintf("id-%02d", i)}}
+	}
+
+	ss := statusStyles{colorEnabled: false, width: 120}
+	m := newSearchModel(results, "q", len(results), search.Config{}, ss)
+
+	footer := m.viewHelp()
+	wantParts := []string{
+		"/ search",
+		"↑/↓, j/k scroll",
+		"home/end, g/G top/bottom",
+		"n/p page",
+		"q quit",
+	}
+	lastIndex := -1
+	for _, want := range wantParts {
+		idx := strings.Index(footer, want)
+		if idx == -1 {
+			t.Fatalf("footer missing %q: %q", want, footer)
+		}
+		if idx < lastIndex {
+			t.Fatalf("footer control %q rendered out of order: %q", want, footer)
+		}
+		lastIndex = idx
 	}
 }
 

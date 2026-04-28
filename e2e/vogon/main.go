@@ -15,6 +15,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -26,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/google/uuid"
 )
 
@@ -539,10 +541,10 @@ func fireHook(dir, hookName string, payload any) {
 		return
 	}
 
-	cmd := exec.Command("entire", "hooks", "vogon", hookName)
+	cmd := execx.NonInteractive(context.Background(), "entire", "hooks", "vogon", hookName)
 	cmd.Dir = dir
 	cmd.Stdin = bytes.NewReader(data)
-	cmd.Env = append(os.Environ(), "ENTIRE_TEST_TTY=0")
+	cmd.Env = os.Environ()
 	// Capture output but don't show it — hooks may output banners
 	out, err := cmd.CombinedOutput()
 	if err != nil {

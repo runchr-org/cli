@@ -198,7 +198,6 @@ func TestResolveCheckpointSummaryProvider_NonInteractiveMultiCandidatePicksFirst
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
 	t.Chdir(tmpDir)
-	t.Setenv("ENTIRE_TEST_TTY", "0")
 
 	originalLoad := loadSummarySettings
 	originalGet := getSummaryAgent

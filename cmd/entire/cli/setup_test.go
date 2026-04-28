@@ -1019,7 +1019,6 @@ func TestEnableUsesSetupFlow(t *testing.T) {
 
 func TestEnableCmd_ForceOnConfiguredRepo_UsesConfigureFlow(t *testing.T) {
 	setupTestRepo(t)
-	t.Setenv("ENTIRE_TEST_TTY", "0")
 	writeSettings(t, testSettingsEnabled)
 	writeClaudeHooksFixture(t)
 
@@ -1045,7 +1044,6 @@ func TestEnableCmd_ForceOnConfiguredRepo_UsesConfigureFlow(t *testing.T) {
 
 func TestEnableCmd_ForceOnConfiguredDisabledRepo_Reenables(t *testing.T) {
 	setupTestRepo(t)
-	t.Setenv("ENTIRE_TEST_TTY", "0")
 	writeSettings(t, testSettingsDisabled)
 	writeClaudeHooksFixture(t)
 
@@ -1079,7 +1077,6 @@ func TestEnableCmd_ForceOnConfiguredDisabledRepo_Reenables(t *testing.T) {
 
 func TestEnableCmd_ForceAndStrategyFlagsOnConfiguredDisabledRepo_ReenablesAndUpdatesSettings(t *testing.T) {
 	setupTestRepo(t)
-	t.Setenv("ENTIRE_TEST_TTY", "0")
 	writeSettings(t, testSettingsDisabled)
 	writeClaudeHooksFixture(t)
 
@@ -1279,7 +1276,6 @@ func TestIsBuiltInAgent_BuiltInAgent_True(t *testing.T) {
 func TestDetectOrSelectAgent_NoDetection_NoTTY_FallsBackToDefault(t *testing.T) {
 	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
 	setupTestRepo(t)
-	t.Setenv("ENTIRE_TEST_TTY", "0") // No TTY available
 
 	// No .claude or .gemini directory - detection will fail
 
@@ -1430,7 +1426,6 @@ func TestDetectOrSelectAgent_BothDirectoriesExist_PromptsUser(t *testing.T) {
 func TestDetectOrSelectAgent_BothDirectoriesExist_NoTTY_UsesAll(t *testing.T) {
 	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
 	setupTestRepo(t)
-	t.Setenv("ENTIRE_TEST_TTY", "0") // No TTY available
 
 	// Create both .claude and .gemini directories
 	if err := os.MkdirAll(".claude", 0o755); err != nil {
@@ -1535,7 +1530,6 @@ func TestDetectOrSelectAgent_ReRun_AlwaysPromptsWithInstalledPreSelected(t *test
 func TestDetectOrSelectAgent_ReRun_NoTTY_KeepsInstalled(t *testing.T) {
 	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
 	setupTestRepo(t)
-	t.Setenv("ENTIRE_TEST_TTY", "0") // No TTY available
 
 	// Install Claude Code hooks
 	writeClaudeHooksFixture(t)
@@ -2638,7 +2632,6 @@ func TestDetectOrSelectAgent_YesSelectsAll(t *testing.T) {
 func TestManageAgents_YesWorksNonInteractive(t *testing.T) {
 	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
 	setupTestRepo(t)
-	t.Setenv("ENTIRE_TEST_TTY", "0") // non-interactive
 
 	// Install claude-code hooks so there's something installed
 	writeClaudeHooksFixture(t)
@@ -2747,7 +2740,6 @@ func TestEnableCmd_YesFreshRepo_SkipsPromptsAndEnables(t *testing.T) {
 	testutil.WriteFile(t, ".", "f.txt", "init")
 	testutil.GitAdd(t, ".", "f.txt")
 	testutil.GitCommit(t, ".", "init")
-	t.Setenv("ENTIRE_TEST_TTY", "0") // non-interactive — proves --yes bypasses prompts
 
 	// Use --yes with --agent to test the realistic CI scenario.
 	// The --yes flag skips telemetry/Vercel prompts while --agent selects a specific agent.
@@ -2783,7 +2775,6 @@ func TestEnableCmd_YesWithAgent_AgentTakesPrecedence(t *testing.T) {
 	testutil.WriteFile(t, ".", "f.txt", "init")
 	testutil.GitAdd(t, ".", "f.txt")
 	testutil.GitCommit(t, ".", "init")
-	t.Setenv("ENTIRE_TEST_TTY", "0")
 
 	cmd := newEnableCmd()
 	var stdout, stderr bytes.Buffer
@@ -2809,7 +2800,6 @@ func TestEnableCmd_YesWithAgent_AgentTakesPrecedence(t *testing.T) {
 func TestEnableCmd_YesOnConfiguredRepo_ManagesAgents(t *testing.T) {
 	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
 	setupTestRepo(t)
-	t.Setenv("ENTIRE_TEST_TTY", "0") // non-interactive
 	writeSettings(t, testSettingsEnabled)
 	writeClaudeHooksFixture(t)
 
@@ -2836,7 +2826,6 @@ func TestEnableCmd_YesWithTelemetryFalse(t *testing.T) {
 	testutil.WriteFile(t, ".", "f.txt", "init")
 	testutil.GitAdd(t, ".", "f.txt")
 	testutil.GitCommit(t, ".", "init")
-	t.Setenv("ENTIRE_TEST_TTY", "0")
 
 	cmd := newEnableCmd()
 	var stdout, stderr bytes.Buffer
@@ -2861,7 +2850,6 @@ func TestEnableCmd_YesWithTelemetryFalse(t *testing.T) {
 func TestConfigureCmd_YesOnConfiguredRepo(t *testing.T) {
 	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
 	setupTestRepo(t)
-	t.Setenv("ENTIRE_TEST_TTY", "0")
 	writeSettings(t, testSettingsEnabled)
 	writeClaudeHooksFixture(t)
 

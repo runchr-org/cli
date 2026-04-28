@@ -136,6 +136,32 @@ t.Chdir(tmpDir)                                 // redirect CWD-based git resolu
 
 **Do NOT** shell out to `git init`/`git commit` directly without setting user config and `--no-gpg-sign`, and **do NOT** run lifecycle/strategy handlers from the real repo CWD in tests.
 
+### Spawning subprocesses in tests (TTY detection)
+
+Tests that spawn the real `entire` or `git` binary need the child to be non-interactive so prompts don't hang on a developer terminal.
+
+`interactive.CanPromptInteractively()` resolves in this order:
+
+1. `ENTIRE_TEST_TTY=1` → force interactive ON (any other non-empty value → force OFF).
+2. `testing.Testing()` → false. In-process `go test` runs are non-interactive by default; no per-test `t.Setenv("ENTIRE_TEST_TTY", "0")` is needed.
+3. Agent sentinels (`GEMINI_CLI`, `COPILOT_CLI`, `PI_CODING_AGENT`, `GIT_TERMINAL_PROMPT=0`) → false.
+4. `CI=<non-empty-non-false>` → false.
+5. `/dev/tty` probe.
+
+For subprocesses spawning the real `entire` binary (e2e, integration tests, `entire` calling itself from a hook), prefer `execx.NonInteractive` over env-var plumbing:
+
+```go
+import "github.com/entireio/cli/cmd/entire/cli/execx"
+
+cmd := execx.NonInteractive(ctx, getTestBinary(), "status")
+cmd.Dir = repoDir
+out, err := cmd.CombinedOutput()
+```
+
+`execx.NonInteractive` puts the child in a new session with no controlling terminal (`Setsid` on Unix, `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` on Windows), so the child's `/dev/tty` probe fails naturally. No env var required.
+
+`interactive.UnderTest()` returns true when `testing.Testing()` or `ENTIRE_TEST_TTY` is set — use it where code needs to skip a real-terminal operation even if `CanPromptInteractively()` returns true (e.g., reading from `/dev/tty` directly inside `askConfirmTTY`).
+
 ### Linting and Formatting
 
 ```bash

@@ -1,12 +1,14 @@
 package entire
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/execx"
 )
 
 // BinPath returns the path to the entire binary from E2E_ENTIRE_BIN.
@@ -90,9 +92,9 @@ func RewindLogsOnly(t *testing.T, dir, id string) error {
 // run executes an `entire` subcommand in dir and fails the test on error.
 func run(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command(BinPath(), args...)
+	cmd := execx.NonInteractive(context.Background(), BinPath(), args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "ENTIRE_TEST_TTY=0")
+	cmd.Env = os.Environ()
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -103,9 +105,9 @@ func run(t *testing.T, dir string, args ...string) string {
 
 // runErr executes an `entire` subcommand in dir and returns any error.
 func runErr(dir string, args ...string) error {
-	cmd := exec.Command(BinPath(), args...)
+	cmd := execx.NonInteractive(context.Background(), BinPath(), args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "ENTIRE_TEST_TTY=0")
+	cmd.Env = os.Environ()
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -173,10 +175,9 @@ func runOutput(dir string, args ...string) (string, error) {
 }
 
 func runOutputEnv(dir string, extraEnv []string, args ...string) (string, error) {
-	cmd := exec.Command(BinPath(), args...)
+	cmd := execx.NonInteractive(context.Background(), BinPath(), args...)
 	cmd.Dir = dir
-	cmd.Env = append(append([]string{}, os.Environ()...), "ENTIRE_TEST_TTY=0")
-	cmd.Env = append(cmd.Env, extraEnv...)
+	cmd.Env = append(append([]string{}, os.Environ()...), extraEnv...)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
