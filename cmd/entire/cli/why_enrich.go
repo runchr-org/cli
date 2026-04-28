@@ -13,6 +13,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
+	"github.com/entireio/cli/perf"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -87,10 +88,14 @@ func enrichWhyCommits(ctx context.Context, repo *git.Repository, lookup *whyChec
 			continue
 		}
 
+		_, commitObjectSpan := perf.Start(ctx, "why_commit_object")
 		commit, err := repo.CommitObject(hash)
 		if err != nil {
+			commitObjectSpan.RecordError(err)
+			commitObjectSpan.End()
 			continue
 		}
+		commitObjectSpan.End()
 
 		subject := whyCommitSubject(commit.Message)
 		info := whyCommitInfo{
@@ -101,13 +106,21 @@ func enrichWhyCommits(ctx context.Context, repo *git.Repository, lookup *whyChec
 			Summary:    subject,
 		}
 
+		_, checkpointTrailerSpan := perf.Start(ctx, "why_checkpoint_trailer")
 		if cpID, ok := trailers.ParseCheckpoint(commit.Message); ok {
+			checkpointTrailerSpan.End()
 			info.CheckpointID = cpID
+			_, checkpointInfoSpan := perf.Start(ctx, "why_checkpoint_info")
 			if checkpointInfo, readErr := readWhyCheckpointInfo(ctx, lookup, cpID); readErr == nil {
 				info.Checkpoint = checkpointInfo
 				info.Summary = whyCommitFallbackSummary(checkpointInfo.Summary, subject)
 				info.SummaryGenerated = checkpointInfo.SummaryGenerated
+			} else {
+				checkpointInfoSpan.RecordError(readErr)
 			}
+			checkpointInfoSpan.End()
+		} else {
+			checkpointTrailerSpan.End()
 		}
 
 		infoByCommit[hash] = info
@@ -124,6 +137,7 @@ func readWhyCheckpointInfo(ctx context.Context, lookup *whyCheckpointLookup, cpI
 		return whyCheckpointInfo{}, checkpoint.ErrCheckpointNotFound
 	}
 
+	_, resolveReaderSpan := perf.Start(ctx, "why_checkpoint_resolve_reader")
 	reader, summary, err := checkpoint.ResolveCommittedReaderForCheckpoint(
 		ctx,
 		cpID,
@@ -132,17 +146,27 @@ func readWhyCheckpointInfo(ctx context.Context, lookup *whyCheckpointLookup, cpI
 		lookup.preferCheckpointsV2,
 	)
 	if err != nil {
+		resolveReaderSpan.RecordError(err)
+		resolveReaderSpan.End()
 		return whyCheckpointInfo{}, fmt.Errorf("resolve checkpoint reader: %w", err)
 	}
 	if summary == nil {
+		resolveReaderSpan.RecordError(checkpoint.ErrCheckpointNotFound)
+		resolveReaderSpan.End()
 		return whyCheckpointInfo{}, checkpoint.ErrCheckpointNotFound
 	}
+	resolveReaderSpan.End()
 
+	_, sessionContentSpan := perf.Start(ctx, "why_checkpoint_read_session")
 	content, err := readLatestSessionContentForExplain(ctx, reader, cpID, summary)
 	if err != nil && !errors.Is(err, checkpoint.ErrNoTranscript) {
+		sessionContentSpan.RecordError(err)
+		sessionContentSpan.End()
 		return whyCheckpointInfo{}, err
 	}
+	sessionContentSpan.End()
 
+	_, buildInfoSpan := perf.Start(ctx, "why_checkpoint_build_info")
 	info := whyCheckpointInfo{
 		Found:        true,
 		SessionCount: len(summary.Sessions),
@@ -150,6 +174,7 @@ func readWhyCheckpointInfo(ctx context.Context, lookup *whyCheckpointLookup, cpI
 		Summary:      whyNotGeneratedSummary,
 	}
 	if content == nil {
+		buildInfoSpan.End()
 		return info, nil
 	}
 
@@ -157,11 +182,13 @@ func readWhyCheckpointInfo(ctx context.Context, lookup *whyCheckpointLookup, cpI
 	if content.Metadata.Summary != nil {
 		info.Summary = whyGeneratedSummary(content.Metadata.Summary)
 		info.SummaryGenerated = true
+		buildInfoSpan.End()
 		return info, nil
 	}
 	if promptSummary, ok := whySummaryFromPrompt(content.Prompts); ok {
 		info.Summary = promptSummary
 	}
+	buildInfoSpan.End()
 	return info, nil
 }
 
