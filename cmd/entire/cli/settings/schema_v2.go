@@ -80,9 +80,12 @@ type CheckpointsConfig struct {
 	// never serve reads — they are export targets, not sources of truth.
 	Mirrors []BackendConfig `json:"mirrors,omitempty"`
 
-	// Remote configures the GitHub remote that hosts the checkpoint
-	// metadata branch. Optional; when unset, the default origin is used.
-	Remote *CheckpointRemoteConfig `json:"remote,omitempty"`
+	// Git configures the destination for git-based backends (v1, v2, gmeta).
+	// Optional; when unset, the default origin is used. Per-backend overrides
+	// can be added by giving BackendConfig its own Git field if a future use
+	// case needs different destinations for different git backends — today
+	// this single value applies to all of them.
+	Git *CheckpointRemoteConfig `json:"git,omitempty"`
 
 	// FullTranscriptRetentionDays is the retention window (in days) for
 	// archived raw-transcript generations. Zero/negative falls back to

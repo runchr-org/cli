@@ -368,7 +368,7 @@ func applyStrategyOptionLegacyKeys(base, overlay *Settings, so map[string]json.R
 		base.Checkpoints.Mirrors = overlay.Checkpoints.Mirrors
 	}
 	if _, ok := so[legacyKeyCheckpointRemote]; ok {
-		base.Checkpoints.Remote = overlay.Checkpoints.Remote
+		base.Checkpoints.Git = overlay.Checkpoints.Git
 	}
 	if _, ok := so[legacyKeyFullTranscriptRetentionDays]; ok {
 		base.Checkpoints.FullTranscriptRetentionDays = overlay.Checkpoints.FullTranscriptRetentionDays
@@ -455,7 +455,7 @@ func synthesizeFromLegacy(s *EntireSettings) *Settings {
 func synthesizeCheckpointsConfig(s *EntireSettings) CheckpointsConfig {
 	cfg := CheckpointsConfig{
 		Primary:                     BackendConfig{Type: legacyPrimaryBackend(s)},
-		Remote:                      s.GetCheckpointRemote(),
+		Git:                         s.GetCheckpointRemote(),
 		FullTranscriptRetentionDays: legacyFullTranscriptRetention(s),
 		SignCommits:                 s.SignCheckpointCommits,
 		FilteredFetches:             s.IsFilteredFetchesEnabled(),

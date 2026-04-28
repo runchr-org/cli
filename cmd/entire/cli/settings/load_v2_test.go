@@ -180,11 +180,11 @@ func TestSynthesizeFromLegacy_CheckpointFields(t *testing.T) {
 				},
 			},
 			check: func(t *testing.T, got *Settings) {
-				if got.Checkpoints.Remote == nil {
-					t.Fatal("Remote = nil, want populated")
+				if got.Checkpoints.Git == nil {
+					t.Fatal("Git = nil, want populated")
 				}
-				if got.Checkpoints.Remote.Provider != "github" || got.Checkpoints.Remote.Repo != "org/checkpoints" {
-					t.Fatalf("Remote = %+v, want github/org/checkpoints", got.Checkpoints.Remote)
+				if got.Checkpoints.Git.Provider != "github" || got.Checkpoints.Git.Repo != "org/checkpoints" {
+					t.Fatalf("Git = %+v, want github/org/checkpoints", got.Checkpoints.Git)
 				}
 			},
 		},
@@ -648,7 +648,7 @@ func TestSynthesizeFromLegacy_RoundTripFromBytes(t *testing.T) {
 		Checkpoints: CheckpointsConfig{
 			Primary:                     BackendConfig{Type: BackendTypeV2},
 			Mirrors:                     []BackendConfig{{Type: BackendTypeGmeta}},
-			Remote:                      &CheckpointRemoteConfig{Provider: "github", Repo: "org/repo"},
+			Git:                         &CheckpointRemoteConfig{Provider: "github", Repo: "org/repo"},
 			FullTranscriptRetentionDays: 30,
 			SignCommits:                 boolPtr(false),
 			FilteredFetches:             true,
