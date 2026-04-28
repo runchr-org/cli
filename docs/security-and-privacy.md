@@ -16,10 +16,13 @@ If your repository is **public**, this data is visible to the entire internet.
 
 ### What Entire redacts automatically
 
-Entire automatically scans transcript and metadata content before writing it to the `entire/checkpoints/v1` branch. Two detection methods run during condensation:
+Entire automatically scans transcript and metadata content before writing it to the `entire/checkpoints/v1` branch. Five secret detection methods run during condensation:
 
 1. **Entropy scoring** — Identifies high-entropy strings (Shannon entropy > 4.5) that look like randomly generated secrets, even if they don't match a known pattern.
-2. **Pattern matching** — Uses [gitleaks](https://github.com/gitleaks/gitleaks) built-in rules to detect known secret formats.
+2. **Pattern matching** — Uses [Betterleaks](https://github.com/betterleaks/betterleaks) built-in rules to detect known secret formats.
+3. **Credentialed URI detection** — Redacts URLs with embedded passwords, such as `scheme://user:password@host`.
+4. **Database connection-string detection** — Redacts JDBC, Postgres keyword DSN, SQL Server, and ODBC-style connection strings containing passwords.
+5. **Bounded credential value detection** — Redacts password-like config values such as `DB_PASSWORD=...` and `PGPASSWORD=...` while preserving the surrounding key.
 
 Detected secrets are replaced with `REDACTED` before the data is ever written to a git object. This is **always on** and cannot be disabled.
 
@@ -35,9 +38,11 @@ If your AI sessions will touch sensitive data:
 
 ### Secrets (always on)
 
-Gitleaks pattern matching covers cloud providers (AWS, GCP, Azure), version control platforms (GitHub, GitLab, Bitbucket), payment processors (Stripe, Square), communication tools (Slack, Discord, Twilio), database connection strings, private key blocks (RSA, DSA, EC, PGP), and generic credentials (bearer tokens, basic auth, JWTs). Entropy scoring catches secrets that don't match any known pattern.
+Betterleaks pattern matching covers cloud providers (AWS, GCP, Azure), version control platforms (GitHub, GitLab, Bitbucket), payment processors (Stripe, Square), communication tools (Slack, Discord, Twilio), private key blocks (RSA, DSA, EC, PGP), and generic credentials (bearer tokens, basic auth, JWTs). Dedicated credentialed URI detection covers URLs that embed passwords. Additional database connection-string detection covers DB DSNs and query-parameter passwords not reliably covered by generic secret rules. Entropy scoring catches secrets that don't match any known pattern.
 
 All detected secrets are replaced with `REDACTED`.
+
+To reduce over-redaction, Entire preserves structural transcript fields such as IDs and paths, ignores common placeholder values, and redacts only credential values for bounded key/value forms. When a connection string contains a real (non-placeholder) password, it is redacted as a unit because partial fragments can still expose sensitive material; connection strings whose passwords are placeholders (e.g. `${DB_PASSWORD}`) are left intact.
 
 ## Limitations
 

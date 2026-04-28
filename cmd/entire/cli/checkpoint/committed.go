@@ -477,12 +477,14 @@ func (s *GitStore) writeCheckpointSummary(opts WriteCommittedOptions, basePath s
 		return fmt.Errorf("failed to aggregate session stats: %w", err)
 	}
 
-	var combinedAttribution *InitialAttribution
-	rootMetadataPath := basePath + paths.MetadataFileName
-	if entry, exists := entries[rootMetadataPath]; exists {
-		existingSummary, readErr := s.readSummaryFromBlob(entry.Hash)
-		if readErr == nil {
-			combinedAttribution = existingSummary.CombinedAttribution
+	combinedAttribution := opts.CombinedAttribution
+	if combinedAttribution == nil {
+		rootMetadataPath := basePath + paths.MetadataFileName
+		if entry, exists := entries[rootMetadataPath]; exists {
+			existingSummary, readErr := s.readSummaryFromBlob(entry.Hash)
+			if readErr == nil {
+				combinedAttribution = existingSummary.CombinedAttribution
+			}
 		}
 	}
 

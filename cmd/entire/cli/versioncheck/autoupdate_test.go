@@ -85,6 +85,7 @@ func TestMaybeAutoUpdate_KillSwitch(t *testing.T) {
 func TestMaybeAutoUpdate_NoTTY(t *testing.T) {
 	f := newAutoUpdateFixture(t)
 	useBrewExecutable(t)
+	// No TTY → MaybeAutoUpdate must print the manual hint instead of prompting.
 	t.Setenv("ENTIRE_TEST_TTY", "0")
 
 	var buf bytes.Buffer

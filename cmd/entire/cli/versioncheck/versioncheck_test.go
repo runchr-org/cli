@@ -395,10 +395,6 @@ func setupCheckAndNotifyTest(t *testing.T, serverURL string) (*cobra.Command, *b
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	// Prevent MaybeAutoUpdate from opening an interactive prompt when the
-	// test binary runs in a real terminal (dev laptop, not just CI).
-	t.Setenv("ENTIRE_TEST_TTY", "0")
-
 	origURL := githubAPIURL
 	githubAPIURL = serverURL
 	t.Cleanup(func() { githubAPIURL = origURL })

@@ -1,12 +1,14 @@
 package entire
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/execx"
 )
 
 // BinPath returns the path to the entire binary from E2E_ENTIRE_BIN.
@@ -44,6 +46,24 @@ func Disable(t *testing.T, dir string) {
 	run(t, dir, "disable")
 }
 
+// Doctor runs `entire doctor --force` and returns the output.
+func Doctor(t *testing.T, dir string) string {
+	t.Helper()
+	return run(t, dir, "doctor", "--force")
+}
+
+// CleanDryRun runs `entire clean --dry-run` and returns the output.
+func CleanDryRun(t *testing.T, dir string) string {
+	t.Helper()
+	return run(t, dir, "clean", "--dry-run")
+}
+
+// CleanForce runs `entire clean --force` and returns the output.
+func CleanForce(t *testing.T, dir string) string {
+	t.Helper()
+	return run(t, dir, "clean", "--force")
+}
+
 // RewindList runs `entire rewind --list` and parses the JSON output.
 func RewindList(t *testing.T, dir string) []RewindPoint {
 	t.Helper()
@@ -72,9 +92,9 @@ func RewindLogsOnly(t *testing.T, dir, id string) error {
 // run executes an `entire` subcommand in dir and fails the test on error.
 func run(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command(BinPath(), args...)
+	cmd := execx.NonInteractive(context.Background(), BinPath(), args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "ENTIRE_TEST_TTY=0")
+	cmd.Env = os.Environ()
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -85,9 +105,9 @@ func run(t *testing.T, dir string, args ...string) string {
 
 // runErr executes an `entire` subcommand in dir and returns any error.
 func runErr(dir string, args ...string) error {
-	cmd := exec.Command(BinPath(), args...)
+	cmd := execx.NonInteractive(context.Background(), BinPath(), args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "ENTIRE_TEST_TTY=0")
+	cmd.Env = os.Environ()
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -133,6 +153,12 @@ func ExplainCommit(dir, ref string) (string, error) {
 	return runOutput(dir, "explain", "--commit", ref)
 }
 
+// AttachWithEnv runs `entire attach <session-id> --agent <agent> --force`
+// with extra env vars.
+func AttachWithEnv(dir string, extraEnv []string, sessionID, agent string) (string, error) {
+	return runOutputEnv(dir, extraEnv, "attach", sessionID, "--agent", agent, "--force")
+}
+
 // Resume runs `entire resume <branch> --force` and returns the output.
 func Resume(dir, branch string) (string, error) {
 	return runOutput(dir, "resume", branch, "--force")
@@ -149,10 +175,9 @@ func runOutput(dir string, args ...string) (string, error) {
 }
 
 func runOutputEnv(dir string, extraEnv []string, args ...string) (string, error) {
-	cmd := exec.Command(BinPath(), args...)
+	cmd := execx.NonInteractive(context.Background(), BinPath(), args...)
 	cmd.Dir = dir
-	cmd.Env = append(append([]string{}, os.Environ()...), "ENTIRE_TEST_TTY=0")
-	cmd.Env = append(cmd.Env, extraEnv...)
+	cmd.Env = append(append([]string{}, os.Environ()...), extraEnv...)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

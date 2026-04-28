@@ -300,6 +300,11 @@ type WriteCommittedOptions struct {
 	// Uses json.RawMessage to avoid importing session package.
 	PromptAttributionsJSON json.RawMessage
 
+	// CombinedAttribution is holistic attribution across all sessions.
+	// Used during migration to preserve v1 root summary attribution.
+	// During normal condensation this is nil (computed post-commit via UpdateCheckpointSummary).
+	CombinedAttribution *InitialAttribution
+
 	// Summary is an optional AI-generated summary for this checkpoint.
 	// This field may be nil when:
 	//   - summarization is disabled in settings

@@ -174,6 +174,10 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 			return fmt.Errorf("v2 checkpoint %s disappeared during migration", info.CheckpointID)
 		}
 
+		// Clean up v1-named transcript files (full.jsonl, content_hash.txt) that older
+		// CLI versions may have written to /full/current before the rename to raw_transcript.
+		cleanupV1TranscriptFiles(ctx, repo, v2Store, info.CheckpointID, len(currentV2.Sessions))
+
 		backfillErr := backfillCompactTranscripts(ctx, v1Store, v2Store, info, currentV2, out, prefix)
 		if errors.Is(backfillErr, errAlreadyMigrated) && repaired {
 			fmt.Fprintf(out, "%s repaired partial v2 checkpoint state\n", prefix)
@@ -206,7 +210,7 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 			shouldCopyTaskMetadata = true
 		}
 
-		opts := buildMigrateWriteOpts(content, info)
+		opts := buildMigrateWriteOpts(content, info, summary.CombinedAttribution)
 
 		compacted := tryCompactTranscript(ctx, content.Transcript, content.Metadata)
 		if compacted != nil {
@@ -392,7 +396,7 @@ func backfillCompactTranscripts(ctx context.Context, v1Store *checkpoint.GitStor
 	return nil
 }
 
-func buildMigrateWriteOpts(content *checkpoint.SessionContent, info checkpoint.CommittedInfo) checkpoint.WriteCommittedOptions {
+func buildMigrateWriteOpts(content *checkpoint.SessionContent, info checkpoint.CommittedInfo, combinedAttribution *checkpoint.InitialAttribution) checkpoint.WriteCommittedOptions {
 	m := content.Metadata
 
 	prompts := checkpoint.SplitPromptContent(content.Prompts)
@@ -414,6 +418,8 @@ func buildMigrateWriteOpts(content *checkpoint.SessionContent, info checkpoint.C
 		TokenUsage:                  m.TokenUsage,
 		SessionMetrics:              m.SessionMetrics,
 		InitialAttribution:          m.InitialAttribution,
+		PromptAttributionsJSON:      m.PromptAttributions,
+		CombinedAttribution:         combinedAttribution,
 		Summary:                     m.Summary,
 		CheckpointTranscriptStart:   m.GetTranscriptStart(),
 		TranscriptIdentifierAtStart: m.TranscriptIdentifierAtStart,
@@ -578,6 +584,19 @@ func resolveV1CheckpointTree(repo *git.Repository, cpID id.CheckpointID) (*objec
 	}
 
 	return cpTree, nil
+}
+
+// cleanupV1TranscriptFiles removes legacy v1-named transcript files (full.jsonl,
+// full.jsonl.*, content_hash.txt) from /full/current. Older CLI versions wrote
+// these before the rename to raw_transcript; they are inert but waste space.
+// Best-effort: failures are logged and do not block migration.
+func cleanupV1TranscriptFiles(ctx context.Context, _ *git.Repository, v2Store *checkpoint.V2GitStore, cpID id.CheckpointID, sessionCount int) {
+	if err := v2Store.CleanupV1TranscriptFiles(ctx, cpID, sessionCount); err != nil {
+		logging.Warn(ctx, "v1 transcript cleanup failed",
+			slog.String("checkpoint_id", string(cpID)),
+			slog.String("error", err.Error()),
+		)
+	}
 }
 
 func spliceTasksTreeToV2(ctx context.Context, repo *git.Repository, v2Store *checkpoint.V2GitStore, cpID id.CheckpointID, sessionIdx int, tasksTreeHash plumbing.Hash) error {

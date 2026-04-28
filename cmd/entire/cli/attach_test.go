@@ -230,6 +230,63 @@ func TestAttach_V2DualWriteEnabled(t *testing.T) {
 	}
 }
 
+func TestAttach_CheckpointsVersion2(t *testing.T) {
+	setupAttachTestRepo(t)
+
+	repoDir := mustGetwd(t)
+	setAttachCheckpointsV2Only(t, repoDir)
+
+	sessionID := "test-attach-v2-only"
+	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"create hello.txt"},"uuid":"uuid-1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Write","input":{"file_path":"hello.txt","content":"hello"}}]},"uuid":"uuid-2"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_1","content":"wrote file"}]},"uuid":"uuid-3"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]},"uuid":"uuid-4"}
+`)
+
+	var out bytes.Buffer
+	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true); err != nil {
+		t.Fatalf("runAttach failed: %v", err)
+	}
+
+	store, err := session.NewStateStore(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Load(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil || state.LastCheckpointID.IsEmpty() {
+		t.Fatal("expected attach to persist a checkpoint ID")
+	}
+
+	repo, err := git.PlainOpen(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cpPath := state.LastCheckpointID.Path()
+	if _, found := readFileFromRef(t, repo, paths.MetadataBranchName, cpPath+"/"+paths.MetadataFileName); found {
+		t.Fatalf("did not expect %s metadata for %s when checkpoints_version is 2", paths.MetadataBranchName, cpPath)
+	}
+
+	mainCompact, found := readFileFromRef(t, repo, paths.V2MainRefName, cpPath+"/0/"+paths.CompactTranscriptFileName)
+	if !found {
+		t.Fatalf("expected %s on %s", paths.CompactTranscriptFileName, paths.V2MainRefName)
+	}
+	if !strings.Contains(mainCompact, "create hello.txt") {
+		t.Errorf("compact transcript missing prompt, got:\n%s", mainCompact)
+	}
+
+	fullTranscript, found := readFileFromRef(t, repo, paths.V2FullCurrentRefName, cpPath+"/0/"+paths.V2RawTranscriptFileName)
+	if !found {
+		t.Fatalf("expected %s on %s", paths.V2RawTranscriptFileName, paths.V2FullCurrentRefName)
+	}
+	if !strings.Contains(fullTranscript, "hello.txt") {
+		t.Errorf("raw transcript missing file content, got:\n%s", fullTranscript)
+	}
+}
+
 func TestAttach_V2DualWriteDisabled(t *testing.T) {
 	setupAttachTestRepo(t)
 
