@@ -53,7 +53,6 @@ type sessionStartRaw struct {
 }
 
 // stopHookInputRaw is the JSON structure from Stop hooks.
-// IDE provides transcript_path; CLI sends null.
 // Both provide status and loop_count.
 type stopHookInputRaw struct {
 	// common
@@ -65,14 +64,15 @@ type stopHookInputRaw struct {
 	WorkspaceRoots []string `json:"workspace_roots"`
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
+	ComposerMode   string   `json:"composer_mode"`
 
 	// hook specific
-	Status    string      `json:"status"`
-	LoopCount json.Number `json:"loop_count"`
+	Status            string      `json:"status"`
+	LoopCount         json.Number `json:"loop_count"`
+	IsBackgroundAgent bool        `json:"is_background_agent"`
 }
 
 // sessionEndRaw is the JSON structure from SessionEnd hooks.
-// IDE provides transcript_path; CLI sends null.
 // Both provide reason, duration_ms, is_background_agent, final_status.
 type sessionEndRaw struct {
 	// common
@@ -84,6 +84,7 @@ type sessionEndRaw struct {
 	WorkspaceRoots []string `json:"workspace_roots"`
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
+	ComposerMode   string   `json:"composer_mode"`
 
 	// hook specific
 	Reason            string      `json:"reason"`
@@ -103,9 +104,11 @@ type beforeSubmitPromptInputRaw struct {
 	WorkspaceRoots []string `json:"workspace_roots"`
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
+	ComposerMode   string   `json:"composer_mode"`
 
 	// hook specific
-	Prompt string `json:"prompt"`
+	Prompt            string `json:"prompt"`
+	IsBackgroundAgent bool   `json:"is_background_agent"`
 }
 
 // preCompactHookInputRaw is the JSON structure from PreCompact hook.
@@ -119,6 +122,7 @@ type preCompactHookInputRaw struct {
 	WorkspaceRoots []string `json:"workspace_roots"`
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
+	ComposerMode   string   `json:"composer_mode"`
 
 	// hook specific
 	Trigger             string      `json:"trigger"`               // "auto" | "manual",
@@ -128,6 +132,7 @@ type preCompactHookInputRaw struct {
 	MessageCount        json.Number `json:"message_count"`         // 45,
 	MessagesToCompact   json.Number `json:"messages_to_compact"`   // : 30,
 	IsFirstCompaction   bool        `json:"is_first_compaction"`   // true | false
+	IsBackgroundAgent   bool        `json:"is_background_agent"`
 }
 
 // subagentStartHookInputRaw is the JSON structure from SubagentStart[Task] hook.

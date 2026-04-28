@@ -62,7 +62,7 @@ All hooks share these common fields:
 }
 ```
 
-**Important:** `transcript_path` is **always `null`** in CLI mode. The existing cursor agent handles this via `resolveTranscriptRef()` which computes the path dynamically from the repo root.
+**Important:** `transcript_path` is not a reliable IDE-vs-CLI discriminator. Cursor Agent may send `null` or a concrete transcript path depending on mode/version. The existing cursor agent handles missing paths via `resolveTranscriptRef()` which computes the path dynamically from the repo root.
 
 #### sessionStart additional fields
 
@@ -206,7 +206,7 @@ Note: IDE also sends `composer_mode: "agent"` — CLI omits this field.
 ## Gaps & Limitations
 
 1. **`beforeSubmitPrompt` and `stop` don't fire in `-p` mode**: This is the main limitation. In headless mode, Entire won't get TurnStart/TurnEnd events. Checkpoints can only be created via sessionStart/sessionEnd flow. E2E tests using `RunPrompt` won't trigger the normal TurnStart→TurnEnd checkpoint flow.
-2. **`transcript_path` is always `null` in CLI mode**: Handled by existing `resolveTranscriptRef()` which computes the path dynamically.
+2. **`transcript_path` may be `null` in CLI mode**: Handled by existing `resolveTranscriptRef()` which computes the path dynamically. Do not use transcript path presence to distinguish Cursor IDE from Cursor Agent.
 3. **No `composer_mode` field in CLI**: IDE sends `"agent"`, CLI omits it. Not impactful.
 4. **Transcript lacks tool_use blocks**: Modified file detection relies on git status (already handled).
 5. **`tool_use_id` format**: Contains newline (`call_xxx\nctc_xxx`) — may need sanitization if used as identifiers.

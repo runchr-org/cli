@@ -21,7 +21,7 @@ func TestParseHookEvent_SessionStart(t *testing.T) {
 	t.Parallel()
 
 	ag := &CursorAgent{}
-	input := `{"conversation_id": "test-session-123", "transcript_path": "/tmp/transcript.jsonl"}`
+	input := `{"conversation_id": "test-session-123", "transcript_path": "/tmp/transcript.jsonl", "composer_mode": "agent"}`
 
 	event, err := ag.ParseHookEvent(context.Background(), HookNameSessionStart, strings.NewReader(input))
 
@@ -322,7 +322,7 @@ func TestParseHookEvent_TurnEnd_IDEWithTranscriptPath(t *testing.T) {
 
 	ag := &CursorAgent{}
 	// IDE stop hook: transcript_path provided — should use it as-is
-	input := `{"conversation_id": "ide-session", "transcript_path": "/home/user/.cursor/projects/proj/agent-transcripts/ide-session/ide-session.jsonl", "status": "completed", "loop_count": 5}`
+	input := `{"conversation_id": "ide-session", "transcript_path": "/home/user/.cursor/projects/proj/agent-transcripts/ide-session/ide-session.jsonl", "model": "default", "status": "completed", "loop_count": 5}`
 
 	event, err := ag.ParseHookEvent(context.Background(), HookNameStop, strings.NewReader(input))
 
@@ -335,6 +335,23 @@ func TestParseHookEvent_TurnEnd_IDEWithTranscriptPath(t *testing.T) {
 	}
 	if event.Metadata[MetadataKeyClient] != MetadataClientIDE {
 		t.Errorf("expected cursor client %q, got %q", MetadataClientIDE, event.Metadata[MetadataKeyClient])
+	}
+}
+
+func TestParseHookEvent_TurnEnd_AgentWithTranscriptPath(t *testing.T) {
+	t.Parallel()
+
+	ag := &CursorAgent{}
+	input := `{"conversation_id": "agent-session", "transcript_path": "/home/user/.cursor/projects/proj/agent-transcripts/agent-session.jsonl", "model": "` + testModel + `", "status": "completed", "loop_count": 2}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameStop, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	require.NotNil(t, event, "expected event, got nil")
+	if event.Metadata[MetadataKeyClient] != MetadataClientAgent {
+		t.Errorf("expected cursor client %q, got %q", MetadataClientAgent, event.Metadata[MetadataKeyClient])
 	}
 }
 
