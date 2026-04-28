@@ -61,9 +61,6 @@ func runWhy(ctx context.Context, w io.Writer, _ io.Writer, opts whyOptions) (err
 		}
 		return errors.New("interactive file browser is not implemented yet")
 	}
-	if canUseTUI {
-		return errors.New("interactive why overview is not implemented yet")
-	}
 
 	_, resolveSpan := perf.Start(ctx, "resolve_path")
 	repoRoot, gitPath, _, err := resolveWhyPath(ctx, opts.Path)
@@ -77,6 +74,17 @@ func runWhy(ctx context.Context, w io.Writer, _ io.Writer, opts whyOptions) (err
 	data, err := loadWhyViewData(ctx, repoRoot, gitPath)
 	if err != nil {
 		return err
+	}
+
+	if canUseTUI {
+		_, renderSpan := perf.Start(ctx, "render_tui")
+		if err := runWhyTUI(ctx, w, data); err != nil {
+			renderSpan.RecordError(err)
+			renderSpan.End()
+			return err
+		}
+		renderSpan.End()
+		return nil
 	}
 
 	_, renderSpan := perf.Start(ctx, "render_static")

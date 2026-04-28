@@ -60,22 +60,43 @@ func TestWhyCmd_NoPathNonInteractiveErrors(t *testing.T) {
 	}
 }
 
-func TestWhyCmd_InteractiveOverviewNotImplementedBeforePathResolution(t *testing.T) {
+func TestWhyCmd_InteractiveOverviewLoadsFileAndStartsTUI(t *testing.T) {
+	repoDir := t.TempDir()
+	testutil.InitRepo(t, repoDir)
+	testutil.WriteFile(t, repoDir, "file.go", "package main\n")
+	testutil.GitAdd(t, repoDir, "file.go")
+	testutil.GitCommit(t, repoDir, "initial")
+
+	t.Chdir(repoDir)
+	paths.ClearWorktreeRootCache()
+	t.Cleanup(paths.ClearWorktreeRootCache)
+
 	originalCanRunWhyTUI := canRunWhyTUI
 	canRunWhyTUI = func(io.Writer) bool { return true }
 	t.Cleanup(func() { canRunWhyTUI = originalCanRunWhyTUI })
+
+	originalRunWhyTUI := runWhyTUI
+	var gotData whyViewData
+	runWhyTUI = func(_ context.Context, _ io.Writer, data whyViewData) error {
+		gotData = data
+		return nil
+	}
+	t.Cleanup(func() { runWhyTUI = originalRunWhyTUI })
 
 	err := runWhy(
 		context.Background(),
 		&bytes.Buffer{},
 		&bytes.Buffer{},
-		whyOptions{Path: filepath.Join(t.TempDir(), "outside.go")},
+		whyOptions{Path: "file.go"},
 	)
-	if err == nil {
-		t.Fatal("expected interactive placeholder error")
+	if err != nil {
+		t.Fatalf("runWhy() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "interactive why overview is not implemented yet") {
-		t.Fatalf("expected interactive overview placeholder, got: %v", err)
+	if gotData.GitPath != "file.go" {
+		t.Fatalf("TUI GitPath = %q, want file.go", gotData.GitPath)
+	}
+	if len(gotData.Rows) != 1 {
+		t.Fatalf("TUI rows = %d, want 1", len(gotData.Rows))
 	}
 }
 

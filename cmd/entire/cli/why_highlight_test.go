@@ -23,6 +23,14 @@ func TestWhyHighlight_KnownExtensionUsesLexer(t *testing.T) {
 	}
 }
 
+func TestWhyHighlight_UsesDarkDefaultStyle(t *testing.T) {
+	t.Parallel()
+
+	if got := whyHighlightStyle().Name; got != whyHighlightStyleName {
+		t.Fatalf("highlight style = %q, want %q", got, whyHighlightStyleName)
+	}
+}
+
 func TestWhyHighlight_UnknownExtensionReturnsPlainCode(t *testing.T) {
 	t.Parallel()
 

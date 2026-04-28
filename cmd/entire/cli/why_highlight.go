@@ -10,6 +10,8 @@ import (
 	"github.com/alecthomas/chroma/v2/styles"
 )
 
+const whyHighlightStyleName = "github-dark"
+
 func highlightWhyCodeLines(filename string, lines []string, colorEnabled bool) []string {
 	if len(lines) == 0 {
 		return nil
@@ -60,14 +62,17 @@ func renderWhyHighlightedTokenLine(tokens []chroma.Token) (string, bool) {
 		return "", true
 	}
 
-	style := styles.Get("github")
-	if style == nil {
-		style = styles.Fallback
-	}
-
 	var buf bytes.Buffer
-	if err := formatters.TTY16m.Format(&buf, style, chroma.Literator(lineTokens...)); err != nil {
+	if err := formatters.TTY16m.Format(&buf, whyHighlightStyle(), chroma.Literator(lineTokens...)); err != nil {
 		return "", false
 	}
 	return buf.String(), true
+}
+
+func whyHighlightStyle() *chroma.Style {
+	style := styles.Get(whyHighlightStyleName)
+	if style == nil {
+		style = styles.Fallback
+	}
+	return style
 }
