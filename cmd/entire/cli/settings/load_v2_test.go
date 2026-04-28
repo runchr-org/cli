@@ -12,6 +12,7 @@ import (
 const (
 	debugLevel       = "debug"
 	providerClaudeCC = "claude-code"
+	modelSonnet      = "sonnet"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -414,14 +415,14 @@ func TestSynthesizeFromLegacy_SummaryGeneration(t *testing.T) {
 				Enabled: true,
 				SummaryGeneration: &SummaryGenerationSettings{
 					Provider: providerClaudeCC,
-					Model:    "sonnet",
+					Model:    modelSonnet,
 				},
 			},
 			check: func(t *testing.T, got *Settings) {
 				if got.SummaryGeneration == nil {
 					t.Fatal("SummaryGeneration = nil")
 				}
-				if got.SummaryGeneration.Provider != providerClaudeCC || got.SummaryGeneration.Model != "sonnet" {
+				if got.SummaryGeneration.Provider != providerClaudeCC || got.SummaryGeneration.Model != modelSonnet {
 					t.Fatalf("SummaryGeneration = %+v, want claude-code/sonnet", got.SummaryGeneration)
 				}
 			},
@@ -660,7 +661,7 @@ func TestSynthesizeFromLegacy_RoundTripFromBytes(t *testing.T) {
 		Telemetry: boolPtr(true),
 		SummaryGeneration: &SummaryGenerationConfig{
 			Provider:       providerClaudeCC,
-			Model:          "sonnet",
+			Model:          modelSonnet,
 			TimeoutSeconds: 45,
 		},
 	}
@@ -872,7 +873,7 @@ func TestSettings_Validate(t *testing.T) {
 			s: &Settings{
 				Schema:            CurrentSchemaVersion,
 				Checkpoints:       CheckpointsConfig{Primary: BackendConfig{Type: BackendTypeV1}},
-				SummaryGeneration: &SummaryGenerationConfig{Model: "sonnet"},
+				SummaryGeneration: &SummaryGenerationConfig{Model: modelSonnet},
 			},
 			wantErr: "summary_generation.model",
 		},
@@ -986,7 +987,7 @@ func TestLoadV2_LegacyOverrideSummaryTimeoutOnly(t *testing.T) {
 	if got.SummaryGeneration.Provider != providerClaudeCC {
 		t.Fatalf("Provider = %q, want %q (preserved)", got.SummaryGeneration.Provider, providerClaudeCC)
 	}
-	if got.SummaryGeneration.Model != "sonnet" {
+	if got.SummaryGeneration.Model != modelSonnet {
 		t.Fatalf("Model = %q, want sonnet (preserved)", got.SummaryGeneration.Model)
 	}
 	if got.SummaryGeneration.TimeoutSeconds != 30 {
@@ -1016,7 +1017,7 @@ func TestLoadV2_LegacyOverrideSummaryProviderOnly(t *testing.T) {
 	if got.SummaryGeneration.Provider != "codex" {
 		t.Fatalf("Provider = %q, want codex (overridden)", got.SummaryGeneration.Provider)
 	}
-	if got.SummaryGeneration.Model != "sonnet" {
+	if got.SummaryGeneration.Model != modelSonnet {
 		t.Fatalf("Model = %q, want sonnet (preserved)", got.SummaryGeneration.Model)
 	}
 	if got.SummaryGeneration.TimeoutSeconds != 45 {
