@@ -242,7 +242,9 @@ func applyLegacyOverride(base *Settings, data []byte) error {
 	}
 
 	overlay := synthesizeFromLegacy(legacy)
-	applyTopLevelLegacyKeys(base, overlay, present)
+	if err := applyTopLevelLegacyKeys(base, legacy, overlay, present); err != nil {
+		return err
+	}
 
 	soRaw, ok := present["strategy_options"]
 	if !ok {
@@ -258,8 +260,11 @@ func applyLegacyOverride(base *Settings, data []byte) error {
 
 // applyTopLevelLegacyKeys copies overlay → base for top-level legacy keys
 // present in the override. Each branch maps one legacy key to its v2
-// destination.
-func applyTopLevelLegacyKeys(base, overlay *Settings, present map[string]json.RawMessage) {
+// destination. Pointer-typed nested fields (Redaction, SummaryGeneration)
+// merge granularly so an override that mentions only sub-fields preserves
+// the rest of the v2 base — wholesale replacement would silently erase
+// fields the user did not intend to change.
+func applyTopLevelLegacyKeys(base *Settings, legacy *EntireSettings, overlay *Settings, present map[string]json.RawMessage) error {
 	if _, ok := present["enabled"]; ok {
 		base.Enabled = overlay.Enabled
 	}
@@ -287,14 +292,66 @@ func applyTopLevelLegacyKeys(base, overlay *Settings, present map[string]json.Ra
 	if _, ok := present["sign_checkpoint_commits"]; ok {
 		base.Checkpoints.SignCommits = overlay.Checkpoints.SignCommits
 	}
-	if _, ok := present["redaction"]; ok {
-		base.Redaction = overlay.Redaction
+	if err := mergeLegacyRedactionOverride(base, present); err != nil {
+		return err
 	}
-	_, hasSummaryGen := present["summary_generation"]
-	_, hasSummaryTimeout := present["summary_timeout_seconds"]
-	if hasSummaryGen || hasSummaryTimeout {
-		base.SummaryGeneration = overlay.SummaryGeneration
+	return mergeLegacySummaryGenerationOverride(base, legacy, present)
+}
+
+// mergeLegacyRedactionOverride applies a legacy redaction override to the
+// v2 base granularly. Reuses the existing legacy mergeRedaction helper so
+// the per-PII-field merge logic stays in a single source of truth.
+func mergeLegacyRedactionOverride(base *Settings, present map[string]json.RawMessage) error {
+	redactRaw, ok := present["redaction"]
+	if !ok {
+		return nil
 	}
+	if base.Redaction == nil {
+		base.Redaction = &RedactionSettings{}
+	}
+	if err := mergeRedaction(base.Redaction, redactRaw); err != nil {
+		return fmt.Errorf("merging redaction override: %w", err)
+	}
+	return nil
+}
+
+// mergeLegacySummaryGenerationOverride applies a legacy summary-generation
+// override to the v2 base granularly. The legacy schema splits the timeout
+// into a top-level field and provider/model into a nested object; both
+// translate into the unified v2 SummaryGenerationConfig.
+//
+// Per-field presence preserves base values that the override does not
+// mention. For example, an override of just summary_timeout_seconds keeps
+// the v2 base's Provider and Model intact.
+func mergeLegacySummaryGenerationOverride(base *Settings, legacy *EntireSettings, present map[string]json.RawMessage) error {
+	sgRaw, hasSg := present["summary_generation"]
+	_, hasTimeout := present["summary_timeout_seconds"]
+	if !hasSg && !hasTimeout {
+		return nil
+	}
+	if base.SummaryGeneration == nil {
+		base.SummaryGeneration = &SummaryGenerationConfig{}
+	}
+	if hasTimeout {
+		base.SummaryGeneration.TimeoutSeconds = legacy.SummaryTimeoutSeconds
+	}
+	if !hasSg {
+		return nil
+	}
+	var sg map[string]json.RawMessage
+	if err := json.Unmarshal(sgRaw, &sg); err != nil {
+		return fmt.Errorf("merging summary_generation override: %w", err)
+	}
+	if legacy.SummaryGeneration == nil {
+		return nil
+	}
+	if _, ok := sg["provider"]; ok {
+		base.SummaryGeneration.Provider = legacy.SummaryGeneration.Provider
+	}
+	if _, ok := sg["model"]; ok {
+		base.SummaryGeneration.Model = legacy.SummaryGeneration.Model
+	}
+	return nil
 }
 
 // applyStrategyOptionLegacyKeys copies overlay → base for strategy_options

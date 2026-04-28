@@ -924,3 +924,100 @@ func TestLoadV2_RejectsInvalidV2(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// TestLoadV2_LegacyOverrideRedactionGranular is the regression test for
+// the wholesale-replacement bug on the legacy-override path: a legacy
+// override that mentions only one PII field should preserve the v2 base's
+// other PII fields and the rest of the redaction config.
+func TestLoadV2_LegacyOverrideRedactionGranular(t *testing.T) {
+	setupSettingsDir(t,
+		`{
+			"schema": 2,
+			"checkpoints": {"primary": {"type": "v2"}},
+			"redaction": {
+				"pii": {"enabled": true, "email": true, "phone": true, "address": true}
+			}
+		}`,
+		`{"redaction": {"pii": {"address": false}}}`,
+	)
+	got, err := LoadV2(context.Background())
+	if err != nil {
+		t.Fatalf("LoadV2: %v", err)
+	}
+	if got.Redaction == nil || got.Redaction.PII == nil {
+		t.Fatalf("Redaction = %+v, want populated", got.Redaction)
+	}
+	pii := got.Redaction.PII
+	if !pii.Enabled {
+		t.Fatal("PII.Enabled = false, want true (preserved from base)")
+	}
+	if pii.Email == nil || !*pii.Email {
+		t.Fatalf("PII.Email = %v, want true (preserved from base)", pii.Email)
+	}
+	if pii.Phone == nil || !*pii.Phone {
+		t.Fatalf("PII.Phone = %v, want true (preserved from base)", pii.Phone)
+	}
+	if pii.Address == nil || *pii.Address {
+		t.Fatalf("PII.Address = %v, want explicit false (overridden)", pii.Address)
+	}
+}
+
+// TestLoadV2_LegacyOverrideSummaryTimeoutOnly verifies that a legacy
+// summary_timeout_seconds-only override preserves the v2 base's provider
+// and model. Previously this was wholesale-replaced.
+func TestLoadV2_LegacyOverrideSummaryTimeoutOnly(t *testing.T) {
+	setupSettingsDir(t,
+		`{
+			"schema": 2,
+			"checkpoints": {"primary": {"type": "v2"}},
+			"summary_generation": {"provider": "`+providerClaudeCC+`", "model": "sonnet", "timeout_seconds": 60}
+		}`,
+		`{"summary_timeout_seconds": 30}`,
+	)
+	got, err := LoadV2(context.Background())
+	if err != nil {
+		t.Fatalf("LoadV2: %v", err)
+	}
+	if got.SummaryGeneration == nil {
+		t.Fatal("SummaryGeneration = nil, want preserved")
+	}
+	if got.SummaryGeneration.Provider != providerClaudeCC {
+		t.Fatalf("Provider = %q, want %q (preserved)", got.SummaryGeneration.Provider, providerClaudeCC)
+	}
+	if got.SummaryGeneration.Model != "sonnet" {
+		t.Fatalf("Model = %q, want sonnet (preserved)", got.SummaryGeneration.Model)
+	}
+	if got.SummaryGeneration.TimeoutSeconds != 30 {
+		t.Fatalf("TimeoutSeconds = %d, want 30 (overridden)", got.SummaryGeneration.TimeoutSeconds)
+	}
+}
+
+// TestLoadV2_LegacyOverrideSummaryProviderOnly verifies that an override
+// of just summary_generation.provider preserves the v2 base's existing
+// timeout and only updates the explicitly-mentioned field.
+func TestLoadV2_LegacyOverrideSummaryProviderOnly(t *testing.T) {
+	setupSettingsDir(t,
+		`{
+			"schema": 2,
+			"checkpoints": {"primary": {"type": "v2"}},
+			"summary_generation": {"provider": "`+providerClaudeCC+`", "model": "sonnet", "timeout_seconds": 45}
+		}`,
+		`{"summary_generation": {"provider": "codex"}}`,
+	)
+	got, err := LoadV2(context.Background())
+	if err != nil {
+		t.Fatalf("LoadV2: %v", err)
+	}
+	if got.SummaryGeneration == nil {
+		t.Fatal("SummaryGeneration = nil")
+	}
+	if got.SummaryGeneration.Provider != "codex" {
+		t.Fatalf("Provider = %q, want codex (overridden)", got.SummaryGeneration.Provider)
+	}
+	if got.SummaryGeneration.Model != "sonnet" {
+		t.Fatalf("Model = %q, want sonnet (preserved)", got.SummaryGeneration.Model)
+	}
+	if got.SummaryGeneration.TimeoutSeconds != 45 {
+		t.Fatalf("TimeoutSeconds = %d, want 45 (preserved)", got.SummaryGeneration.TimeoutSeconds)
+	}
+}

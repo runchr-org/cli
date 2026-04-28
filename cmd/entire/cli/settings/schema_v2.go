@@ -6,6 +6,8 @@ package settings
 import (
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 // CurrentSchemaVersion is the schema version emitted by v2 writers.
@@ -156,11 +158,22 @@ type SummaryGenerationConfig struct {
 
 // knownBackendTypes is the set of backend type identifiers Validate accepts.
 // Kept here next to BackendConfig so adding a new backend type is a single
-// place to update.
+// place to update — Validate's error messages format from this map.
 var knownBackendTypes = map[string]struct{}{
 	BackendTypeV1:    {},
 	BackendTypeV2:    {},
 	BackendTypeGmeta: {},
+}
+
+// knownBackendTypesList returns the backend types in sorted order for use
+// in error messages. Sorting keeps test assertions deterministic.
+func knownBackendTypesList() string {
+	names := make([]string, 0, len(knownBackendTypes))
+	for n := range knownBackendTypes {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // Validate checks the Settings for semantic correctness beyond what JSON
@@ -168,9 +181,10 @@ var knownBackendTypes = map[string]struct{}{
 // configurations at load time rather than at first use.
 //
 // Current rules:
-//   - Schema must be CurrentSchemaVersion (loaders accept >= but writers
-//     emit exactly the current value; older loaders rejecting newer files
-//     is a separate concern handled by isSchemaV2).
+//   - Schema must be exactly CurrentSchemaVersion. Writers emit only the
+//     current value, and Validate rejects others. (isSchemaV2 accepts >=
+//     as a shape probe, but strict decode plus this check enforce the
+//     actual contract.)
 //   - Checkpoints.Primary.Type must be a known backend.
 //   - Each Mirror's Type must be a known backend.
 //   - SummaryGeneration.Model requires SummaryGeneration.Provider, matching
@@ -183,11 +197,11 @@ func (s *Settings) Validate() error {
 		return fmt.Errorf("settings: schema = %d, want %d", s.Schema, CurrentSchemaVersion)
 	}
 	if _, ok := knownBackendTypes[s.Checkpoints.Primary.Type]; !ok {
-		return fmt.Errorf("checkpoints.primary.type = %q: must be one of v1, v2, gmeta", s.Checkpoints.Primary.Type)
+		return fmt.Errorf("checkpoints.primary.type = %q: must be one of %s", s.Checkpoints.Primary.Type, knownBackendTypesList())
 	}
 	for i, m := range s.Checkpoints.Mirrors {
 		if _, ok := knownBackendTypes[m.Type]; !ok {
-			return fmt.Errorf("checkpoints.mirrors[%d].type = %q: must be one of v1, v2, gmeta", i, m.Type)
+			return fmt.Errorf("checkpoints.mirrors[%d].type = %q: must be one of %s", i, m.Type, knownBackendTypesList())
 		}
 	}
 	if s.SummaryGeneration != nil && s.SummaryGeneration.Model != "" && s.SummaryGeneration.Provider == "" {
