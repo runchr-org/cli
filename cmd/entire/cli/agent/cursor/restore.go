@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/entireio/cli/cmd/entire/cli/validation"
 )
 
 // WorkspaceHash returns the Cursor workspace hash for a project path.
@@ -44,6 +46,12 @@ func WorkspaceSlug(projectPath string) string {
 // matching Cursor's own MD5(project_path) convention — run rewind/resume
 // from the repo that originally hosted the session.
 func (c *CursorAgent) RestoreCheckpointFiles(ctx context.Context, sessionID string, files map[string][]byte) error {
+	// Defense-in-depth: sessionID is path-joined into ~/.cursor/chats/<hash>/<sessionID>/.
+	// Local writes already validate, but a checkpoint pulled from a remote could carry
+	// a malicious sessionID that escapes the chats dir via filepath.Join's path cleaning.
+	if err := validation.ValidateSessionID(sessionID); err != nil {
+		return fmt.Errorf("cursor restore: %w", err)
+	}
 	target, err := cursorTargetPaths(sessionID)
 	if err != nil {
 		return err

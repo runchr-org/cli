@@ -8,6 +8,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6"
@@ -49,9 +50,10 @@ func TestCreateRedactedBlob_OpaqueArchive_NotRedacted(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tempDir := t.TempDir()
-			repo, err := git.PlainInit(tempDir, false)
+			testutil.InitRepo(t, tempDir)
+			repo, err := git.PlainOpen(tempDir)
 			if err != nil {
-				t.Fatalf("git init: %v", err)
+				t.Fatalf("git open: %v", err)
 			}
 			filePath := filepath.Join(tempDir, tc.filename)
 			if err := os.WriteFile(filePath, tc.content, 0o600); err != nil {
@@ -89,9 +91,10 @@ func TestWriteCommitted_ReadSessionContent_RoundtripsExtraFiles(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
-	repo, err := git.PlainInit(tempDir, false)
+	testutil.InitRepo(t, tempDir)
+	repo, err := git.PlainOpen(tempDir)
 	if err != nil {
-		t.Fatalf("git init: %v", err)
+		t.Fatalf("git open: %v", err)
 	}
 	worktree, err := repo.Worktree()
 	if err != nil {

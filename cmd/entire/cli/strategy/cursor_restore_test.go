@@ -16,6 +16,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/cursor"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing/object"
@@ -35,9 +36,10 @@ func TestRewind_RestoresCursorChatArchive(t *testing.T) {
 	t.Chdir(dir)
 	paths.ClearWorktreeRootCache()
 
-	repo, err := git.PlainInit(dir, false)
+	testutil.InitRepo(t, dir)
+	repo, err := git.PlainOpen(dir)
 	if err != nil {
-		t.Fatalf("git init: %v", err)
+		t.Fatalf("git open: %v", err)
 	}
 	worktree, err := repo.Worktree()
 	if err != nil {
@@ -181,9 +183,10 @@ func TestRewind_RestoresCursorChatArchiveV3(t *testing.T) {
 	t.Chdir(dir)
 	paths.ClearWorktreeRootCache()
 
-	repo, err := git.PlainInit(dir, false)
+	testutil.InitRepo(t, dir)
+	repo, err := git.PlainOpen(dir)
 	if err != nil {
-		t.Fatalf("git init: %v", err)
+		t.Fatalf("git open: %v", err)
 	}
 	worktree, err := repo.Worktree()
 	if err != nil {

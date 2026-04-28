@@ -37,7 +37,7 @@ func seedStoreDB(t *testing.T, home string, metaValue []byte, blobs map[string][
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	if _, err := db.ExecContext(context.Background(),`
+	if _, err := db.ExecContext(context.Background(), `
 		CREATE TABLE meta  (key TEXT PRIMARY KEY, value TEXT);
 		CREATE TABLE blobs (id  TEXT PRIMARY KEY, data BLOB);
 	`); err != nil {
@@ -45,12 +45,12 @@ func seedStoreDB(t *testing.T, home string, metaValue []byte, blobs map[string][
 	}
 	if metaValue != nil {
 		// Cursor stores meta.value as hex-ASCII of the JSON bytes.
-		if _, err := db.ExecContext(context.Background(),"INSERT INTO meta(key, value) VALUES('0', ?)", hex.EncodeToString(metaValue)); err != nil {
+		if _, err := db.ExecContext(context.Background(), "INSERT INTO meta(key, value) VALUES('0', ?)", hex.EncodeToString(metaValue)); err != nil {
 			t.Fatalf("insert meta: %v", err)
 		}
 	}
 	for id, data := range blobs {
-		if _, err := db.ExecContext(context.Background(),"INSERT INTO blobs(id, data) VALUES(?, ?)", id, data); err != nil {
+		if _, err := db.ExecContext(context.Background(), "INSERT INTO blobs(id, data) VALUES(?, ?)", id, data); err != nil {
 			t.Fatalf("insert blob %s: %v", id, err)
 		}
 	}
@@ -170,11 +170,11 @@ func TestExportChatArchive_RedactsBlobContent(t *testing.T) {
 	treeNode := []byte(`{"latestRootBlobId":"958e728654e1e5e7b019e874d9045f53ba89b36af97e785f023ea8963e961c45"}`)
 
 	seedStoreDB(t, tmp, []byte(`{"agentId":"x"}`), map[string][]byte{
-		"chat-string":     stringContent,
-		"chat-array":      arrayContent,
-		"chat-tool-use":   toolUseContent,
-		"wrapped-binary":  wrappedFrame,
-		"tree-node":       treeNode,
+		"chat-string":    stringContent,
+		"chat-array":     arrayContent,
+		"chat-tool-use":  toolUseContent,
+		"wrapped-binary": wrappedFrame,
+		"tree-node":      treeNode,
 	})
 
 	data, err := ExportChatArchive(context.Background(), testAgentID)

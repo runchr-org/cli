@@ -1075,11 +1075,19 @@ func readExtraSessionFiles(sessionTree *object.Tree) map[string][]byte {
 		if standardSessionFiles[f.Name] {
 			return nil
 		}
-		content, err := f.Contents()
+		// Use Reader, not Contents(): Contents() returns string, which loses raw
+		// bytes for any non-UTF8 file. ExtraFiles is typed as []byte; mirrors the
+		// shadow-branch path in extractExtraFilesFromTree.
+		reader, err := f.Reader()
 		if err != nil {
 			return nil //nolint:nilerr // best-effort: skip unreadable files
 		}
-		extras[f.Name] = []byte(content)
+		content, err := io.ReadAll(reader)
+		_ = reader.Close()
+		if err != nil {
+			return nil //nolint:nilerr // best-effort: skip unreadable files
+		}
+		extras[f.Name] = content
 		return nil
 	})
 	if len(extras) == 0 {
@@ -1802,8 +1810,11 @@ func validateExtraFileRelPath(relPath string) error {
 	if strings.ContainsAny(relPath, "/\\") {
 		return fmt.Errorf("extra file relPath contains a path separator: %q", relPath)
 	}
-	if relPath == "." || relPath == ".." || strings.Contains(relPath, "..") {
-		return fmt.Errorf("extra file relPath contains a traversal segment: %q", relPath)
+	// Reject only whole-segment traversal (".", ".."). Earlier path-separator
+	// check already guarantees the value is a single segment, so substring
+	// matching ".." would over-reject legitimate names like "foo..bar".
+	if relPath == "." || relPath == ".." {
+		return fmt.Errorf("extra file relPath is a traversal segment: %q", relPath)
 	}
 	return nil
 }
