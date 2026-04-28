@@ -253,16 +253,17 @@ func (c *CursorAgent) FormatResumeCommandForSession(ctx agent.ResumeCommandConte
 }
 
 func isCursorAgentCheckpoint(metadata map[string]string, model string) bool {
+	modelLooksLikeCursorAgent := model != "" && !strings.EqualFold(model, "default")
 	switch metadata[MetadataKeyClient] {
 	case MetadataClientAgent:
 		return true
 	case MetadataClientIDE:
-		return false
+		return modelLooksLikeCursorAgent
 	}
 	// Backward compatibility for checkpoints created before cursor_client was
 	// persisted: Cursor IDE historically reports model "default"; Cursor Agent
 	// reports the actual model name.
-	return model != "" && !strings.EqualFold(model, "default")
+	return modelLooksLikeCursorAgent
 }
 
 // sanitizePathForCursor converts a path to Cursor's project directory format.

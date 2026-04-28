@@ -112,6 +112,15 @@ func TestCursorAgent_FormatResumeCommandForSession(t *testing.T) {
 			want: "Open this project in Cursor.",
 		},
 		{
+			name: "misclassified cursor agent metadata is repaired by model",
+			ctx: agent.ResumeCommandContext{
+				SessionID: "session-123",
+				Model:     "gpt-5.2-codex-xhigh-fast",
+				Metadata:  map[string]string{MetadataKeyClient: MetadataClientIDE},
+			},
+			want: "agent --resume session-123",
+		},
+		{
 			name: "legacy cursor agent model returns CLI resume command",
 			ctx: agent.ResumeCommandContext{
 				SessionID: "session-123",
