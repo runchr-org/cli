@@ -1,0 +1,4 @@
+# Package-specific license overrides for dependencies go-licenses cannot classify.
+# Format: <module/package> <SPDX license>
+
+modernc.org/mathutil BSD-3-Clause

@@ -34,6 +34,35 @@ while IFS= read -r line; do
     fi
 done < "$ALLOWED_LICENSES_FILE"
 
+LICENSE_OVERRIDES_FILE=".license-overrides"
+license_override_for() {
+    local package="$1"
+    local line override_package override_license extra
+
+    if [ ! -f "$LICENSE_OVERRIDES_FILE" ]; then
+        return 1
+    fi
+
+    while IFS= read -r line; do
+        # Skip comments and empty lines
+        if [[ "$line" =~ ^[[:space:]]*# ]] || [[ -z "$line" ]]; then
+            continue
+        fi
+
+        read -r override_package override_license extra <<< "$line"
+        if [[ -z "$override_package" || -z "$override_license" || -n "$extra" ]]; then
+            echo -e "${RED}ERROR: invalid license override line: $line${NC}"
+            exit 1
+        fi
+        if [ "$override_package" = "$package" ]; then
+            printf '%s\n' "$override_license"
+            return 0
+        fi
+    done < "$LICENSE_OVERRIDES_FILE"
+
+    return 1
+}
+
 echo "Allowed licenses: ${ALLOWED_LICENSES[*]}"
 echo ""
 
@@ -48,6 +77,10 @@ while IFS=',' read -r package _url license; do
     # Skip internal packages
     if [[ "$package" == entire.io/* ]]; then
         continue
+    fi
+
+    if override_license=$(license_override_for "$package"); then
+        license="$override_license"
     fi
 
     # Check if license is allowed
