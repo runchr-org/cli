@@ -38,8 +38,8 @@ func TestRenderWhyStatic_IncludesEnrichedColumns(t *testing.T) {
 				Author:       "Pat Example",
 				CheckpointID: cpID,
 				Checkpoint: whyCheckpointInfo{
-					Found: true,
-					Agent: types.AgentType("Claude Code"),
+					Found:  true,
+					Agents: []types.AgentType{types.AgentType("Claude Code")},
 				},
 			},
 		},
@@ -84,6 +84,20 @@ func TestRenderWhyStatic_FallbackValuesForNonEntireCommit(t *testing.T) {
 		"-            -",
 		"package main",
 	)
+}
+
+func TestWhyStaticAgent_RendersAllCheckpointAgents(t *testing.T) {
+	t.Parallel()
+
+	info := whyCommitInfo{
+		Checkpoint: whyCheckpointInfo{
+			Agents: []types.AgentType{types.AgentType("claude"), types.AgentType("Codex")},
+		},
+	}
+
+	if got := whyStaticAgent(info); got != "Claude Code, Codex" {
+		t.Fatalf("whyStaticAgent() = %q, want Claude Code, Codex", got)
+	}
 }
 
 func TestWhyStaticMode_RendersFileForNonInteractiveOutput(t *testing.T) {

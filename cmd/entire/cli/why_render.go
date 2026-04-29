@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -14,7 +15,7 @@ const (
 	whyCommitColumnWidth     = 8
 	whyAuthorColumnWidth     = 16
 	whyCheckpointColumnWidth = 12
-	whyAgentColumnWidth      = 14
+	whyAgentColumnWidth      = 24
 )
 
 type whyViewData struct {
@@ -108,10 +109,37 @@ func whyStaticCheckpoint(info whyCommitInfo) string {
 }
 
 func whyStaticAgent(info whyCommitInfo) string {
-	if info.Checkpoint.Agent == "" {
+	agents := whyCheckpointAgentNames(info)
+	if len(agents) == 0 {
 		return "-"
 	}
-	return string(info.Checkpoint.Agent)
+	return strings.Join(agents, ", ")
+}
+
+func whyCheckpointAgentNames(info whyCommitInfo) []string {
+	ids := whyCheckpointAgentIDs(info)
+	labels := make([]string, 0, len(ids))
+	for _, id := range ids {
+		labels = append(labels, agentDisplayMap[id].Label)
+	}
+	return labels
+}
+
+func whyCheckpointAgentIDs(info whyCommitInfo) []string {
+	seen := make(map[string]struct{})
+	ids := make([]string, 0, len(info.Checkpoint.Agents))
+	for _, agent := range info.Checkpoint.Agents {
+		if agent == "" {
+			continue
+		}
+		id := normalizeAgentString(string(agent))
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids
 }
 
 func whyStaticColumn(value string, width int) string {

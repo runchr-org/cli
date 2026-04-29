@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,7 +42,7 @@ type whyCommitInfo struct {
 
 type whyCheckpointInfo struct {
 	Found            bool
-	Agent            types.AgentType
+	Agents           []types.AgentType
 	SessionCount     int
 	FilesTouched     []string
 	Summary          string
@@ -169,8 +170,14 @@ func readWhyCheckpointInfo(ctx context.Context, lookup *whyCheckpointLookup, cpI
 	}
 	resolveReaderSpan.End()
 
+	var agents []types.AgentType
 	_, sessionContentSpan := perf.Start(ctx, "why_checkpoint_read_metadata")
-	content, err := readLatestSessionMetadataAndPromptsForWhy(ctx, reader, cpID, summary)
+	content, err := readCheckpointSessionMetadataAndPromptsForWhy(ctx, reader, cpID, summary, func(_ int, content *checkpoint.SessionContent) {
+		if content == nil {
+			return
+		}
+		agents = appendUniqueWhyAgent(agents, content.Metadata.Agent)
+	})
 	if err != nil && !errors.Is(err, checkpoint.ErrNoTranscript) {
 		sessionContentSpan.RecordError(err)
 		sessionContentSpan.End()
@@ -181,6 +188,7 @@ func readWhyCheckpointInfo(ctx context.Context, lookup *whyCheckpointLookup, cpI
 	_, buildInfoSpan := perf.Start(ctx, "why_checkpoint_build_info")
 	info := whyCheckpointInfo{
 		Found:        true,
+		Agents:       agents,
 		SessionCount: len(summary.Sessions),
 		FilesTouched: append([]string(nil), summary.FilesTouched...),
 		Summary:      whyNotGeneratedSummary,
@@ -190,7 +198,6 @@ func readWhyCheckpointInfo(ctx context.Context, lookup *whyCheckpointLookup, cpI
 		return info, nil
 	}
 
-	info.Agent = content.Metadata.Agent
 	if content.Metadata.Summary != nil {
 		info.Summary = whyGeneratedSummary(content.Metadata.Summary)
 		info.SummaryGenerated = true
@@ -204,24 +211,60 @@ func readWhyCheckpointInfo(ctx context.Context, lookup *whyCheckpointLookup, cpI
 	return info, nil
 }
 
-func readLatestSessionMetadataAndPromptsForWhy(ctx context.Context, reader checkpoint.CommittedReader, checkpointID id.CheckpointID, summary *checkpoint.CheckpointSummary) (*checkpoint.SessionContent, error) {
+func readCheckpointSessionMetadataAndPromptsForWhy(
+	ctx context.Context,
+	reader checkpoint.CommittedReader,
+	checkpointID id.CheckpointID,
+	summary *checkpoint.CheckpointSummary,
+	onSession func(sessionIndex int, content *checkpoint.SessionContent),
+) (*checkpoint.SessionContent, error) {
 	if summary == nil || len(summary.Sessions) == 0 {
 		return nil, checkpoint.ErrCheckpointNotFound
 	}
 
 	latestIndex := len(summary.Sessions) - 1
-	if metadataReader, ok := reader.(whySessionMetadataAndPromptsReader); ok {
-		content, err := metadataReader.ReadSessionMetadataAndPrompts(ctx, checkpointID, latestIndex)
+	var latestContent *checkpoint.SessionContent
+	for sessionIndex := range summary.Sessions {
+		content, err := readSessionMetadataAndPromptsForWhy(ctx, reader, checkpointID, sessionIndex)
 		if err != nil {
-			return nil, fmt.Errorf("reading session %d metadata and prompts: %w", latestIndex, err)
+			if sessionIndex == latestIndex {
+				return nil, err
+			}
+			continue
+		}
+		if onSession != nil {
+			onSession(sessionIndex, content)
+		}
+		if sessionIndex == latestIndex {
+			latestContent = content
+		}
+	}
+	return latestContent, nil
+}
+
+func readSessionMetadataAndPromptsForWhy(ctx context.Context, reader checkpoint.CommittedReader, checkpointID id.CheckpointID, sessionIndex int) (*checkpoint.SessionContent, error) {
+	if metadataReader, ok := reader.(whySessionMetadataAndPromptsReader); ok {
+		content, err := metadataReader.ReadSessionMetadataAndPrompts(ctx, checkpointID, sessionIndex)
+		if err != nil {
+			return nil, fmt.Errorf("reading session %d metadata and prompts: %w", sessionIndex, err)
 		}
 		return content, nil
 	}
-	content, err := reader.ReadSessionContent(ctx, checkpointID, latestIndex)
+	content, err := reader.ReadSessionContent(ctx, checkpointID, sessionIndex)
 	if err != nil {
-		return nil, fmt.Errorf("reading session %d content: %w", latestIndex, err)
+		return nil, fmt.Errorf("reading session %d content: %w", sessionIndex, err)
 	}
 	return content, nil
+}
+
+func appendUniqueWhyAgent(agents []types.AgentType, agent types.AgentType) []types.AgentType {
+	if agent == "" {
+		return agents
+	}
+	if slices.Contains(agents, agent) {
+		return agents
+	}
+	return append(agents, agent)
 }
 
 func whyCommitSubject(message string) string {

@@ -209,7 +209,7 @@ func TestWhyTUIModel_GutterShowsBlameMetadataColumns(t *testing.T) {
 				AuthorTime:   time.Now().Add(-6 * 24 * time.Hour),
 				CheckpointID: cpID,
 				Checkpoint: whyCheckpointInfo{
-					Agent: types.AgentType("Claude Code"),
+					Agents: []types.AgentType{types.AgentType("Claude Code")},
 				},
 			},
 		},
@@ -217,28 +217,42 @@ func TestWhyTUIModel_GutterShowsBlameMetadataColumns(t *testing.T) {
 	m := newWhyTUIModel(data, statusStyles{colorEnabled: false, width: 140})
 
 	gutter := m.renderGutter(0, firstRow)
-	for _, want := range []string{"ago", "Example Author", "(claude)", "c56b7ac719", cpID.String(), "15"} {
+	for _, want := range []string{"ago", "Example Author", "(Claude Code)", "c56b7ac719", cpID.String(), "15"} {
 		if !strings.Contains(gutter, want) {
 			t.Fatalf("gutter missing %q: %q", want, gutter)
 		}
 	}
-	if !strings.Contains(gutter, "Example Author (claude) c56b7ac719 "+cpID.String()) {
+	if !strings.Contains(gutter, "Example Author (Claude Code) c56b7ac719 "+cpID.String()) {
 		t.Fatalf("gutter should use compact single-space metadata columns: %q", gutter)
 	}
-	for _, unwanted := range []string{"Example Author  ", "(claude)  ", "c56b7ac719  "} {
+	for _, unwanted := range []string{"Example Author  ", "(Claude Code)  ", "c56b7ac719  "} {
 		if strings.Contains(gutter, unwanted) {
 			t.Fatalf("gutter contains unnecessary internal spacing %q: %q", unwanted, gutter)
 		}
 	}
 
 	continuation := m.renderGutter(1, secondRow)
-	for _, hidden := range []string{"Example Author", "(claude)", "c56b7ac719", cpID.String()} {
+	for _, hidden := range []string{"Example Author", "(Claude Code)", "c56b7ac719", cpID.String()} {
 		if strings.Contains(continuation, hidden) {
 			t.Fatalf("continuation gutter should not repeat %q: %q", hidden, continuation)
 		}
 	}
 	if !strings.Contains(continuation, "16") {
 		t.Fatalf("continuation gutter missing line number: %q", continuation)
+	}
+}
+
+func TestWhyTUIAgents_RendersAllCheckpointAgents(t *testing.T) {
+	t.Parallel()
+
+	info := whyCommitInfo{
+		Checkpoint: whyCheckpointInfo{
+			Agents: []types.AgentType{types.AgentType("claude"), types.AgentType("Codex")},
+		},
+	}
+
+	if got := whyTUIAgents(info); got != "(Claude Code, Codex)" {
+		t.Fatalf("whyTUIAgents() = %q, want (Claude Code, Codex)", got)
 	}
 }
 

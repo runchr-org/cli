@@ -105,8 +105,8 @@ func TestWhyEnrichCommits_LocalCheckpointUsesSummaryMetadata(t *testing.T) {
 	if !info.Checkpoint.Found {
 		t.Fatal("checkpoint should be marked found")
 	}
-	if info.Checkpoint.Agent != types.AgentType("Claude Code") {
-		t.Fatalf("agent = %q, want Claude Code", info.Checkpoint.Agent)
+	if !slices.Equal(info.Checkpoint.Agents, []types.AgentType{"Claude Code"}) {
+		t.Fatalf("agents = %#v, want Claude Code", info.Checkpoint.Agents)
 	}
 	if info.Checkpoint.SessionCount != 1 {
 		t.Fatalf("session count = %d, want 1", info.Checkpoint.SessionCount)
@@ -122,6 +122,35 @@ func TestWhyEnrichCommits_LocalCheckpointUsesSummaryMetadata(t *testing.T) {
 	}
 	if !strings.Contains(info.Summary, "Rendered enriched metadata") {
 		t.Fatalf("summary = %q, want outcome", info.Summary)
+	}
+}
+
+func TestWhyEnrichCommits_LocalCheckpointIncludesAllSessionAgents(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repoDir := t.TempDir()
+	testutil.InitRepo(t, repoDir)
+	cpID := id.MustCheckpointID("a2b2c3d4e5f6")
+	hash := whyTestCommit(t, repoDir, "linked commit\n\nEntire-Checkpoint: "+cpID.String()+"\n", "package main\n")
+	repo := whyTestOpenRepo(t, repoDir)
+	whyTestWriteCommittedCheckpointWithAgent(ctx, t, repo, cpID, "session-1", types.AgentType("Claude Code"), nil, []string{"first prompt"})
+	whyTestWriteCommittedCheckpointWithAgent(ctx, t, repo, cpID, "session-2", types.AgentType("Codex"), &checkpoint.Summary{
+		Intent: "Explain multi-agent work",
+	}, []string{"second prompt"})
+	lookup := whyTestCheckpointLookup(repo)
+
+	infoByCommit := enrichWhyCommits(ctx, repo, lookup, []whyBlameBlock{{CommitHash: hash.String()}})
+	info, ok := infoByCommit[hash]
+	if !ok {
+		t.Fatalf("missing info for commit %s", hash)
+	}
+	wantAgents := []types.AgentType{"Claude Code", "Codex"}
+	if !slices.Equal(info.Checkpoint.Agents, wantAgents) {
+		t.Fatalf("agents = %#v, want %#v", info.Checkpoint.Agents, wantAgents)
+	}
+	if info.Checkpoint.SessionCount != 2 {
+		t.Fatalf("session count = %d, want 2", info.Checkpoint.SessionCount)
 	}
 }
 
@@ -271,16 +300,31 @@ func whyTestWriteCommittedCheckpoint(
 ) {
 	t.Helper()
 
+	whyTestWriteCommittedCheckpointWithAgent(ctx, t, repo, cpID, "session-1", types.AgentType("Claude Code"), summary, prompts)
+}
+
+func whyTestWriteCommittedCheckpointWithAgent(
+	ctx context.Context,
+	t *testing.T,
+	repo *git.Repository,
+	cpID id.CheckpointID,
+	sessionID string,
+	agent types.AgentType,
+	summary *checkpoint.Summary,
+	prompts []string,
+) {
+	t.Helper()
+
 	err := checkpoint.NewGitStore(repo).WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
 		CheckpointID:     cpID,
-		SessionID:        "session-1",
+		SessionID:        sessionID,
 		Strategy:         "manual-commit",
 		Branch:           "main",
 		Transcript:       redact.AlreadyRedacted([]byte("{}\n")),
 		Prompts:          prompts,
 		FilesTouched:     []string{"file.go", "other.go"},
 		CheckpointsCount: 2,
-		Agent:            types.AgentType("Claude Code"),
+		Agent:            agent,
 		Model:            "test-model",
 		Summary:          summary,
 	})

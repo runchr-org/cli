@@ -42,7 +42,7 @@ type whyTUIModel struct {
 const (
 	whyTUITimeMaxWidth       = 10
 	whyTUIAuthorMaxWidth     = 16
-	whyTUIAgentsMaxWidth     = 10
+	whyTUIAgentsMaxWidth     = 20
 	whyTUICommitWidth        = 10
 	whyTUICheckpointMaxWidth = 12
 )
@@ -279,10 +279,11 @@ func (m whyTUIModel) shouldShowBlameMetadata(rowIndex int, row whyBlameRow) bool
 }
 
 func (m whyTUIModel) renderBlameMetadataCompact(row whyBlameRow, hash plumbing.Hash, info whyCommitInfo) string {
-	agent := whyStaticAgent(info)
 	agentStyle := m.styles.agentID
-	if m.styles.colorEnabled && agent != "-" {
-		agentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(whyAgentDisplay(agent).Color))
+	if m.styles.colorEnabled {
+		if agentIDs := whyCheckpointAgentIDs(info); len(agentIDs) > 0 {
+			agentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(agentDisplayMap[agentIDs[0]].Color))
+		}
 	}
 
 	parts := []struct {
@@ -395,7 +396,8 @@ func (s whyTUIStyles) renderAgent(agent string) string {
 	if !s.colorEnabled || agent == "-" {
 		return agent
 	}
-	display := whyAgentDisplay(agent)
+	firstAgent, _, _ := strings.Cut(agent, ",")
+	display := whyAgentDisplay(strings.TrimSpace(firstAgent))
 	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(display.Color)).Render(agent)
 }
 
@@ -432,15 +434,11 @@ func whyTUIAuthor(row whyBlameRow, info whyCommitInfo) string {
 }
 
 func whyTUIAgents(info whyCommitInfo) string {
-	agent := whyStaticAgent(info)
-	if agent == "-" {
+	agents := whyCheckpointAgentNames(info)
+	if len(agents) == 0 {
 		return "-"
 	}
-	id := normalizeAgentString(agent)
-	if id == agentUnknown {
-		return "(" + truncateDisplayWidth(agent, max(whyTUIAgentsMaxWidth-2, 0), "...") + ")"
-	}
-	return truncateDisplayWidth("("+id+")", whyTUIAgentsMaxWidth, "...")
+	return truncateDisplayWidth("("+strings.Join(agents, ", ")+")", whyTUIAgentsMaxWidth, "...")
 }
 
 func whyTUICommit(hash plumbing.Hash) string {
