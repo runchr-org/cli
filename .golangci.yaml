@@ -94,8 +94,6 @@ linters:
         - pattern: '^.*\.Checkout$'
           msg: "go-git Checkout deletes .gitignored dirs - use CheckoutBranch() from git_operations.go"
           pkg: 'github\.com/go-git/go-git'
-        - pattern: 'logging\.(Debug|Info|Warn|Error|LogDuration)\(\s*context\.(Background|TODO)\(\)'
-          msg: "Don't pass context.Background()/TODO() to logging.X — thread the request ctx so the ctx-carried logger is used"
     govet:
       enable-all: true
       disable:

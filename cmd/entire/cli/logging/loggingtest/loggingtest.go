@@ -9,6 +9,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"testing"
 
@@ -64,9 +66,15 @@ func Records(t testing.TB, buf *bytes.Buffer) []Record {
 	}
 	var records []Record
 	dec := json.NewDecoder(bytes.NewReader(buf.Bytes()))
-	for dec.More() {
+	// Loop until io.EOF rather than json.Decoder.More: More() is defined for
+	// elements inside an array/object, and JSONL is a stream of top-level
+	// values. EOF is the well-defined terminator for that shape.
+	for {
 		var raw map[string]any
 		if err := dec.Decode(&raw); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
 			t.Fatalf("loggingtest: parse log line: %v", err)
 		}
 		rec := Record{Attrs: map[string]any{}}

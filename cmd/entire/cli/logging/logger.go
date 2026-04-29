@@ -1,5 +1,12 @@
 // Package logging provides structured logging for the Entire CLI using slog.
 //
+// Convention: pass the request-scoped ctx to every Debug/Info/Warn/Error/
+// LogDuration call. Never pass context.Background() or context.TODO() — those
+// bypass the ctx-carried logger and route to slog.Default (stderr text), which
+// silently drops session_id/component/agent enrichment. If a function needs
+// to log but lacks ctx, thread one through — that's almost always the right
+// fix and surfaces missing plumbing rather than hiding it.
+//
 // The logger lives in context.Context and is initialised once in main.go via
 // New + WithLogger. Commands and hooks enrich the ctx-logger with attrs via
 // WithSession / WithComponent / WithToolCall / WithAgent / WithParentSession.
@@ -185,13 +192,28 @@ func LogDuration(ctx context.Context, level slog.Level, msg string, start time.T
 	log(ctx, level, msg, allAttrs...)
 }
 
-// log routes a record to the ctx-carried logger.
+// log routes a record to the ctx-carried logger, materialising the typed-key
+// enrichment attrs (session_id, component, …) from ctx as slog.Attrs.
 //
 // The logger value in ctx is immutable for the lifetime of the request and the
 // file closer fires only after main.go's defer (i.e., after ExecuteContext
 // returns), so no synchronisation is needed here.
+//
+// Attrs are appended fresh per call rather than baked into the logger via
+// slog.With to avoid duplicate JSON keys when WithSession nests (slog.With
+// accumulates without deduplicating).
 func log(ctx context.Context, level slog.Level, msg string, attrs ...any) {
-	LoggerFromContext(ctx).Log(ctx, level, msg, attrs...)
+	ctxAttrs := attrsFromContext(ctx)
+	if len(ctxAttrs) == 0 {
+		LoggerFromContext(ctx).Log(ctx, level, msg, attrs...)
+		return
+	}
+	allAttrs := make([]any, 0, len(ctxAttrs)+len(attrs))
+	for _, a := range ctxAttrs {
+		allAttrs = append(allAttrs, a)
+	}
+	allAttrs = append(allAttrs, attrs...)
+	LoggerFromContext(ctx).Log(ctx, level, msg, allAttrs...)
 }
 
 // lazyWriter opens .entire/logs/entire.log on first write, falling back to
@@ -225,7 +247,10 @@ func (w *lazyWriter) Write(p []byte) (int, error) {
 }
 
 func (w *lazyWriter) resolveTarget() {
-	repoRoot, err := paths.WorktreeRoot(w.ctx)
+	// Use a non-cancellable view of the request ctx so SIGINT doesn't prevent
+	// us from opening the log file during shutdown — the user usually wants
+	// the shutdown trace to land on disk.
+	repoRoot, err := paths.WorktreeRoot(context.WithoutCancel(w.ctx))
 	if err != nil {
 		w.useStderr(fmt.Errorf("repo root not found: %w", err))
 		return
