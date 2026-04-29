@@ -42,7 +42,9 @@ func (m *mockAgent) ResolveSessionFile(sessionDir, agentSessionID string) string
 }
 
 //nolint:nilnil // Mock implementation
-func (m *mockAgent) ReadSession(_ *HookInput) (*AgentSession, error)       { return nil, nil }
+func (m *mockAgent) ReadSession(_ context.Context, _ *HookInput) (*AgentSession, error) {
+	return nil, nil
+}
 func (m *mockAgent) WriteSession(_ context.Context, _ *AgentSession) error { return nil }
 func (m *mockAgent) FormatResumeCommand(_ string) string                   { return "" }
 

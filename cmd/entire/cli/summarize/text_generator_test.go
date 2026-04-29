@@ -30,7 +30,7 @@ func (m *mockTextGenerator) ReassembleTranscript([][]byte) ([]byte, error) { ret
 func (m *mockTextGenerator) GetSessionID(*agent.HookInput) string          { return "" }
 func (m *mockTextGenerator) GetSessionDir(string) (string, error)          { return "", nil }
 func (m *mockTextGenerator) ResolveSessionFile(string, string) string      { return "" }
-func (m *mockTextGenerator) ReadSession(*agent.HookInput) (*agent.AgentSession, error) {
+func (m *mockTextGenerator) ReadSession(context.Context, *agent.HookInput) (*agent.AgentSession, error) {
 	return nil, nil //nolint:nilnil // test stub
 }
 func (m *mockTextGenerator) WriteSession(context.Context, *agent.AgentSession) error { return nil }

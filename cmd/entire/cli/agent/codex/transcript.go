@@ -3,6 +3,7 @@ package codex
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -197,7 +198,7 @@ func extractFilesFromApplyPatch(input string) []string {
 // CalculateTokenUsage computes token usage from the transcript starting at the given line offset.
 // Codex reports cumulative total_token_usage, so we compute the delta between the last
 // token_count at/before the offset and the last token_count after the offset.
-func (c *CodexAgent) CalculateTokenUsage(transcriptData []byte, fromOffset int) (*agent.TokenUsage, error) {
+func (c *CodexAgent) CalculateTokenUsage(_ context.Context, transcriptData []byte, fromOffset int) (*agent.TokenUsage, error) {
 	var baselineUsage *tokenUsageData // last token_count at or before offset
 	var lastUsage *tokenUsageData     // last token_count after offset
 	apiCalls := 0

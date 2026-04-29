@@ -138,7 +138,7 @@ func (g *GeminiCLIAgent) GetSessionBaseDir() (string, error) {
 
 // ReadSession reads a session from Gemini's storage (JSON transcript file).
 // The session data is stored in NativeData as raw JSON bytes.
-func (g *GeminiCLIAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession, error) {
+func (g *GeminiCLIAgent) ReadSession(_ context.Context, input *agent.HookInput) (*agent.AgentSession, error) {
 	if input.SessionRef == "" {
 		return nil, errors.New("session reference (transcript path) is required")
 	}

@@ -125,7 +125,7 @@ func (c *CursorAgent) GetSessionBaseDir() (string, error) {
 // Note: ModifiedFiles is left empty because Cursor's transcript does not contain
 // tool_use blocks for file detection. TranscriptAnalyzer extracts prompts and
 // summaries; file detection relies on git status.
-func (c *CursorAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession, error) {
+func (c *CursorAgent) ReadSession(_ context.Context, input *agent.HookInput) (*agent.AgentSession, error) {
 	if input.SessionRef == "" {
 		return nil, errors.New("session reference (transcript path) is required")
 	}

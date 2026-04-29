@@ -23,11 +23,13 @@ func (m *mockBaseAgent) ReadTranscript(string) ([]byte, error)        { return n
 func (m *mockBaseAgent) ChunkTranscript(context.Context, []byte, int) ([][]byte, error) {
 	return nil, nil
 }
-func (m *mockBaseAgent) ReassembleTranscript([][]byte) ([]byte, error)     { return nil, nil }
-func (m *mockBaseAgent) GetSessionID(*HookInput) string                    { return "" }
-func (m *mockBaseAgent) GetSessionDir(string) (string, error)              { return "", nil }
-func (m *mockBaseAgent) ResolveSessionFile(string, string) string          { return "" }
-func (m *mockBaseAgent) ReadSession(*HookInput) (*AgentSession, error)     { return nil, nil } //nolint:nilnil // test mock
+func (m *mockBaseAgent) ReassembleTranscript([][]byte) ([]byte, error) { return nil, nil }
+func (m *mockBaseAgent) GetSessionID(*HookInput) string                { return "" }
+func (m *mockBaseAgent) GetSessionDir(string) (string, error)          { return "", nil }
+func (m *mockBaseAgent) ResolveSessionFile(string, string) string      { return "" }
+func (m *mockBaseAgent) ReadSession(context.Context, *HookInput) (*AgentSession, error) {
+	return nil, nil //nolint:nilnil // test mock
+}
 func (m *mockBaseAgent) WriteSession(context.Context, *AgentSession) error { return nil }
 func (m *mockBaseAgent) FormatResumeCommand(string) string                 { return "" }
 
@@ -76,7 +78,9 @@ func (m *mockFullAgent) ExtractSummary(string) (string, error)        { return "
 func (m *mockFullAgent) PrepareTranscript(context.Context, string) error { return nil }
 
 // TokenCalculator
-func (m *mockFullAgent) CalculateTokenUsage([]byte, int) (*TokenUsage, error) { return nil, nil } //nolint:nilnil // test mock
+func (m *mockFullAgent) CalculateTokenUsage(context.Context, []byte, int) (*TokenUsage, error) {
+	return nil, nil //nolint:nilnil // test mock
+}
 
 // TextGenerator
 func (m *mockFullAgent) GenerateText(context.Context, string, string) (string, error) {

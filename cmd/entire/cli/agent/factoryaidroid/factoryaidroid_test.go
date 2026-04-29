@@ -170,7 +170,7 @@ func TestReadSession(t *testing.T) {
 	}
 
 	ag := &FactoryAIDroidAgent{}
-	session, err := ag.ReadSession(&agent.HookInput{
+	session, err := ag.ReadSession(t.Context(), &agent.HookInput{
 		SessionID:  "test-session-123",
 		SessionRef: transcriptPath,
 	})
@@ -198,7 +198,7 @@ func TestReadSession(t *testing.T) {
 func TestReadSession_EmptyRef(t *testing.T) {
 	t.Parallel()
 	ag := &FactoryAIDroidAgent{}
-	_, err := ag.ReadSession(&agent.HookInput{SessionID: "test"})
+	_, err := ag.ReadSession(t.Context(), &agent.HookInput{SessionID: "test"})
 	if err == nil {
 		t.Error("ReadSession() should error on empty SessionRef")
 	}
@@ -207,7 +207,7 @@ func TestReadSession_EmptyRef(t *testing.T) {
 func TestReadSession_MissingFile(t *testing.T) {
 	t.Parallel()
 	ag := &FactoryAIDroidAgent{}
-	_, err := ag.ReadSession(&agent.HookInput{
+	_, err := ag.ReadSession(t.Context(), &agent.HookInput{
 		SessionID:  "test",
 		SessionRef: "/nonexistent/path/transcript.jsonl",
 	})
@@ -306,7 +306,7 @@ func TestReadWriteSession_RoundTrip(t *testing.T) {
 	ag := &FactoryAIDroidAgent{}
 
 	// Read from original location
-	session, err := ag.ReadSession(&agent.HookInput{
+	session, err := ag.ReadSession(t.Context(), &agent.HookInput{
 		SessionID:  "round-trip-test",
 		SessionRef: originalPath,
 	})

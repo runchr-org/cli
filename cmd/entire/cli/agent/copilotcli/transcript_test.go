@@ -382,7 +382,7 @@ func TestCalculateTokenUsage_SessionShutdown(t *testing.T) {
 	)
 	content := []byte(strings.Join(lines, "\n") + "\n")
 
-	usage, err := ag.CalculateTokenUsage(content, 0)
+	usage, err := ag.CalculateTokenUsage(t.Context(), content, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestCalculateTokenUsage_MultiModel(t *testing.T) {
 	}
 	content := []byte(strings.Join(lines, "\n") + "\n")
 
-	usage, err := ag.CalculateTokenUsage(content, 0)
+	usage, err := ag.CalculateTokenUsage(t.Context(), content, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -445,7 +445,7 @@ func TestCalculateTokenUsage_EmptyModelMetrics(t *testing.T) {
 	}
 	content := []byte(strings.Join(lines, "\n") + "\n")
 
-	usage, err := ag.CalculateTokenUsage(content, 0)
+	usage, err := ag.CalculateTokenUsage(t.Context(), content, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -468,7 +468,7 @@ func TestCalculateTokenUsage_FallbackToAssistantMessages(t *testing.T) {
 	}
 	content := []byte(strings.Join(lines, "\n") + "\n")
 
-	usage, err := ag.CalculateTokenUsage(content, 0)
+	usage, err := ag.CalculateTokenUsage(t.Context(), content, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -487,7 +487,7 @@ func TestCalculateTokenUsage_EmptyTranscript(t *testing.T) {
 	t.Parallel()
 	ag := &CopilotCLIAgent{}
 
-	usage, err := ag.CalculateTokenUsage([]byte{}, 0)
+	usage, err := ag.CalculateTokenUsage(t.Context(), []byte{}, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -509,7 +509,7 @@ func TestCalculateTokenUsage_WithOffset(t *testing.T) {
 	}
 	content := []byte(strings.Join(lines, "\n") + "\n")
 
-	usage, err := ag.CalculateTokenUsage(content, 1)
+	usage, err := ag.CalculateTokenUsage(t.Context(), content, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

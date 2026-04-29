@@ -232,7 +232,7 @@ func TestAgentSessionOperations(t *testing.T) {
 		}
 
 		ag, _ := agent.Get("claude-code")
-		session, err := ag.ReadSession(&agent.HookInput{
+		session, err := ag.ReadSession(t.Context(), &agent.HookInput{
 			SessionID:  "test-session",
 			SessionRef: transcriptPath,
 		})
@@ -274,7 +274,7 @@ func TestAgentSessionOperations(t *testing.T) {
 			t.Fatalf("failed to write source: %v", err)
 		}
 
-		session, _ := ag.ReadSession(&agent.HookInput{
+		session, _ := ag.ReadSession(t.Context(), &agent.HookInput{
 			SessionID:  "test",
 			SessionRef: srcPath,
 		})
@@ -337,7 +337,7 @@ func TestClaudeCodeHelperMethods(t *testing.T) {
 		ag, _ := agent.Get("claude-code")
 		ccAgent := ag.(*claudecode.ClaudeCodeAgent)
 
-		session, _ := ag.ReadSession(&agent.HookInput{
+		session, _ := ag.ReadSession(t.Context(), &agent.HookInput{
 			SessionID:  "test",
 			SessionRef: transcriptPath,
 		})
@@ -372,7 +372,7 @@ func TestClaudeCodeHelperMethods(t *testing.T) {
 		ag, _ := agent.Get("claude-code")
 		ccAgent := ag.(*claudecode.ClaudeCodeAgent)
 
-		session, _ := ag.ReadSession(&agent.HookInput{
+		session, _ := ag.ReadSession(t.Context(), &agent.HookInput{
 			SessionID:  "test",
 			SessionRef: transcriptPath,
 		})
@@ -694,7 +694,7 @@ func TestGeminiCLISessionOperations(t *testing.T) {
 		}
 
 		ag, _ := agent.Get("gemini")
-		session, err := ag.ReadSession(&agent.HookInput{
+		session, err := ag.ReadSession(t.Context(), &agent.HookInput{
 			SessionID:  "test-session",
 			SessionRef: transcriptPath,
 		})
@@ -735,7 +735,7 @@ func TestGeminiCLISessionOperations(t *testing.T) {
 			t.Fatalf("failed to write source: %v", err)
 		}
 
-		session, _ := ag.ReadSession(&agent.HookInput{
+		session, _ := ag.ReadSession(t.Context(), &agent.HookInput{
 			SessionID:  "test",
 			SessionRef: srcPath,
 		})
@@ -1084,7 +1084,7 @@ func TestFactoryAIDroidSessionMethods(t *testing.T) {
 		}
 
 		ag, _ := agent.Get("factoryai-droid")
-		session, err := ag.ReadSession(&agent.HookInput{
+		session, err := ag.ReadSession(t.Context(), &agent.HookInput{
 			SessionID:  "test",
 			SessionRef: transcriptPath,
 		})
@@ -1103,7 +1103,7 @@ func TestFactoryAIDroidSessionMethods(t *testing.T) {
 		t.Parallel()
 
 		ag, _ := agent.Get("factoryai-droid")
-		_, err := ag.ReadSession(&agent.HookInput{
+		_, err := ag.ReadSession(t.Context(), &agent.HookInput{
 			SessionID:  "test",
 			SessionRef: "/nonexistent/path/transcript.jsonl",
 		})
@@ -1125,7 +1125,7 @@ func TestFactoryAIDroidSessionMethods(t *testing.T) {
 		}
 
 		ag, _ := agent.Get("factoryai-droid")
-		session, err := ag.ReadSession(&agent.HookInput{
+		session, err := ag.ReadSession(t.Context(), &agent.HookInput{
 			SessionID:  "test",
 			SessionRef: originalPath,
 		})
@@ -1354,7 +1354,7 @@ func TestOpenCodeSessionOperations(t *testing.T) {
 		}
 
 		ag, _ := agent.Get("opencode")
-		session, err := ag.ReadSession(&agent.HookInput{
+		session, err := ag.ReadSession(t.Context(), &agent.HookInput{
 			SessionID:  "test-session",
 			SessionRef: transcriptPath,
 		})

@@ -184,7 +184,7 @@ func (a *OpenCodeAgent) ResolveSessionFile(sessionDir, agentSessionID string) st
 	return filepath.Join(sessionDir, agentSessionID+".json")
 }
 
-func (a *OpenCodeAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession, error) {
+func (a *OpenCodeAgent) ReadSession(ctx context.Context, input *agent.HookInput) (*agent.AgentSession, error) {
 	if input.SessionRef == "" {
 		return nil, errors.New("no session ref provided")
 	}
@@ -193,12 +193,18 @@ func (a *OpenCodeAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession
 		return nil, fmt.Errorf("failed to read session: %w", err)
 	}
 
-	// Parse to extract computed fields. ReadSession has no context.Context, so
-	// any non-fatal error here cannot reach the request-scoped logger; instead
-	// of swallowing silently, return modifiedFiles=nil and let the caller (which
-	// has a ctx) decide whether to surface the issue. The session itself is
-	// still usable without modified-file metadata.
-	modifiedFiles, _ := ExtractModifiedFiles(data) //nolint:errcheck // intentional best-effort; see comment
+	// Parse to extract computed fields
+	modifiedFiles, err := ExtractModifiedFiles(data)
+	if err != nil {
+		// Non-fatal: we can still return the session without modified files.
+		// Surfacing this as a warning is important — silent failure here used
+		// to mask malformed transcripts in production.
+		logging.Warn(ctx, "failed to extract modified files from opencode session",
+			slog.String("session_ref", input.SessionRef),
+			slog.String("error", err.Error()),
+		)
+		modifiedFiles = nil
+	}
 
 	return &agent.AgentSession{
 		AgentName:     a.Name(),

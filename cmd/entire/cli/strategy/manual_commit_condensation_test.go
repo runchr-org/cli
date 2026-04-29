@@ -54,7 +54,7 @@ func (f *fakeTranscriptCompactorAgent) GetSessionDir(string) (string, error) { r
 func (f *fakeTranscriptCompactorAgent) ResolveSessionFile(_, sessionID string) string {
 	return sessionID
 }
-func (f *fakeTranscriptCompactorAgent) ReadSession(*agent.HookInput) (*agent.AgentSession, error) {
+func (f *fakeTranscriptCompactorAgent) ReadSession(context.Context, *agent.HookInput) (*agent.AgentSession, error) {
 	return nil, nil //nolint:nilnil // test stub
 }
 func (f *fakeTranscriptCompactorAgent) WriteSession(context.Context, *agent.AgentSession) error {

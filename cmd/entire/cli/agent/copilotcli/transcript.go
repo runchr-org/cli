@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -267,19 +268,19 @@ const eventTypeSessionShutdown = "session.shutdown"
 // contains session-wide aggregates. For sliced transcripts, session.shutdown
 // would overcount because it is not checkpoint-scoped, so we fall back to
 // summing assistant.message outputTokens within the slice.
-func (c *CopilotCLIAgent) CalculateTokenUsage(transcriptData []byte, fromOffset int) (*agent.TokenUsage, error) {
+func (c *CopilotCLIAgent) CalculateTokenUsage(ctx context.Context, transcriptData []byte, fromOffset int) (*agent.TokenUsage, error) {
 	events, err := parseEventsFromOffset(transcriptData, fromOffset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse transcript for token usage: %w", err)
 	}
 
-	return extractTokenUsageFromEvents(events, fromOffset == 0), nil
+	return extractTokenUsageFromEvents(ctx, events, fromOffset == 0), nil
 }
 
 // extractTokenUsageFromEvents extracts token usage from parsed events.
 // Prefers session.shutdown aggregate only when the caller is looking at the
 // full transcript; otherwise falls back to per-message outputTokens.
-func extractTokenUsageFromEvents(events []copilotEvent, preferSessionShutdown bool) *agent.TokenUsage {
+func extractTokenUsageFromEvents(ctx context.Context, events []copilotEvent, preferSessionShutdown bool) *agent.TokenUsage {
 	if preferSessionShutdown {
 		// session.shutdown is authoritative, but only for full-session totals.
 		for i := len(events) - 1; i >= 0; i-- {
@@ -289,10 +290,8 @@ func extractTokenUsageFromEvents(events []copilotEvent, preferSessionShutdown bo
 
 			var data sessionShutdownData
 			if err := json.Unmarshal(events[i].Data, &data); err != nil {
-				// Malformed session.shutdown event; skip and rely on per-message
-				// totals. CalculateTokenUsage on the agent.Agent interface has no
-				// context.Context, so this path cannot log to the request-scoped
-				// logger; drop the trace rather than emit through a Background ctx.
+				logging.Debug(ctx, "copilot-cli: session.shutdown data unmarshal failed",
+					slog.String("err", err.Error()))
 				continue
 			}
 

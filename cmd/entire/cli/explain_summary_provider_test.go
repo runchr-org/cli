@@ -35,7 +35,7 @@ func (s *stubTextAgent) ReassembleTranscript([][]byte) ([]byte, error) { return 
 func (s *stubTextAgent) GetSessionID(*agent.HookInput) string          { return "" }
 func (s *stubTextAgent) GetSessionDir(string) (string, error)          { return "", nil }
 func (s *stubTextAgent) ResolveSessionFile(string, string) string      { return "" }
-func (s *stubTextAgent) ReadSession(*agent.HookInput) (*agent.AgentSession, error) {
+func (s *stubTextAgent) ReadSession(context.Context, *agent.HookInput) (*agent.AgentSession, error) {
 	return nil, nil //nolint:nilnil // test stub
 }
 func (s *stubTextAgent) WriteSession(context.Context, *agent.AgentSession) error { return nil }

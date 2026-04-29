@@ -94,7 +94,7 @@ func TestOpenCodeAgentStrategyComposition(t *testing.T) {
 	})
 
 	// Read session via agent interface
-	agentSession, err := ag.ReadSession(&agent.HookInput{
+	agentSession, err := ag.ReadSession(t.Context(), &agent.HookInput{
 		SessionID:  session.ID,
 		SessionRef: transcriptPath,
 	})

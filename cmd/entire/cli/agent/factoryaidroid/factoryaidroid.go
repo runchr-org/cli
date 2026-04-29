@@ -126,7 +126,7 @@ func (f *FactoryAIDroidAgent) ResolveSessionFile(sessionDir, agentSessionID stri
 // ReadSession reads a session from Factory AI Droid's storage (JSONL transcript file).
 // The session data is stored in NativeData as raw JSONL bytes.
 // ModifiedFiles is computed by parsing the transcript.
-func (f *FactoryAIDroidAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession, error) {
+func (f *FactoryAIDroidAgent) ReadSession(_ context.Context, input *agent.HookInput) (*agent.AgentSession, error) {
 	if input.SessionRef == "" {
 		return nil, errors.New("session reference (transcript path) is required")
 	}

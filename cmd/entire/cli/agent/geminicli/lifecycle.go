@@ -83,7 +83,7 @@ func (g *GeminiCLIAgent) ReadTranscript(sessionRef string) ([]byte, error) {
 }
 
 // CalculateTokenUsage computes token usage from the transcript starting at the given message offset.
-func (g *GeminiCLIAgent) CalculateTokenUsage(transcriptData []byte, fromOffset int) (*agent.TokenUsage, error) {
+func (g *GeminiCLIAgent) CalculateTokenUsage(_ context.Context, transcriptData []byte, fromOffset int) (*agent.TokenUsage, error) {
 	var transcript struct {
 		Messages []geminiMessageWithTokens `json:"messages"`
 	}

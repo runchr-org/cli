@@ -88,7 +88,7 @@ func (v *Agent) ResolveSessionFile(sessionDir, agentSessionID string) string {
 	return filepath.Join(sessionDir, agentSessionID+".jsonl")
 }
 
-func (v *Agent) ReadSession(input *agent.HookInput) (*agent.AgentSession, error) {
+func (v *Agent) ReadSession(_ context.Context, input *agent.HookInput) (*agent.AgentSession, error) {
 	if input.SessionRef == "" {
 		return nil, errors.New("session reference (transcript path) is required")
 	}

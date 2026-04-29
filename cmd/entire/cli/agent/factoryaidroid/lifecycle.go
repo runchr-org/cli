@@ -148,7 +148,7 @@ func (f *FactoryAIDroidAgent) ExtractSummary(sessionRef string) (string, error) 
 // --- TokenCalculator ---
 
 // CalculateTokenUsage computes token usage from pre-loaded transcript bytes starting at the given line offset.
-func (f *FactoryAIDroidAgent) CalculateTokenUsage(transcriptData []byte, fromOffset int) (*agent.TokenUsage, error) {
+func (f *FactoryAIDroidAgent) CalculateTokenUsage(_ context.Context, transcriptData []byte, fromOffset int) (*agent.TokenUsage, error) {
 	return CalculateTotalTokenUsageFromBytes(transcriptData, fromOffset, "")
 }
 

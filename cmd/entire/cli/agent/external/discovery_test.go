@@ -348,7 +348,7 @@ func (f *fakeBuiltInAgent) ReassembleTranscript([][]byte) ([]byte, error) { retu
 func (f *fakeBuiltInAgent) GetSessionID(*agent.HookInput) string          { return "" }
 func (f *fakeBuiltInAgent) GetSessionDir(string) (string, error)          { return "", nil }
 func (f *fakeBuiltInAgent) ResolveSessionFile(string, string) string      { return "" }
-func (f *fakeBuiltInAgent) ReadSession(*agent.HookInput) (*agent.AgentSession, error) {
+func (f *fakeBuiltInAgent) ReadSession(context.Context, *agent.HookInput) (*agent.AgentSession, error) {
 	return nil, nil //nolint:nilnil // test fake — no session is a valid state
 }
 func (f *fakeBuiltInAgent) WriteSession(context.Context, *agent.AgentSession) error { return nil }

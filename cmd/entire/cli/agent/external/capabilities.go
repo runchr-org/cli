@@ -69,8 +69,8 @@ func (w *wrappedAgent) GetSessionDir(repoPath string) (string, error) {
 func (w *wrappedAgent) ResolveSessionFile(dir, id string) string {
 	return w.ea.ResolveSessionFile(dir, id)
 }
-func (w *wrappedAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession, error) {
-	return w.ea.ReadSession(input)
+func (w *wrappedAgent) ReadSession(ctx context.Context, input *agent.HookInput) (*agent.AgentSession, error) {
+	return w.ea.ReadSession(ctx, input)
 }
 func (w *wrappedAgent) WriteSession(ctx context.Context, s *agent.AgentSession) error {
 	return w.ea.WriteSession(ctx, s)
@@ -114,8 +114,8 @@ func (w *wrappedAgent) PrepareTranscript(ctx context.Context, ref string) error 
 
 // --- TokenCalculator ---
 
-func (w *wrappedAgent) CalculateTokenUsage(data []byte, offset int) (*agent.TokenUsage, error) {
-	return w.ea.CalculateTokenUsage(data, offset)
+func (w *wrappedAgent) CalculateTokenUsage(ctx context.Context, data []byte, offset int) (*agent.TokenUsage, error) {
+	return w.ea.CalculateTokenUsage(ctx, data, offset)
 }
 
 // --- TextGenerator ---

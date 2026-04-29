@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -302,7 +303,7 @@ func (a *OpenCodeAgent) ExtractPrompts(sessionRef string, fromOffset int) ([]str
 }
 
 // CalculateTokenUsage computes token usage from assistant messages starting at the given offset.
-func (a *OpenCodeAgent) CalculateTokenUsage(transcriptData []byte, fromOffset int) (*agent.TokenUsage, error) {
+func (a *OpenCodeAgent) CalculateTokenUsage(_ context.Context, transcriptData []byte, fromOffset int) (*agent.TokenUsage, error) {
 	session, err := ParseExportSession(transcriptData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse transcript for token usage: %w", err)

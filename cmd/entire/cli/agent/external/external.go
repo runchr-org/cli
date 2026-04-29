@@ -184,7 +184,7 @@ func (e *Agent) ResolveSessionFile(sessionDir, agentSessionID string) string {
 	return resp.SessionFile
 }
 
-func (e *Agent) ReadSession(input *agent.HookInput) (*agent.AgentSession, error) {
+func (e *Agent) ReadSession(_ context.Context, input *agent.HookInput) (*agent.AgentSession, error) {
 	data, err := marshalHookInput(input)
 	if err != nil {
 		return nil, fmt.Errorf("read-session: marshal: %w", err)
@@ -354,7 +354,7 @@ func (e *Agent) PrepareTranscript(ctx context.Context, sessionRef string) error 
 
 // --- TokenCalculator methods ---
 
-func (e *Agent) CalculateTokenUsage(transcriptData []byte, fromOffset int) (*agent.TokenUsage, error) {
+func (e *Agent) CalculateTokenUsage(_ context.Context, transcriptData []byte, fromOffset int) (*agent.TokenUsage, error) {
 	stdout, err := e.run(context.Background(), transcriptData,
 		"calculate-tokens", "--offset", strconv.Itoa(fromOffset))
 	if err != nil {

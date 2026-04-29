@@ -125,7 +125,7 @@ func TestCodexAgent_ReadSession(t *testing.T) {
 	ag := &CodexAgent{}
 	path := writeSampleRollout(t)
 
-	session, err := ag.ReadSession(&agent.HookInput{
+	session, err := ag.ReadSession(t.Context(), &agent.HookInput{
 		SessionID:  "codex-session-1",
 		SessionRef: path,
 	})
@@ -145,7 +145,7 @@ func TestCodexAgent_ReadSession_InvalidSessionMeta(t *testing.T) {
 	path := filepath.Join(dir, "rollout.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte(`{"timestamp":"2026-03-25T11:31:11.754Z","type":"response_item","payload":{"type":"message"}}`), 0o600))
 
-	_, err := ag.ReadSession(&agent.HookInput{
+	_, err := ag.ReadSession(t.Context(), &agent.HookInput{
 		SessionID:  "codex-session-1",
 		SessionRef: path,
 	})

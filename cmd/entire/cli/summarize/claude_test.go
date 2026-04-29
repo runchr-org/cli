@@ -45,7 +45,7 @@ func (s *stubTextGenerator) GetSessionDir(string) (string, error) { return "", n
 
 func (s *stubTextGenerator) ResolveSessionFile(string, string) string { return "" }
 
-func (s *stubTextGenerator) ReadSession(*agent.HookInput) (*agent.AgentSession, error) {
+func (s *stubTextGenerator) ReadSession(context.Context, *agent.HookInput) (*agent.AgentSession, error) {
 	return &agent.AgentSession{}, nil
 }
 

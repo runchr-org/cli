@@ -567,7 +567,7 @@ func (f *fakeExternalAgent) ReassembleTranscript(_ [][]byte) ([]byte, error) { r
 func (f *fakeExternalAgent) GetSessionID(_ *agent.HookInput) string          { return "" }
 func (f *fakeExternalAgent) GetSessionDir(_ string) (string, error)          { return "", nil }
 func (f *fakeExternalAgent) ResolveSessionFile(_, _ string) string           { return "" }
-func (f *fakeExternalAgent) ReadSession(_ *agent.HookInput) (*agent.AgentSession, error) {
+func (f *fakeExternalAgent) ReadSession(_ context.Context, _ *agent.HookInput) (*agent.AgentSession, error) {
 	return nil, nil //nolint:nilnil // test stub
 }
 func (f *fakeExternalAgent) WriteSession(_ context.Context, _ *agent.AgentSession) error { return nil }

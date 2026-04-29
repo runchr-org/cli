@@ -65,7 +65,7 @@ func (m *mockLifecycleAgent) ResolveSessionFile(sessionDir, agentSessionID strin
 }
 
 //nolint:nilnil // Mock implementation
-func (m *mockLifecycleAgent) ReadSession(_ *agent.HookInput) (*agent.AgentSession, error) {
+func (m *mockLifecycleAgent) ReadSession(_ context.Context, _ *agent.HookInput) (*agent.AgentSession, error) {
 	return nil, nil
 }
 

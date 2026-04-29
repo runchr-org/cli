@@ -121,7 +121,7 @@ func (c *ClaudeCodeAgent) GetSessionBaseDir() (string, error) {
 // ReadSession reads a session from Claude's storage (JSONL transcript file).
 // The session data is stored in NativeData as raw JSONL bytes.
 // ModifiedFiles is computed by parsing the transcript.
-func (c *ClaudeCodeAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession, error) {
+func (c *ClaudeCodeAgent) ReadSession(_ context.Context, input *agent.HookInput) (*agent.AgentSession, error) {
 	if input.SessionRef == "" {
 		return nil, errors.New("session reference (transcript path) is required")
 	}
@@ -251,8 +251,8 @@ func (c *ClaudeCodeAgent) FindCheckpointUUID(session *agent.AgentSession, toolUs
 
 // ReadSessionFromPath is a convenience method that reads a session directly from a file path.
 // This is useful when you have the path but not a HookInput.
-func (c *ClaudeCodeAgent) ReadSessionFromPath(transcriptPath, sessionID string) (*agent.AgentSession, error) {
-	return c.ReadSession(&agent.HookInput{
+func (c *ClaudeCodeAgent) ReadSessionFromPath(ctx context.Context, transcriptPath, sessionID string) (*agent.AgentSession, error) {
+	return c.ReadSession(ctx, &agent.HookInput{
 		SessionID:  sessionID,
 		SessionRef: transcriptPath,
 	})

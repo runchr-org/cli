@@ -98,7 +98,7 @@ func TestCalculateTokenUsage(t *testing.T) {
 	ag := &CodexAgent{}
 
 	// From offset 0 (no baseline), should return full cumulative total
-	usage, err := ag.CalculateTokenUsage([]byte(sampleRollout), 0)
+	usage, err := ag.CalculateTokenUsage(t.Context(), []byte(sampleRollout), 0)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 
@@ -115,7 +115,7 @@ func TestCalculateTokenUsage_WithOffset(t *testing.T) {
 
 	// Skip past first token_count (line 4) — baseline is {5000, 4000, 100}
 	// Last after offset is {15000, 12000, 300} → delta = {10000, 8000, 200}
-	usage, err := ag.CalculateTokenUsage([]byte(sampleRollout), 4)
+	usage, err := ag.CalculateTokenUsage(t.Context(), []byte(sampleRollout), 4)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 
@@ -130,7 +130,7 @@ func TestCalculateTokenUsage_NoData(t *testing.T) {
 	t.Parallel()
 	ag := &CodexAgent{}
 
-	usage, err := ag.CalculateTokenUsage([]byte(`{"timestamp":"t","type":"session_meta","payload":{}}`), 0)
+	usage, err := ag.CalculateTokenUsage(t.Context(), []byte(`{"timestamp":"t","type":"session_meta","payload":{}}`), 0)
 	require.NoError(t, err)
 	require.Nil(t, usage)
 }

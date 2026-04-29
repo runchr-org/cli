@@ -68,7 +68,7 @@ type Agent interface {
 	ResolveSessionFile(sessionDir, agentSessionID string) string
 
 	// ReadSession reads session data from agent's storage.
-	ReadSession(input *HookInput) (*AgentSession, error)
+	ReadSession(ctx context.Context, input *HookInput) (*AgentSession, error)
 
 	// WriteSession writes session data for resumption.
 	WriteSession(ctx context.Context, session *AgentSession) error
@@ -184,7 +184,7 @@ type TokenCalculator interface {
 	Agent
 
 	// CalculateTokenUsage computes token usage from the transcript starting at the given offset.
-	CalculateTokenUsage(transcriptData []byte, fromOffset int) (*TokenUsage, error)
+	CalculateTokenUsage(ctx context.Context, transcriptData []byte, fromOffset int) (*TokenUsage, error)
 }
 
 // TextGenerator is an optional interface for agents whose CLI supports

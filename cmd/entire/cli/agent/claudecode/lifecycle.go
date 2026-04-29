@@ -90,7 +90,7 @@ func (c *ClaudeCodeAgent) PrepareTranscript(ctx context.Context, sessionRef stri
 }
 
 // CalculateTokenUsage computes token usage from the transcript starting at the given line offset.
-func (c *ClaudeCodeAgent) CalculateTokenUsage(transcriptData []byte, fromOffset int) (*agent.TokenUsage, error) {
+func (c *ClaudeCodeAgent) CalculateTokenUsage(_ context.Context, transcriptData []byte, fromOffset int) (*agent.TokenUsage, error) {
 	return c.CalculateTotalTokenUsage(transcriptData, fromOffset, "")
 }
 

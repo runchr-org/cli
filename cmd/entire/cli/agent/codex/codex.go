@@ -119,7 +119,7 @@ func (c *CodexAgent) ResolveRestoredSessionFile(sessionDir, agentSessionID strin
 func (c *CodexAgent) ProtectedDirs() []string { return []string{".codex"} }
 
 // ReadSession reads a session from Codex's storage (JSONL rollout file).
-func (c *CodexAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession, error) {
+func (c *CodexAgent) ReadSession(_ context.Context, input *agent.HookInput) (*agent.AgentSession, error) {
 	if input.SessionRef == "" {
 		return nil, errors.New("session reference (transcript path) is required")
 	}

@@ -28,7 +28,7 @@ func CalculateTokenUsage(ctx context.Context, ag Agent, transcriptData []byte, t
 
 	if calculator, ok := AsTokenCalculator(ag); ok {
 		// Fall back to basic token calculation (main transcript only)
-		usage, err := calculator.CalculateTokenUsage(transcriptData, transcriptLinesAtStart)
+		usage, err := calculator.CalculateTokenUsage(ctx, transcriptData, transcriptLinesAtStart)
 		if err != nil {
 			logging.Debug(ctx, "failed token extraction",
 				slog.String("error", err.Error()))

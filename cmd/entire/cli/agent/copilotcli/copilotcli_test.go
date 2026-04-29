@@ -156,7 +156,7 @@ func TestReadSession_Success(t *testing.T) {
 		SessionRef: transcriptPath,
 	}
 
-	session, err := ag.ReadSession(input)
+	session, err := ag.ReadSession(t.Context(), input)
 	if err != nil {
 		t.Fatalf("ReadSession() error = %v", err)
 	}
@@ -189,7 +189,7 @@ func TestReadSession_NativeDataMatchesFile(t *testing.T) {
 		SessionRef: transcriptPath,
 	}
 
-	session, err := ag.ReadSession(input)
+	session, err := ag.ReadSession(t.Context(), input)
 	if err != nil {
 		t.Fatalf("ReadSession() error = %v", err)
 	}
@@ -209,7 +209,7 @@ func TestReadSession_EmptySessionRef(t *testing.T) {
 	ag := &CopilotCLIAgent{}
 	input := &agent.HookInput{SessionID: "sess-no-ref"}
 
-	_, err := ag.ReadSession(input)
+	_, err := ag.ReadSession(t.Context(), input)
 	if err == nil {
 		t.Fatal("ReadSession() should error when SessionRef is empty")
 	}
@@ -223,7 +223,7 @@ func TestReadSession_MissingFile(t *testing.T) {
 		SessionRef: "/nonexistent/path/events.jsonl",
 	}
 
-	_, err := ag.ReadSession(input)
+	_, err := ag.ReadSession(t.Context(), input)
 	if err == nil {
 		t.Fatal("ReadSession() should error when transcript file doesn't exist")
 	}
@@ -271,7 +271,7 @@ func TestWriteSession_RoundTrip(t *testing.T) {
 		SessionID:  "roundtrip-session",
 		SessionRef: transcriptPath,
 	}
-	session, err := ag.ReadSession(input)
+	session, err := ag.ReadSession(t.Context(), input)
 	if err != nil {
 		t.Fatalf("ReadSession() error = %v", err)
 	}
@@ -562,7 +562,7 @@ func TestReadTranscript_MatchesReadSession(t *testing.T) {
 		t.Fatalf("ReadTranscript() error = %v", err)
 	}
 
-	session, err := ag.ReadSession(&agent.HookInput{
+	session, err := ag.ReadSession(t.Context(), &agent.HookInput{
 		SessionID:  "compare-session",
 		SessionRef: transcriptPath,
 	})

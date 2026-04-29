@@ -487,7 +487,7 @@ func TestCalculateTokenUsage(t *testing.T) {
 	ag := &OpenCodeAgent{}
 
 	// From offset 0 — both assistant messages
-	usage, err := ag.CalculateTokenUsage([]byte(testExportJSON), 0)
+	usage, err := ag.CalculateTokenUsage(t.Context(), []byte(testExportJSON), 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -513,7 +513,7 @@ func TestCalculateTokenUsage_FromOffset(t *testing.T) {
 	t.Parallel()
 	ag := &OpenCodeAgent{}
 
-	usage, err := ag.CalculateTokenUsage([]byte(testExportJSON), 2)
+	usage, err := ag.CalculateTokenUsage(t.Context(), []byte(testExportJSON), 2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -532,7 +532,7 @@ func TestCalculateTokenUsage_EmptyData(t *testing.T) {
 	t.Parallel()
 	ag := &OpenCodeAgent{}
 
-	usage, err := ag.CalculateTokenUsage(nil, 0)
+	usage, err := ag.CalculateTokenUsage(t.Context(), nil, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

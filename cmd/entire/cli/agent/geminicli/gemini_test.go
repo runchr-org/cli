@@ -209,7 +209,7 @@ func TestReadSession(t *testing.T) {
 		SessionRef: transcriptPath,
 	}
 
-	session, err := ag.ReadSession(input)
+	session, err := ag.ReadSession(t.Context(), input)
 	if err != nil {
 		t.Fatalf("ReadSession() error = %v", err)
 	}
@@ -229,7 +229,7 @@ func TestReadSession_NoSessionRef(t *testing.T) {
 	ag := &GeminiCLIAgent{}
 	input := &agent.HookInput{SessionID: "test-session"}
 
-	_, err := ag.ReadSession(input)
+	_, err := ag.ReadSession(t.Context(), input)
 	if err == nil {
 		t.Error("ReadSession() should error when SessionRef is empty")
 	}

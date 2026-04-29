@@ -588,7 +588,7 @@ func TestCalculateTokenUsage_BasicMessages(t *testing.T) {
 }`)
 
 	ag := &GeminiCLIAgent{}
-	usage, err := ag.CalculateTokenUsage(data, 0)
+	usage, err := ag.CalculateTokenUsage(t.Context(), data, 0)
 	if err != nil {
 		t.Fatalf("CalculateTokenUsage error: %v", err)
 	}
@@ -629,7 +629,7 @@ func TestCalculateTokenUsage_StartIndex(t *testing.T) {
 
 	// Start from index 2 - should only count the last gemini message
 	ag := &GeminiCLIAgent{}
-	usage, err := ag.CalculateTokenUsage(data, 2)
+	usage, err := ag.CalculateTokenUsage(t.Context(), data, 2)
 	if err != nil {
 		t.Fatalf("CalculateTokenUsage error: %v", err)
 	}
@@ -665,7 +665,7 @@ func TestCalculateTokenUsage_IgnoresUserMessages(t *testing.T) {
 }`)
 
 	ag := &GeminiCLIAgent{}
-	usage, err := ag.CalculateTokenUsage(data, 0)
+	usage, err := ag.CalculateTokenUsage(t.Context(), data, 0)
 	if err != nil {
 		t.Fatalf("CalculateTokenUsage error: %v", err)
 	}
@@ -689,7 +689,7 @@ func TestCalculateTokenUsage_EmptyTranscript(t *testing.T) {
 
 	data := []byte(`{"messages": []}`)
 	ag := &GeminiCLIAgent{}
-	usage, err := ag.CalculateTokenUsage(data, 0)
+	usage, err := ag.CalculateTokenUsage(t.Context(), data, 0)
 	if err != nil {
 		t.Fatalf("CalculateTokenUsage error: %v", err)
 	}
@@ -713,7 +713,7 @@ func TestCalculateTokenUsage_InvalidJSON(t *testing.T) {
 
 	data := []byte(`not valid json`)
 	ag := &GeminiCLIAgent{}
-	usage, err := ag.CalculateTokenUsage(data, 0)
+	usage, err := ag.CalculateTokenUsage(t.Context(), data, 0)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON, got nil")
 	}
@@ -736,7 +736,7 @@ func TestCalculateTokenUsage_MissingTokensField(t *testing.T) {
 }`)
 
 	ag := &GeminiCLIAgent{}
-	usage, err := ag.CalculateTokenUsage(data, 0)
+	usage, err := ag.CalculateTokenUsage(t.Context(), data, 0)
 	if err != nil {
 		t.Fatalf("CalculateTokenUsage error: %v", err)
 	}

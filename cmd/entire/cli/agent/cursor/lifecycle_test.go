@@ -627,7 +627,7 @@ func TestReadTranscript_MatchesReadSession(t *testing.T) {
 	}
 
 	// ReadSession
-	session, err := ag.ReadSession(&agent.HookInput{
+	session, err := ag.ReadSession(t.Context(), &agent.HookInput{
 		SessionID:  "compare-session",
 		SessionRef: transcriptPath,
 	})

@@ -85,7 +85,7 @@ func (c *CopilotCLIAgent) ProtectedDirs() []string {
 }
 
 // ReadSession reads a session from Copilot CLI's storage (JSONL transcript file).
-func (c *CopilotCLIAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession, error) {
+func (c *CopilotCLIAgent) ReadSession(_ context.Context, input *agent.HookInput) (*agent.AgentSession, error) {
 	if input.SessionRef == "" {
 		return nil, errors.New("session reference (transcript path) is required")
 	}
