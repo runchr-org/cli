@@ -64,6 +64,8 @@ All hooks share these common fields:
 
 **Important:** `transcript_path` is not a reliable IDE-vs-CLI discriminator. Cursor Agent may send `null` or a concrete transcript path depending on mode/version. The existing cursor agent handles missing paths via `resolveTranscriptRef()` which computes the path dynamically from the repo root.
 
+Cursor Agent hook processes set `CURSOR_INVOKED_AS=agent`. Prefer that as the primary IDE-vs-Agent discriminator; `model` and `transcript_path` are not reliable enough on their own.
+
 #### sessionStart additional fields
 
 ```json

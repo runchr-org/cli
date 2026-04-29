@@ -91,7 +91,7 @@ func (c *CursorAgent) parseSessionStart(stdin io.Reader) (*agent.Event, error) {
 		SessionRef: raw.TranscriptPath,
 		Model:      raw.Model,
 		Timestamp:  time.Now(),
-		Metadata:   cursorClientMetadata(raw.TranscriptPath, raw.ComposerMode, raw.Model, raw.IsBackgroundAgent),
+		Metadata:   cursorClientMetadata(raw.TranscriptPath, raw.ComposerMode, raw.Model, raw.IsBackgroundAgent, cursorInvokedAs()),
 	}, nil
 }
 
@@ -107,7 +107,7 @@ func (c *CursorAgent) parseTurnStart(ctx context.Context, stdin io.Reader) (*age
 		Prompt:     raw.Prompt,
 		Model:      raw.Model,
 		Timestamp:  time.Now(),
-		Metadata:   cursorClientMetadata(raw.TranscriptPath, raw.ComposerMode, raw.Model, raw.IsBackgroundAgent),
+		Metadata:   cursorClientMetadata(raw.TranscriptPath, raw.ComposerMode, raw.Model, raw.IsBackgroundAgent, cursorInvokedAs()),
 	}, nil
 }
 
@@ -123,7 +123,7 @@ func (c *CursorAgent) parseTurnEnd(ctx context.Context, stdin io.Reader) (*agent
 		Model:      raw.Model,
 		TurnCount:  int(intFromJSON(raw.LoopCount)),
 		Timestamp:  time.Now(),
-		Metadata:   cursorClientMetadata(raw.TranscriptPath, raw.ComposerMode, raw.Model, raw.IsBackgroundAgent),
+		Metadata:   cursorClientMetadata(raw.TranscriptPath, raw.ComposerMode, raw.Model, raw.IsBackgroundAgent, cursorInvokedAs()),
 	}, nil
 }
 
@@ -139,7 +139,7 @@ func (c *CursorAgent) parseSessionEnd(ctx context.Context, stdin io.Reader) (*ag
 		Model:      raw.Model,
 		DurationMs: intFromJSON(raw.DurationMs),
 		Timestamp:  time.Now(),
-		Metadata:   cursorClientMetadata(raw.TranscriptPath, raw.ComposerMode, raw.Model, raw.IsBackgroundAgent),
+		Metadata:   cursorClientMetadata(raw.TranscriptPath, raw.ComposerMode, raw.Model, raw.IsBackgroundAgent, cursorInvokedAs()),
 	}, nil
 }
 
@@ -155,7 +155,7 @@ func (c *CursorAgent) parsePreCompact(stdin io.Reader) (*agent.Event, error) {
 		ContextTokens:     int(intFromJSON(raw.ContextTokens)),
 		ContextWindowSize: int(intFromJSON(raw.ContextWindowSize)),
 		Timestamp:         time.Now(),
-		Metadata:          cursorClientMetadata(raw.TranscriptPath, raw.ComposerMode, raw.Model, raw.IsBackgroundAgent),
+		Metadata:          cursorClientMetadata(raw.TranscriptPath, raw.ComposerMode, raw.Model, raw.IsBackgroundAgent, cursorInvokedAs()),
 	}, nil
 }
 
@@ -179,7 +179,14 @@ func (c *CursorAgent) parseSubagentStart(stdin io.Reader) (*agent.Event, error) 
 	}, nil
 }
 
-func cursorClientMetadata(transcriptPath, composerMode, model string, isBackgroundAgent bool) map[string]string {
+func cursorInvokedAs() string {
+	return strings.ToLower(os.Getenv("CURSOR_INVOKED_AS"))
+}
+
+func cursorClientMetadata(transcriptPath, composerMode, model string, isBackgroundAgent bool, invokedAs string) map[string]string {
+	if invokedAs == "agent" {
+		return map[string]string{MetadataKeyClient: MetadataClientAgent}
+	}
 	if isBackgroundAgent {
 		return map[string]string{MetadataKeyClient: MetadataClientAgent}
 	}

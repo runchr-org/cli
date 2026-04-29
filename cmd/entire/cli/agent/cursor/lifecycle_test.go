@@ -63,6 +63,23 @@ func TestParseHookEvent_SessionStart_ClassifiesCursorAgent(t *testing.T) {
 	}
 }
 
+func TestParseHookEvent_SessionStart_ClassifiesCursorAgentFromInvokedAs(t *testing.T) {
+	ag := &CursorAgent{}
+	t.Setenv("CURSOR_INVOKED_AS", "agent")
+
+	input := `{"conversation_id":"agent-session","generation_id":"agent-session","model":"default","is_background_agent":false,"session_id":"agent-session","hook_event_name":"sessionStart","cursor_version":"2026.04.17-787b533","workspace_roots":["/tmp/repo"],"user_email":"user@example.com","transcript_path":null}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameSessionStart, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	require.NotNil(t, event, "expected event, got nil")
+	if event.Metadata[MetadataKeyClient] != MetadataClientAgent {
+		t.Errorf("expected cursor client %q, got %q", MetadataClientAgent, event.Metadata[MetadataKeyClient])
+	}
+}
+
 func TestParseHookEvent_SessionStart_IncludesModel(t *testing.T) {
 	t.Parallel()
 
@@ -343,6 +360,23 @@ func TestParseHookEvent_TurnEnd_AgentWithTranscriptPath(t *testing.T) {
 
 	ag := &CursorAgent{}
 	input := `{"conversation_id": "agent-session", "transcript_path": "/home/user/.cursor/projects/proj/agent-transcripts/agent-session.jsonl", "model": "` + testModel + `", "status": "completed", "loop_count": 2}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameStop, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	require.NotNil(t, event, "expected event, got nil")
+	if event.Metadata[MetadataKeyClient] != MetadataClientAgent {
+		t.Errorf("expected cursor client %q, got %q", MetadataClientAgent, event.Metadata[MetadataKeyClient])
+	}
+}
+
+func TestParseHookEvent_TurnEnd_ClassifiesCursorAgentFromInvokedAs(t *testing.T) {
+	ag := &CursorAgent{}
+	t.Setenv("CURSOR_INVOKED_AS", "agent")
+
+	input := `{"conversation_id":"agent-session","generation_id":"agent-session","model":"default","status":"completed","loop_count":2,"is_background_agent":false,"session_id":"agent-session","hook_event_name":"stop","cursor_version":"2026.04.17-787b533","workspace_roots":["/tmp/repo"],"user_email":"user@example.com","transcript_path":"/home/user/.cursor/projects/proj/agent-transcripts/agent-session/agent-session.jsonl"}`
 
 	event, err := ag.ParseHookEvent(context.Background(), HookNameStop, strings.NewReader(input))
 
