@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,8 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/go-git/go-git/v6/plumbing"
 )
+
+var whyANSIRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func testWhyTUIModel() whyTUIModel {
 	hashA := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -178,6 +181,48 @@ func TestWhyTUIModel_SelectedLineRemainsVisible(t *testing.T) {
 	}
 }
 
+func TestWhyTUIModel_ViewMarksSelectedRow(t *testing.T) {
+	t.Parallel()
+
+	m := testWhyTUIModel()
+	view := m.View()
+	firstLine := whyTUIViewLineContaining(t, view, "package main")
+	if !strings.HasPrefix(firstLine, "> ") {
+		t.Fatalf("selected line should start with marker: %q", firstLine)
+	}
+
+	var cmd tea.Cmd
+	for range 2 {
+		m, cmd = updateWhyTUIModel(t, m, whyRuneKey('j'))
+		if cmd != nil {
+			t.Fatalf("unexpected command while moving selection")
+		}
+	}
+
+	view = m.View()
+	oldLine := whyTUIViewLineContaining(t, view, "package main")
+	if strings.HasPrefix(oldLine, "> ") {
+		t.Fatalf("previously selected line still marked: %q", oldLine)
+	}
+	newLine := whyTUIViewLineContaining(t, view, "func main()")
+	if !strings.HasPrefix(newLine, "> ") {
+		t.Fatalf("new selected line should start with marker: %q", newLine)
+	}
+}
+
+func TestWhyTUIModel_ViewHighlightsSelectedRow(t *testing.T) {
+	t.Parallel()
+
+	m := newWhyTUIModel(testWhyTUIModel().data, statusStyles{colorEnabled: true, width: 80})
+	m.height = 6
+	m = m.refreshViewport()
+
+	line := whyTUIViewLineContaining(t, m.View(), "package main")
+	if !strings.Contains(line, "\x1b[48;5;236m") {
+		t.Fatalf("selected line should include highlight background: %q", line)
+	}
+}
+
 func TestWhyTUIModel_GutterShowsBlameColumnsInRequestedOrder(t *testing.T) {
 	t.Parallel()
 
@@ -305,4 +350,16 @@ func TestWhyTUIModel_FooterFallsBackWithoutOverflow(t *testing.T) {
 	if got := lipgloss.Width(footer); got != m.width {
 		t.Fatalf("narrow footer width = %d, want %d: %q", got, m.width, footer)
 	}
+}
+
+func whyTUIViewLineContaining(t *testing.T, view, needle string) string {
+	t.Helper()
+
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(whyANSIRe.ReplaceAllString(line, ""), needle) {
+			return line
+		}
+	}
+	t.Fatalf("view missing %q:\n%s", needle, view)
+	return ""
 }

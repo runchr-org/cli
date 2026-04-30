@@ -39,6 +39,8 @@ type whyTUIModel struct {
 
 const (
 	whyTUICheckpointMaxWidth = 12
+	whyTUISelectedBackground = "\x1b[48;5;236m"
+	whyTUIReset              = "\x1b[0m"
 )
 
 var runWhyTUI = defaultRunWhyTUI
@@ -136,10 +138,39 @@ func (m whyTUIModel) View() string {
 
 	var b strings.Builder
 	b.WriteString(m.renderHeader())
-	b.WriteString(m.viewport.View())
+	b.WriteString(m.renderViewport())
 	b.WriteString("\n")
 	b.WriteString(m.renderFooter())
 	return b.String()
+}
+
+func (m whyTUIModel) renderViewport() string {
+	view := m.viewport.View()
+	selectedLine := m.selected - m.viewport.YOffset
+	if selectedLine < 0 || selectedLine >= m.viewport.Height {
+		return view
+	}
+
+	lines := strings.Split(view, "\n")
+	if selectedLine >= len(lines) {
+		return view
+	}
+
+	lines[selectedLine] = m.renderSelectedViewportLine(lines[selectedLine])
+	return strings.Join(lines, "\n")
+}
+
+func (m whyTUIModel) renderSelectedViewportLine(line string) string {
+	if line == "" {
+		line = ">"
+	} else {
+		line = ">" + line[1:]
+	}
+	if !m.styles.colorEnabled {
+		return line
+	}
+	line += strings.Repeat(" ", max(m.width-lipgloss.Width(line), 0))
+	return whyTUISelectedBackground + strings.ReplaceAll(line, whyTUIReset, whyTUIReset+whyTUISelectedBackground) + whyTUIReset
 }
 
 func (m whyTUIModel) refreshViewport() whyTUIModel {
@@ -226,7 +257,7 @@ func (m whyTUIModel) renderGutter(row whyBlameRow, lineWidth int) string {
 	lineNo := fmt.Sprintf("%*d", lineWidth, row.FinalLine)
 	lineColumn := whyTUIColumn(lineNo, lineWidth, m.styles.lineNo, m.styles.colorEnabled)
 	checkpoint := whyTUIColumn(whyTUICheckpoint(info), whyTUICheckpointMaxWidth, m.styles.checkpoint, m.styles.colorEnabled)
-	return strings.Join([]string{
+	return "  " + strings.Join([]string{
 		whyTUIColumn(whyStaticTime(row), whyTimeMaxWidth, m.styles.time, m.styles.colorEnabled),
 		whyTUIColumn(whyStaticAuthor(row), whyAuthorMaxWidth, m.styles.author, m.styles.colorEnabled),
 		whyTUIColumn(whyStaticCommit(row), whyCommitColumnWidth, m.styles.commit, m.styles.colorEnabled),
