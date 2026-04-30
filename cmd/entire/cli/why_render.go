@@ -5,10 +5,14 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
 const (
+	whyTimeMaxWidth          = 10
+	whyAuthorMaxWidth        = 16
+	whyCommitColumnWidth     = 10
 	whyCheckpointColumnWidth = 12
 )
 
@@ -25,11 +29,13 @@ func renderWhyStatic(data whyViewData) string {
 	lineWidth := whyLineColumnWidth(data.Rows)
 	fmt.Fprintf(
 		&sb,
-		"%*s %-*s %s\n",
+		"%s %s %s %s %*s %s\n",
+		whyStaticColumn("TIME", whyTimeMaxWidth),
+		whyStaticColumn("AUTHOR", whyAuthorMaxWidth),
+		whyStaticColumn("COMMIT", whyCommitColumnWidth),
+		whyStaticColumn("CHECKPOINT", whyCheckpointColumnWidth),
 		lineWidth,
 		"LINE",
-		whyCheckpointColumnWidth,
-		"CHECKPOINT",
 		"CODE",
 	)
 
@@ -42,11 +48,13 @@ func renderWhyStatic(data whyViewData) string {
 
 		fmt.Fprintf(
 			&sb,
-			"%*d %-*s %s\n",
+			"%s %s %s %s %*d %s\n",
+			whyStaticColumn(whyStaticTime(row), whyTimeMaxWidth),
+			whyStaticColumn(whyStaticAuthor(row), whyAuthorMaxWidth),
+			whyStaticColumn(whyStaticCommit(row), whyCommitColumnWidth),
+			whyStaticColumn(whyStaticCheckpoint(info), whyCheckpointColumnWidth),
 			lineWidth,
 			row.FinalLine,
-			whyCheckpointColumnWidth,
-			whyStaticCheckpoint(info),
 			row.Source,
 		)
 	}
@@ -65,9 +73,36 @@ func whyLineColumnWidth(rows []whyBlameRow) int {
 	return width
 }
 
+func whyStaticTime(row whyBlameRow) string {
+	if row.AuthorTime.IsZero() {
+		return "-"
+	}
+	return truncateDisplayWidth(timeAgo(row.AuthorTime), whyTimeMaxWidth, "...")
+}
+
+func whyStaticAuthor(row whyBlameRow) string {
+	if row.Author == "" {
+		return "-"
+	}
+	return truncateDisplayWidth(row.Author, whyAuthorMaxWidth, "...")
+}
+
+func whyStaticCommit(row whyBlameRow) string {
+	if row.CommitHash == "" {
+		return "-"
+	}
+	return truncateDisplayWidth(row.CommitHash, whyCommitColumnWidth, "")
+}
+
 func whyStaticCheckpoint(info whyCommitInfo) string {
 	if info.CheckpointID.IsEmpty() {
 		return "-"
 	}
 	return info.CheckpointID.String()
+}
+
+func whyStaticColumn(value string, width int) string {
+	value = truncateDisplayWidth(value, width, "...")
+	value += strings.Repeat(" ", max(width-lipgloss.Width(value), 0))
+	return value
 }

@@ -16,6 +16,9 @@ import (
 type whyTUIStyles struct {
 	statusStyles
 
+	time       lipgloss.Style
+	author     lipgloss.Style
+	commit     lipgloss.Style
 	lineNo     lipgloss.Style
 	checkpoint lipgloss.Style
 	helpKey    lipgloss.Style
@@ -71,6 +74,9 @@ func newWhyTUIStyles(ss statusStyles) whyTUIStyles {
 	}
 
 	s.lineNo = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	s.time = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	s.author = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	s.commit = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	s.checkpoint = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	s.helpKey = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 	s.helpSep = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
@@ -220,7 +226,13 @@ func (m whyTUIModel) renderGutter(row whyBlameRow, lineWidth int) string {
 	lineNo := fmt.Sprintf("%*d", lineWidth, row.FinalLine)
 	lineColumn := whyTUIColumn(lineNo, lineWidth, m.styles.lineNo, m.styles.colorEnabled)
 	checkpoint := whyTUIColumn(whyTUICheckpoint(info), whyTUICheckpointMaxWidth, m.styles.checkpoint, m.styles.colorEnabled)
-	return fmt.Sprintf("%s %s | ", lineColumn, checkpoint)
+	return strings.Join([]string{
+		whyTUIColumn(whyStaticTime(row), whyTimeMaxWidth, m.styles.time, m.styles.colorEnabled),
+		whyTUIColumn(whyStaticAuthor(row), whyAuthorMaxWidth, m.styles.author, m.styles.colorEnabled),
+		whyTUIColumn(whyStaticCommit(row), whyCommitColumnWidth, m.styles.commit, m.styles.colorEnabled),
+		checkpoint,
+		lineColumn,
+	}, " ") + " | "
 }
 
 func (m whyTUIModel) currentLineWidth() int {
@@ -234,13 +246,11 @@ func (m whyTUIModel) gutterWidth(lineWidth int) int {
 	if len(m.data.Rows) == 0 {
 		return 0
 	}
-	sample := fmt.Sprintf(
-		"%*d %s | ",
-		lineWidth,
-		1,
-		strings.Repeat("x", whyTUICheckpointMaxWidth),
-	)
-	return lipgloss.Width(sample)
+	width := 0
+	for _, row := range m.data.Rows {
+		width = max(width, lipgloss.Width(m.renderGutter(row, lineWidth)))
+	}
+	return width
 }
 
 func (m whyTUIModel) renderFooter() string {

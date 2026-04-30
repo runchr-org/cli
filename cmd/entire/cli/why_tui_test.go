@@ -3,6 +3,7 @@ package cli
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -177,13 +178,17 @@ func TestWhyTUIModel_SelectedLineRemainsVisible(t *testing.T) {
 	}
 }
 
-func TestWhyTUIModel_GutterShowsLineAndCheckpoint(t *testing.T) {
+func TestWhyTUIModel_GutterShowsBlameColumnsInRequestedOrder(t *testing.T) {
 	t.Parallel()
 
 	hash := plumbing.NewHash("c56b7ac719000000000000000000000000000000")
 	cpID := id.MustCheckpointID("a1b2c3d4e5f6")
 	firstRow := testWhyTUIRow(hash, 15, "first")
+	firstRow.Author = whyTestAuthor
+	firstRow.AuthorTime = time.Now().Add(-6 * 24 * time.Hour)
 	secondRow := testWhyTUIRow(hash, 16, "second")
+	secondRow.Author = whyTestAuthor
+	secondRow.AuthorTime = firstRow.AuthorTime
 	data := whyViewData{
 		GitPath: "cmd/main.go",
 		Rows:    []whyBlameRow{firstRow, secondRow},
@@ -198,17 +203,57 @@ func TestWhyTUIModel_GutterShowsLineAndCheckpoint(t *testing.T) {
 	lineWidth := whyLineColumnWidth(m.data.Rows)
 
 	gutter := m.renderGutter(firstRow, lineWidth)
-	for _, want := range []string{"15", cpID.String()} {
+	for _, want := range []string{"6d ago", whyTestAuthor, "c56b7ac719", cpID.String(), "15"} {
 		if !strings.Contains(gutter, want) {
 			t.Fatalf("gutter missing %q: %q", want, gutter)
 		}
 	}
+	if strings.Index(gutter, "6d ago") > strings.Index(gutter, whyTestAuthor) ||
+		strings.Index(gutter, whyTestAuthor) > strings.Index(gutter, "c56b7ac719") ||
+		strings.Index(gutter, "c56b7ac719") > strings.Index(gutter, cpID.String()) ||
+		strings.Index(gutter, cpID.String()) > strings.Index(gutter, "15") {
+		t.Fatalf("gutter columns rendered out of order: %q", gutter)
+	}
 
 	next := m.renderGutter(secondRow, lineWidth)
-	for _, want := range []string{"16", cpID.String()} {
+	for _, want := range []string{"6d ago", whyTestAuthor, "c56b7ac719", cpID.String(), "16"} {
 		if !strings.Contains(next, want) {
 			t.Fatalf("next gutter missing %q: %q", want, next)
 		}
+	}
+}
+
+func TestWhyTUIModel_GutterColumnsHaveFixedWidths(t *testing.T) {
+	t.Parallel()
+
+	hashA := plumbing.NewHash("c56b7ac719000000000000000000000000000000")
+	hashB := plumbing.NewHash("d56b7ac719000000000000000000000000000000")
+	cpID := id.MustCheckpointID("a1b2c3d4e5f6")
+	firstRow := testWhyTUIRow(hashA, 7, "short := true")
+	firstRow.Author = whyTestAuthor
+	firstRow.AuthorTime = time.Now().Add(-6 * 24 * time.Hour)
+	secondRow := testWhyTUIRow(hashB, 100, "longer := false")
+	secondRow.Author = "A"
+	data := whyViewData{
+		GitPath: "cmd/main.go",
+		Rows:    []whyBlameRow{firstRow, secondRow},
+		Commits: map[plumbing.Hash]whyCommitInfo{
+			hashA: {
+				Hash:         hashA,
+				CheckpointID: cpID,
+			},
+			hashB: {
+				Hash: hashB,
+			},
+		},
+	}
+	m := newWhyTUIModel(data, statusStyles{colorEnabled: false, width: 140})
+	lineWidth := whyLineColumnWidth(m.data.Rows)
+	firstGutter := m.renderGutter(firstRow, lineWidth)
+	secondGutter := m.renderGutter(secondRow, lineWidth)
+
+	if got, want := lipgloss.Width(firstGutter), lipgloss.Width(secondGutter); got != want {
+		t.Fatalf("gutter widths differ: first=%d second=%d\nfirst:  %q\nsecond: %q", got, want, firstGutter, secondGutter)
 	}
 }
 
