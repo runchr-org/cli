@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestWhyHighlight_KnownExtensionUsesLexer(t *testing.T) {
@@ -74,5 +76,32 @@ func TestWhyHighlight_PreservesLineCountForEmptyAndTrailingLines(t *testing.T) {
 				t.Fatalf("highlighted lines = %d, want %d: %#v", len(got), len(tt.lines), got)
 			}
 		})
+	}
+}
+
+func TestWhyHighlight_TruncatesAfterLexingFullContent(t *testing.T) {
+	t.Parallel()
+
+	lines := []string{
+		`"github.com/entireio/cli/cmd/entire/cli/transcript/compact"`,
+		`"github.com/entireio/cli/redact"`,
+	}
+	got := highlightWhyCodeLines("main.go", lines, true, 28)
+
+	if len(got) != len(lines) {
+		t.Fatalf("highlighted lines = %d, want %d: %#v", len(got), len(lines), got)
+	}
+	for i, line := range got {
+		if width := lipgloss.Width(line); width > 28 {
+			t.Fatalf("line %d width = %d, want <= 28: %q", i, width, line)
+		}
+		if !strings.Contains(line, "\x1b[") {
+			t.Fatalf("line %d = %q, want ANSI styling", i, line)
+		}
+	}
+
+	visibleSecond := whyANSIRe.ReplaceAllString(got[1], "")
+	if !strings.HasPrefix(visibleSecond, `"github.com/entireio/cli`) {
+		t.Fatalf("second line visible text = %q, want independently highlighted import path prefix", visibleSecond)
 	}
 }

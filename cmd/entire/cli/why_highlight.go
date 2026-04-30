@@ -8,15 +8,17 @@ import (
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
+	"github.com/charmbracelet/lipgloss"
 )
 
 const whyHighlightStyleName = "github-dark"
 
-func highlightWhyCodeLines(filename string, lines []string, colorEnabled bool) []string {
+func highlightWhyCodeLines(filename string, lines []string, colorEnabled bool, maxWidth ...int) []string {
 	if len(lines) == 0 {
 		return nil
 	}
-	plain := append([]string(nil), lines...)
+	width := whyHighlightMaxWidth(maxWidth)
+	plain := plainWhyCodeLines(lines, width)
 	if !colorEnabled {
 		return plain
 	}
@@ -36,7 +38,7 @@ func highlightWhyCodeLines(filename string, lines []string, colorEnabled bool) [
 	highlighted := make([]string, len(lines))
 	copy(highlighted, plain)
 	for i := 0; i < len(lines) && i < len(tokenLines); i++ {
-		rendered, ok := renderWhyHighlightedTokenLine(tokenLines[i])
+		rendered, ok := renderWhyHighlightedTokenLine(tokenLines[i], width)
 		if !ok {
 			continue
 		}
@@ -45,16 +47,46 @@ func highlightWhyCodeLines(filename string, lines []string, colorEnabled bool) [
 	return highlighted
 }
 
-func renderWhyHighlightedTokenLine(tokens []chroma.Token) (string, bool) {
+func whyHighlightMaxWidth(maxWidth []int) int {
+	if len(maxWidth) == 0 || maxWidth[0] <= 0 {
+		return 0
+	}
+	return maxWidth[0]
+}
+
+func plainWhyCodeLines(lines []string, maxWidth int) []string {
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		if maxWidth > 0 {
+			line = truncateDisplayWidth(line, maxWidth, "")
+		}
+		plain[i] = line
+	}
+	return plain
+}
+
+func renderWhyHighlightedTokenLine(tokens []chroma.Token, maxWidth int) (string, bool) {
 	if len(tokens) == 0 {
 		return "", true
 	}
 
 	lineTokens := make([]chroma.Token, 0, len(tokens))
+	width := 0
 	for _, token := range tokens {
 		token.Value = strings.TrimSuffix(token.Value, "\n")
 		if token.Value == "" {
 			continue
+		}
+		if maxWidth > 0 {
+			remaining := maxWidth - width
+			if remaining <= 0 {
+				break
+			}
+			token.Value = truncateDisplayWidth(token.Value, remaining, "")
+			if token.Value == "" {
+				break
+			}
+			width += lipgloss.Width(token.Value)
 		}
 		lineTokens = append(lineTokens, token)
 	}

@@ -223,6 +223,21 @@ func TestWhyTUIModel_ViewHighlightsSelectedRow(t *testing.T) {
 	}
 }
 
+func TestWhyTUIModel_SelectedMarkerPreservesLeadingANSI(t *testing.T) {
+	t.Parallel()
+
+	m := newWhyTUIModel(testWhyTUIModel().data, statusStyles{colorEnabled: true, width: 80})
+	line := "\x1b[38;2;230;237;243m\"github.com/entireio/cli/redact\""
+	got := m.renderSelectedViewportLine(line)
+
+	if strings.Contains(got, ">[38;") {
+		t.Fatalf("selected marker corrupted leading ANSI escape: %q", got)
+	}
+	if !strings.Contains(got, "\x1b[38;2;230;237;243m>") {
+		t.Fatalf("selected marker should be inserted after leading ANSI escape: %q", got)
+	}
+}
+
 func TestWhyTUIModel_GutterShowsBlameColumnsInRequestedOrder(t *testing.T) {
 	t.Parallel()
 

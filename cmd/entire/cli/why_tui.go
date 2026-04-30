@@ -161,16 +161,42 @@ func (m whyTUIModel) renderViewport() string {
 }
 
 func (m whyTUIModel) renderSelectedViewportLine(line string) string {
-	if line == "" {
-		line = ">"
-	} else {
-		line = ">" + line[1:]
-	}
+	line = markWhyTUISelectedLine(line)
 	if !m.styles.colorEnabled {
 		return line
 	}
 	line += strings.Repeat(" ", max(m.width-lipgloss.Width(line), 0))
 	return whyTUISelectedBackground + strings.ReplaceAll(line, whyTUIReset, whyTUIReset+whyTUISelectedBackground) + whyTUIReset
+}
+
+func markWhyTUISelectedLine(line string) string {
+	if line == "" {
+		return ">"
+	}
+
+	prefixLen := leadingSGRLen(line)
+	if prefixLen >= len(line) {
+		return line + ">"
+	}
+	if line[prefixLen] == ' ' {
+		return line[:prefixLen] + ">" + line[prefixLen+1:]
+	}
+	return line[:prefixLen] + ">" + line[prefixLen:]
+}
+
+func leadingSGRLen(s string) int {
+	offset := 0
+	for offset < len(s) && s[offset] == '\x1b' {
+		if offset+1 >= len(s) || s[offset+1] != '[' {
+			break
+		}
+		end := strings.IndexByte(s[offset:], 'm')
+		if end < 0 {
+			break
+		}
+		offset += end + 1
+	}
+	return offset
 }
 
 func (m whyTUIModel) refreshViewport() whyTUIModel {
@@ -234,9 +260,9 @@ func (m whyTUIModel) renderRows() string {
 	codeWidth := max(m.width-gutterWidth, 0)
 	sourceLines := make([]string, len(m.data.Rows))
 	for i, row := range m.data.Rows {
-		sourceLines[i] = truncateDisplayWidth(row.Source, codeWidth, "")
+		sourceLines[i] = row.Source
 	}
-	highlightedLines := highlightWhyCodeLines(m.data.GitPath, sourceLines, m.styles.colorEnabled)
+	highlightedLines := highlightWhyCodeLines(m.data.GitPath, sourceLines, m.styles.colorEnabled, codeWidth)
 
 	var b strings.Builder
 	for i, row := range m.data.Rows {
