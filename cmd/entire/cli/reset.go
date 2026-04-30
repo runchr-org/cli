@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/spf13/cobra"
 )
