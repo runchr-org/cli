@@ -74,7 +74,7 @@ Examples:
 
 	cmd.Flags().StringVar(&opts.SessionID, "session", "", "Session ID or prefix to generate from")
 	cmd.Flags().StringVarP(&opts.Output, "output", "o", "", "Output skill directory (default: ./<session-description>-skill)")
-	cmd.Flags().BoolVarP(&opts.Force, "force", "f", false, "Overwrite an existing output directory")
+	cmd.Flags().BoolVarP(&opts.Force, "force", "f", false, "Allow writing to an existing output directory and overwrite SKILL.md")
 
 	return cmd
 }
