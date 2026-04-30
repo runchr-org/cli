@@ -246,8 +246,11 @@ func (m whyTUIModel) renderHeader() string {
 
 	lineLabel := fmt.Sprintf("%s:%d", m.data.GitPath, row.FinalLine)
 	header := fmt.Sprintf(
-		"%s  checkpoint %s",
+		"%s  commit %s  author %s  date %s  checkpoint %s",
 		lineLabel,
+		whyStaticCommit(row),
+		whyStaticAuthor(row),
+		whyStaticTime(row),
 		whyStaticCheckpoint(info),
 	)
 	return fitWhyTUILine(header, m.width) + "\n\n"

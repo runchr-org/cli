@@ -219,6 +219,40 @@ func TestWhyTUIModel_ViewHighlightsSelectedRow(t *testing.T) {
 	}
 }
 
+func TestWhyTUIModel_HeaderShowsSelectedLineMetadata(t *testing.T) {
+	t.Parallel()
+
+	hash := plumbing.NewHash("c56b7ac719000000000000000000000000000000")
+	cpID := id.MustCheckpointID("a1b2c3d4e5f6")
+	row := testWhyTUIRow(hash, 15, "selected := true")
+	row.Author = whyTestAuthor
+	row.AuthorTime = time.Now().Add(-6 * 24 * time.Hour)
+	data := whyViewData{
+		GitPath: "cmd/main.go",
+		Rows:    []whyBlameRow{row},
+		Commits: map[plumbing.Hash]whyCommitInfo{
+			hash: {
+				Hash:         hash,
+				CheckpointID: cpID,
+			},
+		},
+	}
+	m := newWhyTUIModel(data, statusStyles{colorEnabled: false, width: 160})
+
+	header := strings.Split(m.View(), "\n")[0]
+	for _, want := range []string{
+		"cmd/main.go:15",
+		"commit c56b7ac719",
+		"author " + whyTestAuthor,
+		"date 6d ago",
+		"checkpoint " + cpID.String(),
+	} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("header missing %q: %q", want, header)
+		}
+	}
+}
+
 func TestWhyTUIModel_ViewShowsStickyGutterHeader(t *testing.T) {
 	t.Parallel()
 
