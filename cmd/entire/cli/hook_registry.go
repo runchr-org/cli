@@ -76,14 +76,12 @@ func getHookType(hookName string) string {
 	}
 }
 
-// executeAgentHook runs the core hook execution logic for a given agent and hook name.
-// It handles git repo checks, enabled checks, logging, event parsing, and lifecycle dispatch.
-// Used by both the registered subcommand path and the RunE fallback for external agents.
-// When enrichCtx is true, it enriches cmd.Context() with the discovered session ID
-// (used by the RunE fallback since it doesn't go through PersistentPreRunE).
-// Built-in agent subcommands pass false since their parent command's PersistentPreRunE
-// already handles enrichment.
-func executeAgentHook(cmd *cobra.Command, agentName types.AgentName, hookName string, enrichCtx bool) error {
+// executeAgentHook runs the core hook execution logic for a given agent and
+// hook name. It handles git repo checks, enabled checks, event parsing, and
+// lifecycle dispatch. The caller is responsible for ensuring cmd.Context()
+// has been enriched via enrichHookContext (built-in subcommands do this in
+// PersistentPreRunE; the external RunE fallback does it before calling).
+func executeAgentHook(cmd *cobra.Command, agentName types.AgentName, hookName string) error {
 	// Skip silently if not in a git repository - hooks shouldn't prevent the agent from working
 	if _, err := paths.WorktreeRoot(cmd.Context()); err != nil {
 		return nil
@@ -93,10 +91,6 @@ func executeAgentHook(cmd *cobra.Command, agentName types.AgentName, hookName st
 	enabled, err := IsEnabled(cmd.Context())
 	if err == nil && !enabled {
 		return nil
-	}
-
-	if enrichCtx {
-		cmd.SetContext(enrichHookContext(cmd.Context()))
 	}
 
 	// Initialize logging context with agent name
@@ -163,7 +157,7 @@ func newAgentHookVerbCmdWithLogging(agentName types.AgentName, hookName string) 
 		Hidden: true,
 		Short:  "Called on " + hookName,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return executeAgentHook(cmd, agentName, hookName, false)
+			return executeAgentHook(cmd, agentName, hookName)
 		},
 	}
 }

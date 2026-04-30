@@ -51,7 +51,8 @@ func newHooksCmd() *cobra.Command {
 				return fmt.Errorf("unknown agent %q (not found as built-in or external plugin)", agentName)
 			}
 
-			return executeAgentHook(cmd, agentName, hookName, true)
+			cmd.SetContext(enrichHookContext(cmd.Context()))
+			return executeAgentHook(cmd, agentName, hookName)
 		},
 	}
 

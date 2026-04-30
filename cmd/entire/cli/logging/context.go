@@ -62,22 +62,20 @@ func WithAgent(ctx context.Context, agentName types.AgentName) context.Context {
 // string if none. Useful for callers that need the raw ID for non-logging
 // decisions (e.g., test assertions, hook routing).
 func SessionIDFromContext(ctx context.Context) string {
-	if v := ctx.Value(sessionIDKey); v != nil {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
+	return stringFromContext(ctx, sessionIDKey)
 }
 
 // ParentSessionIDFromContext returns the parent session ID stored by
 // WithParentSession or by WithSession's auto-promotion, or empty string if
 // none. See SessionIDFromContext for usage notes.
 func ParentSessionIDFromContext(ctx context.Context) string {
-	if v := ctx.Value(parentSessionIDKey); v != nil {
-		if s, ok := v.(string); ok {
-			return s
-		}
+	return stringFromContext(ctx, parentSessionIDKey)
+}
+
+// stringFromContext returns the string value stored under key, or "".
+func stringFromContext(ctx context.Context, key contextKey) string {
+	if s, ok := ctx.Value(key).(string); ok {
+		return s
 	}
 	return ""
 }
@@ -91,20 +89,17 @@ func attrsFromContext(ctx context.Context) []slog.Attr {
 		return nil
 	}
 	var attrs []slog.Attr
-	if s, ok := ctx.Value(sessionIDKey).(string); ok && s != "" {
-		attrs = append(attrs, slog.String("session_id", s))
-	}
-	if s, ok := ctx.Value(parentSessionIDKey).(string); ok && s != "" {
-		attrs = append(attrs, slog.String("parent_session_id", s))
-	}
-	if s, ok := ctx.Value(toolCallIDKey).(string); ok && s != "" {
-		attrs = append(attrs, slog.String("tool_call_id", s))
-	}
-	if s, ok := ctx.Value(componentKey).(string); ok && s != "" {
-		attrs = append(attrs, slog.String("component", s))
-	}
-	if s, ok := ctx.Value(agentKey).(string); ok && s != "" {
-		attrs = append(attrs, slog.String("agent", s))
+	attrs = appendStringAttr(ctx, attrs, sessionIDKey, "session_id")
+	attrs = appendStringAttr(ctx, attrs, parentSessionIDKey, "parent_session_id")
+	attrs = appendStringAttr(ctx, attrs, toolCallIDKey, "tool_call_id")
+	attrs = appendStringAttr(ctx, attrs, componentKey, "component")
+	attrs = appendStringAttr(ctx, attrs, agentKey, "agent")
+	return attrs
+}
+
+func appendStringAttr(ctx context.Context, attrs []slog.Attr, key contextKey, name string) []slog.Attr {
+	if s := stringFromContext(ctx, key); s != "" {
+		return append(attrs, slog.String(name, s))
 	}
 	return attrs
 }

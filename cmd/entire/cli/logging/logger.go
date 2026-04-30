@@ -195,17 +195,19 @@ func LogDuration(ctx context.Context, level slog.Level, msg string, start time.T
 // log routes a record to the ctx-carried logger, materialising the typed-key
 // enrichment attrs (session_id, component, …) from ctx as slog.Attrs.
 //
-// The logger value in ctx is immutable for the lifetime of the request and the
-// file closer fires only after main.go's defer (i.e., after ExecuteContext
-// returns), so no synchronisation is needed here.
-//
-// Attrs are appended fresh per call rather than baked into the logger via
-// slog.With to avoid duplicate JSON keys when WithSession nests (slog.With
-// accumulates without deduplicating).
+// Bails out before any allocation when the level is filtered, so a Debug call
+// in a hot path costs ~one level compare when DEBUG is disabled. Attrs are
+// appended fresh per call rather than baked into the logger via slog.With,
+// because slog.With accumulates without deduplicating and would produce
+// duplicate JSON keys when WithSession nests.
 func log(ctx context.Context, level slog.Level, msg string, attrs ...any) {
+	l := LoggerFromContext(ctx)
+	if !l.Enabled(ctx, level) {
+		return
+	}
 	ctxAttrs := attrsFromContext(ctx)
 	if len(ctxAttrs) == 0 {
-		LoggerFromContext(ctx).Log(ctx, level, msg, attrs...)
+		l.Log(ctx, level, msg, attrs...)
 		return
 	}
 	allAttrs := make([]any, 0, len(ctxAttrs)+len(attrs))
@@ -213,7 +215,7 @@ func log(ctx context.Context, level slog.Level, msg string, attrs ...any) {
 		allAttrs = append(allAttrs, a)
 	}
 	allAttrs = append(allAttrs, attrs...)
-	LoggerFromContext(ctx).Log(ctx, level, msg, allAttrs...)
+	l.Log(ctx, level, msg, allAttrs...)
 }
 
 // lazyWriter opens .entire/logs/entire.log on first write, falling back to
