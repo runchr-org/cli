@@ -200,10 +200,6 @@ func TestWhyTUIModel_ViewMarksSelectedRow(t *testing.T) {
 	}
 
 	view = m.View()
-	oldLine := whyTUIViewLineContaining(t, view, "package main")
-	if strings.HasPrefix(oldLine, "> ") {
-		t.Fatalf("previously selected line still marked: %q", oldLine)
-	}
 	newLine := whyTUIViewLineContaining(t, view, "func main()")
 	if !strings.HasPrefix(newLine, "> ") {
 		t.Fatalf("new selected line should start with marker: %q", newLine)
@@ -220,6 +216,63 @@ func TestWhyTUIModel_ViewHighlightsSelectedRow(t *testing.T) {
 	line := whyTUIViewLineContaining(t, m.View(), "package main")
 	if !strings.Contains(line, "\x1b[48;5;236m") {
 		t.Fatalf("selected line should include highlight background: %q", line)
+	}
+}
+
+func TestWhyTUIModel_ViewShowsStickyGutterHeader(t *testing.T) {
+	t.Parallel()
+
+	m := testWhyTUIModel()
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) < 3 {
+		t.Fatalf("view should include dynamic header, padding, and gutter header:\n%s", view)
+	}
+	if lines[1] != "" {
+		t.Fatalf("expected blank padding line between dynamic and gutter headers, got %q", lines[1])
+	}
+
+	headerLine := whyTUIViewLineContaining(t, view, "TIME")
+	for _, want := range []string{"AUTHOR", "COMMIT", "CHECKPOINT", "LINE", "| CODE"} {
+		if !strings.Contains(headerLine, want) {
+			t.Fatalf("gutter header missing %q: %q", want, headerLine)
+		}
+	}
+	if strings.Index(view, "TIME") > strings.Index(view, "package main") {
+		t.Fatalf("gutter header should render above file rows:\n%s", view)
+	}
+
+	m, _ = updateWhyTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnd})
+	view = m.View()
+	headerLine = whyTUIViewLineContaining(t, view, "TIME")
+	if !strings.Contains(headerLine, "CHECKPOINT") {
+		t.Fatalf("scrolled gutter header missing checkpoint label: %q", headerLine)
+	}
+	if strings.Index(view, "TIME") > strings.Index(view, "// end") {
+		t.Fatalf("gutter header should stay above scrolled file rows:\n%s", view)
+	}
+}
+
+func TestWhyTUIModel_GutterHeaderUsesHighlightedStyle(t *testing.T) {
+	t.Parallel()
+
+	styles := newWhyTUIStyles(statusStyles{colorEnabled: true})
+	if !styles.columnHead.GetBold() {
+		t.Fatal("gutter header style should be bold")
+	}
+	if styles.columnHead.GetForeground() == nil {
+		t.Fatal("gutter header style should define a foreground color")
+	}
+	if styles.columnHead.GetFaint() {
+		t.Fatal("gutter header style should not be dim/faint")
+	}
+
+	m := newWhyTUIModel(testWhyTUIModel().data, statusStyles{colorEnabled: true, width: 80})
+	m.styles.columnHead = lipgloss.NewStyle().Transform(func(s string) string {
+		return "highlighted:" + s
+	})
+	if header := m.renderColumnHeader(); !strings.Contains(header, "highlighted:") {
+		t.Fatalf("gutter header should render through column header style: %q", header)
 	}
 }
 

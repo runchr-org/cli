@@ -21,6 +21,7 @@ type whyTUIStyles struct {
 	commit     lipgloss.Style
 	lineNo     lipgloss.Style
 	checkpoint lipgloss.Style
+	columnHead lipgloss.Style
 	helpKey    lipgloss.Style
 	helpSep    lipgloss.Style
 }
@@ -80,6 +81,7 @@ func newWhyTUIStyles(ss statusStyles) whyTUIStyles {
 	s.author = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 	s.commit = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	s.checkpoint = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	s.columnHead = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 	s.helpKey = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 	s.helpSep = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	return s
@@ -138,6 +140,7 @@ func (m whyTUIModel) View() string {
 
 	var b strings.Builder
 	b.WriteString(m.renderHeader())
+	b.WriteString(m.renderColumnHeader())
 	b.WriteString(m.renderViewport())
 	b.WriteString("\n")
 	b.WriteString(m.renderFooter())
@@ -200,7 +203,8 @@ func leadingSGRLen(s string) int {
 }
 
 func (m whyTUIModel) refreshViewport() whyTUIModel {
-	headerHeight := strings.Count(m.renderHeader(), "\n")
+	m.lineWidth = whyLineColumnWidth(m.data.Rows)
+	headerHeight := strings.Count(m.renderHeader(), "\n") + strings.Count(m.renderColumnHeader(), "\n")
 	vpHeight := m.height - headerHeight - 1
 	if vpHeight < 1 {
 		vpHeight = 1
@@ -213,7 +217,6 @@ func (m whyTUIModel) refreshViewport() whyTUIModel {
 		m.viewport.Width = m.width
 		m.viewport.Height = vpHeight
 	}
-	m.lineWidth = whyLineColumnWidth(m.data.Rows)
 	m.viewport.SetContent(m.renderRows())
 	return m.ensureSelectedVisible()
 }
@@ -247,7 +250,24 @@ func (m whyTUIModel) renderHeader() string {
 		lineLabel,
 		whyStaticCheckpoint(info),
 	)
-	return fitWhyTUILine(header, m.width) + "\n"
+	return fitWhyTUILine(header, m.width) + "\n\n"
+}
+
+func (m whyTUIModel) renderColumnHeader() string {
+	if len(m.data.Rows) == 0 {
+		return ""
+	}
+
+	lineWidth := m.currentLineWidth()
+	line := "  " + strings.Join([]string{
+		whyTUIHeaderColumn("TIME", whyTimeMaxWidth),
+		whyTUIHeaderColumn("AUTHOR", whyAuthorMaxWidth),
+		whyTUIHeaderColumn("COMMIT", whyCommitColumnWidth),
+		whyTUIHeaderColumn("CHECKPOINT", whyTUICheckpointMaxWidth),
+		whyTUIHeaderColumn("LINE", lineWidth),
+	}, " ") + " | CODE"
+	line = fitWhyTUILine(line, m.width)
+	return m.styles.render(m.styles.columnHead, line) + "\n"
 }
 
 func (m whyTUIModel) renderRows() string {
@@ -367,6 +387,11 @@ func whyTUIColumn(value string, width int, style lipgloss.Style, colorEnabled bo
 		return value
 	}
 	return style.Render(value)
+}
+
+func whyTUIHeaderColumn(value string, width int) string {
+	value = truncateDisplayWidth(value, width, "...")
+	return value + strings.Repeat(" ", max(width-lipgloss.Width(value), 0))
 }
 
 func whyTUICheckpoint(info whyCommitInfo) string {
