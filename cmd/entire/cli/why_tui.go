@@ -16,15 +16,10 @@ import (
 type whyTUIStyles struct {
 	statusStyles
 
-	time           lipgloss.Style
-	author         lipgloss.Style
-	agentID        lipgloss.Style
-	lineNo         lipgloss.Style
-	commit         lipgloss.Style
-	checkpoint     lipgloss.Style
-	selectedMarker lipgloss.Style
-	helpKey        lipgloss.Style
-	helpSep        lipgloss.Style
+	lineNo     lipgloss.Style
+	checkpoint lipgloss.Style
+	helpKey    lipgloss.Style
+	helpSep    lipgloss.Style
 }
 
 type whyTUIModel struct {
@@ -36,14 +31,10 @@ type whyTUIModel struct {
 	height   int
 	ready    bool
 
-	metadataWidth int
+	lineWidth int
 }
 
 const (
-	whyTUITimeMaxWidth       = 10
-	whyTUIAuthorMaxWidth     = 16
-	whyTUIAgentsMaxWidth     = 20
-	whyTUICommitWidth        = 10
 	whyTUICheckpointMaxWidth = 12
 )
 
@@ -79,13 +70,8 @@ func newWhyTUIStyles(ss statusStyles) whyTUIStyles {
 		return s
 	}
 
-	s.time = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	s.author = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	s.agentID = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	s.lineNo = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	s.commit = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	s.checkpoint = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	s.selectedMarker = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(agentDisplayMap["claude"].Color))
 	s.helpKey = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 	s.helpSep = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	return s
@@ -116,21 +102,19 @@ func (m whyTUIModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) { //nolint:i
 	case key.Matches(msg, keys.Up):
 		if m.selected > 0 {
 			m.selected--
-			m = m.refreshViewport()
+			m = m.ensureSelectedVisible()
 		}
 	case key.Matches(msg, keys.Down):
 		if m.selected < len(m.data.Rows)-1 {
 			m.selected++
-			m = m.refreshViewport()
+			m = m.ensureSelectedVisible()
 		}
 	case key.Matches(msg, keys.Home):
 		m.selected = 0
-		m = m.refreshViewport()
 		m.viewport.GotoTop()
 	case key.Matches(msg, keys.End):
 		if len(m.data.Rows) > 0 {
 			m.selected = len(m.data.Rows) - 1
-			m = m.refreshViewport()
 			m.viewport.GotoBottom()
 		}
 	case key.Matches(msg, keys.Confirm):
@@ -166,7 +150,7 @@ func (m whyTUIModel) refreshViewport() whyTUIModel {
 		m.viewport.Width = m.width
 		m.viewport.Height = vpHeight
 	}
-	m.metadataWidth = m.computeMetadataWidth()
+	m.lineWidth = whyLineColumnWidth(m.data.Rows)
 	m.viewport.SetContent(m.renderRows())
 	return m.ensureSelectedVisible()
 }
@@ -193,30 +177,14 @@ func (m whyTUIModel) renderHeader() string {
 
 	row := m.data.Rows[m.selected]
 	info := m.commitInfoForRow(row)
-	commit := whyStaticCommit(info.Hash)
-	author := whyStaticAuthor(row, info)
-	date := "-"
-	if !info.AuthorTime.IsZero() {
-		date = info.AuthorTime.Format("2006-01-02")
-	} else if !row.AuthorTime.IsZero() {
-		date = row.AuthorTime.Format("2006-01-02")
-	}
 
 	lineLabel := fmt.Sprintf("%s:%d", m.data.GitPath, row.FinalLine)
-	first := fmt.Sprintf(
-		"%s  commit %s  author %s  date %s",
+	header := fmt.Sprintf(
+		"%s  checkpoint %s",
 		lineLabel,
-		commit,
-		author,
-		date,
-	)
-	second := fmt.Sprintf(
-		"checkpoint %s  agent %s  summary %s",
 		whyStaticCheckpoint(info),
-		m.styles.renderAgent(whyStaticAgent(info)),
-		whyTUISummary(info),
 	)
-	return fitWhyTUILine(first, m.width) + "\n" + fitWhyTUILine(second, m.width) + "\n"
+	return fitWhyTUILine(header, m.width) + "\n"
 }
 
 func (m whyTUIModel) renderRows() string {
@@ -224,7 +192,8 @@ func (m whyTUIModel) renderRows() string {
 		return "No blame lines for this file."
 	}
 
-	gutterWidth := m.gutterWidth()
+	lineWidth := m.currentLineWidth()
+	gutterWidth := m.gutterWidth(lineWidth)
 	codeWidth := max(m.width-gutterWidth, 0)
 	sourceLines := make([]string, len(m.data.Rows))
 	for i, row := range m.data.Rows {
@@ -234,7 +203,7 @@ func (m whyTUIModel) renderRows() string {
 
 	var b strings.Builder
 	for i, row := range m.data.Rows {
-		line := m.renderGutter(i, row)
+		line := m.renderGutter(row, lineWidth)
 		if codeWidth > 0 && i < len(highlightedLines) {
 			line += highlightedLines[i]
 		}
@@ -246,98 +215,30 @@ func (m whyTUIModel) renderRows() string {
 	return b.String()
 }
 
-func (m whyTUIModel) renderGutter(rowIndex int, row whyBlameRow) string {
-	marker := " "
-	if rowIndex == m.selected {
-		marker = m.styles.render(m.styles.selectedMarker, ">")
-	}
-
-	hash := plumbing.NewHash(row.CommitHash)
+func (m whyTUIModel) renderGutter(row whyBlameRow, lineWidth int) string {
 	info := m.commitInfoForRow(row)
-	lineNo := fmt.Sprintf("%*d", whyLineColumnWidth(m.data.Rows), row.FinalLine)
-	metadata := m.renderBlameMetadata(rowIndex, row, hash, info)
-	lineColumn := whyTUIColumn(lineNo, whyLineColumnWidth(m.data.Rows), m.styles.lineNo, m.styles.colorEnabled)
-
-	return fmt.Sprintf("%s %s | %s | ", marker, metadata, lineColumn)
+	lineNo := fmt.Sprintf("%*d", lineWidth, row.FinalLine)
+	lineColumn := whyTUIColumn(lineNo, lineWidth, m.styles.lineNo, m.styles.colorEnabled)
+	checkpoint := whyTUIColumn(whyTUICheckpoint(info), whyTUICheckpointMaxWidth, m.styles.checkpoint, m.styles.colorEnabled)
+	return fmt.Sprintf("%s %s | ", lineColumn, checkpoint)
 }
 
-func (m whyTUIModel) renderBlameMetadata(rowIndex int, row whyBlameRow, hash plumbing.Hash, info whyCommitInfo) string {
-	if !m.shouldShowBlameMetadata(rowIndex, row) {
-		return strings.Repeat(" ", m.metadataWidth)
+func (m whyTUIModel) currentLineWidth() int {
+	if m.lineWidth > 0 {
+		return m.lineWidth
 	}
-
-	metadata := m.renderBlameMetadataCompact(row, hash, info)
-	padding := max(m.metadataWidth-lipgloss.Width(metadata), 0)
-	return metadata + strings.Repeat(" ", padding)
+	return whyLineColumnWidth(m.data.Rows)
 }
 
-func (m whyTUIModel) shouldShowBlameMetadata(rowIndex int, row whyBlameRow) bool {
-	if len(m.data.Blocks) == 0 || row.BlockIndex < 0 || row.BlockIndex >= len(m.data.Blocks) {
-		return true
-	}
-	return m.data.Blocks[row.BlockIndex].StartRow == rowIndex
-}
-
-func (m whyTUIModel) renderBlameMetadataCompact(row whyBlameRow, hash plumbing.Hash, info whyCommitInfo) string {
-	agentStyle := m.styles.agentID
-	if m.styles.colorEnabled {
-		if agentIDs := whyCheckpointAgentIDs(info); len(agentIDs) > 0 {
-			agentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(agentDisplayMap[agentIDs[0]].Color))
-		}
-	}
-
-	parts := []struct {
-		value string
-		style lipgloss.Style
-	}{
-		{value: whyTUITime(row, info), style: m.styles.time},
-		{value: whyTUIAuthor(row, info), style: m.styles.author},
-		{value: whyTUIAgents(info), style: agentStyle},
-		{value: whyTUICommit(hash), style: m.styles.commit},
-		{value: whyTUICheckpoint(info), style: m.styles.checkpoint},
-	}
-
-	rendered := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if !m.styles.colorEnabled {
-			rendered = append(rendered, part.value)
-			continue
-		}
-		rendered = append(rendered, part.style.Render(part.value))
-	}
-	return strings.Join(rendered, " ")
-}
-
-func (m whyTUIModel) computeMetadataWidth() int {
-	width := 0
-	for i, row := range m.data.Rows {
-		if !m.shouldShowBlameMetadata(i, row) {
-			continue
-		}
-		hash := plumbing.NewHash(row.CommitHash)
-		info := m.commitInfoForRow(row)
-		metadata := strings.Join([]string{
-			whyTUITime(row, info),
-			whyTUIAuthor(row, info),
-			whyTUIAgents(info),
-			whyTUICommit(hash),
-			whyTUICheckpoint(info),
-		}, " ")
-		width = max(width, lipgloss.Width(metadata))
-	}
-	return width
-}
-
-func (m whyTUIModel) gutterWidth() int {
+func (m whyTUIModel) gutterWidth(lineWidth int) int {
 	if len(m.data.Rows) == 0 {
 		return 0
 	}
 	sample := fmt.Sprintf(
-		"%s %s | %*d | ",
-		">",
-		strings.Repeat("x", m.metadataWidth),
-		whyLineColumnWidth(m.data.Rows),
+		"%*d %s | ",
+		lineWidth,
 		1,
+		strings.Repeat("x", whyTUICheckpointMaxWidth),
 	)
 	return lipgloss.Width(sample)
 }
@@ -392,24 +293,6 @@ func (s whyTUIStyles) helpItem(keyLabel, desc string) string {
 	return s.render(s.helpKey, keyLabel) + " " + desc
 }
 
-func (s whyTUIStyles) renderAgent(agent string) string {
-	if !s.colorEnabled || agent == "-" {
-		return agent
-	}
-	firstAgent, _, _ := strings.Cut(agent, ",")
-	display := whyAgentDisplay(strings.TrimSpace(firstAgent))
-	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(display.Color)).Render(agent)
-}
-
-func whyAgentDisplay(agent string) agentDisplay {
-	id := normalizeAgentString(agent)
-	display, ok := agentDisplayMap[id]
-	if !ok {
-		return agentDisplayMap[agentUnknown]
-	}
-	return display
-}
-
 func whyTUIColumn(value string, width int, style lipgloss.Style, colorEnabled bool) string {
 	value = truncateDisplayWidth(value, width, "...")
 	value += strings.Repeat(" ", max(width-lipgloss.Width(value), 0))
@@ -417,36 +300,6 @@ func whyTUIColumn(value string, width int, style lipgloss.Style, colorEnabled bo
 		return value
 	}
 	return style.Render(value)
-}
-
-func whyTUITime(row whyBlameRow, info whyCommitInfo) string {
-	value := "-"
-	if !info.AuthorTime.IsZero() {
-		value = timeAgo(info.AuthorTime)
-	} else if !row.AuthorTime.IsZero() {
-		value = timeAgo(row.AuthorTime)
-	}
-	return truncateDisplayWidth(value, whyTUITimeMaxWidth, "...")
-}
-
-func whyTUIAuthor(row whyBlameRow, info whyCommitInfo) string {
-	return truncateDisplayWidth(whyStaticAuthor(row, info), whyTUIAuthorMaxWidth, "...")
-}
-
-func whyTUIAgents(info whyCommitInfo) string {
-	agents := whyCheckpointAgentNames(info)
-	if len(agents) == 0 {
-		return "-"
-	}
-	return truncateDisplayWidth("("+strings.Join(agents, ", ")+")", whyTUIAgentsMaxWidth, "...")
-}
-
-func whyTUICommit(hash plumbing.Hash) string {
-	full := hash.String()
-	if len(full) <= whyTUICommitWidth {
-		return full
-	}
-	return full[:whyTUICommitWidth]
 }
 
 func whyTUICheckpoint(info whyCommitInfo) string {
@@ -458,14 +311,4 @@ func fitWhyTUILine(line string, width int) string {
 		return ""
 	}
 	return truncateDisplayWidth(line, width, "")
-}
-
-func whyTUISummary(info whyCommitInfo) string {
-	if strings.TrimSpace(info.Summary) != "" {
-		return info.Summary
-	}
-	if strings.TrimSpace(info.Subject) != "" {
-		return info.Subject
-	}
-	return whyNotGeneratedSummary
 }

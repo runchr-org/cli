@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entireio/cli/cmd/entire/cli/agent/types"
-	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
@@ -15,7 +13,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
-func TestRenderWhyStatic_IncludesEnrichedColumns(t *testing.T) {
+func TestRenderWhyStatic_IncludesCheckpointColumn(t *testing.T) {
 	t.Parallel()
 
 	hash := plumbing.NewHash("abcdef1234567890abcdef1234567890abcdef12")
@@ -27,7 +25,6 @@ func TestRenderWhyStatic_IncludesEnrichedColumns(t *testing.T) {
 				whyBlameLine: whyBlameLine{
 					CommitHash: hash.String(),
 					FinalLine:  12,
-					Author:     "Fallback Author",
 					Source:     "func main() {",
 				},
 			},
@@ -35,12 +32,7 @@ func TestRenderWhyStatic_IncludesEnrichedColumns(t *testing.T) {
 		Commits: map[plumbing.Hash]whyCommitInfo{
 			hash: {
 				Hash:         hash,
-				Author:       "Pat Example",
 				CheckpointID: cpID,
-				Checkpoint: whyCheckpointInfo{
-					Found:  true,
-					Agents: []types.AgentType{types.AgentType("Claude Code")},
-				},
 			},
 		},
 	}
@@ -48,13 +40,10 @@ func TestRenderWhyStatic_IncludesEnrichedColumns(t *testing.T) {
 	output := renderWhyStatic(data)
 	assertWhyOutputContains(t, output,
 		"LINE",
-		"COMMIT",
-		"AUTHOR",
 		"CHECKPOINT",
-		"AGENT",
-		"  12 abcdef12 Pat Example",
+		"CODE",
+		"  12",
 		cpID.String(),
-		"Claude Code",
 		"func main() {",
 	)
 }
@@ -70,7 +59,6 @@ func TestRenderWhyStatic_FallbackValuesForNonEntireCommit(t *testing.T) {
 				whyBlameLine: whyBlameLine{
 					CommitHash: hash.String(),
 					FinalLine:  1,
-					Author:     "Git Author",
 					Source:     "package main",
 				},
 			},
@@ -80,24 +68,9 @@ func TestRenderWhyStatic_FallbackValuesForNonEntireCommit(t *testing.T) {
 
 	output := renderWhyStatic(data)
 	assertWhyOutputContains(t, output,
-		"1 11111111 Git Author",
-		"-            -",
+		"1 -",
 		"package main",
 	)
-}
-
-func TestWhyStaticAgent_RendersAllCheckpointAgents(t *testing.T) {
-	t.Parallel()
-
-	info := whyCommitInfo{
-		Checkpoint: whyCheckpointInfo{
-			Agents: []types.AgentType{types.AgentType("claude"), types.AgentType("Codex")},
-		},
-	}
-
-	if got := whyStaticAgent(info); got != "Claude Code, Codex" {
-		t.Fatalf("whyStaticAgent() = %q, want Claude Code, Codex", got)
-	}
 }
 
 func TestWhyStaticMode_RendersFileForNonInteractiveOutput(t *testing.T) {
@@ -119,26 +92,19 @@ func TestWhyStaticMode_RendersFileForNonInteractiveOutput(t *testing.T) {
 
 	assertWhyOutputContains(t, out.String(),
 		"LINE",
-		"COMMIT",
-		"AUTHOR",
 		"CHECKPOINT",
-		"AGENT",
+		"CODE",
 		"package main",
 		"func main() {}",
 	)
 }
 
-func TestWhyStaticMode_RendersEntireCheckpointData(t *testing.T) {
+func TestWhyStaticMode_RendersCheckpointTrailer(t *testing.T) {
 	ctx := context.Background()
 	repoDir := t.TempDir()
 	testutil.InitRepo(t, repoDir)
 	cpID := id.MustCheckpointID("b1b2c3d4e5f6")
-	whyTestCommit(t, repoDir, "linked commit\n\nEntire-Checkpoint: "+cpID.String()+"\n", "package main\n")
-	repo := whyTestOpenRepo(t, repoDir)
-	whyTestWriteCommittedCheckpoint(ctx, t, repo, cpID, &checkpoint.Summary{
-		Intent:  "Explain static why",
-		Outcome: "Rendered checkpoint columns",
-	}, []string{"prompt"})
+	whyTestCommit(t, repoDir, "linked commit\n\nEntire-Checkpoint: "+cpID.String()+"\n")
 
 	t.Chdir(repoDir)
 	paths.ClearWorktreeRootCache()
@@ -152,7 +118,6 @@ func TestWhyStaticMode_RendersEntireCheckpointData(t *testing.T) {
 
 	assertWhyOutputContains(t, out.String(),
 		cpID.String(),
-		"Claude Code",
 		"package main",
 	)
 }

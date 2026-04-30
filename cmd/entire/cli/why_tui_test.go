@@ -3,11 +3,9 @@ package cli
 import (
 	"strings"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/go-git/go-git/v6/plumbing"
 )
@@ -28,18 +26,10 @@ func testWhyTUIModel() whyTUIModel {
 		Rows:    rows,
 		Commits: map[plumbing.Hash]whyCommitInfo{
 			hashA: {
-				Hash:       hashA,
-				Subject:    "initial",
-				Author:     "Pat Example",
-				AuthorTime: time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC),
-				Summary:    "initial",
+				Hash: hashA,
 			},
 			hashB: {
-				Hash:       hashB,
-				Subject:    "update main",
-				Author:     "Sam Example",
-				AuthorTime: time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC),
-				Summary:    "update main",
+				Hash: hashB,
 			},
 		},
 	}
@@ -187,72 +177,38 @@ func TestWhyTUIModel_SelectedLineRemainsVisible(t *testing.T) {
 	}
 }
 
-func TestWhyTUIModel_GutterShowsBlameMetadataColumns(t *testing.T) {
+func TestWhyTUIModel_GutterShowsLineAndCheckpoint(t *testing.T) {
 	t.Parallel()
 
 	hash := plumbing.NewHash("c56b7ac719000000000000000000000000000000")
 	cpID := id.MustCheckpointID("a1b2c3d4e5f6")
 	firstRow := testWhyTUIRow(hash, 15, "first")
-	firstRow.BlockIndex = 0
 	secondRow := testWhyTUIRow(hash, 16, "second")
-	secondRow.BlockIndex = 0
 	data := whyViewData{
 		GitPath: "cmd/main.go",
 		Rows:    []whyBlameRow{firstRow, secondRow},
-		Blocks: []whyBlameBlock{
-			{CommitHash: hash.String(), StartLine: 15, EndLine: 16, StartRow: 0, EndRow: 1},
-		},
 		Commits: map[plumbing.Hash]whyCommitInfo{
 			hash: {
 				Hash:         hash,
-				Author:       "Example Author",
-				AuthorTime:   time.Now().Add(-6 * 24 * time.Hour),
 				CheckpointID: cpID,
-				Checkpoint: whyCheckpointInfo{
-					Agents: []types.AgentType{types.AgentType("Claude Code")},
-				},
 			},
 		},
 	}
 	m := newWhyTUIModel(data, statusStyles{colorEnabled: false, width: 140})
+	lineWidth := whyLineColumnWidth(m.data.Rows)
 
-	gutter := m.renderGutter(0, firstRow)
-	for _, want := range []string{"ago", "Example Author", "(Claude Code)", "c56b7ac719", cpID.String(), "15"} {
+	gutter := m.renderGutter(firstRow, lineWidth)
+	for _, want := range []string{"15", cpID.String()} {
 		if !strings.Contains(gutter, want) {
 			t.Fatalf("gutter missing %q: %q", want, gutter)
 		}
 	}
-	if !strings.Contains(gutter, "Example Author (Claude Code) c56b7ac719 "+cpID.String()) {
-		t.Fatalf("gutter should use compact single-space metadata columns: %q", gutter)
-	}
-	for _, unwanted := range []string{"Example Author  ", "(Claude Code)  ", "c56b7ac719  "} {
-		if strings.Contains(gutter, unwanted) {
-			t.Fatalf("gutter contains unnecessary internal spacing %q: %q", unwanted, gutter)
+
+	next := m.renderGutter(secondRow, lineWidth)
+	for _, want := range []string{"16", cpID.String()} {
+		if !strings.Contains(next, want) {
+			t.Fatalf("next gutter missing %q: %q", want, next)
 		}
-	}
-
-	continuation := m.renderGutter(1, secondRow)
-	for _, hidden := range []string{"Example Author", "(Claude Code)", "c56b7ac719", cpID.String()} {
-		if strings.Contains(continuation, hidden) {
-			t.Fatalf("continuation gutter should not repeat %q: %q", hidden, continuation)
-		}
-	}
-	if !strings.Contains(continuation, "16") {
-		t.Fatalf("continuation gutter missing line number: %q", continuation)
-	}
-}
-
-func TestWhyTUIAgents_RendersAllCheckpointAgents(t *testing.T) {
-	t.Parallel()
-
-	info := whyCommitInfo{
-		Checkpoint: whyCheckpointInfo{
-			Agents: []types.AgentType{types.AgentType("claude"), types.AgentType("Codex")},
-		},
-	}
-
-	if got := whyTUIAgents(info); got != "(Claude Code, Codex)" {
-		t.Fatalf("whyTUIAgents() = %q, want (Claude Code, Codex)", got)
 	}
 }
 
@@ -303,33 +259,5 @@ func TestWhyTUIModel_FooterFallsBackWithoutOverflow(t *testing.T) {
 	footer = m.renderFooter()
 	if got := lipgloss.Width(footer); got != m.width {
 		t.Fatalf("narrow footer width = %d, want %d: %q", got, m.width, footer)
-	}
-}
-
-func TestWhyTUIAgentDisplayUsesActivityPalette(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		agent string
-		id    string
-	}{
-		{name: "claude", agent: "Claude Code", id: "claude"},
-		{name: "gemini", agent: "Gemini CLI", id: "gemini"},
-		{name: "copilot", agent: "Copilot CLI", id: "copilot"},
-		{name: "droid", agent: "Factory AI Droid", id: "droid"},
-		{name: "unknown", agent: "Mystery Agent", id: "unknown"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := whyAgentDisplay(tt.agent)
-			want := agentDisplayMap[tt.id]
-			if got.Color != want.Color || got.Label != want.Label {
-				t.Fatalf("whyAgentDisplay(%q) = %#v, want %#v", tt.agent, got, want)
-			}
-		})
 	}
 }

@@ -187,17 +187,8 @@ func loadWhyViewData(ctx context.Context, repoRoot, gitPath string) (whyViewData
 	}
 	openRepoSpan.End()
 
-	_, lookupSpan := perf.Start(ctx, "init_checkpoint_lookup")
-	lookup, err := newWhyCheckpointLookup(ctx, repo)
-	if err != nil {
-		lookupSpan.RecordError(err)
-		lookupSpan.End()
-		return whyViewData{}, fmt.Errorf("initialize checkpoint lookup: %w", err)
-	}
-	lookupSpan.End()
-
 	_, enrichSpan := perf.Start(ctx, "enrich_commits")
-	commits := enrichWhyCommits(ctx, repo, lookup, blocks)
+	commits := enrichWhyCommits(ctx, repo, blocks)
 	enrichSpan.End()
 
 	return whyViewData{
