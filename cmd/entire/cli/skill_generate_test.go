@@ -75,14 +75,35 @@ func TestBuildSkillGenerationPrompt(t *testing.T) {
 func TestValidateGeneratedSkillMarkdown(t *testing.T) {
 	t.Parallel()
 
-	valid := "---\nname: release-workflow\ndescription: Use when preparing releases.\n---\n# Release Workflow\n"
-	if err := validateGeneratedSkillMarkdown(valid); err != nil {
-		t.Fatalf("valid skill markdown rejected: %v", err)
+	validCases := map[string]string{
+		"lf":                       "---\nname: release-workflow\ndescription: Use when preparing releases.\n---\n# Release Workflow\n",
+		"crlf":                     "---\r\nname: release-workflow\r\ndescription: Use when preparing releases.\r\n---\r\n# Release Workflow\r\n",
+		"closing delimiter at EOF": "---\nname: release-workflow\ndescription: Use when preparing releases.\n---",
+		"delimiter text in value":  "---\nname: release-workflow\ndescription: Use --- when preparing releases.\n---\n# Release Workflow\n",
+	}
+	for name, content := range validCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateGeneratedSkillMarkdown(content); err != nil {
+				t.Fatalf("valid skill markdown rejected: %v", err)
+			}
+		})
 	}
 
-	invalid := "# Missing Frontmatter\n"
-	if err := validateGeneratedSkillMarkdown(invalid); err == nil {
-		t.Fatal("expected invalid skill markdown to be rejected")
+	invalidCases := map[string]string{
+		"missing frontmatter":      "# Missing Frontmatter\n",
+		"name only in body":        "---\ndescription: Use when preparing releases.\n---\n# Release Workflow\nname: release-workflow\n",
+		"description only in body": "---\nname: release-workflow\n---\n# Release Workflow\ndescription: Use when preparing releases.\n",
+		"unclosed frontmatter":     "---\nname: release-workflow\ndescription: Use when preparing releases.\n# Release Workflow\n",
+		"empty closed frontmatter": "---\n---\n# Release Workflow\nname: release-workflow\ndescription: Use when preparing releases.\n",
+	}
+	for name, content := range invalidCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateGeneratedSkillMarkdown(content); err == nil {
+				t.Fatal("expected invalid skill markdown to be rejected")
+			}
+		})
 	}
 }
 

@@ -281,7 +281,7 @@ func generateSkillMarkdown(ctx context.Context, source *skillSource, provider *c
 		return "", fmt.Errorf("provider text generation failed: %w", err)
 	}
 
-	result = stripMarkdownFence(strings.TrimSpace(result))
+	result = normalizeGeneratedSkillMarkdown(stripMarkdownFence(strings.TrimSpace(result)))
 	if err := validateGeneratedSkillMarkdown(result); err != nil {
 		return "", err
 	}
@@ -322,22 +322,53 @@ func buildSkillGenerationPrompt(source *skillSource, condensedTranscript string)
 }
 
 func validateGeneratedSkillMarkdown(content string) error {
+	content = normalizeGeneratedSkillMarkdown(content)
 	if content == "" {
 		return errors.New("provider returned empty skill content")
 	}
 	if !strings.HasPrefix(content, "---\n") {
 		return errors.New("provider returned invalid skill content: missing YAML frontmatter")
 	}
-	if !strings.Contains(content[4:], "\n---\n") {
+	frontmatter, ok := extractGeneratedSkillFrontmatter(content)
+	if !ok {
 		return errors.New("provider returned invalid skill content: frontmatter is not closed")
 	}
-	if !skillNameFrontmatterRE.MatchString(content) {
+	if !skillNameFrontmatterRE.MatchString(frontmatter) {
 		return errors.New("provider returned invalid skill content: frontmatter missing name")
 	}
-	if !skillDescriptionFrontmatterRE.MatchString(content) {
+	if !skillDescriptionFrontmatterRE.MatchString(frontmatter) {
 		return errors.New("provider returned invalid skill content: frontmatter missing description")
 	}
 	return nil
+}
+
+func normalizeGeneratedSkillMarkdown(content string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	return strings.ReplaceAll(content, "\r", "\n")
+}
+
+func extractGeneratedSkillFrontmatter(content string) (string, bool) {
+	body := strings.TrimPrefix(content, "---\n")
+	if body == "---" {
+		return "", true
+	}
+	if strings.HasPrefix(body, "---\n") {
+		return "", true
+	}
+
+	marker := "\n---"
+	for offset := 0; ; {
+		idx := strings.Index(body[offset:], marker)
+		if idx == -1 {
+			return "", false
+		}
+		idx += offset
+		after := idx + len(marker)
+		if after == len(body) || body[after] == '\n' {
+			return body[:idx], true
+		}
+		offset = after
+	}
 }
 
 func stripMarkdownFence(content string) string {
