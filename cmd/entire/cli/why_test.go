@@ -83,12 +83,7 @@ func TestWhyCmd_InteractiveOverviewLoadsFileAndStartsTUI(t *testing.T) {
 	}
 	t.Cleanup(func() { runWhyTUI = originalRunWhyTUI })
 
-	err := runWhy(
-		context.Background(),
-		&bytes.Buffer{},
-		&bytes.Buffer{},
-		whyOptions{Path: "file.go"},
-	)
+	err := runWhy(context.Background(), &bytes.Buffer{}, "file.go")
 	if err != nil {
 		t.Fatalf("runWhy() error = %v", err)
 	}

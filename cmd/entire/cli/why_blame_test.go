@@ -123,12 +123,13 @@ func TestCollapseWhyBlameBlocks(t *testing.T) {
 		t.Fatalf("third block = %+v", blocks[2])
 	}
 
-	rows := buildWhyBlameRows(lines, blocks)
-	gotBlockIndexes := []int{rows[0].BlockIndex, rows[1].BlockIndex, rows[2].BlockIndex, rows[3].BlockIndex}
-	wantBlockIndexes := []int{0, 0, 1, 2}
-	for i := range wantBlockIndexes {
-		if gotBlockIndexes[i] != wantBlockIndexes[i] {
-			t.Fatalf("row block indexes = %v, want %v", gotBlockIndexes, wantBlockIndexes)
+	rows := buildWhyBlameRows(lines)
+	if len(rows) != len(lines) {
+		t.Fatalf("rows = %d, want %d", len(rows), len(lines))
+	}
+	for i, row := range rows {
+		if row.CommitHash != lines[i].CommitHash || row.FinalLine != lines[i].FinalLine {
+			t.Fatalf("row[%d] = %+v, want line %+v", i, row, lines[i])
 		}
 	}
 }

@@ -11,15 +11,17 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const whyHighlightStyleName = "github-dark"
+const (
+	whyHighlightStyleName = "github-dark"
+	whyTabWidth           = 4
+)
 
-func highlightWhyCodeLines(filename string, lines []string, colorEnabled bool, maxWidth ...int) []string {
+func highlightWhyCodeLines(filename string, lines []string, colorEnabled bool, maxWidth int) []string {
 	if len(lines) == 0 {
 		return nil
 	}
 	lines = expandWhyCodeTabs(lines)
-	width := whyHighlightMaxWidth(maxWidth)
-	plain := plainWhyCodeLines(lines, width)
+	plain := plainWhyCodeLines(lines, maxWidth)
 	if !colorEnabled {
 		return plain
 	}
@@ -39,7 +41,7 @@ func highlightWhyCodeLines(filename string, lines []string, colorEnabled bool, m
 	highlighted := make([]string, len(lines))
 	copy(highlighted, plain)
 	for i := 0; i < len(lines) && i < len(tokenLines); i++ {
-		rendered, ok := renderWhyHighlightedTokenLine(tokenLines[i], width)
+		rendered, ok := renderWhyHighlightedTokenLine(tokenLines[i], maxWidth)
 		if !ok {
 			continue
 		}
@@ -49,18 +51,12 @@ func highlightWhyCodeLines(filename string, lines []string, colorEnabled bool, m
 }
 
 func expandWhyCodeTabs(lines []string) []string {
+	tab := strings.Repeat(" ", whyTabWidth)
 	expanded := make([]string, len(lines))
 	for i, line := range lines {
-		expanded[i] = strings.ReplaceAll(line, "\t", "    ")
+		expanded[i] = strings.ReplaceAll(line, "\t", tab)
 	}
 	return expanded
-}
-
-func whyHighlightMaxWidth(maxWidth []int) int {
-	if len(maxWidth) == 0 || maxWidth[0] <= 0 {
-		return 0
-	}
-	return maxWidth[0]
 }
 
 func plainWhyCodeLines(lines []string, maxWidth int) []string {

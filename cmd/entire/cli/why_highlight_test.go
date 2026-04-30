@@ -12,7 +12,7 @@ func TestWhyHighlight_KnownExtensionUsesLexer(t *testing.T) {
 	t.Parallel()
 
 	lines := []string{"package main", "func main() {}"}
-	got := highlightWhyCodeLines("main.go", lines, true)
+	got := highlightWhyCodeLines("main.go", lines, true, 0)
 
 	if len(got) != len(lines) {
 		t.Fatalf("highlighted lines = %d, want %d", len(got), len(lines))
@@ -37,7 +37,7 @@ func TestWhyHighlight_UnknownExtensionReturnsPlainCode(t *testing.T) {
 	t.Parallel()
 
 	lines := []string{"plain line", "another line"}
-	got := highlightWhyCodeLines("file.unknown-extension-for-why", lines, true)
+	got := highlightWhyCodeLines("file.unknown-extension-for-why", lines, true, 0)
 
 	if !slices.Equal(got, lines) {
 		t.Fatalf("highlighted lines = %#v, want %#v", got, lines)
@@ -48,7 +48,7 @@ func TestWhyHighlight_ColorDisabledReturnsPlainCode(t *testing.T) {
 	t.Parallel()
 
 	lines := []string{"package main", "func main() {}"}
-	got := highlightWhyCodeLines("main.go", lines, false)
+	got := highlightWhyCodeLines("main.go", lines, false, 0)
 
 	if !slices.Equal(got, lines) {
 		t.Fatalf("highlighted lines = %#v, want %#v", got, lines)
@@ -71,7 +71,7 @@ func TestWhyHighlight_PreservesLineCountForEmptyAndTrailingLines(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := highlightWhyCodeLines("main.go", tt.lines, true)
+			got := highlightWhyCodeLines("main.go", tt.lines, true, 0)
 			if len(got) != len(tt.lines) {
 				t.Fatalf("highlighted lines = %d, want %d: %#v", len(got), len(tt.lines), got)
 			}

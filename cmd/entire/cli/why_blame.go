@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -30,8 +31,6 @@ type whyBlameBlock struct {
 
 type whyBlameRow struct {
 	whyBlameLine
-
-	BlockIndex int
 }
 
 type whyBlameMetadata struct {
@@ -137,15 +136,11 @@ func parseBlameHeader(line string) (string, int, int, bool, error) {
 }
 
 func isBlameHash(value string) bool {
-	if len(value) < 7 {
+	if len(value) < 7 || len(value)%2 != 0 {
 		return false
 	}
-	for _, r := range value {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
-			return false
-		}
-	}
-	return true
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func applyBlameMetadataLine(line *whyBlameLine, metadata string) error {
@@ -215,15 +210,10 @@ func collapseWhyBlameBlocks(lines []whyBlameLine) []whyBlameBlock {
 	return blocks
 }
 
-func buildWhyBlameRows(lines []whyBlameLine, blocks []whyBlameBlock) []whyBlameRow {
+func buildWhyBlameRows(lines []whyBlameLine) []whyBlameRow {
 	rows := make([]whyBlameRow, len(lines))
 	for i, line := range lines {
 		rows[i] = whyBlameRow{whyBlameLine: line}
-	}
-	for blockIndex, block := range blocks {
-		for rowIndex := block.StartRow; rowIndex <= block.EndRow && rowIndex < len(rows); rowIndex++ {
-			rows[rowIndex].BlockIndex = blockIndex
-		}
 	}
 	return rows
 }

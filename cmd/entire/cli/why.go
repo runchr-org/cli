@@ -16,37 +16,32 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type whyOptions struct {
-	Path string
-}
-
 func newWhyCmd() *cobra.Command {
-	var opts whyOptions
-
 	cmd := &cobra.Command{
 		Use:    "why [path]",
 		Short:  "Explain why a file looks the way it does",
 		Hidden: true,
 		Args:   cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var path string
 			if len(args) > 0 {
-				opts.Path = args[0]
+				path = args[0]
 			}
-			if opts.Path != "" && !canRunWhyTUI(cmd.OutOrStdout()) {
+			if path != "" && !canRunWhyTUI(cmd.OutOrStdout()) {
 				cleanup := initWhyLogging(cmd.Context())
 				defer cleanup()
 			}
-			return runWhy(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), opts)
+			return runWhy(cmd.Context(), cmd.OutOrStdout(), path)
 		},
 	}
 
 	return cmd
 }
 
-func runWhy(ctx context.Context, w io.Writer, _ io.Writer, opts whyOptions) (err error) {
+func runWhy(ctx context.Context, w io.Writer, path string) (err error) {
 	ctx, span := perf.Start(ctx, "why",
-		slog.String("path", opts.Path),
-		slog.Bool("has_path", opts.Path != ""))
+		slog.String("path", path),
+		slog.Bool("has_path", path != ""))
 	defer func() {
 		span.RecordError(err)
 		span.End()
@@ -55,7 +50,7 @@ func runWhy(ctx context.Context, w io.Writer, _ io.Writer, opts whyOptions) (err
 	_, modeSpan := perf.Start(ctx, "detect_mode")
 	canUseTUI := canRunWhyTUI(w)
 	modeSpan.End()
-	if opts.Path == "" {
+	if path == "" {
 		if !canUseTUI {
 			return errors.New("path required when not running interactively")
 		}
@@ -63,7 +58,7 @@ func runWhy(ctx context.Context, w io.Writer, _ io.Writer, opts whyOptions) (err
 	}
 
 	_, resolveSpan := perf.Start(ctx, "resolve_path")
-	repoRoot, gitPath, _, err := resolveWhyPath(ctx, opts.Path)
+	repoRoot, gitPath, _, err := resolveWhyPath(ctx, path)
 	if err != nil {
 		resolveSpan.RecordError(err)
 		resolveSpan.End()
@@ -175,7 +170,7 @@ func loadWhyViewData(ctx context.Context, repoRoot, gitPath string) (whyViewData
 
 	_, buildRowsSpan := perf.Start(ctx, "build_rows")
 	blocks := collapseWhyBlameBlocks(lines)
-	rows := buildWhyBlameRows(lines, blocks)
+	rows := buildWhyBlameRows(lines)
 	buildRowsSpan.End()
 
 	_, openRepoSpan := perf.Start(ctx, "open_repository")

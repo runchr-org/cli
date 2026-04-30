@@ -33,7 +33,6 @@ type whyTUIModel struct {
 	styles   whyTUIStyles
 	width    int
 	height   int
-	ready    bool
 
 	lineWidth int
 }
@@ -62,10 +61,11 @@ func newWhyTUIModel(data whyViewData, ss statusStyles) whyTUIModel {
 	}
 
 	m := whyTUIModel{
-		data:     data,
-		viewport: viewport.New(ss.width, 1),
-		styles:   newWhyTUIStyles(ss),
-		width:    ss.width,
+		data:      data,
+		viewport:  viewport.New(ss.width, 1),
+		styles:    newWhyTUIStyles(ss),
+		width:     ss.width,
+		lineWidth: whyLineColumnWidth(data.Rows),
 	}
 	return m.refreshViewport()
 }
@@ -94,6 +94,9 @@ func (m whyTUIModel) Init() tea.Cmd {
 func (m whyTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn // bubbletea interface
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		if msg.Width == m.width && msg.Height == m.height {
+			return m, nil
+		}
 		m.width = msg.Width
 		m.height = msg.Height
 		m.viewport.Width = msg.Width
@@ -127,8 +130,6 @@ func (m whyTUIModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) { //nolint:i
 			m.selected = len(m.data.Rows) - 1
 			m.viewport.GotoBottom()
 		}
-	case key.Matches(msg, keys.Confirm):
-		return m, nil
 	}
 	return m, nil
 }
@@ -203,20 +204,14 @@ func leadingSGRLen(s string) int {
 }
 
 func (m whyTUIModel) refreshViewport() whyTUIModel {
-	m.lineWidth = whyLineColumnWidth(m.data.Rows)
 	headerHeight := strings.Count(m.renderHeader(), "\n") + strings.Count(m.renderColumnHeader(), "\n")
 	vpHeight := m.height - headerHeight - 1
 	if vpHeight < 1 {
 		vpHeight = 1
 	}
 
-	if !m.ready {
-		m.viewport = viewport.New(m.width, vpHeight)
-		m.ready = true
-	} else {
-		m.viewport.Width = m.width
-		m.viewport.Height = vpHeight
-	}
+	m.viewport.Width = m.width
+	m.viewport.Height = vpHeight
 	m.viewport.SetContent(m.renderRows())
 	return m.ensureSelectedVisible()
 }
@@ -261,13 +256,12 @@ func (m whyTUIModel) renderColumnHeader() string {
 		return ""
 	}
 
-	lineWidth := m.currentLineWidth()
 	line := "  " + strings.Join([]string{
-		whyTUIHeaderColumn("TIME", whyTimeMaxWidth),
-		whyTUIHeaderColumn("AUTHOR", whyAuthorMaxWidth),
-		whyTUIHeaderColumn("COMMIT", whyCommitColumnWidth),
-		whyTUIHeaderColumn("CHECKPOINT", whyTUICheckpointMaxWidth),
-		whyTUIHeaderColumn("LINE", lineWidth),
+		whyColumn("TIME", whyTimeMaxWidth),
+		whyColumn("AUTHOR", whyAuthorMaxWidth),
+		whyColumn("COMMIT", whyCommitColumnWidth),
+		whyColumn("CHECKPOINT", whyTUICheckpointMaxWidth),
+		whyColumn("LINE", m.lineWidth),
 	}, " ") + " | CODE"
 	line = fitWhyTUILine(line, m.width)
 	return m.styles.render(m.styles.columnHead, line) + "\n"
@@ -278,9 +272,7 @@ func (m whyTUIModel) renderRows() string {
 		return "No blame lines for this file."
 	}
 
-	lineWidth := m.currentLineWidth()
-	gutterWidth := m.gutterWidth(lineWidth)
-	codeWidth := max(m.width-gutterWidth, 0)
+	codeWidth := max(m.width-whyGutterWidth(m.lineWidth), 0)
 	sourceLines := make([]string, len(m.data.Rows))
 	for i, row := range m.data.Rows {
 		sourceLines[i] = row.Source
@@ -289,7 +281,7 @@ func (m whyTUIModel) renderRows() string {
 
 	var b strings.Builder
 	for i, row := range m.data.Rows {
-		line := m.renderGutter(row, lineWidth)
+		line := m.renderGutter(row, m.lineWidth)
 		if codeWidth > 0 && i < len(highlightedLines) {
 			line += highlightedLines[i]
 		}
@@ -304,33 +296,26 @@ func (m whyTUIModel) renderRows() string {
 func (m whyTUIModel) renderGutter(row whyBlameRow, lineWidth int) string {
 	info := m.commitInfoForRow(row)
 	lineNo := fmt.Sprintf("%*d", lineWidth, row.FinalLine)
-	lineColumn := whyTUIColumn(lineNo, lineWidth, m.styles.lineNo, m.styles.colorEnabled)
-	checkpoint := whyTUIColumn(whyTUICheckpoint(info), whyTUICheckpointMaxWidth, m.styles.checkpoint, m.styles.colorEnabled)
 	return "  " + strings.Join([]string{
-		whyTUIColumn(whyStaticTime(row), whyTimeMaxWidth, m.styles.time, m.styles.colorEnabled),
-		whyTUIColumn(whyStaticAuthor(row), whyAuthorMaxWidth, m.styles.author, m.styles.colorEnabled),
-		whyTUIColumn(whyStaticCommit(row), whyCommitColumnWidth, m.styles.commit, m.styles.colorEnabled),
-		checkpoint,
-		lineColumn,
+		m.styles.render(m.styles.time, whyColumn(whyStaticTime(row), whyTimeMaxWidth)),
+		m.styles.render(m.styles.author, whyColumn(whyStaticAuthor(row), whyAuthorMaxWidth)),
+		m.styles.render(m.styles.commit, whyColumn(whyStaticCommit(row), whyCommitColumnWidth)),
+		m.styles.render(m.styles.checkpoint, whyColumn(whyTUICheckpoint(info), whyTUICheckpointMaxWidth)),
+		m.styles.render(m.styles.lineNo, whyColumn(lineNo, lineWidth)),
 	}, " ") + " | "
 }
 
-func (m whyTUIModel) currentLineWidth() int {
-	if m.lineWidth > 0 {
-		return m.lineWidth
-	}
-	return whyLineColumnWidth(m.data.Rows)
-}
-
-func (m whyTUIModel) gutterWidth(lineWidth int) int {
-	if len(m.data.Rows) == 0 {
-		return 0
-	}
-	width := 0
-	for _, row := range m.data.Rows {
-		width = max(width, lipgloss.Width(m.renderGutter(row, lineWidth)))
-	}
-	return width
+// whyGutterWidth derives the gutter width from the fixed column widths plus
+// the variable-width line-number column. Five fixed columns are joined with
+// single spaces, prefixed with "  ", and suffixed with " | ".
+func whyGutterWidth(lineWidth int) int {
+	const (
+		leadingPad  = 2
+		columnGaps  = 4
+		trailingSep = 3
+	)
+	return leadingPad + whyTimeMaxWidth + whyAuthorMaxWidth + whyCommitColumnWidth +
+		whyTUICheckpointMaxWidth + lineWidth + columnGaps + trailingSep
 }
 
 func (m whyTUIModel) renderFooter() string {
@@ -381,20 +366,6 @@ func (m whyTUIModel) commitInfoForRow(row whyBlameRow) whyCommitInfo {
 
 func (s whyTUIStyles) helpItem(keyLabel, desc string) string {
 	return s.render(s.helpKey, keyLabel) + " " + desc
-}
-
-func whyTUIColumn(value string, width int, style lipgloss.Style, colorEnabled bool) string {
-	value = truncateDisplayWidth(value, width, "...")
-	value += strings.Repeat(" ", max(width-lipgloss.Width(value), 0))
-	if !colorEnabled {
-		return value
-	}
-	return style.Render(value)
-}
-
-func whyTUIHeaderColumn(value string, width int) string {
-	value = truncateDisplayWidth(value, width, "...")
-	return value + strings.Repeat(" ", max(width-lipgloss.Width(value), 0))
 }
 
 func whyTUICheckpoint(info whyCommitInfo) string {

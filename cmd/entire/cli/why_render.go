@@ -30,10 +30,10 @@ func renderWhyStatic(data whyViewData) string {
 	fmt.Fprintf(
 		&sb,
 		"%s %s %s %s %*s %s\n",
-		whyStaticColumn("TIME", whyTimeMaxWidth),
-		whyStaticColumn("AUTHOR", whyAuthorMaxWidth),
-		whyStaticColumn("COMMIT", whyCommitColumnWidth),
-		whyStaticColumn("CHECKPOINT", whyCheckpointColumnWidth),
+		whyColumn("TIME", whyTimeMaxWidth),
+		whyColumn("AUTHOR", whyAuthorMaxWidth),
+		whyColumn("COMMIT", whyCommitColumnWidth),
+		whyColumn("CHECKPOINT", whyCheckpointColumnWidth),
 		lineWidth,
 		"LINE",
 		"CODE",
@@ -49,10 +49,10 @@ func renderWhyStatic(data whyViewData) string {
 		fmt.Fprintf(
 			&sb,
 			"%s %s %s %s %*d %s\n",
-			whyStaticColumn(whyStaticTime(row), whyTimeMaxWidth),
-			whyStaticColumn(whyStaticAuthor(row), whyAuthorMaxWidth),
-			whyStaticColumn(whyStaticCommit(row), whyCommitColumnWidth),
-			whyStaticColumn(whyStaticCheckpoint(info), whyCheckpointColumnWidth),
+			whyColumn(whyStaticTime(row), whyTimeMaxWidth),
+			whyColumn(whyStaticAuthor(row), whyAuthorMaxWidth),
+			whyColumn(whyStaticCommit(row), whyCommitColumnWidth),
+			whyColumn(whyStaticCheckpoint(info), whyCheckpointColumnWidth),
 			lineWidth,
 			row.FinalLine,
 			row.Source,
@@ -101,7 +101,7 @@ func whyStaticCheckpoint(info whyCommitInfo) string {
 	return info.CheckpointID.String()
 }
 
-func whyStaticColumn(value string, width int) string {
+func whyColumn(value string, width int) string {
 	value = truncateDisplayWidth(value, width, "...")
 	value += strings.Repeat(" ", max(width-lipgloss.Width(value), 0))
 	return value

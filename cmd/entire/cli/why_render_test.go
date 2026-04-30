@@ -189,7 +189,7 @@ func TestWhyStaticMode_RendersFileForNonInteractiveOutput(t *testing.T) {
 	t.Cleanup(paths.ClearWorktreeRootCache)
 
 	var out bytes.Buffer
-	err := runWhy(context.Background(), &out, &bytes.Buffer{}, whyOptions{Path: "file.go"})
+	err := runWhy(context.Background(), &out, "file.go")
 	if err != nil {
 		t.Fatalf("runWhy() error = %v", err)
 	}
@@ -215,7 +215,7 @@ func TestWhyStaticMode_RendersCheckpointTrailer(t *testing.T) {
 	t.Cleanup(paths.ClearWorktreeRootCache)
 
 	var out bytes.Buffer
-	err := runWhy(ctx, &out, &bytes.Buffer{}, whyOptions{Path: "file.go"})
+	err := runWhy(ctx, &out, "file.go")
 	if err != nil {
 		t.Fatalf("runWhy() error = %v", err)
 	}
