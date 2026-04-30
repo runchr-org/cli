@@ -17,6 +17,7 @@ func highlightWhyCodeLines(filename string, lines []string, colorEnabled bool, m
 	if len(lines) == 0 {
 		return nil
 	}
+	lines = expandWhyCodeTabs(lines)
 	width := whyHighlightMaxWidth(maxWidth)
 	plain := plainWhyCodeLines(lines, width)
 	if !colorEnabled {
@@ -45,6 +46,14 @@ func highlightWhyCodeLines(filename string, lines []string, colorEnabled bool, m
 		highlighted[i] = rendered
 	}
 	return highlighted
+}
+
+func expandWhyCodeTabs(lines []string) []string {
+	expanded := make([]string, len(lines))
+	for i, line := range lines {
+		expanded[i] = strings.ReplaceAll(line, "\t", "    ")
+	}
+	return expanded
 }
 
 func whyHighlightMaxWidth(maxWidth []int) int {

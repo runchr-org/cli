@@ -105,3 +105,21 @@ func TestWhyHighlight_TruncatesAfterLexingFullContent(t *testing.T) {
 		t.Fatalf("second line visible text = %q, want independently highlighted import path prefix", visibleSecond)
 	}
 }
+
+func TestWhyHighlight_ExpandsTabsBeforeTruncating(t *testing.T) {
+	t.Parallel()
+
+	lines := []string{"\t" + strings.Repeat("x", 40)}
+
+	got := highlightWhyCodeLines("main.go", lines, false, 12)
+
+	if len(got) != len(lines) {
+		t.Fatalf("highlighted lines = %d, want %d: %#v", len(got), len(lines), got)
+	}
+	if strings.Contains(got[0], "\t") {
+		t.Fatalf("highlighted line should not contain literal tabs: %q", got[0])
+	}
+	if width := lipgloss.Width(got[0]); width > 12 {
+		t.Fatalf("highlighted line width = %d, want <= 12: %q", width, got[0])
+	}
+}
