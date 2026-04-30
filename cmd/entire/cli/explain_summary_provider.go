@@ -31,13 +31,40 @@ var (
 )
 
 type checkpointSummaryProvider struct {
-	Name        types.AgentName
-	DisplayName string
-	Model       string
-	Generator   summarize.Generator
+	Name          types.AgentName
+	DisplayName   string
+	Model         string
+	TextGenerator agent.TextGenerator
+	Generator     summarize.Generator
+}
+
+type summaryProviderPromptCopy struct {
+	Title           string
+	Description     string
+	GenerationLabel string
+}
+
+var checkpointSummaryProviderPrompt = summaryProviderPromptCopy{
+	Title:           "Choose a summary provider",
+	Description:     "This choice will be saved. Use `entire configure --summarize-provider <name>` to change it later.",
+	GenerationLabel: "summary",
+}
+
+var skillGenerationProviderPrompt = summaryProviderPromptCopy{
+	Title:           "Choose a skill generation provider",
+	Description:     "This choice will be saved. Use `entire configure --summarize-provider <name>` to change it later.",
+	GenerationLabel: "skill",
 }
 
 func resolveCheckpointSummaryProvider(ctx context.Context, w io.Writer) (*checkpointSummaryProvider, error) {
+	return resolveCheckpointSummaryProviderWithPrompt(ctx, w, checkpointSummaryProviderPrompt)
+}
+
+func resolveSkillGenerationProvider(ctx context.Context, w io.Writer) (*checkpointSummaryProvider, error) {
+	return resolveCheckpointSummaryProviderWithPrompt(ctx, w, skillGenerationProviderPrompt)
+}
+
+func resolveCheckpointSummaryProviderWithPrompt(ctx context.Context, w io.Writer, promptCopy summaryProviderPromptCopy) (*checkpointSummaryProvider, error) {
 	s, err := loadSummarySettings(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading settings: %w", err)
@@ -70,7 +97,7 @@ func resolveCheckpointSummaryProvider(ctx context.Context, w io.Writer) (*checkp
 			return autoSelectSummaryProvider(ctx, w, candidates[0].Name, "non-interactive auto-select: first detected of multiple")
 		}
 
-		selected, err := promptForSummaryProvider(candidates)
+		selected, err := promptForSummaryProvider(candidates, promptCopy)
 		if err != nil {
 			return nil, err
 		}
@@ -78,7 +105,7 @@ func resolveCheckpointSummaryProvider(ctx context.Context, w io.Writer) (*checkp
 		if err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(w, "Using %s for summary generation.\n", provider.DisplayName)
+		fmt.Fprintf(w, "Using %s for %s generation.\n", provider.DisplayName, promptCopy.GenerationLabel)
 		return provider, nil
 	}
 }
@@ -144,7 +171,7 @@ func isSummaryProviderAvailable(name types.AgentName, ag agent.Agent) bool {
 	return isSummaryCLIAvailable(name)
 }
 
-func promptForSummaryProvider(providers []checkpointSummaryProvider) (types.AgentName, error) {
+func promptForSummaryProvider(providers []checkpointSummaryProvider, promptCopy summaryProviderPromptCopy) (types.AgentName, error) {
 	options := make([]huh.Option[string], 0, len(providers))
 	for _, provider := range providers {
 		options = append(options, huh.NewOption(provider.DisplayName, string(provider.Name)))
@@ -154,8 +181,8 @@ func promptForSummaryProvider(providers []checkpointSummaryProvider) (types.Agen
 	form := NewAccessibleForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
-				Title("Choose a summary provider").
-				Description("This choice will be saved. Use `entire configure --summarize-provider <name>` to change it later.").
+				Title(promptCopy.Title).
+				Description(promptCopy.Description).
 				Options(options...).
 				Value(&selected),
 		),
@@ -181,9 +208,10 @@ func buildCheckpointSummaryProvider(name types.AgentName, model string) (*checkp
 	effectiveModel := summarize.ResolveModel(name, model)
 
 	return &checkpointSummaryProvider{
-		Name:        name,
-		DisplayName: string(ag.Type()),
-		Model:       effectiveModel,
+		Name:          name,
+		DisplayName:   string(ag.Type()),
+		Model:         effectiveModel,
+		TextGenerator: textGenerator,
 		Generator: &summarize.TextGeneratorAdapter{
 			TextGenerator: textGenerator,
 			Model:         effectiveModel,
