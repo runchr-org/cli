@@ -21,29 +21,31 @@ func highlightWhyCodeLines(filename string, lines []string, colorEnabled bool, m
 		return nil
 	}
 	lines = expandWhyCodeTabs(lines)
-	plain := plainWhyCodeLines(lines, maxWidth)
 	if !colorEnabled {
-		return plain
+		return plainWhyCodeLines(lines, maxWidth)
 	}
 
 	lexer := lexers.Match(filename)
 	if lexer == nil || lexer == lexers.Fallback {
-		return plain
+		return plainWhyCodeLines(lines, maxWidth)
 	}
 	lexer = chroma.Coalesce(lexer)
 
 	iterator, err := lexer.Tokenise(nil, strings.Join(lines, "\n"))
 	if err != nil {
-		return plain
+		return plainWhyCodeLines(lines, maxWidth)
 	}
 
 	tokenLines := chroma.SplitTokensIntoLines(iterator.Tokens())
 	highlighted := make([]string, len(lines))
-	copy(highlighted, plain)
-	for i := 0; i < len(lines) && i < len(tokenLines); i++ {
+	for i, line := range lines {
+		if i >= len(tokenLines) {
+			highlighted[i] = plainWhyCodeLine(line, maxWidth)
+			continue
+		}
 		rendered, ok := renderWhyHighlightedTokenLine(tokenLines[i], maxWidth)
 		if !ok {
-			continue
+			rendered = plainWhyCodeLine(line, maxWidth)
 		}
 		highlighted[i] = rendered
 	}
@@ -62,12 +64,16 @@ func expandWhyCodeTabs(lines []string) []string {
 func plainWhyCodeLines(lines []string, maxWidth int) []string {
 	plain := make([]string, len(lines))
 	for i, line := range lines {
-		if maxWidth > 0 {
-			line = truncateDisplayWidth(line, maxWidth, "")
-		}
-		plain[i] = line
+		plain[i] = plainWhyCodeLine(line, maxWidth)
 	}
 	return plain
+}
+
+func plainWhyCodeLine(line string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return line
+	}
+	return truncateDisplayWidth(line, maxWidth, "")
 }
 
 func renderWhyHighlightedTokenLine(tokens []chroma.Token, maxWidth int) (string, bool) {
