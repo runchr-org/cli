@@ -26,7 +26,7 @@ func enrichWhyCommits(ctx context.Context, repo *git.Repository, blocks []whyBla
 	defer enrichCommitLoop.End()
 
 	for _, block := range blocks {
-		if err := ctx.Err(); err != nil {
+		if err := loopCtx.Err(); err != nil {
 			return infoByCommit
 		}
 
@@ -35,9 +35,9 @@ func enrichWhyCommits(ctx context.Context, repo *git.Repository, blocks []whyBla
 			continue
 		}
 
-		_, iterSpan := enrichCommitLoop.Iteration(loopCtx)
+		iterCtx, iterSpan := enrichCommitLoop.Iteration(loopCtx)
 
-		_, commitObjectSpan := perf.Start(ctx, "why_commit_object")
+		_, commitObjectSpan := perf.Start(iterCtx, "why_commit_object")
 		commit, err := repo.CommitObject(hash)
 		if err != nil {
 			commitObjectSpan.RecordError(err)
@@ -49,7 +49,7 @@ func enrichWhyCommits(ctx context.Context, repo *git.Repository, blocks []whyBla
 		commitObjectSpan.End()
 
 		info := whyCommitInfo{Hash: hash}
-		_, checkpointTrailerSpan := perf.Start(ctx, "why_checkpoint_trailer")
+		_, checkpointTrailerSpan := perf.Start(iterCtx, "why_checkpoint_trailer")
 		if cpID, ok := trailers.ParseCheckpoint(commit.Message); ok {
 			info.CheckpointID = cpID
 		}

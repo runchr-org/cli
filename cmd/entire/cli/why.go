@@ -182,8 +182,8 @@ func loadWhyViewData(ctx context.Context, repoRoot, gitPath string) (whyViewData
 	}
 	openRepoSpan.End()
 
-	_, enrichSpan := perf.Start(ctx, "enrich_commits")
-	commits := enrichWhyCommits(ctx, repo, blocks)
+	enrichCtx, enrichSpan := perf.Start(ctx, "enrich_commits")
+	commits := enrichWhyCommits(enrichCtx, repo, blocks)
 	enrichSpan.End()
 
 	return whyViewData{
