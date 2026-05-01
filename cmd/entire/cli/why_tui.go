@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -16,14 +17,16 @@ import (
 type whyTUIStyles struct {
 	statusStyles
 
-	time       lipgloss.Style
-	author     lipgloss.Style
-	commit     lipgloss.Style
-	lineNo     lipgloss.Style
-	checkpoint lipgloss.Style
-	columnHead lipgloss.Style
-	helpKey    lipgloss.Style
-	helpSep    lipgloss.Style
+	time        lipgloss.Style
+	author      lipgloss.Style
+	commit      lipgloss.Style
+	lineNo      lipgloss.Style
+	checkpoint  lipgloss.Style
+	columnHead  lipgloss.Style
+	headerLabel lipgloss.Style
+	headerValue lipgloss.Style
+	helpKey     lipgloss.Style
+	helpSep     lipgloss.Style
 }
 
 type whyTUIModel struct {
@@ -39,6 +42,7 @@ type whyTUIModel struct {
 
 const (
 	whyTUICheckpointMaxWidth = 12
+	whyTUIHeaderLabelWidth   = 11
 	whyTUISelectedBackground = "\x1b[48;5;236m"
 	whyTUIReset              = "\x1b[0m"
 )
@@ -82,6 +86,8 @@ func newWhyTUIStyles(ss statusStyles) whyTUIStyles {
 	s.commit = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	s.checkpoint = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	s.columnHead = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
+	s.headerLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("#fb923c")).Bold(true)
+	s.headerValue = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 	s.helpKey = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 	s.helpSep = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	return s
@@ -239,16 +245,19 @@ func (m whyTUIModel) renderHeader() string {
 	row := m.data.Rows[m.selected]
 	info := m.commitInfoForRow(row)
 
-	lineLabel := fmt.Sprintf("%s:%d", m.data.GitPath, row.FinalLine)
-	header := fmt.Sprintf(
-		"%s  commit %s  author %s  date %s  checkpoint %s",
-		lineLabel,
-		whyStaticCommit(row),
-		whyStaticAuthor(row),
-		whyStaticTime(row),
-		whyStaticCheckpoint(info),
-	)
-	return fitWhyTUILine(header, m.width) + "\n\n"
+	title := fmt.Sprintf("%s:%d", m.data.GitPath, row.FinalLine)
+	metadata := strings.Join([]string{
+		m.renderHeaderField("commit", whyStaticCommit(row)),
+		m.renderHeaderField("author", whyStaticAuthor(row)),
+		m.renderHeaderField("date", whyStaticTime(row)),
+		m.renderHeaderField("checkpoint", whyStaticCheckpoint(info)),
+	}, "  ")
+	return fitWhyTUILine(title, m.width) + "\n" + fitWhyTUILine(metadata, m.width) + "\n\n"
+}
+
+func (m whyTUIModel) renderHeaderField(label, value string) string {
+	label = whyColumn(strings.ToUpper(label)+":", whyTUIHeaderLabelWidth)
+	return m.styles.render(m.styles.headerLabel, label) + " " + m.styles.render(m.styles.headerValue, value)
 }
 
 func (m whyTUIModel) renderColumnHeader() string {
@@ -376,5 +385,54 @@ func fitWhyTUILine(line string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	return truncateDisplayWidth(line, width, "")
+	if lipgloss.Width(line) <= width {
+		return line
+	}
+	return cutWhyTUILine(line, width)
+}
+
+func cutWhyTUILine(line string, width int) string {
+	var b strings.Builder
+	visibleWidth := 0
+	sawANSI := false
+
+	for i := 0; i < len(line); {
+		if line[i] == '\x1b' {
+			next := consumeWhyTUIANSI(line, i)
+			if next > i+1 {
+				sawANSI = true
+			}
+			b.WriteString(line[i:next])
+			i = next
+			continue
+		}
+
+		r, size := utf8.DecodeRuneInString(line[i:])
+		if r == utf8.RuneError && size == 0 {
+			break
+		}
+		runeWidth := lipgloss.Width(string(r))
+		if visibleWidth+runeWidth > width {
+			if sawANSI {
+				b.WriteString(whyTUIReset)
+			}
+			return b.String()
+		}
+		b.WriteRune(r)
+		visibleWidth += runeWidth
+		i += size
+	}
+	return b.String()
+}
+
+func consumeWhyTUIANSI(line string, start int) int {
+	if start+1 >= len(line) || line[start+1] != '[' {
+		return start + 1
+	}
+	for i := start + 2; i < len(line); i++ {
+		if line[i] >= 0x40 && line[i] <= 0x7e {
+			return i + 1
+		}
+	}
+	return len(line)
 }

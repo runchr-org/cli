@@ -239,17 +239,71 @@ func TestWhyTUIModel_HeaderShowsSelectedLineMetadata(t *testing.T) {
 	}
 	m := newWhyTUIModel(data, statusStyles{colorEnabled: false, width: 160})
 
-	header := strings.Split(m.View(), "\n")[0]
+	lines := strings.Split(m.View(), "\n")
+	if got, want := lines[0], "cmd/main.go:15"; got != want {
+		t.Fatalf("header title = %q, want %q", got, want)
+	}
+	header := lines[1]
 	for _, want := range []string{
-		"cmd/main.go:15",
-		"commit c56b7ac719",
-		"author " + whyTestAuthor,
-		"date 6d ago",
-		"checkpoint " + cpID.String(),
+		"COMMIT:     c56b7ac719",
+		"AUTHOR:     " + whyTestAuthor,
+		"DATE:       6d ago",
+		"CHECKPOINT: " + cpID.String(),
 	} {
 		if !strings.Contains(header, want) {
 			t.Fatalf("header missing %q: %q", want, header)
 		}
+	}
+}
+
+func TestWhyTUIModel_HeaderStylesLabelsAndValuesSeparately(t *testing.T) {
+	t.Parallel()
+
+	styles := newWhyTUIStyles(statusStyles{colorEnabled: true})
+	if !styles.headerLabel.GetBold() {
+		t.Fatal("header labels should be bold")
+	}
+	if styles.headerLabel.GetForeground() == nil {
+		t.Fatal("header labels should define a foreground color")
+	}
+	if styles.headerValue.GetForeground() == nil {
+		t.Fatal("header values should define a foreground color")
+	}
+	if styles.headerValue.GetBold() {
+		t.Fatal("header values should not be bold")
+	}
+
+	m := newWhyTUIModel(testWhyTUIModel().data, statusStyles{colorEnabled: true, width: 160})
+	m.styles.headerLabel = lipgloss.NewStyle().Transform(func(s string) string {
+		return "label:" + s
+	})
+	m.styles.headerValue = lipgloss.NewStyle().Transform(func(s string) string {
+		return "value:" + s
+	})
+	header := m.renderHeader()
+
+	if !strings.Contains(header, "label:COMMIT:") {
+		t.Fatalf("header should render labels through header label style: %q", header)
+	}
+	if !strings.Contains(header, "value:aaaaaaaaaa") {
+		t.Fatalf("header should render values through header value style: %q", header)
+	}
+}
+
+func TestFitWhyTUILine_TruncatesStyledLinesWithoutCorruptingANSI(t *testing.T) {
+	t.Parallel()
+
+	line := "\x1b[38;5;214mcommit\x1b[0m value"
+	got := fitWhyTUILine(line, 4)
+
+	if width := lipgloss.Width(got); width != 4 {
+		t.Fatalf("truncated line width = %d, want 4: %q", width, got)
+	}
+	if !strings.Contains(got, "\x1b[38;5;214mcomm") {
+		t.Fatalf("truncated line should preserve leading ANSI sequence: %q", got)
+	}
+	if !strings.HasSuffix(got, whyTUIReset) {
+		t.Fatalf("truncated styled line should end with reset: %q", got)
 	}
 }
 
@@ -259,11 +313,11 @@ func TestWhyTUIModel_ViewShowsStickyGutterHeader(t *testing.T) {
 	m := testWhyTUIModel()
 	view := m.View()
 	lines := strings.Split(view, "\n")
-	if len(lines) < 3 {
-		t.Fatalf("view should include dynamic header, padding, and gutter header:\n%s", view)
+	if len(lines) < 4 {
+		t.Fatalf("view should include dynamic title, metadata row, padding, and gutter header:\n%s", view)
 	}
-	if lines[1] != "" {
-		t.Fatalf("expected blank padding line between dynamic and gutter headers, got %q", lines[1])
+	if lines[2] != "" {
+		t.Fatalf("expected blank padding line between metadata and gutter headers, got %q", lines[2])
 	}
 
 	headerLine := whyTUIViewLineContaining(t, view, "TIME")
