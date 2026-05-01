@@ -994,48 +994,6 @@ func (s *GitStore) ReadSessionMetadata(ctx context.Context, checkpointID id.Chec
 	return &metadata, nil
 }
 
-// ReadSessionMetadataAndPrompts reads a session's metadata and prompts without loading transcript blobs.
-// sessionIndex is 0-based.
-func (s *GitStore) ReadSessionMetadataAndPrompts(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*SessionContent, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err //nolint:wrapcheck // Propagating context cancellation
-	}
-
-	ft, err := s.getFetchingTree(ctx)
-	if err != nil {
-		return nil, ErrCheckpointNotFound
-	}
-
-	checkpointPath := checkpointID.Path()
-	checkpointTree, err := ft.Tree(checkpointPath)
-	if err != nil {
-		return nil, ErrCheckpointNotFound
-	}
-
-	sessionDir := strconv.Itoa(sessionIndex)
-	sessionTree, err := checkpointTree.Tree(sessionDir)
-	if err != nil {
-		return nil, ErrCheckpointNotFound
-	}
-
-	result := &SessionContent{}
-	if metadataFile, fileErr := sessionTree.File(paths.MetadataFileName); fileErr == nil {
-		if content, contentErr := metadataFile.Contents(); contentErr == nil {
-			if jsonErr := json.Unmarshal([]byte(content), &result.Metadata); jsonErr != nil {
-				return nil, fmt.Errorf("failed to parse session metadata: %w", jsonErr)
-			}
-		}
-	}
-
-	if file, fileErr := sessionTree.File(paths.PromptFileName); fileErr == nil {
-		if content, contentErr := file.Contents(); contentErr == nil {
-			result.Prompts = content
-		}
-	}
-
-	return result, nil
-}
-
 // ReadSessionContent reads the actual content for a specific session within a checkpoint.
 // sessionIndex is 0-based (0 for first session, 1 for second, etc.).
 // Returns the session's metadata, transcript, prompts, and context.
