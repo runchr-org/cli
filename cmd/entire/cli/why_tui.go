@@ -333,7 +333,7 @@ func (m whyTUIModel) renderGutter(row whyBlameRow, lineWidth int) string {
 
 func (m whyTUIModel) renderCommitHash(text, commitHash string, style lipgloss.Style) string {
 	rendered := m.styles.render(style, text)
-	if !m.styles.colorEnabled || commitHash == "" {
+	if !m.styles.colorEnabled || commitHash == "" || plumbing.NewHash(commitHash) == plumbing.ZeroHash {
 		return rendered
 	}
 	return lipgloss.NewStyle().Hyperlink(whyTUICommitURL(commitHash)).Render(rendered)

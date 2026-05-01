@@ -327,6 +327,25 @@ func TestWhyTUIModel_CommitHashesRenderAsTerminalHyperlinks(t *testing.T) {
 	assertTerminalHyperlink(t, m.renderGutter(row, whyLineColumnWidth(data.Rows)), target, text)
 }
 
+func TestWhyTUIModel_ZeroCommitHashDoesNotRenderAsTerminalHyperlink(t *testing.T) {
+	t.Parallel()
+
+	row := testWhyTUIRow(plumbing.ZeroHash, 15, "selected := true")
+	data := whyViewData{
+		GitPath: "cmd/main.go",
+		Rows:    []whyBlameRow{row},
+		Commits: map[plumbing.Hash]whyCommitInfo{
+			plumbing.ZeroHash: {
+				Hash: plumbing.ZeroHash,
+			},
+		},
+	}
+	m := newWhyTUIModel(data, statusStyles{colorEnabled: true, width: 160})
+
+	assertNoTerminalHyperlink(t, m.renderHeader())
+	assertNoTerminalHyperlink(t, m.renderGutter(row, whyLineColumnWidth(data.Rows)))
+}
+
 func assertTerminalHyperlink(t *testing.T, rendered, target, text string) {
 	t.Helper()
 
@@ -335,6 +354,14 @@ func assertTerminalHyperlink(t *testing.T, rendered, target, text string) {
 		regexp.QuoteMeta("\x1b]8;;\x07")
 	if !regexp.MustCompile(pattern).MatchString(rendered) {
 		t.Fatalf("rendered output missing terminal hyperlink %q around %q: %q", target, text, rendered)
+	}
+}
+
+func assertNoTerminalHyperlink(t *testing.T, rendered string) {
+	t.Helper()
+
+	if strings.Contains(rendered, "\x1b]8;;") {
+		t.Fatalf("rendered output should not contain terminal hyperlinks: %q", rendered)
 	}
 }
 
