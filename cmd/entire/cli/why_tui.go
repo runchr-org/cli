@@ -7,16 +7,18 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
 type whyTUIStyles struct {
 	statusStyles
 
+	bold        lipgloss.Style
+	dim         lipgloss.Style
 	time        lipgloss.Style
 	author      lipgloss.Style
 	commit      lipgloss.Style
@@ -45,6 +47,9 @@ const (
 	whyTUIHeaderLabelWidth   = 11
 	whyTUISelectedBackground = "\x1b[48;5;236m"
 	whyTUIReset              = "\x1b[0m"
+	whyTUIResetShort         = "\x1b[m"
+	whyTUIResetHyperlink     = "\x1b]8;;\x07"
+	whyTUICommitURLPrefix    = "https://entire.io/gh/entireio/cli/commit/"
 )
 
 var runWhyTUI = defaultRunWhyTUI
@@ -80,6 +85,8 @@ func newWhyTUIStyles(ss statusStyles) whyTUIStyles {
 		return s
 	}
 
+	s.bold = lipgloss.NewStyle().Bold(true)
+	s.dim = lipgloss.NewStyle().Faint(true)
 	s.lineNo = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	s.time = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	s.author = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
@@ -176,7 +183,9 @@ func (m whyTUIModel) renderSelectedViewportLine(line string) string {
 		return line
 	}
 	line += strings.Repeat(" ", max(m.width-lipgloss.Width(line), 0))
-	return whyTUISelectedBackground + strings.ReplaceAll(line, whyTUIReset, whyTUIReset+whyTUISelectedBackground) + whyTUIReset
+	line = strings.ReplaceAll(line, whyTUIReset, whyTUIReset+whyTUISelectedBackground)
+	line = strings.ReplaceAll(line, whyTUIResetShort, whyTUIResetShort+whyTUISelectedBackground)
+	return whyTUISelectedBackground + line + whyTUIReset
 }
 
 func markWhyTUISelectedLine(line string) string {
@@ -247,12 +256,18 @@ func (m whyTUIModel) renderHeader() string {
 
 	title := fmt.Sprintf("%s:%d", m.data.GitPath, row.FinalLine)
 	metadata := strings.Join([]string{
-		m.renderHeaderField("commit", whyStaticCommit(row)),
+		m.renderHeaderCommitField(row),
 		m.renderHeaderField("author", whyStaticAuthor(row)),
 		m.renderHeaderField("date", whyStaticTime(row)),
 		m.renderHeaderField("checkpoint", whyStaticCheckpoint(info)),
 	}, "  ")
 	return fitWhyTUILine(title, m.width) + "\n" + fitWhyTUILine(metadata, m.width) + "\n\n"
+}
+
+func (m whyTUIModel) renderHeaderCommitField(row whyBlameRow) string {
+	label := whyColumn("COMMIT:", whyTUIHeaderLabelWidth)
+	value := m.renderCommitHash(whyStaticCommit(row), row.CommitHash, m.styles.headerValue)
+	return m.styles.render(m.styles.headerLabel, label) + " " + value
 }
 
 func (m whyTUIModel) renderHeaderField(label, value string) string {
@@ -308,10 +323,22 @@ func (m whyTUIModel) renderGutter(row whyBlameRow, lineWidth int) string {
 	return "  " + strings.Join([]string{
 		m.styles.render(m.styles.time, whyColumn(whyStaticTime(row), whyTimeMaxWidth)),
 		m.styles.render(m.styles.author, whyColumn(whyStaticAuthor(row), whyAuthorMaxWidth)),
-		m.styles.render(m.styles.commit, whyColumn(whyStaticCommit(row), whyCommitColumnWidth)),
+		m.renderCommitHash(whyColumn(whyStaticCommit(row), whyCommitColumnWidth), row.CommitHash, m.styles.commit),
 		m.styles.render(m.styles.checkpoint, whyColumn(whyTUICheckpoint(info), whyTUICheckpointMaxWidth)),
 		m.styles.render(m.styles.lineNo, whyColumn(lineNo, lineWidth)),
 	}, " ") + " | "
+}
+
+func (m whyTUIModel) renderCommitHash(text, commitHash string, style lipgloss.Style) string {
+	rendered := m.styles.render(style, text)
+	if !m.styles.colorEnabled || commitHash == "" {
+		return rendered
+	}
+	return lipgloss.NewStyle().Hyperlink(whyTUICommitURL(commitHash)).Render(rendered)
+}
+
+func whyTUICommitURL(commitHash string) string {
+	return whyTUICommitURLPrefix + commitHash
 }
 
 // whyGutterWidth derives the gutter width from the fixed column widths plus
@@ -373,6 +400,13 @@ func (m whyTUIModel) commitInfoForRow(row whyBlameRow) whyCommitInfo {
 	return info
 }
 
+func (s whyTUIStyles) render(style lipgloss.Style, text string) string {
+	if !s.colorEnabled {
+		return text
+	}
+	return style.Render(text)
+}
+
 func (s whyTUIStyles) helpItem(keyLabel, desc string) string {
 	return s.render(s.helpKey, keyLabel) + " " + desc
 }
@@ -394,14 +428,14 @@ func fitWhyTUILine(line string, width int) string {
 func cutWhyTUILine(line string, width int) string {
 	var b strings.Builder
 	visibleWidth := 0
-	sawANSI := false
+	sawSGR := false
+	sawHyperlink := false
 
 	for i := 0; i < len(line); {
 		if line[i] == '\x1b' {
-			next := consumeWhyTUIANSI(line, i)
-			if next > i+1 {
-				sawANSI = true
-			}
+			next, isSGR, isHyperlink := consumeWhyTUIEscape(line, i)
+			sawSGR = sawSGR || isSGR
+			sawHyperlink = sawHyperlink || isHyperlink
 			b.WriteString(line[i:next])
 			i = next
 			continue
@@ -413,8 +447,11 @@ func cutWhyTUILine(line string, width int) string {
 		}
 		runeWidth := lipgloss.Width(string(r))
 		if visibleWidth+runeWidth > width {
-			if sawANSI {
+			if sawSGR {
 				b.WriteString(whyTUIReset)
+			}
+			if sawHyperlink {
+				b.WriteString(whyTUIResetHyperlink)
 			}
 			return b.String()
 		}
@@ -425,13 +462,36 @@ func cutWhyTUILine(line string, width int) string {
 	return b.String()
 }
 
-func consumeWhyTUIANSI(line string, start int) int {
-	if start+1 >= len(line) || line[start+1] != '[' {
-		return start + 1
+func consumeWhyTUIEscape(line string, start int) (int, bool, bool) {
+	if start+1 >= len(line) {
+		return start + 1, false, false
 	}
+	switch line[start+1] {
+	case '[':
+		return consumeWhyTUICSI(line, start), true, false
+	case ']':
+		return consumeWhyTUIOSC(line, start), false, true
+	default:
+		return start + 1, false, false
+	}
+}
+
+func consumeWhyTUICSI(line string, start int) int {
 	for i := start + 2; i < len(line); i++ {
 		if line[i] >= 0x40 && line[i] <= 0x7e {
 			return i + 1
+		}
+	}
+	return len(line)
+}
+
+func consumeWhyTUIOSC(line string, start int) int {
+	for i := start + 2; i < len(line); i++ {
+		if line[i] == '\a' {
+			return i + 1
+		}
+		if line[i] == '\x1b' && i+1 < len(line) && line[i+1] == '\\' {
+			return i + 2
 		}
 	}
 	return len(line)

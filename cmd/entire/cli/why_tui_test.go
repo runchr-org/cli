@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/go-git/go-git/v6/plumbing"
 )
@@ -219,6 +219,17 @@ func TestWhyTUIModel_ViewHighlightsSelectedRow(t *testing.T) {
 	}
 }
 
+func TestWhyTUIModel_SelectedHighlightSurvivesShortStyleReset(t *testing.T) {
+	t.Parallel()
+
+	m := newWhyTUIModel(testWhyTUIModel().data, statusStyles{colorEnabled: true, width: 80})
+	got := m.renderSelectedViewportLine("\x1b[38;5;8mhash\x1b[m tail")
+
+	if !strings.Contains(got, "\x1b[m\x1b[48;5;236m tail") {
+		t.Fatalf("selected highlight should resume after short SGR reset: %q", got)
+	}
+}
+
 func TestWhyTUIModel_HeaderShowsSelectedLineMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -290,6 +301,39 @@ func TestWhyTUIModel_HeaderStylesLabelsAndValuesSeparately(t *testing.T) {
 	}
 }
 
+func TestWhyTUIModel_CommitHashesRenderAsTerminalHyperlinks(t *testing.T) {
+	t.Parallel()
+
+	hash := plumbing.NewHash("c56b7ac719000000000000000000000000000000")
+	row := testWhyTUIRow(hash, 15, "selected := true")
+	data := whyViewData{
+		GitPath: "cmd/main.go",
+		Rows:    []whyBlameRow{row},
+		Commits: map[plumbing.Hash]whyCommitInfo{
+			hash: {
+				Hash: hash,
+			},
+		},
+	}
+	m := newWhyTUIModel(data, statusStyles{colorEnabled: true, width: 160})
+	target := "https://entire.io/gh/entireio/cli/commit/" + hash.String()
+	text := "c56b7ac719"
+
+	assertTerminalHyperlink(t, m.renderHeader(), target, text)
+	assertTerminalHyperlink(t, m.renderGutter(row, whyLineColumnWidth(data.Rows)), target, text)
+}
+
+func assertTerminalHyperlink(t *testing.T, rendered, target, text string) {
+	t.Helper()
+
+	pattern := regexp.QuoteMeta("\x1b]8;;"+target+"\x07") + ".*" +
+		regexp.QuoteMeta(text) + ".*" +
+		regexp.QuoteMeta("\x1b]8;;\x07")
+	if !regexp.MustCompile(pattern).MatchString(rendered) {
+		t.Fatalf("rendered output missing terminal hyperlink %q around %q: %q", target, text, rendered)
+	}
+}
+
 func TestFitWhyTUILine_TruncatesStyledLinesWithoutCorruptingANSI(t *testing.T) {
 	t.Parallel()
 
@@ -304,6 +348,23 @@ func TestFitWhyTUILine_TruncatesStyledLinesWithoutCorruptingANSI(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, whyTUIReset) {
 		t.Fatalf("truncated styled line should end with reset: %q", got)
+	}
+}
+
+func TestFitWhyTUILine_TruncatesHyperlinksWithoutCorruptingOSC(t *testing.T) {
+	t.Parallel()
+
+	line := "\x1b]8;;https://example.test/commit/abc\x07abcdef\x1b]8;;\x07"
+	got := fitWhyTUILine(line, 3)
+
+	if width := lipgloss.Width(got); width != 3 {
+		t.Fatalf("truncated line width = %d, want 3: %q", width, got)
+	}
+	if !strings.Contains(got, "\x1b]8;;https://example.test/commit/abc\x07abc") {
+		t.Fatalf("truncated line should preserve leading OSC hyperlink sequence: %q", got)
+	}
+	if !strings.HasSuffix(got, "\x1b]8;;\x07") {
+		t.Fatalf("truncated linked line should end with hyperlink reset: %q", got)
 	}
 }
 

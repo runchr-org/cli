@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	charm.land/glamour/v2 v2.0.0
+	charm.land/lipgloss/v2 v2.0.0
 	github.com/alecthomas/chroma/v2 v2.14.0
 	github.com/betterleaks/betterleaks v1.1.2
 	github.com/charmbracelet/bubbles v0.21.1
@@ -33,7 +34,6 @@ require (
 
 require (
 	cel.dev/expr v0.25.1 // indirect
-	charm.land/lipgloss/v2 v2.0.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/BobuSumisu/aho-corasick v1.0.3 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
