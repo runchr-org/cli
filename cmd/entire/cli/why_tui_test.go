@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/go-git/go-git/v6/plumbing"
 )
@@ -65,8 +65,12 @@ func updateWhyTUIModel(t *testing.T, m whyTUIModel, msg tea.Msg) (whyTUIModel, t
 	return result, cmd
 }
 
-func whyRuneKey(r rune) tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+func whyRuneKey(r rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: r, Text: string(r)}
+}
+
+func whyTUIView(m whyTUIModel) string {
+	return m.View().Content
 }
 
 func TestWhyTUIModel_DownKeysMoveSelection(t *testing.T) {
@@ -74,9 +78,9 @@ func TestWhyTUIModel_DownKeysMoveSelection(t *testing.T) {
 
 	tests := []struct {
 		name string
-		key  tea.KeyMsg
+		key  tea.KeyPressMsg
 	}{
-		{name: "arrow down", key: tea.KeyMsg{Type: tea.KeyDown}},
+		{name: "arrow down", key: tea.KeyPressMsg{Code: tea.KeyDown}},
 		{name: "vim down", key: whyRuneKey('j')},
 	}
 
@@ -97,9 +101,9 @@ func TestWhyTUIModel_UpKeysMoveSelection(t *testing.T) {
 
 	tests := []struct {
 		name string
-		key  tea.KeyMsg
+		key  tea.KeyPressMsg
 	}{
-		{name: "arrow up", key: tea.KeyMsg{Type: tea.KeyUp}},
+		{name: "arrow up", key: tea.KeyPressMsg{Code: tea.KeyUp}},
 		{name: "vim up", key: whyRuneKey('k')},
 	}
 
@@ -123,12 +127,12 @@ func TestWhyTUIModel_TopBottomKeys(t *testing.T) {
 
 	tests := []struct {
 		name string
-		key  tea.KeyMsg
+		key  tea.KeyPressMsg
 		want int
 	}{
-		{name: "home", key: tea.KeyMsg{Type: tea.KeyHome}, want: 0},
+		{name: "home", key: tea.KeyPressMsg{Code: tea.KeyHome}, want: 0},
 		{name: "vim top", key: whyRuneKey('g'), want: 0},
-		{name: "end", key: tea.KeyMsg{Type: tea.KeyEnd}, want: 5},
+		{name: "end", key: tea.KeyPressMsg{Code: tea.KeyEnd}, want: 5},
 		{name: "vim bottom", key: whyRuneKey('G'), want: 5},
 	}
 
@@ -176,8 +180,8 @@ func TestWhyTUIModel_SelectedLineRemainsVisible(t *testing.T) {
 	if m.selected != 5 {
 		t.Fatalf("selected = %d, want 5", m.selected)
 	}
-	if m.selected < m.viewport.YOffset || m.selected >= m.viewport.YOffset+m.viewport.Height {
-		t.Fatalf("selected row %d outside viewport offset %d height %d", m.selected, m.viewport.YOffset, m.viewport.Height)
+	if m.selected < m.viewport.YOffset() || m.selected >= m.viewport.YOffset()+m.viewport.Height() {
+		t.Fatalf("selected row %d outside viewport offset %d height %d", m.selected, m.viewport.YOffset(), m.viewport.Height())
 	}
 }
 
@@ -185,7 +189,7 @@ func TestWhyTUIModel_ViewMarksSelectedRow(t *testing.T) {
 	t.Parallel()
 
 	m := testWhyTUIModel()
-	view := m.View()
+	view := whyTUIView(m)
 	firstLine := whyTUIViewLineContaining(t, view, "package main")
 	if !strings.HasPrefix(firstLine, "> ") {
 		t.Fatalf("selected line should start with marker: %q", firstLine)
@@ -199,7 +203,7 @@ func TestWhyTUIModel_ViewMarksSelectedRow(t *testing.T) {
 		}
 	}
 
-	view = m.View()
+	view = whyTUIView(m)
 	newLine := whyTUIViewLineContaining(t, view, "func main()")
 	if !strings.HasPrefix(newLine, "> ") {
 		t.Fatalf("new selected line should start with marker: %q", newLine)
@@ -213,7 +217,7 @@ func TestWhyTUIModel_ViewHighlightsSelectedRow(t *testing.T) {
 	m.height = 6
 	m = m.refreshViewport()
 
-	line := whyTUIViewLineContaining(t, m.View(), "package main")
+	line := whyTUIViewLineContaining(t, whyTUIView(m), "package main")
 	if !strings.Contains(line, "\x1b[48;5;236m") {
 		t.Fatalf("selected line should include highlight background: %q", line)
 	}
@@ -250,7 +254,7 @@ func TestWhyTUIModel_HeaderShowsSelectedLineMetadata(t *testing.T) {
 	}
 	m := newWhyTUIModel(data, statusStyles{colorEnabled: false, width: 160})
 
-	lines := strings.Split(m.View(), "\n")
+	lines := strings.Split(whyTUIView(m), "\n")
 	if got, want := lines[0], "cmd/main.go:15"; got != want {
 		t.Fatalf("header title = %q, want %q", got, want)
 	}
@@ -372,7 +376,7 @@ func TestWhyTUIModel_ViewShowsStickyGutterHeader(t *testing.T) {
 	t.Parallel()
 
 	m := testWhyTUIModel()
-	view := m.View()
+	view := whyTUIView(m)
 	lines := strings.Split(view, "\n")
 	if len(lines) < 4 {
 		t.Fatalf("view should include dynamic title, metadata row, padding, and gutter header:\n%s", view)
@@ -391,8 +395,8 @@ func TestWhyTUIModel_ViewShowsStickyGutterHeader(t *testing.T) {
 		t.Fatalf("gutter header should render above file rows:\n%s", view)
 	}
 
-	m, _ = updateWhyTUIModel(t, m, tea.KeyMsg{Type: tea.KeyEnd})
-	view = m.View()
+	m, _ = updateWhyTUIModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnd})
+	view = whyTUIView(m)
 	headerLine = whyTUIViewLineContaining(t, view, "TIME")
 	if !strings.Contains(headerLine, "CHECKPOINT") {
 		t.Fatalf("scrolled gutter header missing checkpoint label: %q", headerLine)
@@ -550,7 +554,7 @@ func TestWhyTUIModel_FooterFallsBackWithoutOverflow(t *testing.T) {
 
 	m := testWhyTUIModel()
 	m.width = 50
-	m.viewport.Width = 50
+	m.viewport.SetWidth(50)
 	footer := m.renderFooter()
 	if got := lipgloss.Width(footer); got != m.width {
 		t.Fatalf("compact footer width = %d, want %d: %q", got, m.width, footer)
@@ -562,7 +566,7 @@ func TestWhyTUIModel_FooterFallsBackWithoutOverflow(t *testing.T) {
 	}
 
 	m.width = 20
-	m.viewport.Width = 20
+	m.viewport.SetWidth(20)
 	footer = m.renderFooter()
 	if got := lipgloss.Width(footer); got != m.width {
 		t.Fatalf("narrow footer width = %d, want %d: %q", got, m.width, footer)

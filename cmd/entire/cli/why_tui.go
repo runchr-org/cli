@@ -7,10 +7,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
@@ -57,7 +57,7 @@ var runWhyTUI = defaultRunWhyTUI
 func defaultRunWhyTUI(ctx context.Context, w io.Writer, data whyViewData) error {
 	ss := newStatusStyles(w)
 	m := newWhyTUIModel(data, ss)
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
+	p := tea.NewProgram(m, tea.WithContext(ctx))
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("why TUI: %w", err)
 	}
@@ -71,7 +71,7 @@ func newWhyTUIModel(data whyViewData, ss statusStyles) whyTUIModel {
 
 	m := whyTUIModel{
 		data:      data,
-		viewport:  viewport.New(ss.width, 1),
+		viewport:  viewport.New(viewport.WithWidth(ss.width), viewport.WithHeight(1)),
 		styles:    newWhyTUIStyles(ss),
 		width:     ss.width,
 		lineWidth: whyLineColumnWidth(data.Rows),
@@ -112,16 +112,16 @@ func (m whyTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 		}
 		m.width = msg.Width
 		m.height = msg.Height
-		m.viewport.Width = msg.Width
+		m.viewport.SetWidth(msg.Width)
 		m = m.refreshViewport()
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.updateKey(msg)
 	}
 	return m, nil
 }
 
-func (m whyTUIModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) { //nolint:ireturn // bubbletea pattern
+func (m whyTUIModel) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) { //nolint:ireturn // bubbletea pattern
 	switch {
 	case key.Matches(msg, keys.Quit), key.Matches(msg, keys.Back):
 		return m, tea.Quit
@@ -147,9 +147,10 @@ func (m whyTUIModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) { //nolint:i
 	return m, nil
 }
 
-func (m whyTUIModel) View() string {
+func (m whyTUIModel) View() tea.View {
+	v := tea.View{AltScreen: true}
 	if m.width == 0 {
-		return ""
+		return v
 	}
 
 	var b strings.Builder
@@ -158,13 +159,14 @@ func (m whyTUIModel) View() string {
 	b.WriteString(m.renderViewport())
 	b.WriteString("\n")
 	b.WriteString(m.renderFooter())
-	return b.String()
+	v.SetContent(b.String())
+	return v
 }
 
 func (m whyTUIModel) renderViewport() string {
 	view := m.viewport.View()
-	selectedLine := m.selected - m.viewport.YOffset
-	if selectedLine < 0 || selectedLine >= m.viewport.Height {
+	selectedLine := m.selected - m.viewport.YOffset()
+	if selectedLine < 0 || selectedLine >= m.viewport.Height() {
 		return view
 	}
 
@@ -225,23 +227,23 @@ func (m whyTUIModel) refreshViewport() whyTUIModel {
 		vpHeight = 1
 	}
 
-	m.viewport.Width = m.width
-	m.viewport.Height = vpHeight
+	m.viewport.SetWidth(m.width)
+	m.viewport.SetHeight(vpHeight)
 	m.viewport.SetContent(m.renderRows())
 	return m.ensureSelectedVisible()
 }
 
 func (m whyTUIModel) ensureSelectedVisible() whyTUIModel {
-	if len(m.data.Rows) == 0 || m.viewport.Height <= 0 {
+	if len(m.data.Rows) == 0 || m.viewport.Height() <= 0 {
 		return m
 	}
-	if m.selected < m.viewport.YOffset {
+	if m.selected < m.viewport.YOffset() {
 		m.viewport.SetYOffset(m.selected)
 		return m
 	}
-	bottom := m.viewport.YOffset + m.viewport.Height - 1
+	bottom := m.viewport.YOffset() + m.viewport.Height() - 1
 	if m.selected > bottom {
-		m.viewport.SetYOffset(m.selected - m.viewport.Height + 1)
+		m.viewport.SetYOffset(m.selected - m.viewport.Height() + 1)
 	}
 	return m
 }
