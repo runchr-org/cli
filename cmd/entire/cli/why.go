@@ -169,7 +169,6 @@ func loadWhyViewData(ctx context.Context, repoRoot, gitPath string) (whyViewData
 	parseSpan.End()
 
 	_, buildRowsSpan := perf.Start(ctx, "build_rows")
-	blocks := collapseWhyBlameBlocks(lines)
 	rows := buildWhyBlameRows(lines)
 	buildRowsSpan.End()
 
@@ -183,13 +182,12 @@ func loadWhyViewData(ctx context.Context, repoRoot, gitPath string) (whyViewData
 	openRepoSpan.End()
 
 	enrichCtx, enrichSpan := perf.Start(ctx, "enrich_commits")
-	commits := enrichWhyCommits(enrichCtx, repo, blocks)
+	commits := enrichWhyCommits(enrichCtx, repo, lines)
 	enrichSpan.End()
 
 	return whyViewData{
 		GitPath: gitPath,
 		Rows:    rows,
-		Blocks:  blocks,
 		Commits: commits,
 	}, nil
 }

@@ -16,7 +16,7 @@ type whyCommitInfo struct {
 	CheckpointID id.CheckpointID
 }
 
-func enrichWhyCommits(ctx context.Context, repo *git.Repository, blocks []whyBlameBlock) map[plumbing.Hash]whyCommitInfo {
+func enrichWhyCommits(ctx context.Context, repo *git.Repository, lines []whyBlameLine) map[plumbing.Hash]whyCommitInfo {
 	infoByCommit := make(map[plumbing.Hash]whyCommitInfo)
 	if repo == nil {
 		return infoByCommit
@@ -25,12 +25,12 @@ func enrichWhyCommits(ctx context.Context, repo *git.Repository, blocks []whyBla
 	loopCtx, enrichCommitLoop := perf.StartLoop(ctx, "why_enrich_commit")
 	defer enrichCommitLoop.End()
 
-	for _, block := range blocks {
+	for _, line := range lines {
 		if err := loopCtx.Err(); err != nil {
 			return infoByCommit
 		}
 
-		hash := plumbing.NewHash(block.CommitHash)
+		hash := plumbing.NewHash(line.CommitHash)
 		if _, exists := infoByCommit[hash]; exists {
 			continue
 		}

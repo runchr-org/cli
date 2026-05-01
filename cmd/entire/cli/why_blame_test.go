@@ -99,7 +99,7 @@ func TestParseBlamePorcelain_InvalidRecord(t *testing.T) {
 	}
 }
 
-func TestCollapseWhyBlameBlocks(t *testing.T) {
+func TestBuildWhyBlameRows(t *testing.T) {
 	t.Parallel()
 
 	lines := []whyBlameLine{
@@ -107,20 +107,6 @@ func TestCollapseWhyBlameBlocks(t *testing.T) {
 		{CommitHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", FinalLine: 2},
 		{CommitHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", FinalLine: 3},
 		{CommitHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", FinalLine: 4},
-	}
-
-	blocks := collapseWhyBlameBlocks(lines)
-	if len(blocks) != 3 {
-		t.Fatalf("got %d blocks, want 3", len(blocks))
-	}
-	if blocks[0].CommitHash != lines[0].CommitHash || blocks[0].StartLine != 1 || blocks[0].EndLine != 2 {
-		t.Fatalf("first block = %+v", blocks[0])
-	}
-	if blocks[1].CommitHash != lines[2].CommitHash || blocks[1].StartLine != 3 || blocks[1].EndLine != 3 {
-		t.Fatalf("second block = %+v", blocks[1])
-	}
-	if blocks[2].CommitHash != lines[3].CommitHash || blocks[2].StartLine != 4 || blocks[2].EndLine != 4 {
-		t.Fatalf("third block = %+v", blocks[2])
 	}
 
 	rows := buildWhyBlameRows(lines)

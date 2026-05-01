@@ -19,7 +19,6 @@ const (
 type whyViewData struct {
 	GitPath string
 	Rows    []whyBlameRow
-	Blocks  []whyBlameBlock
 	Commits map[plumbing.Hash]whyCommitInfo
 }
 

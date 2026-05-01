@@ -20,7 +20,7 @@ func TestWhyEnrichCommits_NoCheckpointTrailerRecordsCommit(t *testing.T) {
 	hash := whyTestCommit(t, repoDir, "plain commit")
 	repo := whyTestOpenRepo(t, repoDir)
 
-	infoByCommit := enrichWhyCommits(ctx, repo, []whyBlameBlock{{CommitHash: hash.String()}})
+	infoByCommit := enrichWhyCommits(ctx, repo, []whyBlameLine{{CommitHash: hash.String()}})
 	info, ok := infoByCommit[hash]
 	if !ok {
 		t.Fatalf("missing info for commit %s", hash)
@@ -43,7 +43,7 @@ func TestWhyEnrichCommits_ParsesCheckpointTrailer(t *testing.T) {
 	hash := whyTestCommit(t, repoDir, "linked commit\n\nEntire-Checkpoint: "+cpID.String()+"\n")
 	repo := whyTestOpenRepo(t, repoDir)
 
-	infoByCommit := enrichWhyCommits(ctx, repo, []whyBlameBlock{{CommitHash: hash.String()}})
+	infoByCommit := enrichWhyCommits(ctx, repo, []whyBlameLine{{CommitHash: hash.String()}})
 	info, ok := infoByCommit[hash]
 	if !ok {
 		t.Fatalf("missing info for commit %s", hash)
@@ -53,7 +53,7 @@ func TestWhyEnrichCommits_ParsesCheckpointTrailer(t *testing.T) {
 	}
 }
 
-func TestWhyEnrichCommits_DeduplicatesBlameBlocks(t *testing.T) {
+func TestWhyEnrichCommits_DeduplicatesBlameLines(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -63,9 +63,9 @@ func TestWhyEnrichCommits_DeduplicatesBlameBlocks(t *testing.T) {
 	hash := whyTestCommit(t, repoDir, "linked commit\n\nEntire-Checkpoint: "+cpID.String()+"\n")
 	repo := whyTestOpenRepo(t, repoDir)
 
-	infoByCommit := enrichWhyCommits(ctx, repo, []whyBlameBlock{
-		{CommitHash: hash.String(), StartLine: 1, EndLine: 1},
-		{CommitHash: hash.String(), StartLine: 2, EndLine: 2},
+	infoByCommit := enrichWhyCommits(ctx, repo, []whyBlameLine{
+		{CommitHash: hash.String(), FinalLine: 1},
+		{CommitHash: hash.String(), FinalLine: 2},
 	})
 	if len(infoByCommit) != 1 {
 		t.Fatalf("commit info count = %d, want 1", len(infoByCommit))

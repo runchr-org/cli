@@ -21,14 +21,6 @@ type whyBlameLine struct {
 	Source       string
 }
 
-type whyBlameBlock struct {
-	CommitHash string
-	StartLine  int
-	EndLine    int
-	StartRow   int
-	EndRow     int
-}
-
 type whyBlameRow struct {
 	whyBlameLine
 }
@@ -172,42 +164,6 @@ func applyBlameMetadata(line *whyBlameLine, metadata whyBlameMetadata) {
 	line.Author = metadata.Author
 	line.AuthorTime = metadata.AuthorTime
 	line.Filename = metadata.Filename
-}
-
-func collapseWhyBlameBlocks(lines []whyBlameLine) []whyBlameBlock {
-	if len(lines) == 0 {
-		return nil
-	}
-
-	blocks := make([]whyBlameBlock, 0)
-	current := whyBlameBlock{
-		CommitHash: lines[0].CommitHash,
-		StartLine:  lines[0].FinalLine,
-		EndLine:    lines[0].FinalLine,
-		StartRow:   0,
-		EndRow:     0,
-	}
-
-	for i := 1; i < len(lines); i++ {
-		line := lines[i]
-		if line.CommitHash == current.CommitHash {
-			current.EndLine = line.FinalLine
-			current.EndRow = i
-			continue
-		}
-
-		blocks = append(blocks, current)
-		current = whyBlameBlock{
-			CommitHash: line.CommitHash,
-			StartLine:  line.FinalLine,
-			EndLine:    line.FinalLine,
-			StartRow:   i,
-			EndRow:     i,
-		}
-	}
-
-	blocks = append(blocks, current)
-	return blocks
 }
 
 func buildWhyBlameRows(lines []whyBlameLine) []whyBlameRow {
