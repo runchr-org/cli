@@ -147,6 +147,9 @@ func TestRunGitBlame(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runGitBlame() error = %v", err)
 	}
+	if got := strings.Count("\n"+string(output), "\nauthor "); got != 1 {
+		t.Fatalf("author metadata count = %d, want compact porcelain metadata once", got)
+	}
 	lines, err := parseBlamePorcelain(output)
 	if err != nil {
 		t.Fatalf("parseBlamePorcelain(runGitBlame()) error = %v", err)

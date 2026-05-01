@@ -40,7 +40,7 @@ type whyBlameMetadata struct {
 }
 
 func runGitBlame(ctx context.Context, repoRoot, gitPath string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "git", "blame", "--line-porcelain", "--", gitPath)
+	cmd := exec.CommandContext(ctx, "git", "blame", "--porcelain", "--", gitPath)
 	cmd.Dir = repoRoot
 
 	var stdout, stderr bytes.Buffer
