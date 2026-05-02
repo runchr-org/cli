@@ -27,10 +27,6 @@ func newWhyCmd() *cobra.Command {
 			if len(args) > 0 {
 				path = args[0]
 			}
-			if path != "" && !canRunWhyTUI(cmd.OutOrStdout()) {
-				cleanup := initWhyLogging(cmd.Context())
-				defer cleanup()
-			}
 			return runWhy(cmd.Context(), cmd.OutOrStdout(), path)
 		},
 	}
@@ -47,9 +43,7 @@ func runWhy(ctx context.Context, w io.Writer, path string) (err error) {
 		span.End()
 	}()
 
-	_, modeSpan := perf.Start(ctx, "detect_mode")
 	canUseTUI := canRunWhyTUI(w)
-	modeSpan.End()
 	if path == "" {
 		if !canUseTUI {
 			return errors.New("path required when not running interactively")
@@ -57,14 +51,15 @@ func runWhy(ctx context.Context, w io.Writer, path string) (err error) {
 		return errors.New("interactive file browser is not implemented yet")
 	}
 
-	_, resolveSpan := perf.Start(ctx, "resolve_path")
-	repoRoot, gitPath, _, err := resolveWhyPath(ctx, path)
+	if !canUseTUI {
+		cleanup := initWhyLogging(ctx)
+		defer cleanup()
+	}
+
+	repoRoot, gitPath, err := resolveWhyPath(ctx, path)
 	if err != nil {
-		resolveSpan.RecordError(err)
-		resolveSpan.End()
 		return err
 	}
-	resolveSpan.End()
 
 	data, err := loadWhyViewData(ctx, repoRoot, gitPath)
 	if err != nil {
@@ -72,23 +67,10 @@ func runWhy(ctx context.Context, w io.Writer, path string) (err error) {
 	}
 
 	if canUseTUI {
-		_, renderSpan := perf.Start(ctx, "render_tui")
-		if err := runWhyTUI(ctx, w, data); err != nil {
-			renderSpan.RecordError(err)
-			renderSpan.End()
-			return err
-		}
-		renderSpan.End()
-		return nil
+		return runWhyTUI(ctx, w, data)
 	}
 
-	_, renderSpan := perf.Start(ctx, "render_static")
-	content := renderWhyStatic(data)
-	renderSpan.End()
-
-	_, outputSpan := perf.Start(ctx, "write_output")
-	outputExplainContent(w, content, false)
-	outputSpan.End()
+	outputExplainContent(w, renderWhyStatic(data), false)
 	return nil
 }
 
@@ -109,10 +91,10 @@ func initWhyLogging(ctx context.Context) func() {
 	return logging.Close
 }
 
-func resolveWhyPath(ctx context.Context, input string) (string, string, string, error) {
+func resolveWhyPath(ctx context.Context, input string) (string, string, error) {
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return "", "", "", fmt.Errorf("not a git repository: %w", err)
+		return "", "", fmt.Errorf("not a git repository: %w", err)
 	}
 	repoRoot = normalizeWhyPathForRel(repoRoot)
 
@@ -120,20 +102,20 @@ func resolveWhyPath(ctx context.Context, input string) (string, string, string, 
 	if !filepath.IsAbs(absPath) {
 		absPath, err = filepath.Abs(absPath)
 		if err != nil {
-			return "", "", "", fmt.Errorf("resolving path %q: %w", input, err)
+			return "", "", fmt.Errorf("resolving path %q: %w", input, err)
 		}
 	}
 	absPath = normalizeWhyPathForRel(absPath)
 
 	relPath, err := filepath.Rel(repoRoot, absPath)
 	if err != nil {
-		return "", "", "", fmt.Errorf("resolving path %q relative to repository: %w", input, err)
+		return "", "", fmt.Errorf("resolving path %q relative to repository: %w", input, err)
 	}
 	if relPath == "." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) || relPath == ".." {
-		return "", "", "", fmt.Errorf("path %q is outside the repository", input)
+		return "", "", fmt.Errorf("path %q is outside the repository", input)
 	}
 
-	return repoRoot, filepath.ToSlash(relPath), absPath, nil
+	return repoRoot, filepath.ToSlash(relPath), nil
 }
 
 func normalizeWhyPathForRel(path string) string {
@@ -168,10 +150,6 @@ func loadWhyViewData(ctx context.Context, repoRoot, gitPath string) (whyViewData
 	}
 	parseSpan.End()
 
-	_, buildRowsSpan := perf.Start(ctx, "build_rows")
-	rows := buildWhyBlameRows(lines)
-	buildRowsSpan.End()
-
 	_, openRepoSpan := perf.Start(ctx, "open_repository")
 	repo, err := openRepository(ctx)
 	if err != nil {
@@ -187,7 +165,7 @@ func loadWhyViewData(ctx context.Context, repoRoot, gitPath string) (whyViewData
 
 	return whyViewData{
 		GitPath: gitPath,
-		Rows:    rows,
+		Rows:    lines,
 		Commits: commits,
 	}, nil
 }

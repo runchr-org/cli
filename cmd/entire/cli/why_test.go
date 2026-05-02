@@ -112,20 +112,17 @@ func TestResolveWhyPath(t *testing.T) {
 		name        string
 		input       string
 		wantGitPath string
-		wantAbsPath string
 		wantErr     bool
 	}{
 		{
 			name:        "relative path",
 			input:       "dir/file.go",
 			wantGitPath: "dir/file.go",
-			wantAbsPath: filepath.Join(wantRepoRoot, "dir", "file.go"),
 		},
 		{
 			name:        "absolute path inside repo",
 			input:       filepath.Join(repoDir, "dir", "file.go"),
 			wantGitPath: "dir/file.go",
-			wantAbsPath: filepath.Join(wantRepoRoot, "dir", "file.go"),
 		},
 		{
 			name:    "outside repo",
@@ -136,7 +133,7 @@ func TestResolveWhyPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotRepoRoot, gotGitPath, gotAbsPath, err := resolveWhyPath(ctx, tt.input)
+			gotRepoRoot, gotGitPath, err := resolveWhyPath(ctx, tt.input)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error")
@@ -151,9 +148,6 @@ func TestResolveWhyPath(t *testing.T) {
 			}
 			if gotGitPath != tt.wantGitPath {
 				t.Fatalf("gitPath = %q, want %q", gotGitPath, tt.wantGitPath)
-			}
-			if gotAbsPath != tt.wantAbsPath {
-				t.Fatalf("absPath = %q, want %q", gotAbsPath, tt.wantAbsPath)
 			}
 		})
 	}

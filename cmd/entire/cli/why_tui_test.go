@@ -17,7 +17,7 @@ var whyANSIRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 func testWhyTUIModel() whyTUIModel {
 	hashA := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	hashB := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	rows := []whyBlameRow{
+	rows := []whyBlameLine{
 		testWhyTUIRow(hashA, 1, "package main"),
 		testWhyTUIRow(hashA, 2, ""),
 		testWhyTUIRow(hashB, 3, "func main() {"),
@@ -43,14 +43,12 @@ func testWhyTUIModel() whyTUIModel {
 	return m.refreshViewport()
 }
 
-func testWhyTUIRow(hash plumbing.Hash, line int, source string) whyBlameRow {
-	return whyBlameRow{
-		whyBlameLine: whyBlameLine{
-			CommitHash: hash.String(),
-			FinalLine:  line,
-			Author:     "Fallback Author",
-			Source:     source,
-		},
+func testWhyTUIRow(hash plumbing.Hash, line int, source string) whyBlameLine {
+	return whyBlameLine{
+		CommitHash: hash.String(),
+		FinalLine:  line,
+		Author:     "Fallback Author",
+		Source:     source,
 	}
 }
 
@@ -244,7 +242,7 @@ func TestWhyTUIModel_HeaderShowsSelectedLineMetadata(t *testing.T) {
 	row.AuthorTime = time.Now().Add(-6 * 24 * time.Hour)
 	data := whyViewData{
 		GitPath: "cmd/main.go",
-		Rows:    []whyBlameRow{row},
+		Rows:    []whyBlameLine{row},
 		Commits: map[plumbing.Hash]whyCommitInfo{
 			hash: {
 				Hash:         hash,
@@ -312,7 +310,7 @@ func TestWhyTUIModel_CommitHashesRenderAsTerminalHyperlinks(t *testing.T) {
 	row := testWhyTUIRow(hash, 15, "selected := true")
 	data := whyViewData{
 		GitPath: "cmd/main.go",
-		Rows:    []whyBlameRow{row},
+		Rows:    []whyBlameLine{row},
 		Commits: map[plumbing.Hash]whyCommitInfo{
 			hash: {
 				Hash: hash,
@@ -333,7 +331,7 @@ func TestWhyTUIModel_ZeroCommitHashDoesNotRenderAsTerminalHyperlink(t *testing.T
 	row := testWhyTUIRow(plumbing.ZeroHash, 15, "selected := true")
 	data := whyViewData{
 		GitPath: "cmd/main.go",
-		Rows:    []whyBlameRow{row},
+		Rows:    []whyBlameLine{row},
 		Commits: map[plumbing.Hash]whyCommitInfo{
 			plumbing.ZeroHash: {
 				Hash: plumbing.ZeroHash,
@@ -484,7 +482,7 @@ func TestWhyTUIModel_GutterShowsBlameColumnsInRequestedOrder(t *testing.T) {
 	secondRow.AuthorTime = firstRow.AuthorTime
 	data := whyViewData{
 		GitPath: "cmd/main.go",
-		Rows:    []whyBlameRow{firstRow, secondRow},
+		Rows:    []whyBlameLine{firstRow, secondRow},
 		Commits: map[plumbing.Hash]whyCommitInfo{
 			hash: {
 				Hash:         hash,
@@ -529,7 +527,7 @@ func TestWhyTUIModel_GutterColumnsHaveFixedWidths(t *testing.T) {
 	secondRow.Author = "A"
 	data := whyViewData{
 		GitPath: "cmd/main.go",
-		Rows:    []whyBlameRow{firstRow, secondRow},
+		Rows:    []whyBlameLine{firstRow, secondRow},
 		Commits: map[plumbing.Hash]whyCommitInfo{
 			hashA: {
 				Hash:         hashA,

@@ -99,27 +99,6 @@ func TestParseBlamePorcelain_InvalidRecord(t *testing.T) {
 	}
 }
 
-func TestBuildWhyBlameRows(t *testing.T) {
-	t.Parallel()
-
-	lines := []whyBlameLine{
-		{CommitHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", FinalLine: 1},
-		{CommitHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", FinalLine: 2},
-		{CommitHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", FinalLine: 3},
-		{CommitHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", FinalLine: 4},
-	}
-
-	rows := buildWhyBlameRows(lines)
-	if len(rows) != len(lines) {
-		t.Fatalf("rows = %d, want %d", len(rows), len(lines))
-	}
-	for i, row := range rows {
-		if row.CommitHash != lines[i].CommitHash || row.FinalLine != lines[i].FinalLine {
-			t.Fatalf("row[%d] = %+v, want line %+v", i, row, lines[i])
-		}
-	}
-}
-
 func TestRunGitBlame(t *testing.T) {
 	t.Parallel()
 

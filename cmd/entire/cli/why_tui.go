@@ -39,7 +39,9 @@ type whyTUIModel struct {
 	width    int
 	height   int
 
-	lineWidth int
+	lineWidth     int
+	renderedRows  string
+	renderedWidth int
 }
 
 const (
@@ -221,16 +223,29 @@ func leadingSGRLen(s string) int {
 }
 
 func (m whyTUIModel) refreshViewport() whyTUIModel {
-	headerHeight := strings.Count(m.renderHeader(), "\n") + strings.Count(m.renderColumnHeader(), "\n")
-	vpHeight := m.height - headerHeight - 1
+	vpHeight := m.height - whyTUIHeaderHeight(len(m.data.Rows) > 0) - 1
 	if vpHeight < 1 {
 		vpHeight = 1
 	}
 
 	m.viewport.SetWidth(m.width)
 	m.viewport.SetHeight(vpHeight)
-	m.viewport.SetContent(m.renderRows())
+	if m.renderedRows == "" || m.renderedWidth != m.width {
+		m.renderedRows = m.renderRows()
+		m.renderedWidth = m.width
+		m.viewport.SetContent(m.renderedRows)
+	}
 	return m.ensureSelectedVisible()
+}
+
+// whyTUIHeaderHeight returns the number of newlines emitted by renderHeader
+// plus renderColumnHeader. Empty data renders one line; otherwise three header
+// lines plus a column-header line.
+func whyTUIHeaderHeight(hasRows bool) int {
+	if !hasRows {
+		return 1
+	}
+	return 4
 }
 
 func (m whyTUIModel) ensureSelectedVisible() whyTUIModel {
@@ -266,7 +281,7 @@ func (m whyTUIModel) renderHeader() string {
 	return fitWhyTUILine(title, m.width) + "\n" + fitWhyTUILine(metadata, m.width) + "\n\n"
 }
 
-func (m whyTUIModel) renderHeaderCommitField(row whyBlameRow) string {
+func (m whyTUIModel) renderHeaderCommitField(row whyBlameLine) string {
 	label := whyColumn("COMMIT:", whyTUIHeaderLabelWidth)
 	value := m.renderCommitHash(whyStaticCommit(row), row.CommitHash, m.styles.headerValue)
 	return m.styles.render(m.styles.headerLabel, label) + " " + value
@@ -319,7 +334,7 @@ func (m whyTUIModel) renderRows() string {
 	return b.String()
 }
 
-func (m whyTUIModel) renderGutter(row whyBlameRow, lineWidth int) string {
+func (m whyTUIModel) renderGutter(row whyBlameLine, lineWidth int) string {
 	info := m.commitInfoForRow(row)
 	lineNo := fmt.Sprintf("%*d", lineWidth, row.FinalLine)
 	return "  " + strings.Join([]string{
@@ -393,7 +408,7 @@ func (m whyTUIModel) positionText() string {
 	return fmt.Sprintf("%d/%d", m.selected+1, len(m.data.Rows))
 }
 
-func (m whyTUIModel) commitInfoForRow(row whyBlameRow) whyCommitInfo {
+func (m whyTUIModel) commitInfoForRow(row whyBlameLine) whyCommitInfo {
 	hash := plumbing.NewHash(row.CommitHash)
 	info, ok := m.data.Commits[hash]
 	if !ok {

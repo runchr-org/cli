@@ -21,16 +21,6 @@ type whyBlameLine struct {
 	Source       string
 }
 
-type whyBlameRow struct {
-	whyBlameLine
-}
-
-type whyBlameMetadata struct {
-	Author     string
-	AuthorTime time.Time
-	Filename   string
-}
-
 func runGitBlame(ctx context.Context, repoRoot, gitPath string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", "blame", "--porcelain", "--", gitPath)
 	cmd.Dir = repoRoot
@@ -56,7 +46,7 @@ func parseBlamePorcelain(data []byte) ([]whyBlameLine, error) {
 	}
 
 	rawLines := bytes.Split(bytes.TrimSuffix(data, []byte{'\n'}), []byte{'\n'})
-	metadataByCommit := make(map[string]whyBlameMetadata)
+	metadataByCommit := make(map[string]whyBlameLine)
 	lines := make([]whyBlameLine, 0)
 
 	var current *whyBlameLine
@@ -74,8 +64,10 @@ func parseBlamePorcelain(data []byte) ([]whyBlameLine, error) {
 				OriginalLine: originalLine,
 				FinalLine:    finalLine,
 			}
-			if metadata, exists := metadataByCommit[hash]; exists {
-				applyBlameMetadata(&next, metadata)
+			if cached, exists := metadataByCommit[hash]; exists {
+				next.Author = cached.Author
+				next.AuthorTime = cached.AuthorTime
+				next.Filename = cached.Filename
 			}
 			current = &next
 			continue
@@ -91,7 +83,7 @@ func parseBlamePorcelain(data []byte) ([]whyBlameLine, error) {
 		if strings.HasPrefix(line, "\t") {
 			current.Source = strings.TrimPrefix(line, "\t")
 			lines = append(lines, *current)
-			metadataByCommit[current.CommitHash] = metadataFromBlameLine(*current)
+			metadataByCommit[current.CommitHash] = *current
 			current = nil
 			continue
 		}
@@ -99,7 +91,7 @@ func parseBlamePorcelain(data []byte) ([]whyBlameLine, error) {
 		if err := applyBlameMetadataLine(current, line); err != nil {
 			return nil, fmt.Errorf("parse blame metadata on line %d: %w", lineNumber+1, err)
 		}
-		metadataByCommit[current.CommitHash] = metadataFromBlameLine(*current)
+		metadataByCommit[current.CommitHash] = *current
 	}
 
 	if current != nil {
@@ -150,26 +142,4 @@ func applyBlameMetadataLine(line *whyBlameLine, metadata string) error {
 		line.Filename = strings.TrimPrefix(metadata, "filename ")
 	}
 	return nil
-}
-
-func metadataFromBlameLine(line whyBlameLine) whyBlameMetadata {
-	return whyBlameMetadata{
-		Author:     line.Author,
-		AuthorTime: line.AuthorTime,
-		Filename:   line.Filename,
-	}
-}
-
-func applyBlameMetadata(line *whyBlameLine, metadata whyBlameMetadata) {
-	line.Author = metadata.Author
-	line.AuthorTime = metadata.AuthorTime
-	line.Filename = metadata.Filename
-}
-
-func buildWhyBlameRows(lines []whyBlameLine) []whyBlameRow {
-	rows := make([]whyBlameRow, len(lines))
-	for i, line := range lines {
-		rows[i] = whyBlameRow{whyBlameLine: line}
-	}
-	return rows
 }

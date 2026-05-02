@@ -18,7 +18,7 @@ const (
 
 type whyViewData struct {
 	GitPath string
-	Rows    []whyBlameRow
+	Rows    []whyBlameLine
 	Commits map[plumbing.Hash]whyCommitInfo
 }
 
@@ -61,7 +61,7 @@ func renderWhyStatic(data whyViewData) string {
 	return sb.String()
 }
 
-func whyLineColumnWidth(rows []whyBlameRow) int {
+func whyLineColumnWidth(rows []whyBlameLine) int {
 	width := len("LINE")
 	for _, row := range rows {
 		lineWidth := len(strconv.Itoa(row.FinalLine))
@@ -72,21 +72,21 @@ func whyLineColumnWidth(rows []whyBlameRow) int {
 	return width
 }
 
-func whyStaticTime(row whyBlameRow) string {
+func whyStaticTime(row whyBlameLine) string {
 	if row.AuthorTime.IsZero() {
 		return "-"
 	}
 	return truncateDisplayWidth(timeAgo(row.AuthorTime), whyTimeMaxWidth, "...")
 }
 
-func whyStaticAuthor(row whyBlameRow) string {
+func whyStaticAuthor(row whyBlameLine) string {
 	if row.Author == "" {
 		return "-"
 	}
 	return truncateDisplayWidth(row.Author, whyAuthorMaxWidth, "...")
 }
 
-func whyStaticCommit(row whyBlameRow) string {
+func whyStaticCommit(row whyBlameLine) string {
 	if row.CommitHash == "" {
 		return "-"
 	}

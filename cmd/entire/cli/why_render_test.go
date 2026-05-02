@@ -23,13 +23,11 @@ func TestRenderWhyStatic_IncludesCheckpointColumn(t *testing.T) {
 	cpID := id.MustCheckpointID("a1b2c3d4e5f6")
 	data := whyViewData{
 		GitPath: "file.go",
-		Rows: []whyBlameRow{
+		Rows: []whyBlameLine{
 			{
-				whyBlameLine: whyBlameLine{
-					CommitHash: hash.String(),
-					FinalLine:  12,
-					Source:     "func main() {",
-				},
+				CommitHash: hash.String(),
+				FinalLine:  12,
+				Source:     "func main() {",
 			},
 		},
 		Commits: map[plumbing.Hash]whyCommitInfo{
@@ -58,15 +56,13 @@ func TestRenderWhyStatic_GutterColumnsFollowRequestedOrder(t *testing.T) {
 	cpID := id.MustCheckpointID("a1b2c3d4e5f6")
 	data := whyViewData{
 		GitPath: "file.go",
-		Rows: []whyBlameRow{
+		Rows: []whyBlameLine{
 			{
-				whyBlameLine: whyBlameLine{
-					CommitHash: hash.String(),
-					FinalLine:  42,
-					Author:     whyTestAuthor,
-					AuthorTime: time.Now().Add(-6 * 24 * time.Hour),
-					Source:     "func main() {}",
-				},
+				CommitHash: hash.String(),
+				FinalLine:  42,
+				Author:     whyTestAuthor,
+				AuthorTime: time.Now().Add(-6 * 24 * time.Hour),
+				Source:     "func main() {}",
 			},
 		},
 		Commits: map[plumbing.Hash]whyCommitInfo{
@@ -108,23 +104,19 @@ func TestRenderWhyStatic_GutterColumnsHaveFixedWidths(t *testing.T) {
 	now := time.Now()
 	data := whyViewData{
 		GitPath: "file.go",
-		Rows: []whyBlameRow{
+		Rows: []whyBlameLine{
 			{
-				whyBlameLine: whyBlameLine{
-					CommitHash: hashA.String(),
-					FinalLine:  7,
-					Author:     whyTestAuthor,
-					AuthorTime: now.Add(-6 * 24 * time.Hour),
-					Source:     "short := true",
-				},
+				CommitHash: hashA.String(),
+				FinalLine:  7,
+				Author:     whyTestAuthor,
+				AuthorTime: now.Add(-6 * 24 * time.Hour),
+				Source:     "short := true",
 			},
 			{
-				whyBlameLine: whyBlameLine{
-					CommitHash: hashB.String(),
-					FinalLine:  100,
-					Author:     "A",
-					Source:     "longer := false",
-				},
+				CommitHash: hashB.String(),
+				FinalLine:  100,
+				Author:     "A",
+				Source:     "longer := false",
 			},
 		},
 		Commits: map[plumbing.Hash]whyCommitInfo{
@@ -158,13 +150,11 @@ func TestRenderWhyStatic_FallbackValuesForNonEntireCommit(t *testing.T) {
 	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
 	data := whyViewData{
 		GitPath: "file.go",
-		Rows: []whyBlameRow{
+		Rows: []whyBlameLine{
 			{
-				whyBlameLine: whyBlameLine{
-					CommitHash: hash.String(),
-					FinalLine:  1,
-					Source:     "package main",
-				},
+				CommitHash: hash.String(),
+				FinalLine:  1,
+				Source:     "package main",
 			},
 		},
 		Commits: map[plumbing.Hash]whyCommitInfo{},
