@@ -2068,13 +2068,12 @@ func walkFirstParentCommits(ctx context.Context, repo *git.Repository, from plum
 	return nil
 }
 
-// getBranchCheckpoints returns checkpoints relevant to the current branch.
-// This is strategy-agnostic - it queries checkpoints directly from the checkpoint store.
-//
-// Behavior:
-//   - On feature branches: only show checkpoints unique to this branch (not in main)
-//   - On default branch (main/master): show all checkpoints in history (up to limit)
-//   - Includes both committed checkpoints (entire/checkpoints/v1) and temporary checkpoints (shadow branches)
+// getBranchCheckpoints returns checkpoints reachable from HEAD, mirroring
+// `git log` semantics regardless of branch. Walk follows the full DAG (so
+// checkpoints on merged feature branches are included) and is bounded by
+// commitScanLimit. Includes both committed checkpoints (entire/checkpoints/v1)
+// and temporary checkpoints from shadow branches whose base commit is in the
+// reachable set.
 func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) ([]strategy.RewindPoint, error) {
 	// Warn (once per process) if metadata branches are disconnected
 	strategy.WarnIfMetadataDisconnected()
@@ -2113,9 +2112,6 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
 
-	// Check if we're on the default branch (needed for getReachableTemporaryCheckpoints)
-	isOnDefault, _ := strategy.IsOnDefaultBranch(repo)
-
 	// Fetch metadata trees for reading session prompts (cheap tree lookups).
 	// Try v2 /main first, fall back to v1 metadata branch.
 	v1MetadataTree, _ := strategy.GetMetadataBranchTree(repo)   //nolint:errcheck // Best-effort
@@ -2123,6 +2119,7 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 	promptTree := resolvePromptTree(v1MetadataTree, v2MetadataTree, preferCheckpointsV2)
 
 	var points []strategy.RewindPoint
+	reachable := make(map[plumbing.Hash]bool)
 
 	collectCheckpoint := func(c *object.Commit) {
 		cpID, found := trailers.ParseCheckpoint(c.Message)
@@ -2156,52 +2153,39 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 		points = append(points, point)
 	}
 
-	if isOnDefault {
-		// On the default branch, use full DAG walk to find checkpoint commits
-		// on merged feature branches (second parents of merge commits).
-		iter, iterErr := repo.Log(&git.LogOptions{
-			From:  head.Hash(),
-			Order: git.LogOrderCommitterTime,
-		})
-		if iterErr != nil {
-			return nil, fmt.Errorf("failed to get commit log: %w", iterErr)
-		}
-		defer iter.Close()
-
-		count := 0
-		err = iter.ForEach(func(c *object.Commit) error {
-			if err := ctx.Err(); err != nil {
-				return err //nolint:wrapcheck // Propagating context cancellation
-			}
-			if count >= commitScanLimit {
-				return storer.ErrStop
-			}
-			count++
-			collectCheckpoint(c)
-			return nil
-		})
-	} else {
-		// On feature branches, use first-parent walk with branch filtering.
-		// This avoids walking into main's full history through merge commit parents.
-		reachableFromMain := computeReachableFromMain(ctx, repo)
-
-		err = walkFirstParentCommits(ctx, repo, head.Hash(), commitScanLimit, func(c *object.Commit) error {
-			// Once we hit a commit reachable from main on the first-parent chain,
-			// all earlier ancestors are also shared-with-main, so stop scanning.
-			if reachableFromMain[c.Hash] {
-				return errStopIteration
-			}
-			collectCheckpoint(c)
-			return nil
-		})
+	// Full DAG walk from HEAD, capped at commitScanLimit. Follows merge parents
+	// so checkpoints on merged feature branches are included regardless of
+	// whether HEAD is on main or a feature branch.
+	iter, iterErr := repo.Log(&git.LogOptions{
+		From:  head.Hash(),
+		Order: git.LogOrderCommitterTime,
+	})
+	if iterErr != nil {
+		return nil, fmt.Errorf("failed to get commit log: %w", iterErr)
 	}
+	defer iter.Close()
+
+	count := 0
+	err = iter.ForEach(func(c *object.Commit) error {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
+		if count >= commitScanLimit {
+			return storer.ErrStop
+		}
+		count++
+		reachable[c.Hash] = true
+		collectCheckpoint(c)
+		return nil
+	})
 
 	if err != nil {
 		return nil, fmt.Errorf("error iterating commits: %w", err)
 	}
 
-	// Get temporary checkpoints from ALL shadow branches whose base commit is reachable from HEAD.
-	tempPoints := getReachableTemporaryCheckpoints(ctx, repo, v1Store, head.Hash(), isOnDefault, limit)
+	// Get temporary checkpoints from shadow branches whose base commit is in
+	// the reachable set we just built (no extra walk needed).
+	tempPoints := getReachableTemporaryCheckpoints(ctx, repo, v1Store, reachable, limit)
 	points = append(points, tempPoints...)
 
 	// Sort by date, most recent first
@@ -2217,11 +2201,11 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 	return points, nil
 }
 
-// getReachableTemporaryCheckpoints returns temporary checkpoints from shadow branches
-// whose base commit is reachable from the given HEAD hash and that belong to this worktree.
-// For default branches, all shadow branches for this worktree are included.
-// For feature branches, only shadow branches whose base commit is in HEAD's history are included.
-func getReachableTemporaryCheckpoints(ctx context.Context, repo *git.Repository, store *checkpoint.GitStore, headHash plumbing.Hash, isOnDefault bool, limit int) []strategy.RewindPoint {
+// getReachableTemporaryCheckpoints returns temporary checkpoints from shadow
+// branches whose base commit is in `reachable` and that belong to this
+// worktree. `reachable` is the precomputed full-DAG set built by the caller's
+// commit walk.
+func getReachableTemporaryCheckpoints(ctx context.Context, repo *git.Repository, store *checkpoint.GitStore, reachable map[plumbing.Hash]bool, limit int) []strategy.RewindPoint {
 	var points []strategy.RewindPoint
 
 	// Compute current worktree's hash for filtering shadow branches
@@ -2237,8 +2221,9 @@ func getReachableTemporaryCheckpoints(ctx context.Context, repo *git.Repository,
 			continue
 		}
 
-		// Check if this shadow branch's base commit is reachable from current HEAD
-		if !isShadowBranchReachable(ctx, repo, sb.BaseCommit, headHash, isOnDefault) {
+		// Check if this shadow branch's base commit is reachable from HEAD via
+		// the DAG. sb.BaseCommit is a 7-char prefix from the branch name.
+		if !isBaseCommitInReachableSet(sb.BaseCommit, reachable) {
 			continue
 		}
 
@@ -2255,26 +2240,19 @@ func getReachableTemporaryCheckpoints(ctx context.Context, repo *git.Repository,
 	return points
 }
 
-// isShadowBranchReachable checks if a shadow branch's base commit is reachable from HEAD.
-// For default branches, all shadow branches are considered reachable.
-// For feature branches, we check if any commit with the base commit prefix is in HEAD's history.
-func isShadowBranchReachable(ctx context.Context, repo *git.Repository, baseCommit string, headHash plumbing.Hash, isOnDefault bool) bool {
-	// For default branch: all shadow branches are potentially relevant
-	if isOnDefault {
-		return true
+// isBaseCommitInReachableSet reports whether any hash in `reachable` has the
+// given prefix. Shadow branches store base commit as a 7-char prefix, so we
+// can't use a direct map lookup.
+func isBaseCommitInReachableSet(baseCommitPrefix string, reachable map[plumbing.Hash]bool) bool {
+	if baseCommitPrefix == "" {
+		return false
 	}
-
-	// Check if base commit hash prefix matches any commit in HEAD's first-parent chain
-	found := false
-	_ = walkFirstParentCommits(ctx, repo, headHash, commitScanLimit, func(c *object.Commit) error { //nolint:errcheck // Best-effort
-		if strings.HasPrefix(c.Hash.String(), baseCommit) {
-			found = true
-			return errStopIteration
+	for h := range reachable {
+		if strings.HasPrefix(h.String(), baseCommitPrefix) {
+			return true
 		}
-		return nil
-	})
-
-	return found
+	}
+	return false
 }
 
 // convertTemporaryCheckpoint converts a TemporaryCheckpointInfo to a RewindPoint.
