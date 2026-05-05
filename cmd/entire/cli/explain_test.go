@@ -5643,24 +5643,23 @@ func TestGetBranchCheckpointsInRange_ExcludesLeftSide(t *testing.T) {
 		wantNotContains []id.CheckpointID
 	}{
 		{
-			name:         "full reach from C — finds B and C",
+			name:         "full reach from C: finds B and C",
 			walk:         checkpointWalkRange{from: commitC},
 			wantContains: []id.CheckpointID{cpB, cpC},
 		},
 		{
-			name:            "C excluding A — A has no checkpoint, B and C still visible",
-			walk:            checkpointWalkRange{from: commitC, excludeFrom: commitA},
-			wantContains:    []id.CheckpointID{cpB, cpC},
-			wantNotContains: nil,
+			name:         "C excluding A: A has no checkpoint, B and C still visible",
+			walk:         checkpointWalkRange{from: commitC, excludeFrom: commitA},
+			wantContains: []id.CheckpointID{cpB, cpC},
 		},
 		{
-			name:            "C excluding B — drops B (and ancestors), keeps C",
+			name:            "C excluding B: drops B (and ancestors), keeps C",
 			walk:            checkpointWalkRange{from: commitC, excludeFrom: commitB},
 			wantContains:    []id.CheckpointID{cpC},
 			wantNotContains: []id.CheckpointID{cpB},
 		},
 		{
-			name:            "B alone — C unreachable",
+			name:            "B alone: C unreachable",
 			walk:            checkpointWalkRange{from: commitB},
 			wantContains:    []id.CheckpointID{cpB},
 			wantNotContains: []id.CheckpointID{cpC},
@@ -5688,9 +5687,10 @@ func TestGetBranchCheckpointsInRange_ExcludesLeftSide(t *testing.T) {
 }
 
 func TestGetBranchCheckpointsInRange_ExcludedCommitsDoNotConsumeBudget(t *testing.T) {
-	// Regression test for the cap-budget bug: excluded commits must not
-	// count toward commitScanLimit. Without this, a long left-side history
-	// can starve the right-side from producing visible checkpoints.
+	// Regression: excluded commits must not count toward commitScanLimit. We
+	// build a chain longer than the cap and put the trailered target on top —
+	// if the budget bug returns, the target gets skipped because the cap is
+	// exhausted by excluded ancestors.
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
@@ -5698,34 +5698,29 @@ func TestGetBranchCheckpointsInRange_ExcludedCommitsDoNotConsumeBudget(t *testin
 	repo, err := git.PlainOpen(tmpDir)
 	require.NoError(t, err)
 
+	// Use plumbing-level commit creation to avoid the cost of
+	// commitScanLimit+5 worktree checkouts.
 	w, err := repo.Worktree()
-	if err != nil {
-		t.Fatalf("worktree: %v", err)
-	}
-
+	require.NoError(t, err)
 	testFile := filepath.Join(tmpDir, "test.txt")
-	mustCommit := func(content, msg string, author time.Time) plumbing.Hash {
-		t.Helper()
-		require.NoError(t, os.WriteFile(testFile, []byte(content), 0o644))
-		_, err := w.Add("test.txt")
-		require.NoError(t, err)
-		hash, err := w.Commit(msg, &git.CommitOptions{
-			Author: &object.Signature{Name: "Test", Email: "test@example.com", When: author},
-		})
-		require.NoError(t, err)
-		return hash
-	}
+	require.NoError(t, os.WriteFile(testFile, []byte("seed"), 0o644))
+	_, err = w.Add("test.txt")
+	require.NoError(t, err)
+	seedHash, err := w.Commit("seed", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+	seedCommit, err := repo.CommitObject(seedHash)
+	require.NoError(t, err)
+	seedTree, err := seedCommit.Tree()
+	require.NoError(t, err)
 
-	// Build a chain `excluded[0..commitScanLimit] -> target (with trailer)`
-	// so the trailered commit is past commitScanLimit ancestors. With the
-	// budget bug, all of those would be counted and target would be missed.
-	now := time.Now()
-	var leftTip plumbing.Hash
+	leftTip := seedHash
 	for i := range commitScanLimit + 5 {
-		leftTip = mustCommit(fmt.Sprintf("noise-%d", i), fmt.Sprintf("noise %d", i), now.Add(-time.Duration(commitScanLimit-i)*time.Minute))
+		leftTip = createCommitWithTree(t, repo, seedTree.Hash, []plumbing.Hash{leftTip}, fmt.Sprintf("noise %d", i))
 	}
 	cpID := id.MustCheckpointID("ddddeeeeffff")
-	rightTip := mustCommit("target", trailers.FormatCheckpoint("feat: target", cpID), now)
+	rightTip := createCommitWithTree(t, repo, seedTree.Hash, []plumbing.Hash{leftTip}, trailers.FormatCheckpoint("feat: target", cpID))
 
 	store := checkpoint.NewGitStore(repo)
 	require.NoError(t, store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
@@ -5736,15 +5731,9 @@ func TestGetBranchCheckpointsInRange_ExcludedCommitsDoNotConsumeBudget(t *testin
 		Prompts:      []string{"add target"},
 	}))
 
-	// Exclude everything reachable from leftTip; the only commit visible
-	// in `leftTip..rightTip` is `rightTip` itself, which carries the
-	// trailer. Even though leftTip's history is longer than the cap, the
-	// exclude shouldn't consume it.
 	walk := checkpointWalkRange{from: rightTip, excludeFrom: leftTip}
 	points, err := getBranchCheckpointsInRange(context.Background(), repo, walk, 100)
-	if err != nil {
-		t.Fatalf("getBranchCheckpointsInRange: %v", err)
-	}
+	require.NoError(t, err)
 	var found bool
 	for _, p := range points {
 		if p.CheckpointID == cpID {
