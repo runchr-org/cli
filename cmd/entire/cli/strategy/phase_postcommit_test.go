@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -287,13 +288,7 @@ func TestPostCommit_ReadOnlyActiveSessionNotCondensed(t *testing.T) {
 //
 // Expected behavior: the stale session must be skipped or, if it is
 // condensed, must not inherit a different session's file list.
-//
-// Currently this test fails: the stale session is condensed and inherits
-// "test.txt" via filterFilesTouched's evidence-of-work fallback. The
-// Skip below keeps CI green; remove it as part of the fix to lock in
-// the corrected behavior.
 func TestPostCommit_StaleActiveSession_DoesNotInheritOtherSessionFiles(t *testing.T) {
-	t.Skip("known bug: filterFilesTouched inherits another session's committed files when sessionsWithCommittedFiles==0 at gate-check time. Remove this Skip with the fix.")
 	dir := setupGitRepo(t)
 	t.Chdir(dir)
 
@@ -319,13 +314,18 @@ func TestPostCommit_StaleActiveSession_DoesNotInheritOtherSessionFiles(t *testin
 
 	// Stale session: ACTIVE in the same worktree at the same base commit,
 	// LastInteractionTime within 24h (so isRecentInteraction == true). No
-	// shadow branch contribution. Transcript file exists but only contains
-	// startup banner / "exit" content with no file modifications.
+	// shadow branch contribution. Transcript file exists with content from
+	// before the last condensation (CheckpointTranscriptStart matches the
+	// current line count — no growth this checkpoint window), mirroring the
+	// real-world Codex case where the user typed "exit" hours ago and the
+	// session has been idle since.
 	staleTranscript := filepath.Join(dir, "stale-transcript.jsonl")
-	require.NoError(t, os.WriteFile(staleTranscript,
-		[]byte(`{"type":"event_msg","payload":{"type":"session_meta","session_id":"codex","tool":"codex"}}`+"\n"+
-			`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"exit"}]}}`+"\n"),
-		0o644))
+	staleTranscriptLines := []string{
+		`{"type":"event_msg","payload":{"type":"session_meta","session_id":"codex","tool":"codex"}}`,
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"exit"}]}}`,
+	}
+	staleTranscriptBytes := []byte(strings.Join(staleTranscriptLines, "\n") + "\n")
+	require.NoError(t, os.WriteFile(staleTranscript, staleTranscriptBytes, 0o644))
 
 	staleState := &SessionState{
 		SessionID:                 staleSessionID,
@@ -338,7 +338,8 @@ func TestPostCommit_StaleActiveSession_DoesNotInheritOtherSessionFiles(t *testin
 		StepCount:                 0,
 		AgentType:                 agent.AgentTypeCodex,
 		TranscriptPath:            staleTranscript,
-		CheckpointTranscriptStart: 0,
+		CheckpointTranscriptStart: len(staleTranscriptLines),
+		CheckpointTranscriptSize:  int64(len(staleTranscriptBytes)),
 	}
 	require.NoError(t, s.saveSessionState(context.Background(), staleState))
 
