@@ -365,7 +365,7 @@ func runExplain(ctx context.Context, w, errW io.Writer, sessionID, commitRef, ch
 	}
 
 	// Default or with session filter: show list view (optionally filtered by session)
-	return runExplainBranchWithFilter(ctx, w, noPager, sessionID)
+	return runExplainBranchWithFilter(ctx, w, noPager, sessionID, "")
 }
 
 // runExplainAuto resolves a positional target as either a checkpoint ID
@@ -2068,15 +2068,153 @@ func walkFirstParentCommits(ctx context.Context, repo *git.Repository, from plum
 	return nil
 }
 
+// buildReachableSet walks the full DAG from `from` and returns the set of
+// visited commit hashes (capped at `limit`). Returns nil when from is the
+// zero hash. Errors only on context cancellation; iteration errors are
+// best-effort.
+func buildReachableSet(ctx context.Context, repo *git.Repository, from plumbing.Hash, limit int) (map[plumbing.Hash]bool, error) {
+	set := make(map[plumbing.Hash]bool)
+	if from == plumbing.ZeroHash {
+		return set, nil
+	}
+	iter, err := repo.Log(&git.LogOptions{From: from, Order: git.LogOrderCommitterTime})
+	if err != nil {
+		return nil, fmt.Errorf("log from %s: %w", from, err)
+	}
+	defer iter.Close()
+	count := 0
+	err = iter.ForEach(func(c *object.Commit) error {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
+		if count >= limit {
+			return storer.ErrStop
+		}
+		count++
+		set[c.Hash] = true
+		return nil
+	})
+	if err != nil && !errors.Is(err, ctx.Err()) {
+		// Best-effort: log errors but return what we collected.
+		logging.Debug(ctx, "buildReachableSet: iteration error", slog.String("error", err.Error()))
+		return set, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err //nolint:wrapcheck // Propagating context cancellation
+	}
+	return set, nil
+}
+
+// parseCheckpointRevRange parses a git-style revision range and resolves it
+// against the repository. Supported forms:
+//
+//	""           → from=HEAD,  excludeFrom=zero (full reachable from HEAD)
+//	"<ref>"      → from=<ref>, excludeFrom=zero
+//	"A..B"       → from=B,     excludeFrom=A
+//	"A.."        → from=HEAD,  excludeFrom=A
+//	"..B"        → from=B,     excludeFrom=zero
+//
+// Symmetric difference (A...B) is rejected as unsupported.
+func parseCheckpointRevRange(repo *git.Repository, arg string) (checkpointWalkRange, error) {
+	var r checkpointWalkRange
+	resolveHEAD := func() (plumbing.Hash, error) {
+		head, err := repo.Head()
+		if err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("resolve HEAD: %w", err)
+		}
+		return head.Hash(), nil
+	}
+	resolveRev := func(ref string) (plumbing.Hash, error) {
+		h, err := repo.ResolveRevision(plumbing.Revision(ref))
+		if err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("resolve %q: %w", ref, err)
+		}
+		return *h, nil
+	}
+
+	if arg == "" {
+		h, err := resolveHEAD()
+		if err != nil {
+			return r, err
+		}
+		r.from = h
+		return r, nil
+	}
+
+	if strings.Contains(arg, "...") {
+		return r, fmt.Errorf("symmetric-difference range %q is not supported; use A..B", arg)
+	}
+
+	if !strings.Contains(arg, "..") {
+		h, err := resolveRev(arg)
+		if err != nil {
+			return r, err
+		}
+		r.from = h
+		return r, nil
+	}
+
+	left, right, _ := strings.Cut(arg, "..")
+	if right == "" {
+		h, err := resolveHEAD()
+		if err != nil {
+			return r, err
+		}
+		r.from = h
+	} else {
+		h, err := resolveRev(right)
+		if err != nil {
+			return r, err
+		}
+		r.from = h
+	}
+	if left != "" {
+		h, err := resolveRev(left)
+		if err != nil {
+			return r, err
+		}
+		r.excludeFrom = h
+	}
+	return r, nil
+}
+
+// checkpointWalkRange describes the slice of git history to scan for
+// checkpoints. `from` is the right side (commits reachable from here are
+// visited); `excludeFrom` is the left side (commits also reachable from
+// here are skipped). When excludeFrom is the zero hash, no exclusion is
+// applied. Mirrors `git log <excludeFrom>..<from>` semantics.
+type checkpointWalkRange struct {
+	from        plumbing.Hash
+	excludeFrom plumbing.Hash
+}
+
 // getBranchCheckpoints returns checkpoints reachable from HEAD, mirroring
-// `git log` semantics regardless of branch. Walk follows the full DAG (so
-// checkpoints on merged feature branches are included) and is bounded by
-// commitScanLimit. Includes both committed checkpoints (entire/checkpoints/v1)
-// and temporary checkpoints from shadow branches whose base commit is in the
-// reachable set.
+// `git log` semantics regardless of branch. See getBranchCheckpointsInRange
+// for the underlying walk; this is a thin wrapper that defaults to HEAD
+// with no exclusion.
 func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) ([]strategy.RewindPoint, error) {
+	head, err := repo.Head()
+	if err != nil {
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return []strategy.RewindPoint{}, nil
+		}
+		return nil, fmt.Errorf("failed to get HEAD: %w", err)
+	}
+	return getBranchCheckpointsInRange(ctx, repo, checkpointWalkRange{from: head.Hash()}, limit)
+}
+
+// getBranchCheckpointsInRange returns checkpoints in the given range, walking
+// the full DAG (so checkpoints on merged feature branches are included) and
+// capping at commitScanLimit. Includes both committed checkpoints
+// (entire/checkpoints/v1) and temporary checkpoints from shadow branches
+// whose base commit is in the visible reachable set.
+func getBranchCheckpointsInRange(ctx context.Context, repo *git.Repository, walk checkpointWalkRange, limit int) ([]strategy.RewindPoint, error) {
 	// Warn (once per process) if metadata branches are disconnected
 	strategy.WarnIfMetadataDisconnected()
+
+	if walk.from == plumbing.ZeroHash {
+		return nil, errors.New("checkpoint walk range: from hash is zero")
+	}
 
 	v1Store := checkpoint.NewGitStore(repo)
 	v2URL, err := remote.FetchURL(ctx)
@@ -2103,20 +2241,17 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 		}
 	}
 
-	head, err := repo.Head()
-	if err != nil {
-		// Unborn HEAD (no commits yet) - return empty list instead of erroring
-		if errors.Is(err, plumbing.ErrReferenceNotFound) {
-			return []strategy.RewindPoint{}, nil
-		}
-		return nil, fmt.Errorf("failed to get HEAD: %w", err)
-	}
-
 	// Fetch metadata trees for reading session prompts (cheap tree lookups).
 	// Try v2 /main first, fall back to v1 metadata branch.
 	v1MetadataTree, _ := strategy.GetMetadataBranchTree(repo)   //nolint:errcheck // Best-effort
 	v2MetadataTree, _ := strategy.GetV2MetadataBranchTree(repo) //nolint:errcheck // Best-effort
 	promptTree := resolvePromptTree(v1MetadataTree, v2MetadataTree, preferCheckpointsV2)
+
+	// Build exclude set when a left side was given.
+	excludeSet, err := buildReachableSet(ctx, repo, walk.excludeFrom, commitScanLimit)
+	if err != nil {
+		return nil, fmt.Errorf("compute exclude set: %w", err)
+	}
 
 	var points []strategy.RewindPoint
 	reachable := make(map[plumbing.Hash]bool)
@@ -2153,11 +2288,10 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 		points = append(points, point)
 	}
 
-	// Full DAG walk from HEAD, capped at commitScanLimit. Follows merge parents
-	// so checkpoints on merged feature branches are included regardless of
-	// whether HEAD is on main or a feature branch.
+	// Full DAG walk from `from`, capped at commitScanLimit. Follows merge
+	// parents so checkpoints on merged feature branches are included.
 	iter, iterErr := repo.Log(&git.LogOptions{
-		From:  head.Hash(),
+		From:  walk.from,
 		Order: git.LogOrderCommitterTime,
 	})
 	if iterErr != nil {
@@ -2174,6 +2308,9 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 			return storer.ErrStop
 		}
 		count++
+		if excludeSet[c.Hash] {
+			return nil
+		}
 		reachable[c.Hash] = true
 		collectCheckpoint(c)
 		return nil
@@ -2296,33 +2433,51 @@ func convertTemporaryCheckpoint(repo *git.Repository, tc checkpoint.TemporaryChe
 	}
 }
 
-// runExplainBranchWithFilter shows checkpoints on the current branch, optionally filtered by session.
+// runExplainBranchWithFilter shows checkpoints reachable from HEAD (or a
+// caller-supplied revision range), optionally filtered by session.
+// `revRangeArg` is a git-style revision range string; see
+// parseCheckpointRevRange for accepted forms. Empty string means "full
+// reachable from HEAD".
 // This is strategy-agnostic - it queries checkpoints directly.
-func runExplainBranchWithFilter(ctx context.Context, w io.Writer, noPager bool, sessionFilter string) error {
+func runExplainBranchWithFilter(ctx context.Context, w io.Writer, noPager bool, sessionFilter, revRangeArg string) error {
 	repo, err := openRepository(ctx)
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
 	}
 
-	// Get current branch name
-	branchName := strategy.GetCurrentBranchName(repo)
-	if branchName == "" {
-		// Detached HEAD state or unborn HEAD - try to use short commit hash if possible
-		head, headErr := repo.Head()
-		if headErr != nil {
-			// Unborn HEAD (no commits yet) - treat as empty history instead of erroring
-			if errors.Is(headErr, plumbing.ErrReferenceNotFound) {
-				branchName = "HEAD (no commits yet)"
+	// Compute the header label: branch name when no range was given, otherwise
+	// the range string itself (clearer than the current branch when scoped).
+	headerLabel := revRangeArg
+	if headerLabel == "" {
+		headerLabel = strategy.GetCurrentBranchName(repo)
+		if headerLabel == "" {
+			head, headErr := repo.Head()
+			if headErr != nil {
+				if errors.Is(headErr, plumbing.ErrReferenceNotFound) {
+					headerLabel = "HEAD (no commits yet)"
+				} else {
+					return fmt.Errorf("failed to get HEAD: %w", headErr)
+				}
 			} else {
-				return fmt.Errorf("failed to get HEAD: %w", headErr)
+				headerLabel = "HEAD (" + head.Hash().String()[:7] + ")"
 			}
-		} else {
-			branchName = "HEAD (" + head.Hash().String()[:7] + ")"
 		}
 	}
 
-	// Get checkpoints for this branch (strategy-agnostic)
-	points, err := getBranchCheckpoints(ctx, repo, branchCheckpointsLimit)
+	walk, err := parseCheckpointRevRange(repo, revRangeArg)
+	if err != nil {
+		// Unborn HEAD with empty arg yields a ReferenceNotFound — fall through
+		// to the empty-list path so users get a helpful message.
+		if revRangeArg == "" && errors.Is(err, plumbing.ErrReferenceNotFound) {
+			output := formatBranchCheckpoints(w, headerLabel, nil, sessionFilter)
+			outputExplainContent(w, output, noPager)
+			return nil
+		}
+		return fmt.Errorf("invalid revision range %q: %w", revRangeArg, err)
+	}
+
+	// Get checkpoints for the requested range (strategy-agnostic)
+	points, err := getBranchCheckpointsInRange(ctx, repo, walk, branchCheckpointsLimit)
 	if err != nil {
 		// If context was cancelled (e.g. user hit Ctrl+C), exit silently
 		if ctx.Err() != nil {
@@ -2334,16 +2489,16 @@ func runExplainBranchWithFilter(ctx context.Context, w io.Writer, noPager bool, 
 	}
 
 	// Format output
-	output := formatBranchCheckpoints(w, branchName, points, sessionFilter)
+	output := formatBranchCheckpoints(w, headerLabel, points, sessionFilter)
 
 	outputExplainContent(w, output, noPager)
 	return nil
 }
 
-// runExplainBranchDefault shows all checkpoints on the current branch grouped by date.
+// runExplainBranchDefault shows all checkpoints reachable from HEAD grouped by date.
 // This is a convenience wrapper that calls runExplainBranchWithFilter with no filter.
 func runExplainBranchDefault(ctx context.Context, w io.Writer, noPager bool) error {
-	return runExplainBranchWithFilter(ctx, w, noPager, "")
+	return runExplainBranchWithFilter(ctx, w, noPager, "", "")
 }
 
 // outputExplainContent outputs content with optional pager support.
