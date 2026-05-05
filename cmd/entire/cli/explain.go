@@ -629,7 +629,7 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 	}
 
 	// Find associated commits (git commits with matching Entire-Checkpoint trailer)
-	associatedCommits, _ := getAssociatedCommits(ctx, lookup.repo, fullCheckpointID, searchAll) //nolint:errcheck // Best-effort
+	associatedCommits, _ := getAssociatedCommits(ctx, lookup.repo, fullCheckpointID, searchAll, errW) //nolint:errcheck // Best-effort
 
 	// Derive author from the first associated commit (the user who made the commit).
 	// Fall back to GetCheckpointAuthor (walks entire/checkpoints/v1) for checkpoints
@@ -1386,82 +1386,101 @@ func explainTemporaryCheckpoint(ctx context.Context, w, errW io.Writer, repo *gi
 	return sb.String(), true, nil
 }
 
-// getAssociatedCommits finds git commits that reference the given checkpoint ID.
-// Searches commits on the current branch for Entire-Checkpoint trailer matches.
-// When searchAll is true, uses full DAG walk with no depth limit (may be slow).
-// This finds checkpoint commits on merged feature branches (second parents of merges).
-func getAssociatedCommits(ctx context.Context, repo *git.Repository, checkpointID id.CheckpointID, searchAll bool) ([]associatedCommit, error) {
+// getAssociatedCommits finds git commits whose Entire-Checkpoint trailer
+// matches the given checkpoint ID, walking the full DAG from HEAD so
+// checkpoints on merged feature branches are visible.
+//
+// Default behavior (searchAll=false): walk capped at commitScanLimit. If the
+// cap is reached with zero matches, it auto-falls back to an uncapped walk
+// and writes a one-line note to errW (when non-nil).
+//
+// When searchAll is true, the bounded pass is skipped and the uncapped walk
+// runs immediately — useful when the caller already knows the commit is
+// older than the cap.
+func getAssociatedCommits(ctx context.Context, repo *git.Repository, checkpointID id.CheckpointID, searchAll bool, errW io.Writer) ([]associatedCommit, error) {
+	return getAssociatedCommitsWithLimit(ctx, repo, checkpointID, searchAll, errW, commitScanLimit)
+}
+
+// getAssociatedCommitsWithLimit is the test seam for getAssociatedCommits.
+// `limit` controls the bounded-pass cap; pass 0 to disable the cap entirely
+// (equivalent to searchAll=true).
+func getAssociatedCommitsWithLimit(ctx context.Context, repo *git.Repository, checkpointID id.CheckpointID, searchAll bool, errW io.Writer, limit int) ([]associatedCommit, error) {
 	head, err := repo.Head()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
-
-	commits := []associatedCommit{} // Initialize as empty slice, not nil (nil means "not searched")
 	targetID := checkpointID.String()
 
-	collectCommit := func(c *object.Commit) {
-		fullSHA := c.Hash.String()
-		shortSHA := fullSHA
-		if len(fullSHA) >= 7 {
-			shortSHA = fullSHA[:7]
-		}
-		commits = append(commits, associatedCommit{
-			SHA:      fullSHA,
-			ShortSHA: shortSHA,
-			Message:  strings.Split(c.Message, "\n")[0],
-			Author:   c.Author.Name,
-			Email:    c.Author.Email,
-			Date:     c.Author.When,
-		})
+	if searchAll || limit <= 0 {
+		commits, _, err := walkDAGForCheckpointCommits(ctx, repo, head.Hash(), targetID, 0)
+		return commits, err
 	}
 
-	if searchAll {
-		// Full DAG walk: follows all parents of merge commits, no depth limit.
-		// This finds checkpoint commits on merged feature branches.
-		iter, iterErr := repo.Log(&git.LogOptions{
-			From:  head.Hash(),
-			Order: git.LogOrderCommitterTime,
-		})
-		if iterErr != nil {
-			return nil, fmt.Errorf("failed to get commit log: %w", iterErr)
-		}
-		defer iter.Close()
-
-		err = iter.ForEach(func(c *object.Commit) error {
-			if err := ctx.Err(); err != nil {
-				return err //nolint:wrapcheck // Propagating context cancellation
-			}
-			cpID, found := trailers.ParseCheckpoint(c.Message)
-			if found && cpID.String() == targetID {
-				collectCommit(c)
-			}
-			return nil
-		})
-	} else {
-		// First-parent walk with depth limit and branch filtering.
-		// Avoids walking into main's history through merge commit parents.
-		reachableFromMain := computeReachableFromMain(ctx, repo)
-
-		err = walkFirstParentCommits(ctx, repo, head.Hash(), commitScanLimit, func(c *object.Commit) error {
-			// Once we hit a commit reachable from main on the first-parent chain,
-			// all earlier ancestors are also shared-with-main, so stop scanning.
-			if reachableFromMain[c.Hash] {
-				return errStopIteration
-			}
-
-			cpID, found := trailers.ParseCheckpoint(c.Message)
-			if found && cpID.String() == targetID {
-				collectCommit(c)
-			}
-			return nil
-		})
-	}
-
+	commits, capReached, err := walkDAGForCheckpointCommits(ctx, repo, head.Hash(), targetID, limit)
 	if err != nil {
-		return nil, fmt.Errorf("error iterating commits: %w", err)
+		return nil, err
+	}
+	if len(commits) > 0 || !capReached {
+		return commits, nil
 	}
 
-	return commits, nil
+	if errW != nil {
+		fmt.Fprintf(errW, "Searching full history (no match in last %d commits)…\n", limit)
+	}
+	commits, _, err = walkDAGForCheckpointCommits(ctx, repo, head.Hash(), targetID, 0)
+	return commits, err
+}
+
+// walkDAGForCheckpointCommits walks the DAG from `head`, collecting commits
+// whose Entire-Checkpoint trailer matches `targetID`. When `limit` > 0 the
+// walk is capped at that many commits and capReached reports whether the
+// cap was hit. When `limit` <= 0 the walk is unbounded and capReached is
+// always false.
+func walkDAGForCheckpointCommits(ctx context.Context, repo *git.Repository, head plumbing.Hash, targetID string, limit int) (commits []associatedCommit, capReached bool, err error) {
+	commits = []associatedCommit{} // empty (not nil) so callers can distinguish "searched, none" from "not searched"
+
+	iter, iterErr := repo.Log(&git.LogOptions{
+		From:  head,
+		Order: git.LogOrderCommitterTime,
+	})
+	if iterErr != nil {
+		return nil, false, fmt.Errorf("failed to get commit log: %w", iterErr)
+	}
+	defer iter.Close()
+
+	count := 0
+	err = iter.ForEach(func(c *object.Commit) error {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
+		if limit > 0 && count >= limit {
+			capReached = true
+			return storer.ErrStop
+		}
+		count++
+
+		cpID, found := trailers.ParseCheckpoint(c.Message)
+		if found && cpID.String() == targetID {
+			fullSHA := c.Hash.String()
+			shortSHA := fullSHA
+			if len(fullSHA) >= 7 {
+				shortSHA = fullSHA[:7]
+			}
+			commits = append(commits, associatedCommit{
+				SHA:      fullSHA,
+				ShortSHA: shortSHA,
+				Message:  strings.Split(c.Message, "\n")[0],
+				Author:   c.Author.Name,
+				Email:    c.Author.Email,
+				Date:     c.Author.When,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("error iterating commits: %w", err)
+	}
+	return commits, capReached, nil
 }
 
 // scopeTranscriptForCheckpoint slices a transcript to include only the portion
@@ -1975,9 +1994,6 @@ const branchCheckpointsLimit = 100
 // commitScanLimit is how far back to scan git history for checkpoints
 const commitScanLimit = 500
 
-// errStopIteration is used to stop commit iteration early
-var errStopIteration = errors.New("stop iteration")
-
 // getCurrentWorktreeHash returns the hashed worktree ID for the current working directory.
 // This is used to filter shadow branches to only those belonging to this worktree.
 func getCurrentWorktreeHash(ctx context.Context) string {
@@ -1990,82 +2006,6 @@ func getCurrentWorktreeHash(ctx context.Context) string {
 		return ""
 	}
 	return checkpoint.HashWorktreeID(worktreeID)
-}
-
-// computeReachableFromMain returns a set of commit hashes on the main/default branch's first-parent chain.
-// On the default branch itself, returns an empty map (no filtering needed).
-// Only first-parent commits are included — commits from side branches merged into main are excluded,
-// since those could be feature branch commits that shouldn't be filtered out.
-func computeReachableFromMain(ctx context.Context, repo *git.Repository) map[plumbing.Hash]bool {
-	reachableFromMain := make(map[plumbing.Hash]bool)
-
-	isOnDefault, _ := strategy.IsOnDefaultBranch(repo)
-	if isOnDefault {
-		return reachableFromMain // No filtering needed on default branch
-	}
-
-	// Resolve main branch hash
-	var mainBranchHash plumbing.Hash
-	if defaultBranchName := strategy.GetDefaultBranchName(repo); defaultBranchName != "" {
-		ref, refErr := repo.Reference(plumbing.ReferenceName("refs/heads/"+defaultBranchName), true)
-		if refErr != nil {
-			ref, refErr = repo.Reference(plumbing.ReferenceName("refs/remotes/origin/"+defaultBranchName), true)
-		}
-		if refErr == nil {
-			mainBranchHash = ref.Hash()
-		}
-	}
-	if mainBranchHash == plumbing.ZeroHash {
-		mainBranchHash = strategy.GetMainBranchHash(repo)
-	}
-	if mainBranchHash == plumbing.ZeroHash {
-		return reachableFromMain
-	}
-
-	// Walk main's first-parent chain to build the set
-	_ = walkFirstParentCommits(ctx, repo, mainBranchHash, strategy.MaxCommitTraversalDepth, func(c *object.Commit) error { //nolint:errcheck // Best-effort
-		reachableFromMain[c.Hash] = true
-		return nil
-	})
-
-	return reachableFromMain
-}
-
-// walkFirstParentCommits walks the first-parent chain starting from `from`,
-// calling fn for each commit. It stops after visiting `limit` commits (0 = no limit).
-// This avoids the full DAG traversal that repo.Log() does, which follows ALL parents
-// of merge commits and can walk into unrelated branch history (e.g., main's full
-// history after merging main into a feature branch).
-func walkFirstParentCommits(ctx context.Context, repo *git.Repository, from plumbing.Hash, limit int, fn func(*object.Commit) error) error {
-	current, err := repo.CommitObject(from)
-	if err != nil {
-		return fmt.Errorf("failed to get commit %s: %w", from, err)
-	}
-
-	for count := 0; limit <= 0 || count < limit; count++ {
-		if err := ctx.Err(); err != nil {
-			return err //nolint:wrapcheck // Propagating context cancellation
-		}
-		if err := fn(current); err != nil {
-			if errors.Is(err, errStopIteration) {
-				return nil
-			}
-			return err
-		}
-
-		// Follow first parent only (skip merge parents).
-		// When there are no parents or parent lookup fails, we've reached the
-		// end of the chain — this is a normal termination, not an error.
-		if current.NumParents() == 0 {
-			return nil
-		}
-		parentHash := current.Hash
-		current, err = current.Parent(0)
-		if err != nil {
-			return fmt.Errorf("failed to load first parent of commit %s: %w", parentHash, err)
-		}
-	}
-	return nil
 }
 
 // buildReachableSet walks the full DAG from `from` and returns the set of
