@@ -2009,9 +2009,10 @@ func getCurrentWorktreeHash(ctx context.Context) string {
 }
 
 // buildReachableSet walks the full DAG from `from` and returns the set of
-// visited commit hashes (capped at `limit`). Returns nil when from is the
-// zero hash. Errors only on context cancellation; iteration errors are
-// best-effort.
+// visited commit hashes (capped at `limit`). When `from` is the zero hash
+// it returns an empty (non-nil) set. Returns an error if `repo.Log` fails
+// to start or the context is cancelled; iteration errors after the walk
+// has begun are logged at debug level and the partial set is returned.
 func buildReachableSet(ctx context.Context, repo *git.Repository, from plumbing.Hash, limit int) (map[plumbing.Hash]bool, error) {
 	set := make(map[plumbing.Hash]bool)
 	if from == plumbing.ZeroHash {
@@ -2239,18 +2240,23 @@ func getBranchCheckpointsInRange(ctx context.Context, repo *git.Repository, walk
 	}
 	defer iter.Close()
 
+	// `count` only tracks commits that are visible in the current range —
+	// excluded commits don't consume the budget. Without this, a range like
+	// `main..HEAD` on a feature branch that merged main can return fewer
+	// feature checkpoints than the prior view because interleaved main
+	// commits eat into commitScanLimit before we reach older feature work.
 	count := 0
 	err = iter.ForEach(func(c *object.Commit) error {
 		if err := ctx.Err(); err != nil {
 			return err //nolint:wrapcheck // Propagating context cancellation
 		}
+		if excludeSet[c.Hash] {
+			return nil
+		}
 		if count >= commitScanLimit {
 			return storer.ErrStop
 		}
 		count++
-		if excludeSet[c.Hash] {
-			return nil
-		}
 		reachable[c.Hash] = true
 		collectCheckpoint(c)
 		return nil

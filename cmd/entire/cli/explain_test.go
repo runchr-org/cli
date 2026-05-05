@@ -5582,6 +5582,181 @@ func TestGetBranchCheckpoints_DefaultBranchFindsMergedCheckpoints(t *testing.T) 
 	}
 }
 
+func TestGetBranchCheckpointsInRange_ExcludesLeftSide(t *testing.T) {
+	// End-to-end check that getBranchCheckpointsInRange honors the exclude
+	// set: a range A..B drops checkpoints that are reachable from A while
+	// still collecting checkpoints reachable from B but not A.
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+
+	w, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+
+	testFile := filepath.Join(tmpDir, "test.txt")
+	mustCommit := func(content, msg string, author time.Time) plumbing.Hash {
+		t.Helper()
+		require.NoError(t, os.WriteFile(testFile, []byte(content), 0o644))
+		_, err := w.Add("test.txt")
+		require.NoError(t, err)
+		hash, err := w.Commit(msg, &git.CommitOptions{
+			Author: &object.Signature{Name: "Test", Email: "test@example.com", When: author},
+		})
+		require.NoError(t, err)
+		return hash
+	}
+
+	now := time.Now()
+	// Linear chain: A (no trailer) <- B (cpB) <- C (cpC).
+	commitA := mustCommit("a", "initial", now.Add(-3*time.Hour))
+	cpB := id.MustCheckpointID("bbbbbbbbbbbb")
+	commitB := mustCommit("b", trailers.FormatCheckpoint("feat: B", cpB), now.Add(-2*time.Hour))
+	cpC := id.MustCheckpointID("cccccccccccc")
+	commitC := mustCommit("c", trailers.FormatCheckpoint("feat: C", cpC), now.Add(-1*time.Hour))
+
+	store := checkpoint.NewGitStore(repo)
+	for _, write := range []checkpoint.WriteCommittedOptions{
+		{CheckpointID: cpB, SessionID: "sess-b", Strategy: "manual-commit", FilesTouched: []string{"test.txt"}, Prompts: []string{"add B"}},
+		{CheckpointID: cpC, SessionID: "sess-c", Strategy: "manual-commit", FilesTouched: []string{"test.txt"}, Prompts: []string{"add C"}},
+	} {
+		require.NoError(t, store.WriteCommitted(context.Background(), write))
+	}
+
+	hasCheckpoint := func(points []strategy.RewindPoint, cpID id.CheckpointID) bool {
+		for _, p := range points {
+			if p.CheckpointID == cpID {
+				return true
+			}
+		}
+		return false
+	}
+
+	cases := []struct {
+		name            string
+		walk            checkpointWalkRange
+		wantContains    []id.CheckpointID
+		wantNotContains []id.CheckpointID
+	}{
+		{
+			name:         "full reach from C — finds B and C",
+			walk:         checkpointWalkRange{from: commitC},
+			wantContains: []id.CheckpointID{cpB, cpC},
+		},
+		{
+			name:            "C excluding A — A has no checkpoint, B and C still visible",
+			walk:            checkpointWalkRange{from: commitC, excludeFrom: commitA},
+			wantContains:    []id.CheckpointID{cpB, cpC},
+			wantNotContains: nil,
+		},
+		{
+			name:            "C excluding B — drops B (and ancestors), keeps C",
+			walk:            checkpointWalkRange{from: commitC, excludeFrom: commitB},
+			wantContains:    []id.CheckpointID{cpC},
+			wantNotContains: []id.CheckpointID{cpB},
+		},
+		{
+			name:            "B alone — C unreachable",
+			walk:            checkpointWalkRange{from: commitB},
+			wantContains:    []id.CheckpointID{cpB},
+			wantNotContains: []id.CheckpointID{cpC},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			points, err := getBranchCheckpointsInRange(context.Background(), repo, tc.walk, 100)
+			if err != nil {
+				t.Fatalf("getBranchCheckpointsInRange: %v", err)
+			}
+			for _, cp := range tc.wantContains {
+				if !hasCheckpoint(points, cp) {
+					t.Errorf("expected %s in result, got %v", cp, points)
+				}
+			}
+			for _, cp := range tc.wantNotContains {
+				if hasCheckpoint(points, cp) {
+					t.Errorf("did not expect %s in result, got %v", cp, points)
+				}
+			}
+		})
+	}
+}
+
+func TestGetBranchCheckpointsInRange_ExcludedCommitsDoNotConsumeBudget(t *testing.T) {
+	// Regression test for the cap-budget bug: excluded commits must not
+	// count toward commitScanLimit. Without this, a long left-side history
+	// can starve the right-side from producing visible checkpoints.
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+
+	w, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+
+	testFile := filepath.Join(tmpDir, "test.txt")
+	mustCommit := func(content, msg string, author time.Time) plumbing.Hash {
+		t.Helper()
+		require.NoError(t, os.WriteFile(testFile, []byte(content), 0o644))
+		_, err := w.Add("test.txt")
+		require.NoError(t, err)
+		hash, err := w.Commit(msg, &git.CommitOptions{
+			Author: &object.Signature{Name: "Test", Email: "test@example.com", When: author},
+		})
+		require.NoError(t, err)
+		return hash
+	}
+
+	// Build a chain `excluded[0..commitScanLimit] -> target (with trailer)`
+	// so the trailered commit is past commitScanLimit ancestors. With the
+	// budget bug, all of those would be counted and target would be missed.
+	now := time.Now()
+	var leftTip plumbing.Hash
+	for i := range commitScanLimit + 5 {
+		leftTip = mustCommit(fmt.Sprintf("noise-%d", i), fmt.Sprintf("noise %d", i), now.Add(-time.Duration(commitScanLimit-i)*time.Minute))
+	}
+	cpID := id.MustCheckpointID("ddddeeeeffff")
+	rightTip := mustCommit("target", trailers.FormatCheckpoint("feat: target", cpID), now)
+
+	store := checkpoint.NewGitStore(repo)
+	require.NoError(t, store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "sess-target",
+		Strategy:     "manual-commit",
+		FilesTouched: []string{"test.txt"},
+		Prompts:      []string{"add target"},
+	}))
+
+	// Exclude everything reachable from leftTip; the only commit visible
+	// in `leftTip..rightTip` is `rightTip` itself, which carries the
+	// trailer. Even though leftTip's history is longer than the cap, the
+	// exclude shouldn't consume it.
+	walk := checkpointWalkRange{from: rightTip, excludeFrom: leftTip}
+	points, err := getBranchCheckpointsInRange(context.Background(), repo, walk, 100)
+	if err != nil {
+		t.Fatalf("getBranchCheckpointsInRange: %v", err)
+	}
+	var found bool
+	for _, p := range points {
+		if p.CheckpointID == cpID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected to find target checkpoint past the exclude set, got %d points: %v", len(points), points)
+	}
+}
+
 func TestGetBranchCheckpoints_ReadsPromptFromCommittedCheckpoint(t *testing.T) {
 	// Verifies that getBranchCheckpoints populates RewindPoint.SessionPrompt
 	// from prompt.txt on entire/checkpoints/v1 (committed checkpoint) without
