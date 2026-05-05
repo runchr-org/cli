@@ -6111,3 +6111,92 @@ func TestRenderExplainBody_NoColorReturnsRawMarkdown(t *testing.T) {
 		t.Errorf("expected raw markdown when no color\n got: %q", got)
 	}
 }
+
+func TestParseCheckpointRevRange(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+
+	w, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+
+	// Two commits on the default branch ("master" by default for go-git).
+	first := filepath.Join(tmpDir, "first.txt")
+	if err := os.WriteFile(first, []byte("a"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := w.Add("first.txt"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	commitA, err := w.Commit("A", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now().Add(-2 * time.Hour)},
+	})
+	if err != nil {
+		t.Fatalf("commit A: %v", err)
+	}
+	if err := os.WriteFile(first, []byte("b"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := w.Add("first.txt"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	commitB, err := w.Commit("B", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now().Add(-1 * time.Hour)},
+	})
+	if err != nil {
+		t.Fatalf("commit B: %v", err)
+	}
+
+	defaultBranch := strategy.GetCurrentBranchName(repo)
+	if defaultBranch == "" {
+		t.Fatalf("could not resolve current branch")
+	}
+
+	cases := []struct {
+		name         string
+		arg          string
+		wantFrom     plumbing.Hash
+		wantExclude  plumbing.Hash
+		wantErr      bool
+		errSubstring string
+	}{
+		{name: "empty defaults to HEAD", arg: "", wantFrom: commitB},
+		{name: "single ref", arg: defaultBranch, wantFrom: commitB},
+		{name: "single hash", arg: commitA.String(), wantFrom: commitA},
+		{name: "A..B", arg: commitA.String() + ".." + commitB.String(), wantFrom: commitB, wantExclude: commitA},
+		{name: "A.. shortcut", arg: commitA.String() + "..", wantFrom: commitB, wantExclude: commitA},
+		{name: "..B shortcut", arg: ".." + commitB.String(), wantFrom: commitB},
+		{name: "symmetric difference rejected", arg: commitA.String() + "..." + commitB.String(), wantErr: true, errSubstring: "symmetric-difference"},
+		{name: "unknown ref rejected", arg: "no-such-ref", wantErr: true, errSubstring: "resolve"},
+		{name: "unknown left side rejected", arg: "no-such-ref..HEAD", wantErr: true, errSubstring: "resolve"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := parseCheckpointRevRange(repo, tc.arg)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if tc.errSubstring != "" && !strings.Contains(err.Error(), tc.errSubstring) {
+					t.Errorf("error %q missing %q", err.Error(), tc.errSubstring)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if r.from != tc.wantFrom {
+				t.Errorf("from: got %s, want %s", r.from, tc.wantFrom)
+			}
+			if r.excludeFrom != tc.wantExclude {
+				t.Errorf("excludeFrom: got %s, want %s", r.excludeFrom, tc.wantExclude)
+			}
+		})
+	}
+}
