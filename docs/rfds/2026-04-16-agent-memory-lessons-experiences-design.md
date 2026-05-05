@@ -9,18 +9,23 @@ Agent memory in Entire is modeled as **two peer primitives**:
 
 Lessons remain the hot path. Experiences earn their token cost only on tasks that resemble prior solve patterns. Lessons can be **derived** from repeated experiences under strict evidence-independence rules, closing the loop from episodic memory to durable guidance.
 
-### Two architectural options
+### Decision: ship Option A for beta
 
-This document presents two options for how memory is **extracted, stored, and retrieved**:
+This RFD commits to **Option A — Chunk-search-and-extract** for the beta substrate: transcript chunks indexed in a vector DB (Turbopuffer), extractor LLM queries the index with seed prototypes, reads localized chunks with neighbor expansion, and produces flat lesson and experience records stored as rows in the server DB.
 
-- **Option A — Chunk-search-and-extract.** Transcript chunks indexed in a vector DB (Turbopuffer). An extractor LLM queries the index with seed prototypes, reads localized chunks with neighbor expansion, and produces flat lesson and experience records. Records are stored as rows in the server DB.
-- **Option B — Temporal knowledge graph.** Same vector substrate for transcript retrieval, plus a knowledge-graph layer (Graphiti or similar) where entities (files, patterns, sessions, tools), memories (lessons, experiences), and their relationships live as time-valid nodes and edges. Extraction produces graph updates, not flat records. Retrieval is graph traversal + vector search.
+**Option B — Temporal knowledge graph** (entities + edges + temporal validity) is documented in Section 4 as a future migration path, **not** an alternative we are still evaluating. Section 4 exists so beta schemas (provenance fields, structured entity-shaped lists) carry the data needed to bootstrap Option B as an additive migration when triggered. Triggering criteria for opening that follow-up RFD are listed in §11 Open Questions.
 
-The two options share the same memory model (primitives, lifecycle, scope, governance), the same injection hot path, the same prompt-injection hardening, and the same CLI-side cache + outbox shape. They differ in the shape of the extraction pipeline, what gets stored, and what queries are natural.
+The CLI surface in this RFD is therefore single-substrate. There is no graph-aware code path on the CLI in beta. References in later sections to "Option B" are scoped to the additive future-migration subsection and do not affect anything we ship.
 
 Target: external beta, opt-in. Defaults once enabled: `mode=auto`, `policy=review`, `threshold=balanced`.
 
-This document replaces the earlier lesson-only rollout (`docs/superpowers/specs/2026-04-07-memory-loop-rollout-design.md`) and experience-memory layering proposal (`docs/plans/2026-04-16-experience-memory-layering-design.md`).
+This RFD supersedes:
+
+- `docs/superpowers/specs/2026-04-07-memory-loop-rollout-design.md` (lesson-only rollout).
+- `docs/plans/2026-04-16-experience-memory-layering-design.md` (experience-memory layering proposal).
+- `docs/plans/2026-04-16-agent-memory-design.md` (parallel scratch design from the same date; this RFD is the canonical version).
+
+A migration path from the existing local JSON store (`.entire/memory-loop.json`) to the new SQLite cache is specified in §12 PR 1.
 
 ---
 
@@ -47,7 +52,7 @@ This document replaces the earlier lesson-only rollout (`docs/superpowers/specs/
 
 ---
 
-## 2. Memory Model (shared across both options)
+## 2. Memory Model
 
 ### The two primitives
 
@@ -75,6 +80,17 @@ This document replaces the earlier lesson-only rollout (`docs/superpowers/specs/
 - Experiences are conditionally eligible — a procedural-need classifier gates retrieval.
 - Lessons can be derived from repeated experiences under evidence-independence rules (Section 8).
 - On conflict, **lessons win**: experience injection is dropped when an active lesson covers the same `task_class` or shares ≥ 50 % of the experience's `file_dependencies`.
+
+### `source_signal` shape
+
+`source_signal` is a structured slug — `{type, key}` where `type ∈ {error_signature, file_dependency, task_class, pattern}` and `key` is the normalized canonical value (e.g., `error_signature:cwd-leakage-in-integration-tests`). It is **not** a free-text sentence. Two consequences:
+
+- **Outcome computation (§9)** can deterministically check whether `source_signal` recurs in post-injection sessions, because the comparison is slug-equality, not substring matching against transcript text.
+- **Prototype growth (§3)** embeds the slug's canonical key, not the prose, so a memory's `source_signal` is a stable retrieval handle across extraction runs.
+
+Free-form description belongs in `summary` / `goal_summary`. The validator rejects records whose `source_signal.key` is empty or fails normalization.
+
+`source_signal` is a requirement for newly extracted server records, not for imported legacy/manual compatibility rows. The current local `.entire/memory-loop.json` store does not persist the full structured lesson shape and may omit `source_signal` entirely, so PR 1 must allow migrated `origin='manual'` lessons to keep `source_signal = NULL`. Those compatibility rows are still eligible for lesson injection, but they are excluded from prototype growth, outcome computation beyond `neutral`, and derivation evidence until the user edits them in the new model or the server later re-extracts an equivalent generated record. The CLI does not attempt to invent or normalize `source_signal` for legacy imports.
 
 ### Shared lifecycle
 
@@ -128,7 +144,9 @@ Scope promotion is `branch → me → repo` through an explicit TUI action.
 
 ---
 
-## 3. Option A — Chunk-Search-and-Extract
+## 3. Substrate — Chunk-Search-and-Extract
+
+This is the substrate this RFD commits to shipping. The "Option A" / "Option B" framing is preserved in section names for readers cross-referencing the design discussion in the timeline; nothing in this section is optional.
 
 ### Model
 
@@ -274,7 +292,9 @@ At injection time, the CLI scores its local cache of memory records (lessons and
 
 ---
 
-## 4. Option B — Temporal Knowledge Graph
+## 4. Future Migration Path — Temporal Knowledge Graph (Option B, deferred)
+
+> **Status:** *Not in scope for this RFD.* Documented here so the Option A schemas carry the provenance fields needed to bootstrap a graph layer additively when triggered. Triggering conditions are listed in §11. Building this requires a separate RFD; nothing in §6, §7, §12, or §14 depends on it.
 
 ### Model
 
@@ -456,7 +476,10 @@ At injection time the CLI does not traverse the graph. All graph traversal happe
 
 ---
 
-## 5. Option A vs Option B — Comparison
+## 5. Why Not Option B (For Now) — Comparison
+
+> Reference material. The decision is already made (§Summary). This table exists so reviewers can see what we're trading away, not as a re-evaluation prompt.
+
 
 | Dimension | Option A — Chunk-search-and-extract | Option B — Temporal knowledge graph |
 |---|---|---|
@@ -475,24 +498,19 @@ At injection time the CLI does not traverse the graph. All graph traversal happe
 | Fit for current rollout | Direct drop-in | Substantially different rollout |
 | Fit for Planner layer | Adequate | Strong — graph traversal supports multi-entity queries the Planner naturally wants |
 
-### Hybrid / migration path
+### Schema commitments that keep migration additive
 
-Worth noting: Option A can evolve into Option B without a full re-extract. If we ship Option A in beta, every memory record already carries `source_chunk_ids[]`, `source_session_ids[]`, `file_dependencies[]`, `error_signatures[]`, `source_signal` — these are the raw materials for later deriving entities and edges. A post-beta migration would build the graph from existing records without rerunning extraction.
+Because Option A is what we ship, these are the schema commitments that make a future Option B additive rather than a rebuild:
 
-So one pragmatic read: **start with Option A, design for Option B**, meaning:
+- Every memory record carries `source_chunk_ids[]`, `source_session_ids[]`, `file_dependencies[]`, `error_signatures[]`, `source_signal` — raw materials for later deriving entities and edges.
+- Entity-shaped fields (file paths, task classes, tool names) are stored as explicit normalized lists, not embedded inside `summary` prose.
+- `source_signal` is a structured slug (§2) so it round-trips to a graph node identity cleanly.
 
-- Schemas carry enough provenance to bootstrap a graph later.
-- Extraction records entity-shaped fields (file paths, task classes, tool names) as explicit lists, not as free-form strings inside `summary`.
-- If/when Option B becomes desirable, migration is additive, not replacement.
-
-### Beta recommendation
-
-Option A. It covers the beta goal (does memory help at TurnStart) with the smallest operational surface. Option B is worth standing up only after beta telemetry shows the flat model is hitting real limits — most likely in provenance queries and staleness detection.
+A future Option B RFD would build the graph from existing records without rerunning extraction.
 
 ---
 
-## 6. Storage Architecture (shared layers)
-
+## 6. Storage Architecture
 ### Local storage: SQLite
 
 Both options use `.entire/memory-loop.db` on the CLI side as an **injection cache** (WAL mode, busy timeout, retry-once). The schema is identical for both options because the CLI never sees the server's internal representation — it sees rendered memory records suitable for injection.
@@ -509,7 +527,6 @@ memories_cache (
   outcome, inject_count, owner_id, repo_id,
   source_chunk_ids_json, source_experience_ids_json, derived_from_origin,
   sanitizer_warnings_json,
-  graph_neighborhood_json,       -- Option B only; null/empty in Option A
   server_etag, server_updated_at, local_observed_at,
   created_at, updated_at, last_injected_at
 )
@@ -548,7 +565,7 @@ sync_state (
 )
 ```
 
-The only Option-B-specific field on the cache is `graph_neighborhood_json` — a compact precomputed adjacency for each memory (direct neighbors only, limited size) so injection-time scoring can include a graph-proximity bonus without round-tripping to the server.
+If a future Option B migration ships, it would add a side table (e.g., `memory_neighborhoods`) for precomputed adjacencies rather than widening this schema. The CLI cache stays single-substrate.
 
 ### Sync protocol
 
@@ -588,8 +605,7 @@ All requests carry the Entire auth token. Authorization is server-side.
 
 ---
 
-## 7. Injection Hot Path (shared)
-
+## 7. Injection Hot Path
 ### Flow
 
 ```
@@ -644,9 +660,7 @@ Cache reads only — no network calls at TurnStart. `cache_age_seconds` logged s
 
 ### Scoring
 
-Structured fields only; `summary` and `goal_summary` are not scoring inputs.
-
-Shared factors for both options:
+Structured fields are the primary scoring inputs; `summary` and `goal_summary` are not. One narrow exception: see *Legacy-manual fallback* below.
 
 - Lesson primary signals: `error_signatures[]`, `file_dependencies[]`, `failed_approaches[]`, `cause_chain[]`.
 - Lesson secondary signals: `decisions[]`, `key_insights[]`, `warnings[]` (flexible/balanced).
@@ -655,7 +669,7 @@ Shared factors for both options:
 - Outcome bonus/penalty.
 - Cooldown penalty.
 
-**Option B additional factor:** graph-proximity bonus. If the memory's `graph_neighborhood_json` references entities present in the current turn (files, tools mentioned), add a small bonus. Pure cache-local computation; no network.
+**Legacy-manual fallback.** A record with `origin='manual'` *and* every structured field empty (the shape produced by the PR 1 JSON-store migration) falls back to scoring against `summary` via embedding similarity (in `balanced`) plus simple keyword overlap (in any threshold). Without this carve-out, legacy lessons whose only content lives in `summary` would never score above zero against structured signals and would silently disappear from injection. The fallback is deliberately scoped to migrated records: any user-edited or server-extracted record with at least one populated structured field is scored under the normal rules. The TUI surfaces "structured fields empty — scoring via summary fallback" on these records to nudge users to re-author them.
 
 ### Procedural-need classifier
 
@@ -701,8 +715,7 @@ The wrapper is mandatory whenever any injection is emitted. The TUI shows the ex
 
 ---
 
-## 8. Governance and Review (shared)
-
+## 8. Governance and Review
 ### Review surface
 
 TUI is the only review surface in beta. Two top-level lenses:
@@ -716,8 +729,6 @@ TUI is the only review surface in beta. Two top-level lenses:
 From lesson detail:      "Derived from experiences"
 From experience detail:  "Related lessons from this experience"
 ```
-
-**Option B additional lens:** optional **Graph view** in the TUI showing a memory's neighborhood — entities it connects to, other memories that share entities, timeline of reinforcement. Purely informational; promotion actions remain on the detail view.
 
 ### TUI read vs. write
 
@@ -734,7 +745,6 @@ Must show before promotion:
 - **Exact rendered injection form** (`<prior-solve-path>` block).
 - `sanitizer_warnings_json` contents.
 - Any derived lessons linking back.
-- **Option B:** connected entities (files, patterns, tools).
 
 ### Governance actions
 
@@ -743,8 +753,6 @@ Both types: `activate`, `suppress`, `unsuppress`, `archive`, `promote`, `demote`
 ### Suppression and regeneration
 
 Suppression keys on `fingerprint + scope + owner_id + repo_id`. Blocks regeneration for that exact combination across extraction runs.
-
-**Option B addition:** suppression can also key on an entity (e.g., "never extract a lesson about `pattern:cwd-leakage` in this scope"). More expressive but more surface area; beta treats entity-level suppression as out of scope.
 
 ### Auto-promotion seed (server-computed)
 
@@ -760,8 +768,7 @@ Auto-promoted records land `status='active'`, `origin='generated_auto_promoted'`
 
 ---
 
-## 9. Outcome Tracking (shared)
-
+## 9. Outcome Tracking
 Outcome tracking is unified across both memory types. It answers: **did this record make subsequent sessions better on the thing it was meant to help with?**
 
 Computed server-side because the server sees sessions across devices.
@@ -776,8 +783,6 @@ Computed server-side because the server sees sessions across devices.
 | Post-injection sessions show `source_signal` persists | `ineffective` |
 | Data insufficient | `neutral` |
 
-**Option B refinement:** outcome can also weigh pattern-recurrence edges. A lesson addressing `pattern:cwd-leakage` whose `pattern —last-encountered` edge is 30+ days old is a stronger signal of `reinforced` than a per-session lookup.
-
 ### Pre-registered analysis plan (default-flip gate)
 
 Before experience injection default flips from `off` to `on`, compare on paired session groups:
@@ -789,8 +794,7 @@ Before experience injection default flips from `off` to `on`, compare on paired 
 
 ---
 
-## 10. Deriving Lessons from Experiences (shared)
-
+## 10. Deriving Lessons from Experiences
 Repeated experiences can synthesize or reinforce lessons. Derivation runs server-side.
 
 ### Evidence-independence gate
@@ -827,12 +831,10 @@ Each derivation attempt is logged server-side with inputs, thresholds in effect,
 
 - Derived lessons always enter as `candidate`.
 - Each derived lesson stores `source_experience_ids[]`.
-- **Option B:** derivation walks `experience —addresses→ pattern ←addresses— lesson` edges natively; `source_experience_ids[]` is derived from edges at materialization time.
 
 ---
 
-## 11. Prompt-Injection Hardening (shared)
-
+## 11. Prompt-Injection Hardening
 Memory content flows from agent transcripts → server-side extraction → server storage → CLI cache → future agent prompts. Controls at every stage:
 
 1. **Transcript ingress redaction** — enforced by the existing server-side sanitizer. Secrets (AWS keys, GitHub tokens, JWTs, PEM blocks, high-entropy strings) are stripped before any LLM call.
@@ -854,7 +856,9 @@ No local transcript reader or local redactor. The CLI does not see raw transcrip
 
 ## 12. Rollout Plan — CLI-Facing PRs
 
-Server-side work is shipped in a new RFD covering: extraction pipeline, prototype system, memory API endpoints, derivation job, outcome aggregation, and (for Option B) the graph layer. The CLI PRs below assume the relevant API surface is available.
+Server-side work is shipped in a separate RFD (**must land first or in lockstep**) covering: extraction pipeline, prototype system, memory API endpoints, derivation job, and outcome aggregation. The minimum API surface that must be available before each CLI PR is listed under "Server deps."
+
+**Hard prerequisite for PR 1:** the server RFD is approved and at least `GET /memories` + `GET /memory-settings` are deployed in a staging environment. Without that, the CLI cache cannot be populated and PR 1 cannot be tested end-to-end.
 
 ```
 PR 1  Local cache schema + sync state + migrations
@@ -887,19 +891,25 @@ PR 9  Experience injection cohort (server auto-promote consumed)
 PR 10 Outcome and derivation read views
 ```
 
-The rollout is **option-agnostic on the CLI side** — the CLI sees the same API contract regardless of which server substrate (Option A or Option B) is chosen. If Option B ships, PR 5 and PR 7 optionally use `graph_neighborhood_json` as an additional scoring input, and PR 6 / PR 8 optionally add a graph lens.
-
-Option-specific server work (not enumerated here):
-
-- **Option A server-side:** prototype config loader + embedder, chunk-query orchestrator, extractor LLM pipeline, fingerprint dedup, outcome aggregator, derivation job.
-- **Option B server-side:** all of Option A + graph layer (Graphiti or pg+pgvector), entity resolution, edge deduplication, temporal validity tracking, graph-neighborhood materialization on refresh.
+Server work the CLI depends on (enumerated in the server RFD): prototype config loader + embedder, chunk-query orchestrator, extractor LLM pipeline, fingerprint dedup, outcome aggregator, derivation job.
 
 ### PR descriptions
 
-#### PR 1 — Local cache schema + sync state
+#### PR 1 — Local cache schema + sync state + JSON-store migration
 **Server deps:** `GET /memories`, `GET /memory-settings`.
-**Deliverables:** cache tables + migrations, `owner_id` resolution, server-floor cache.
-**Tests:** schema migration; `owner_id` resolution; server-floor cache survives offline restart.
+**Deliverables:** cache tables + migrations, `owner_id` resolution, server-floor cache, **one-shot migration tool that imports existing `.entire/memory-loop.json` records into the local cache as `origin='manual'` lessons with their current status preserved** (`active` stays `active`, `candidate` stays `candidate`, `suppressed` stays `suppressed`), except for unknown legacy kinds which are capped at `candidate` by the normalization rule below.
+
+The migration's concrete mapping is pinned, not "nearest structured field" prose, because the legacy schema (`title/body/why/evidence[]`) does not align with the new schema (`summary` + structured lists) field-for-field, and a sloppy mapping silently regresses scoring (§7 says structured fields are the only scoring inputs). The live JSON store also still contains pre-enum kind aliases (`project`, `feedback`, `agent_instructions`) and personal-scope rows with no persisted `owner_id`, so PR 1 must normalize both without widening visibility. Specifically:
+
+- **Field mapping.** `summary = legacy.body` verbatim. Structured-field columns (`decisions_json`, `failed_approaches_json`, `warnings_json`, `error_signatures_json`, `cause_chain_json`, `file_dependencies_json`, `key_insights_json`) are written as empty arrays. The legacy `title`, `why`, and `evidence[]` are preserved verbatim inside a single `memory_history_cache` row of type `legacy_import` keyed by the new memory ID, so they remain visible in the TUI for the user to re-author into structured form but do not pollute scoring.
+- **Kind normalization.** Legacy kinds already in the beta enum pass through unchanged. Legacy aliases normalize before fingerprinting: `project → repo_rule`, `feedback → workflow_rule`, `agent_instructions → agent_instruction`. The original legacy kind is preserved in the `legacy_import` history row. Any unknown legacy kind is imported as `workflow_rule`, forced to `status='candidate'`, and surfaced in the TUI as "legacy kind unmapped" so the record is preserved without silently claiming stronger semantics than we can justify.
+- **Fingerprint.** A new fingerprint is computed under the new schema (kind + `summary`-namespace) at import and stored in `memories_cache.fingerprint`. The legacy fingerprint is preserved alongside the legacy blob in the `legacy_import` history row only. Server-extracted records that match the same rule will collide on the new fingerprint after the user rewrites structured fields, not before; until then a duplicate active pair is acceptable and the lessons-win conflict rule (§2) prevents double injection.
+- **`source_signal`.** `NULL` for every imported record (the existing JSON store does not persist this field for any record — verified against the live file in this repo). Imported records are excluded from prototype growth, outcome updates beyond `neutral`, and derivation evidence until rewritten or replaced by a generated record (see §2 compatibility carve-out).
+- **`owner_id` translation.** For legacy `scope_kind='me'` records, preserve personal scope; migration must **never** widen them to `repo` or `branch`. If `scope_value` is present, it is already the canonical GitHub-username `owner_id` and is copied directly. If `scope_value` is missing, PR 1 resolves the current user's `owner_id` and writes it regardless of whether `owner_email` is present, because `.entire/memory-loop.json` is local per-user state and the inference is safe. The original `owner_email` (when present) is preserved in the `legacy_import` history row for audit. If the current `owner_id` cannot be resolved at migration time, the record still stays `scope_kind='me'`, `owner_id` remains `NULL`, and the history row records `legacy_owner_inferred_pending`; local selection must continue treating that row as current-user-only until a later authenticated refresh fills in the canonical `owner_id`.
+- **Telemetry continuity.** `inject_count` and `last_injected_at` carry over verbatim. The legacy CLI-side counters `match_count` and `last_matched_at` are dropped — they have no equivalent in the new schema and were never round-tripped to a server. Their final values are preserved in the `legacy_import` history row.
+- **Existing JSON store** is renamed `.entire/memory-loop.json.migrated-<timestamp>` and no longer read on subsequent runs.
+
+**Tests:** schema migration; kind normalization (`project`, `feedback`, `agent_instructions`, plus unknown kind → `workflow_rule` + `candidate`); `owner_id` resolution (`me` with `scope_value`, `me` missing `scope_value` with authenticated GitHub username available, `me` missing `scope_value` with username unavailable but still preserved as personal scope); server-floor cache survives offline restart; migration is idempotent (re-running with the renamed file is a no-op); migrated `active` lessons remain injectable end-to-end (paired with the §7 summary-fallback rule); migrated records render in TUI with the legacy `title`/`why`/`evidence` visible from the `legacy_import` history row; migrated records with `source_signal = NULL` are excluded from prototype seeding / outcome updates / derivation inputs; new fingerprint differs from legacy fingerprint and the legacy fingerprint is recoverable from history.
 
 #### PR 2 — Pull-from-server refresh
 **Server deps:** `GET /memories` with cursor + `etag` + `updated_since`.
@@ -916,7 +926,7 @@ Option-specific server work (not enumerated here):
 **Tests:** offline create → reconnect; offline + online conflict; max-attempts failure path.
 
 #### PR 5 — Injection + scoring (lessons) with TurnStart hook
-**Deliverables:** structured-field scoring, embeddings in `balanced`, outcome bonus / cooldown / diversity, TurnStart hook, `injection_logs`, 50 ms warning. Option B: optional graph-proximity bonus from `graph_neighborhood_json`.
+**Deliverables:** structured-field scoring, embeddings in `balanced`, outcome bonus / cooldown / diversity, TurnStart hook, `injection_logs`, 50 ms warning.
 **Tests:** scoring determinism; `mode=off` no-op; latency warning; cache-age populated; recalled-context wrapper byte-stable.
 
 #### PR 6 — TUI review (lessons)
@@ -946,20 +956,28 @@ Option-specific server work (not enumerated here):
 
 ## 13. Open Questions
 
-1. **Option A vs Option B.** Which substrate to ship. Beta recommendation: Option A, with schemas that preserve the data needed to bootstrap Option B later without re-extracting.
-2. **Pull cadence.** When does the CLI pull extracted memories?
-   - **A. Manual refresh only.** Simple, predictable, works offline; but staleness between refreshes and cross-device drift.
+1. **Pull cadence.** When does the CLI pull extracted memories?
+   - **A. Manual refresh only.** Simple, predictable, works offline; staleness between refreshes and cross-device drift.
    - **B. Auto-pull on session start.** Freshest memory but adds network latency to session start; offline sessions never get fresh memory.
-   - **C. Background pull + manual refresh.** Freshest without session-start cost; but background worker complexity.
+   - **C. Background pull + manual refresh.** Freshest without session-start cost; background worker complexity.
    Recommendation for beta: A.
-3. **Prototype curation.** Hand-seed + `source_signal`-learned prototypes. Who maintains the seed set? How often do we review recall against held-out transcripts?
-4. **Extraction schedule on server.** Automatic on transcript-sync webhook, on a fixed cadence, or only on explicit `POST /memory-loop/refresh`? Beta recommendation: explicit + opt-in scheduled.
-5. **Outbox conflict resolution.** Server-state-wins (recommended) vs. latest-write-wins for concurrent lifecycle operations from multiple devices.
-6. **Cache TTL.** How long is local cache trusted without a refresh; when does `entire status` warn; is there a hard cutoff?
-7. **Branch-scope memories server-side.** How does the server know a branch no longer exists locally? CLI informs on refresh, or server times out after N days?
-8. **Manual experience authoring in beta.** Allow it behind `candidate` default, or restrict to lessons until generated experience quality is established?
-9. **Playbook layer.** The prior experience-layering doc anticipated a future episode-cluster-to-playbook step. Option B makes this natural (playbooks are graph subgraphs); Option A would need a separate synthesis pass.
-10. **Graph layer choice (if Option B).** Graphiti (purpose-built, temporal facts out of the box, Python lib) vs. roll-your-own over Postgres + pgvector (more control, more maintenance). Not a beta question unless Option B is chosen.
+2. **Prototype curation.** Hand-seed + `source_signal`-learned prototypes. Who maintains the seed set? How often do we review recall against held-out transcripts?
+3. **Extraction schedule on server.** Automatic on transcript-sync webhook, on a fixed cadence, or only on explicit `POST /memory-loop/refresh`? Beta recommendation: explicit + opt-in scheduled.
+4. **Outbox conflict resolution.** Server-state-wins (recommended) vs. latest-write-wins for concurrent lifecycle operations from multiple devices.
+5. **Cache TTL.** How long is local cache trusted without a refresh; when does `entire status` warn; is there a hard cutoff?
+6. **Branch-scope memories server-side.** How does the server know a branch no longer exists locally? CLI informs on refresh, or server times out after N days?
+7. **Manual experience authoring in beta.** Allow it behind `candidate` default, or restrict to lessons until generated experience quality is established?
+8. **Playbook layer.** The prior experience-layering doc anticipated a future episode-cluster-to-playbook step; Option A would need a separate synthesis pass. Out of scope here.
+9. **One-shot structured-field backfill for legacy records.** PR 1 imports legacy lessons with empty structured fields and relies on the §7 summary-fallback to keep them injectable. An optional follow-up pass could call the extractor LLM against each legacy record's `body + why + evidence[]` to populate `decisions[]`, `key_insights[]`, `error_signatures[]`, etc., promoting them out of fallback scoring. Open: do this at migration time (longer one-time CLI run, requires server extraction endpoint), as a server-side job once the record syncs, or never (require users to rewrite). Beta recommendation: never — keep PR 1 pure migration, let the TUI nudge re-authoring.
+
+### Triggering criteria for opening an Option B follow-up RFD
+
+Open the temporal-knowledge-graph RFD only when one or more of these hold post-beta:
+
+- Provenance queries beyond `source_experience_ids[]` are repeatedly asked for (TUI feedback, support tickets).
+- Staleness detection from `last_injected_at` + outcome misses real recurrences observed in the wild.
+- The Planner layer (separate RFD) needs multi-entity neighborhood queries that flat records cannot answer in one hop.
+- Memory corpus per repo grows past the size where flat list browsing in the TUI is workable (target threshold: ~500 active records per scope).
 
 ---
 
@@ -980,7 +998,11 @@ Per-PR tests are listed in Section 12. System-level verification before the beta
 - **Deny-list coverage** — seeded injection phrases caught; version bumps re-run extraction.
 - **Recalled-context wrapper always present** — byte-for-byte assertion on both lesson-only and lesson+experience injection paths.
 - **Anti-echo response sanitization** — an agent response containing a fabricated `<prior-solve-path>` block does not produce a new memory on the next refresh.
-- **Option B specific (if shipped):** entity resolution is stable across repeated extraction runs over identical input; edge deduplication is idempotent; temporal validity ranges advance correctly on recurrence.
+- **JSON-store migration** — running the migration with the legacy `.entire/memory-loop.json` produces the same imported records as a no-op re-run; no record is double-imported; renamed file is preserved as a recovery artifact.
+- **Legacy scope preservation** — migrated `scope_kind='me'` rows never widen to `repo` or `branch`; missing canonical `owner_id` leaves the row personal-only until resolved.
+- **Legacy kind normalization** — `project`, `feedback`, and `agent_instructions` normalize deterministically; any unknown legacy kind lands `candidate` with the original kind recoverable from history.
+- **Legacy-manual compatibility** — migrated records missing canonical `source_signal` still render and inject as lessons, but never enter prototype growth, outcome updates, or derivation evidence until rewritten or replaced by generated records.
+- **Legacy summary-fallback scoring** — a migrated lesson whose only populated content is `summary` is reachable by the scorer via the §7 summary-fallback path; the test plants such a record and asserts it injects on a turn whose prompt embeds against the summary text.
 - **Canary E2E** — full flow exercised through Vogon where practical.
 
 ---
@@ -988,13 +1010,12 @@ Per-PR tests are listed in Section 12. System-level verification before the beta
 ## 15. Summary
 
 - **Two memory primitives, one system.** Lessons on the hot path; experiences as a conditional second layer; derivation bridges episodic recall into durable guidance.
-- **Two architectural options for extraction and storage.** Option A (chunk-search-and-extract) is simpler and beta-ready. Option B (temporal knowledge graph) is richer for provenance, staleness, and entity-centric reasoning but costs more to build.
+- **Beta substrate is committed: Option A — chunk-search-and-extract.** Flat lesson and experience records, indexed transcript chunks in Turbopuffer, prototype-driven extraction. Option B (temporal knowledge graph) is documented as a future-migration appendix only.
 - **Extraction is retrieval-driven.** The extractor targets interesting moments in transcript chunks via vector queries over prototypes, rather than summarizing every checkpoint.
-- **Server owns extraction and source-of-truth storage.** CLI owns the injection hot path, local cache, and outbox.
-- **CLI rollout is option-agnostic** — same API contract in both options; graph-aware extras are optional enhancements.
+- **Server owns extraction and source-of-truth storage.** CLI owns the injection hot path, local cache, and outbox. The server-side RFD is a hard prerequisite for PR 1.
+- **`source_signal` is a structured slug for generated records**, not free text — load-bearing for outcome computation and prototype growth. Migrated legacy/manual lessons may leave it null as a compatibility exception.
 - **Every boundary between data and instructions is hardened**: server-side sanitization, authorization at every API call, delimited injection templates, rendered-form review, manual-experience candidate default, kill switch, invisible-Unicode rejection, versioned deny list, recalled-context wrapper, anti-echo response sanitization.
-- **Fingerprints (Option A) or entity identity (Option B) are deterministic and NULL-collapse-proof**; suppression outlives extractor churn.
+- **Fingerprints are deterministic and NULL-collapse-proof**; suppression outlives extractor churn.
 - **Derivation runs server-side** under evidence-independence thresholds pinned in server code.
+- **Existing local JSON store is migrated** (PR 1) into the SQLite cache with status preserved (`active`/`candidate`/`suppressed`) for mapped kinds; legacy `body` becomes `summary`, structured fields are left empty, legacy kind aliases are normalized (`project → repo_rule`, `feedback → workflow_rule`, `agent_instructions → agent_instruction`), and `title`/`why`/`evidence` are preserved verbatim in a `legacy_import` history row. Personal-scope legacy rows stay personal and never widen during import. Migrated lessons stay reachable via the §7 summary-fallback scoring carve-out so they don't silently vanish; the legacy JSON file is renamed and preserved as a recovery artifact.
 - **Rollout ships one vertical CLI slice at a time**, each with named deliverables, tests, success criteria, and server-API dependencies. The experience layer stays dark until cohort telemetry meets the pre-registered analysis plan.
-
-**Beta recommendation:** ship Option A; design schemas so Option B is reachable as an additive migration rather than a rebuild.
