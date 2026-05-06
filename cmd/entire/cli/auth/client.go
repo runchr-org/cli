@@ -14,18 +14,6 @@ import (
 // nowFunc is the package's clock. Override in tests.
 var nowFunc = time.Now
 
-// clientID is the OAuth client_id this CLI registers under at the
-// entire.io device-flow endpoint.
-const clientID = "entire-cli"
-
-// Device-flow endpoint paths on entire.io. Held as constants so the
-// shim is the only place that knows them; if the CLI ever needs to
-// target a different surface, the change lives here.
-const (
-	deviceCodePath = "/oauth/device/code"
-	tokenPath      = "/oauth/token"
-)
-
 // DeviceAuthStart preserves the historical type name; the shape now
 // matches deviceflow.DeviceCode field-for-field.
 type DeviceAuthStart = deviceflow.DeviceCode
@@ -41,22 +29,25 @@ type DeviceAuthPoll struct {
 	Error       string
 }
 
-// Client wraps a deviceflow.Client preconfigured for entire.io.
+// Client wraps a deviceflow.Client preconfigured for whichever provider
+// version is selected via ENTIRE_AUTH_PROVIDER_VERSION (defaulting to
+// v1).
 type Client struct {
 	inner *deviceflow.Client
 }
 
-// NewClient constructs a Client targeting entire.io. httpClient is
-// used directly when non-nil; otherwise http.DefaultClient.
+// NewClient constructs a Client targeting the active provider version.
+// httpClient is used directly when non-nil; otherwise http.DefaultClient.
 func NewClient(httpClient *http.Client) *Client {
+	p := currentProvider()
 	return &Client{inner: &deviceflow.Client{
 		HTTP:           httpClient,
 		BaseURL:        api.BaseURL(),
-		ClientID:       clientID,
+		ClientID:       p.clientID,
 		Scope:          "cli",
-		UserAgent:      clientID,
-		DeviceCodePath: deviceCodePath,
-		TokenPath:      tokenPath,
+		UserAgent:      p.clientID,
+		DeviceCodePath: p.deviceCodePath,
+		TokenPath:      p.tokenPath,
 	}}
 }
 
