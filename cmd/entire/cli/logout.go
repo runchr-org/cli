@@ -11,9 +11,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// tokenStore abstracts keyring access so commands that read or delete the
-// stored bearer token can be unit-tested without hitting the real OS keyring.
-// Used by logout and the auth subcommands.
+// tokenStore abstracts the auth backend (keyring, file, env) so commands that
+// read or delete the stored bearer token can be unit-tested without hitting
+// the real OS keyring or filesystem.
 type tokenStore interface {
 	GetToken(baseURL string) (string, error)
 	GetTokenInfo(baseURL string) (auth.TokenInfo, error)
@@ -48,7 +48,7 @@ func defaultRevokeCurrentToken(ctx context.Context, token string) error {
 func runLogout(ctx context.Context, outW, errW io.Writer, store tokenStore, revoke revokeCurrentFunc, baseURL string) error {
 	info, err := store.GetTokenInfo(baseURL)
 	if err != nil {
-		// Fall through to the local delete: we still want the keyring entry
+		// Fall through to the local delete: we still want the stored token
 		// gone, even if we couldn't read it well enough to revoke server-side.
 		fmt.Fprintf(errW, "Warning: failed to read token before revocation: %v\n", err)
 	}

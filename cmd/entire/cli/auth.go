@@ -133,10 +133,7 @@ func describeTokenSource(info auth.TokenInfo) string {
 	case auth.TokenSourceEnv:
 		return "supplied by " + auth.AuthTokenEnvVar
 	case auth.TokenSourceFile:
-		if info.Path != "" {
-			return "stored in file " + info.Path
-		}
-		return "stored in file"
+		return "stored in file " + info.Path
 	case auth.TokenSourceKeyring:
 		return "stored in OS keychain"
 	default:
