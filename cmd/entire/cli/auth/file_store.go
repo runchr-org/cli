@@ -147,6 +147,9 @@ func newFileStoreData() fileStoreData {
 }
 
 func getFileToken(path, baseURL string) (string, error) {
+	// Atomic-rename writes mean readers always see a complete prior or new
+	// file — no torn reads possible — so locking is unnecessary on the read
+	// path.
 	store, err := readFileStore(path)
 	if err != nil {
 		return "", err
@@ -155,34 +158,56 @@ func getFileToken(path, baseURL string) (string, error) {
 }
 
 func saveFileToken(path, baseURL, token string) error {
-	store, err := readFileStore(path)
-	if err != nil {
-		return err
-	}
-	store.Tokens[baseURL] = token
-	if err := writeFileStore(path, store); err != nil {
-		return err
-	}
-	return nil
+	return withFileStoreLock(path, func() error {
+		store, err := readFileStore(path)
+		if err != nil {
+			return err
+		}
+		store.Tokens[baseURL] = token
+		return writeFileStore(path, store)
+	})
 }
 
 func deleteFileToken(path, baseURL string) error {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("stat token file: %w", err)
+	return withFileStoreLock(path, func() error {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("stat token file: %w", err)
+		}
+
+		store, err := readFileStore(path)
+		if err != nil {
+			return err
+		}
+		if _, ok := store.Tokens[baseURL]; !ok {
+			return nil
+		}
+		delete(store.Tokens, baseURL)
+		return writeFileStore(path, store)
+	})
+}
+
+// withFileStoreLock serializes the read-modify-write cycle across processes
+// using a sidecar lock file. The credentials file itself can't be flocked
+// safely because writeFileStore replaces the inode via temp+rename.
+func withFileStoreLock(path string, fn func() error) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create token file directory: %w", err)
 	}
 
-	store, err := readFileStore(path)
+	lockPath := path + ".lock"
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // sidecar lock for explicit user-provided credential path.
+	if err != nil {
+		return fmt.Errorf("open token lock file: %w", err)
+	}
+	defer func() { _ = lockFile.Close() }()
+
+	release, err := acquireExclusiveLock(lockFile)
 	if err != nil {
 		return err
 	}
-	if _, ok := store.Tokens[baseURL]; !ok {
-		return nil
-	}
-	delete(store.Tokens, baseURL)
-	if err := writeFileStore(path, store); err != nil {
-		return err
-	}
-	return nil
+	defer release()
+
+	return fn()
 }
