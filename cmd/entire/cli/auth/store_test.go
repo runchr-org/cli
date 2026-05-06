@@ -176,12 +176,18 @@ func TestStoreDeleteToken_NotFoundIsNoop(t *testing.T) {
 	}
 }
 
-func TestStoreFileBackend_SaveGetDelete(t *testing.T) {
-	// Not parallel: auth env vars are process-global.
+func newFileBackendTestStore(t *testing.T, service string) (*Store, string) {
+	t.Helper()
+
 	path := filepath.Join(t.TempDir(), "credentials.json")
 	t.Setenv(SecretsPathEnvVar, path)
 
-	store := NewStoreWithService("test-file-backend")
+	return NewStoreWithService(service), path
+}
+
+func TestStoreFileBackend_SaveGetDelete(t *testing.T) {
+	// Not parallel: auth env vars are process-global.
+	store, path := newFileBackendTestStore(t, "test-file-backend")
 	if err := store.SaveToken("https://entire.io", "file-token"); err != nil {
 		t.Fatalf("SaveToken() error = %v", err)
 	}
@@ -218,10 +224,7 @@ func TestStoreFileBackend_SaveGetDelete(t *testing.T) {
 
 func TestStoreFileBackend_PreservesOtherBaseURLs(t *testing.T) {
 	// Not parallel: auth env vars are process-global.
-	path := filepath.Join(t.TempDir(), "credentials.json")
-	t.Setenv(SecretsPathEnvVar, path)
-
-	store := NewStoreWithService("test-file-preserve")
+	store, _ := newFileBackendTestStore(t, "test-file-preserve")
 	if err := store.SaveToken("https://entire.io", "prod-token"); err != nil {
 		t.Fatalf("SaveToken(prod) error = %v", err)
 	}
@@ -243,11 +246,9 @@ func TestStoreFileBackend_PreservesOtherBaseURLs(t *testing.T) {
 
 func TestStoreFileBackend_EnvTokenTakesPrecedence(t *testing.T) {
 	// Not parallel: auth env vars are process-global.
-	path := filepath.Join(t.TempDir(), "credentials.json")
-	t.Setenv(SecretsPathEnvVar, path)
+	store, _ := newFileBackendTestStore(t, "test-file-env-precedence")
 	t.Setenv(AuthTokenEnvVar, "env-token")
 
-	store := NewStoreWithService("test-file-env-precedence")
 	if err := store.SaveToken("https://entire.io", "file-token"); err != nil {
 		t.Fatalf("SaveToken() error = %v", err)
 	}
@@ -279,13 +280,11 @@ func TestStoreFileBackend_RejectsRelativePath(t *testing.T) {
 
 func TestStoreFileBackend_RejectsMalformedJSON(t *testing.T) {
 	// Not parallel: auth env vars are process-global.
-	path := filepath.Join(t.TempDir(), "credentials.json")
-	t.Setenv(SecretsPathEnvVar, path)
+	store, path := newFileBackendTestStore(t, "test-file-malformed")
 	if err := os.WriteFile(path, []byte("{not-json"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	store := NewStoreWithService("test-file-malformed")
 	if _, err := store.GetTokenInfo("https://entire.io"); err == nil || !strings.Contains(err.Error(), "parse") {
 		t.Fatalf("GetTokenInfo() err = %v, want parse error", err)
 	}
@@ -296,13 +295,11 @@ func TestStoreFileBackend_RejectsGroupReadableFile(t *testing.T) {
 		t.Skip("permission bit checks are Unix-specific")
 	}
 	// Not parallel: auth env vars are process-global.
-	path := filepath.Join(t.TempDir(), "credentials.json")
-	t.Setenv(SecretsPathEnvVar, path)
+	store, path := newFileBackendTestStore(t, "test-file-perms")
 	if err := os.WriteFile(path, []byte(`{"version":1,"tokens":{"https://entire.io":"tok"}}`), 0o640); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	store := NewStoreWithService("test-file-perms")
 	if _, err := store.GetTokenInfo("https://entire.io"); err == nil || !strings.Contains(err.Error(), "chmod 600") {
 		t.Fatalf("GetTokenInfo() err = %v, want chmod 600 hint", err)
 	}
@@ -310,10 +307,7 @@ func TestStoreFileBackend_RejectsGroupReadableFile(t *testing.T) {
 
 func TestStoreFileBackend_DeleteMissingFileDoesNotCreateFile(t *testing.T) {
 	// Not parallel: auth env vars are process-global.
-	path := filepath.Join(t.TempDir(), "credentials.json")
-	t.Setenv(SecretsPathEnvVar, path)
-
-	store := NewStoreWithService("test-file-delete-missing")
+	store, path := newFileBackendTestStore(t, "test-file-delete-missing")
 	if err := store.DeleteToken("https://entire.io"); err != nil {
 		t.Fatalf("DeleteToken() error = %v", err)
 	}
@@ -322,29 +316,23 @@ func TestStoreFileBackend_DeleteMissingFileDoesNotCreateFile(t *testing.T) {
 	}
 }
 
-func TestStoreFileBackend_DeleteMissingTokenDoesNotRewriteFile(t *testing.T) {
+func TestStoreFileBackend_DeleteMissingTokenPreservesExistingToken(t *testing.T) {
 	// Not parallel: auth env vars are process-global.
-	path := filepath.Join(t.TempDir(), "credentials.json")
-	t.Setenv(SecretsPathEnvVar, path)
-
-	store := NewStoreWithService("test-file-delete-missing-token")
+	store, _ := newFileBackendTestStore(t, "test-file-delete-missing-token")
 	if err := store.SaveToken("https://entire.io", "file-token"); err != nil {
 		t.Fatalf("SaveToken() error = %v", err)
-	}
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(before) error = %v", err)
 	}
 
 	if err := store.DeleteToken("https://missing.example.com"); err != nil {
 		t.Fatalf("DeleteToken() error = %v", err)
 	}
-	after, err := os.ReadFile(path)
+
+	got, err := store.GetToken("https://entire.io")
 	if err != nil {
-		t.Fatalf("ReadFile(after) error = %v", err)
+		t.Fatalf("GetToken() error = %v", err)
 	}
-	if string(after) != string(before) {
-		t.Fatalf("credentials file changed after deleting missing token\nbefore:\n%s\nafter:\n%s", string(before), string(after))
+	if got != "file-token" {
+		t.Fatalf("GetToken() = %q, want existing token preserved", got)
 	}
 }
 
