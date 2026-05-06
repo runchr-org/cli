@@ -11,6 +11,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -107,6 +110,92 @@ func TestLogin_SavesTokenAfterApproval(t *testing.T) {
 	}
 }
 
+func TestLogin_SavesTokenToSecretsPathAfterApproval(t *testing.T) {
+	t.Parallel()
+
+	type state struct {
+		sync.Mutex
+		approved bool
+	}
+
+	serverState := &state{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/oauth/device/code":
+			writeJSON(t, w, http.StatusOK, map[string]any{
+				"device_code":               "device-123",
+				"user_code":                 "ABCD-EFGH",
+				"verification_uri":          serverURLWithPath(r, "/approve"),
+				"verification_uri_complete": serverURLWithPath(r, "/approve?code=ABCD-EFGH"),
+				"expires_in":                10,
+				"interval":                  1,
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/oauth/token":
+			serverState.Lock()
+			approved := serverState.approved
+			serverState.Unlock()
+
+			if !approved {
+				writeJSON(t, w, http.StatusBadRequest, map[string]any{"error": "authorization_pending"})
+				return
+			}
+
+			writeJSON(t, w, http.StatusOK, map[string]any{"access_token": "local-token", "token_type": "Bearer", "expires_in": 3600, "scope": "cli"})
+		case r.Method == http.MethodPost && r.URL.Path == "/approve":
+			serverState.Lock()
+			serverState.approved = true
+			serverState.Unlock()
+			writeJSON(t, w, http.StatusOK, map[string]any{"success": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	credentialsPath := filepath.Join(t.TempDir(), "credentials.json")
+	proc := runLoginProcess(t, server.URL, "ENTIRE_SECRETS_PATH="+credentialsPath)
+
+	approvalURL, _ := waitForLoginPrompt(t, proc.stdout)
+	approveResp, doErr := http.Post(approvalURL, "application/json", http.NoBody)
+	if doErr != nil {
+		t.Fatalf("approve request failed: %v", doErr)
+	}
+	_ = approveResp.Body.Close()
+
+	output, waitErr := proc.wait()
+	if waitErr != nil {
+		t.Fatalf("login command failed: %v\nOutput:\n%s", waitErr, output)
+	}
+	if !strings.Contains(output, "Login complete.") {
+		t.Fatalf("output missing login complete message:\n%s", output)
+	}
+
+	if runtime.GOOS != "windows" {
+		stat, statErr := os.Stat(credentialsPath)
+		if statErr != nil {
+			t.Fatalf("stat credentials file: %v", statErr)
+		}
+		if got := stat.Mode().Perm(); got != 0o600 {
+			t.Fatalf("credentials mode = %o, want 600", got)
+		}
+	}
+
+	data, readErr := os.ReadFile(credentialsPath)
+	if readErr != nil {
+		t.Fatalf("read credentials file: %v", readErr)
+	}
+	var credentials struct {
+		Version int               `json:"version"`
+		Tokens  map[string]string `json:"tokens"`
+	}
+	if err := json.Unmarshal(data, &credentials); err != nil {
+		t.Fatalf("unmarshal credentials: %v", err)
+	}
+	if credentials.Tokens[server.URL] != "local-token" {
+		t.Fatalf("stored token for %s = %q, want local-token", server.URL, credentials.Tokens[server.URL])
+	}
+}
+
 func TestLogin_ExpiredFlow(t *testing.T) {
 	t.Parallel()
 
@@ -190,7 +279,7 @@ type loginProcess struct {
 	waitFn func() (string, error)
 }
 
-func runLoginProcess(t *testing.T, apiBaseURL string) *loginProcess {
+func runLoginProcess(t *testing.T, apiBaseURL string, extraEnv ...string) *loginProcess {
 	t.Helper()
 
 	env := NewTestEnv(t)
@@ -203,6 +292,7 @@ func runLoginProcess(t *testing.T, apiBaseURL string) *loginProcess {
 		"ENTIRE_TEST_OPENCODE_PROJECT_DIR="+env.OpenCodeProjectDir,
 		"ENTIRE_API_BASE_URL="+apiBaseURL,
 	)
+	cmd.Env = append(cmd.Env, extraEnv...)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {

@@ -346,6 +346,33 @@ Personal overrides, gitignored by default:
 | `strategy_options.summarize.enabled` | `true`, `false`                              | Auto-generate AI summaries at commit time               |
 | `telemetry`                          | `true`, `false`                              | Send anonymous usage statistics to Posthog              |
 
+### Authentication Token Storage
+
+By default, `entire login` stores the CLI API token in your operating system keyring. In headless environments, containers, and CI jobs where a keyring is unavailable, use one of these explicit alternatives:
+
+| Environment Variable | Use Case | Behavior |
+| -------------------- | -------- | -------- |
+| `ENTIRE_AUTH_TOKEN`  | CI and ephemeral shells | Highest-priority read-only CLI API token. Entire uses it for authenticated API requests and never writes, deletes, or rotates it. |
+| `ENTIRE_SECRETS_PATH` | Headless machines that need persistent login | Absolute path to a JSON token file. `entire login` writes this file with `0600` permissions, and `entire logout` removes the token from this file. |
+
+For CI, set `ENTIRE_AUTH_TOKEN` directly:
+
+```bash
+export ENTIRE_AUTH_TOKEN=entire_api_token
+entire auth status
+```
+
+For a remote container or server where `entire login` cannot save to the OS keyring, set `ENTIRE_SECRETS_PATH` to an absolute path before logging in:
+
+```bash
+export ENTIRE_SECRETS_PATH="$HOME/.config/entire/credentials.json"
+entire login
+```
+
+The token file is plaintext JSON protected by local filesystem permissions. Keep it outside your repository, do not commit it, and choose a path only your user can read. `ENTIRE_AUTH_TOKEN` takes precedence over tokens stored in `ENTIRE_SECRETS_PATH`, and the file store takes precedence over the OS keyring.
+
+`ENTIRE_CHECKPOINT_TOKEN` is separate from CLI API authentication. It is only used for checkpoint Git fetch and push operations.
+
 ### Agent Hook Configuration
 
 Each agent stores its hook configuration in its own directory. When you run `entire enable`, hooks are installed in the appropriate location for each selected agent:

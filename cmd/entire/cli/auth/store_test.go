@@ -2,10 +2,18 @@ package auth
 
 import (
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/zalando/go-keyring"
+)
+
+const (
+	testLocalToken = "local-token"
+	testWindowsOS  = "windows"
 )
 
 func TestMain(m *testing.M) {
@@ -43,6 +51,42 @@ func TestStoreGetToken_NotFound(t *testing.T) {
 	}
 }
 
+func TestStoreGetTokenInfo_EnvTokenTakesPrecedence(t *testing.T) {
+	// Not parallel: go-keyring's mock provider uses an unprotected map.
+	t.Setenv(AuthTokenEnvVar, " env-token ")
+
+	store := NewStoreWithService("test-env-precedence")
+	if err := store.SaveToken("https://entire.io", "keyring-token"); err != nil {
+		t.Fatalf("SaveToken() error = %v", err)
+	}
+
+	info, err := store.GetTokenInfo("https://entire.io")
+	if err != nil {
+		t.Fatalf("GetTokenInfo() error = %v", err)
+	}
+	if info.Value != "env-token" || info.Source != TokenSourceEnv {
+		t.Fatalf("GetTokenInfo() = %#v, want env token/source", info)
+	}
+}
+
+func TestStoreGetTokenInfo_WhitespaceEnvTokenIgnored(t *testing.T) {
+	// Not parallel: go-keyring's mock provider uses an unprotected map.
+	t.Setenv(AuthTokenEnvVar, "   ")
+
+	store := NewStoreWithService("test-env-blank")
+	if err := store.SaveToken("https://entire.io", "keyring-token"); err != nil {
+		t.Fatalf("SaveToken() error = %v", err)
+	}
+
+	info, err := store.GetTokenInfo("https://entire.io")
+	if err != nil {
+		t.Fatalf("GetTokenInfo() error = %v", err)
+	}
+	if info.Value != "keyring-token" || info.Source != TokenSourceKeyring {
+		t.Fatalf("GetTokenInfo() = %#v, want keyring token/source", info)
+	}
+}
+
 func TestStoreSaveToken_PreservesOtherBaseURLs(t *testing.T) {
 	// Not parallel: go-keyring's mock provider uses an unprotected map.
 	store := NewStoreWithService("test-preserve")
@@ -51,7 +95,7 @@ func TestStoreSaveToken_PreservesOtherBaseURLs(t *testing.T) {
 		t.Fatalf("SaveToken(prod) error = %v", err)
 	}
 
-	if err := store.SaveToken("http://localhost:8787", "local-token"); err != nil {
+	if err := store.SaveToken("http://localhost:8787", testLocalToken); err != nil {
 		t.Fatalf("SaveToken(local) error = %v", err)
 	}
 
@@ -67,8 +111,8 @@ func TestStoreSaveToken_PreservesOtherBaseURLs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetToken(local) error = %v", err)
 	}
-	if local != "local-token" {
-		t.Fatalf("local token = %q, want %q", local, "local-token")
+	if local != testLocalToken {
+		t.Fatalf("local token = %q, want %q", local, testLocalToken)
 	}
 }
 
@@ -132,11 +176,183 @@ func TestStoreDeleteToken_NotFoundIsNoop(t *testing.T) {
 	}
 }
 
+func TestStoreFileBackend_SaveGetDelete(t *testing.T) {
+	// Not parallel: auth env vars are process-global.
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	t.Setenv(SecretsPathEnvVar, path)
+
+	store := NewStoreWithService("test-file-backend")
+	if err := store.SaveToken("https://entire.io", "file-token"); err != nil {
+		t.Fatalf("SaveToken() error = %v", err)
+	}
+
+	info, err := store.GetTokenInfo("https://entire.io")
+	if err != nil {
+		t.Fatalf("GetTokenInfo() error = %v", err)
+	}
+	if info.Value != "file-token" || info.Source != TokenSourceFile || info.Path != path {
+		t.Fatalf("GetTokenInfo() = %#v, want file token/source/path", info)
+	}
+
+	if runtime.GOOS != testWindowsOS {
+		stat, statErr := os.Stat(path)
+		if statErr != nil {
+			t.Fatalf("Stat() error = %v", statErr)
+		}
+		if got := stat.Mode().Perm(); got != 0o600 {
+			t.Fatalf("credential file mode = %o, want 600", got)
+		}
+	}
+
+	if err := store.DeleteToken("https://entire.io"); err != nil {
+		t.Fatalf("DeleteToken() error = %v", err)
+	}
+	got, err := store.GetToken("https://entire.io")
+	if err != nil {
+		t.Fatalf("GetToken() error = %v", err)
+	}
+	if got != "" {
+		t.Fatalf("GetToken() after delete = %q, want empty", got)
+	}
+}
+
+func TestStoreFileBackend_PreservesOtherBaseURLs(t *testing.T) {
+	// Not parallel: auth env vars are process-global.
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	t.Setenv(SecretsPathEnvVar, path)
+
+	store := NewStoreWithService("test-file-preserve")
+	if err := store.SaveToken("https://entire.io", "prod-token"); err != nil {
+		t.Fatalf("SaveToken(prod) error = %v", err)
+	}
+	if err := store.SaveToken("http://localhost:8787", testLocalToken); err != nil {
+		t.Fatalf("SaveToken(local) error = %v", err)
+	}
+	if err := store.DeleteToken("https://entire.io"); err != nil {
+		t.Fatalf("DeleteToken(prod) error = %v", err)
+	}
+
+	got, err := store.GetToken("http://localhost:8787")
+	if err != nil {
+		t.Fatalf("GetToken(local) error = %v", err)
+	}
+	if got != testLocalToken {
+		t.Fatalf("local token = %q, want %q", got, testLocalToken)
+	}
+}
+
+func TestStoreFileBackend_EnvTokenTakesPrecedence(t *testing.T) {
+	// Not parallel: auth env vars are process-global.
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	t.Setenv(SecretsPathEnvVar, path)
+	t.Setenv(AuthTokenEnvVar, "env-token")
+
+	store := NewStoreWithService("test-file-env-precedence")
+	if err := store.SaveToken("https://entire.io", "file-token"); err != nil {
+		t.Fatalf("SaveToken() error = %v", err)
+	}
+
+	info, err := store.GetTokenInfo("https://entire.io")
+	if err != nil {
+		t.Fatalf("GetTokenInfo() error = %v", err)
+	}
+	if info.Value != "env-token" || info.Source != TokenSourceEnv {
+		t.Fatalf("GetTokenInfo() = %#v, want env token/source", info)
+	}
+}
+
+func TestStoreFileBackend_RejectsRelativePath(t *testing.T) {
+	// Not parallel: auth env vars are process-global.
+	t.Setenv(SecretsPathEnvVar, "credentials.json")
+
+	store := NewStoreWithService("test-file-relative")
+	if _, err := store.GetTokenInfo("https://entire.io"); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("GetTokenInfo() err = %v, want absolute-path error", err)
+	}
+	if err := store.SaveToken("https://entire.io", "tok"); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("SaveToken() err = %v, want absolute-path error", err)
+	}
+	if err := store.DeleteToken("https://entire.io"); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("DeleteToken() err = %v, want absolute-path error", err)
+	}
+}
+
+func TestStoreFileBackend_RejectsMalformedJSON(t *testing.T) {
+	// Not parallel: auth env vars are process-global.
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	t.Setenv(SecretsPathEnvVar, path)
+	if err := os.WriteFile(path, []byte("{not-json"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	store := NewStoreWithService("test-file-malformed")
+	if _, err := store.GetTokenInfo("https://entire.io"); err == nil || !strings.Contains(err.Error(), "parse") {
+		t.Fatalf("GetTokenInfo() err = %v, want parse error", err)
+	}
+}
+
+func TestStoreFileBackend_RejectsGroupReadableFile(t *testing.T) {
+	if runtime.GOOS == testWindowsOS {
+		t.Skip("permission bit checks are Unix-specific")
+	}
+	// Not parallel: auth env vars are process-global.
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	t.Setenv(SecretsPathEnvVar, path)
+	if err := os.WriteFile(path, []byte(`{"version":1,"tokens":{"https://entire.io":"tok"}}`), 0o640); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	store := NewStoreWithService("test-file-perms")
+	if _, err := store.GetTokenInfo("https://entire.io"); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+		t.Fatalf("GetTokenInfo() err = %v, want chmod 600 hint", err)
+	}
+}
+
+func TestStoreFileBackend_DeleteMissingFileDoesNotCreateFile(t *testing.T) {
+	// Not parallel: auth env vars are process-global.
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	t.Setenv(SecretsPathEnvVar, path)
+
+	store := NewStoreWithService("test-file-delete-missing")
+	if err := store.DeleteToken("https://entire.io"); err != nil {
+		t.Fatalf("DeleteToken() error = %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("Stat() err = %v, want file to remain absent", err)
+	}
+}
+
+func TestStoreFileBackend_DeleteMissingTokenDoesNotRewriteFile(t *testing.T) {
+	// Not parallel: auth env vars are process-global.
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	t.Setenv(SecretsPathEnvVar, path)
+
+	store := NewStoreWithService("test-file-delete-missing-token")
+	if err := store.SaveToken("https://entire.io", "file-token"); err != nil {
+		t.Fatalf("SaveToken() error = %v", err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(before) error = %v", err)
+	}
+
+	if err := store.DeleteToken("https://missing.example.com"); err != nil {
+		t.Fatalf("DeleteToken() error = %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(after) error = %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("credentials file changed after deleting missing token\nbefore:\n%s\nafter:\n%s", string(before), string(after))
+	}
+}
+
 func TestLookupCurrentToken(t *testing.T) {
 	t.Setenv(api.BaseURLEnvVar, "http://localhost:8787")
 
 	store := NewStore()
-	if err := store.SaveToken("http://localhost:8787", "local-token"); err != nil {
+	if err := store.SaveToken("http://localhost:8787", testLocalToken); err != nil {
 		t.Fatalf("SaveToken() error = %v", err)
 	}
 
@@ -144,7 +360,7 @@ func TestLookupCurrentToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LookupCurrentToken() error = %v", err)
 	}
-	if got != "local-token" {
-		t.Fatalf("LookupCurrentToken() = %q, want %q", got, "local-token")
+	if got != testLocalToken {
+		t.Fatalf("LookupCurrentToken() = %q, want %q", got, testLocalToken)
 	}
 }

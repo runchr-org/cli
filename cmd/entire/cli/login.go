@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/auth"
@@ -33,6 +34,10 @@ type deviceAuthClient interface {
 	BaseURL() string
 }
 
+type loginTokenStore interface {
+	SaveToken(baseURL, token string) error
+}
+
 func newLoginCmd() *cobra.Command {
 	var insecureHTTPAuth bool
 	cmd := &cobra.Command{
@@ -50,6 +55,10 @@ func newLoginCmd() *cobra.Command {
 }
 
 func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient, openURL browserOpenFunc) error {
+	return runLoginWithStore(ctx, outW, errW, client, openURL, auth.NewStore())
+}
+
+func runLoginWithStore(ctx context.Context, outW, errW io.Writer, client deviceAuthClient, openURL browserOpenFunc, store loginTokenStore) error {
 	start, err := client.StartDeviceAuth(ctx)
 	if err != nil {
 		return fmt.Errorf("start login: %w", err)
@@ -84,10 +93,15 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 		return fmt.Errorf("complete login: %w", err)
 	}
 
-	store := auth.NewStore()
-
 	if err := store.SaveToken(client.BaseURL(), token); err != nil {
+		if strings.TrimSpace(os.Getenv(auth.SecretsPathEnvVar)) == "" {
+			fmt.Fprintf(errW, "For headless environments, set %s=/path/to/credentials.json and retry `entire login`.\n", auth.SecretsPathEnvVar)
+		}
 		return fmt.Errorf("save auth token: %w", err)
+	}
+
+	if strings.TrimSpace(os.Getenv(auth.AuthTokenEnvVar)) != "" {
+		fmt.Fprintf(errW, "Warning: %s is set and will take precedence over the newly saved login token until it is unset.\n", auth.AuthTokenEnvVar)
 	}
 
 	fmt.Fprintln(outW, "Login complete.")

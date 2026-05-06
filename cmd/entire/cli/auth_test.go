@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/api"
+	"github.com/entireio/cli/cmd/entire/cli/auth"
 )
 
 const (
@@ -70,6 +71,54 @@ func TestRunAuthStatus_LoggedIn(t *testing.T) {
 	}
 }
 
+func TestRunAuthStatus_SourceLabels(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		source auth.TokenSource
+		path   string
+		want   string
+	}{
+		"env": {
+			source: auth.TokenSourceEnv,
+			want:   "Token: supplied by " + auth.AuthTokenEnvVar,
+		},
+		"file": {
+			source: auth.TokenSourceFile,
+			path:   "/tmp/entire-credentials.json",
+			want:   "Token: stored in file /tmp/entire-credentials.json",
+		},
+		"keyring": {
+			source: auth.TokenSourceKeyring,
+			want:   "Token: stored in OS keychain",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newMockTokenStore()
+			store.tokens[testBaseURL] = testAuthTok
+			store.source = tt.source
+			store.path = tt.path
+
+			list := func(context.Context, string) ([]api.Token, error) {
+				return []api.Token{{ID: "a", Name: "laptop"}}, nil
+			}
+
+			var out bytes.Buffer
+			if err := runAuthStatus(context.Background(), &out, store, list, testBaseURL); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if !strings.Contains(out.String(), tt.want) {
+				t.Fatalf("output = %q, want %q", out.String(), tt.want)
+			}
+		})
+	}
+}
+
 func TestRunAuthStatus_TokenInvalid(t *testing.T) {
 	t.Parallel()
 
@@ -90,6 +139,30 @@ func TestRunAuthStatus_TokenInvalid(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "entire login") {
 		t.Fatalf("output = %q, want re-auth hint", out.String())
+	}
+}
+
+func TestRunAuthStatus_EnvTokenInvalidSuggestsUpdatingEnv(t *testing.T) {
+	t.Parallel()
+
+	store := newMockTokenStore()
+	store.tokens[testBaseURL] = testAuthTok
+	store.source = auth.TokenSourceEnv
+
+	list := func(context.Context, string) ([]api.Token, error) {
+		return nil, &api.HTTPError{StatusCode: http.StatusUnauthorized, Message: "Not authenticated"}
+	}
+
+	var out bytes.Buffer
+	if err := runAuthStatus(context.Background(), &out, store, list, testBaseURL); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(out.String(), auth.AuthTokenEnvVar) {
+		t.Fatalf("output = %q, want env-token guidance", out.String())
+	}
+	if strings.Contains(out.String(), "entire login") {
+		t.Fatalf("output = %q, should not suggest login while env token has precedence", out.String())
 	}
 }
 
@@ -405,6 +478,77 @@ func TestRunAuthRevoke_CurrentDelegatesToLogout(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Logged out.") {
 		t.Fatalf("output = %q, want 'Logged out.' message from logout path", out.String())
+	}
+}
+
+func TestRunAuthRevoke_CurrentEnvTokenRevokesButDoesNotDelete(t *testing.T) {
+	t.Parallel()
+
+	store := newMockTokenStore()
+	store.tokens[testBaseURL] = testAuthTok
+	store.source = auth.TokenSourceEnv
+
+	revokeByIDCalled := false
+	revokeByID := func(context.Context, string, string) error {
+		revokeByIDCalled = true
+		return nil
+	}
+
+	revokedToken := ""
+	revokeCurrent := func(_ context.Context, token string) error {
+		revokedToken = token
+		return nil
+	}
+
+	list := func(context.Context, string) ([]api.Token, error) { return nil, nil }
+
+	var out, errOut bytes.Buffer
+	err := runAuthRevoke(context.Background(), &out, &errOut, store,
+		list, revokeByID, revokeCurrent, testBaseURL, "", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if revokeByIDCalled {
+		t.Fatal("revokeByID should not be called when --current is set")
+	}
+	if revokedToken != testAuthTok {
+		t.Errorf("revokeCurrent called with token %q, want %q", revokedToken, testAuthTok)
+	}
+	if store.deleted[testBaseURL] {
+		t.Fatal("env-token revoke should not delete lower-priority credentials")
+	}
+	if !strings.Contains(out.String(), auth.AuthTokenEnvVar) {
+		t.Fatalf("output = %q, want env-token guidance", out.String())
+	}
+}
+
+func TestRunAuthRevoke_ByIDEnvSelfRevokeDoesNotDeleteLowerPriority(t *testing.T) {
+	t.Parallel()
+
+	store := newMockTokenStore()
+	store.tokens[testBaseURL] = testAuthTok
+	store.source = auth.TokenSourceEnv
+
+	revokeByID := func(context.Context, string, string) error { return nil }
+	revokeCurrent := func(context.Context, string) error { return nil }
+
+	list := func(context.Context, string) ([]api.Token, error) {
+		return nil, &api.HTTPError{StatusCode: http.StatusUnauthorized, Message: "Not authenticated"}
+	}
+
+	var out, errOut bytes.Buffer
+	err := runAuthRevoke(context.Background(), &out, &errOut, store,
+		list, revokeByID, revokeCurrent, testBaseURL, testTokenID, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if store.deleted[testBaseURL] {
+		t.Fatal("env-token self-revoke should not delete lower-priority credentials")
+	}
+	if !strings.Contains(out.String(), auth.AuthTokenEnvVar) {
+		t.Fatalf("output = %q, want env-token guidance", out.String())
 	}
 }
 
