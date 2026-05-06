@@ -12,10 +12,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
+	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -93,7 +96,18 @@ func runMigrateCheckpointsV2(ctx context.Context, cmd *cobra.Command, force bool
 	out := cmd.OutOrStdout()
 	progressOut := cmd.ErrOrStderr()
 
-	result, freshlyPackedRefs, err := migrateCheckpointsV2(ctx, repo, v1Store, v2Store, progressOut, force)
+	// Sync local refs with origin before walking v1: this clone's local v1
+	// may be stale (default fetch refspec only updates origin/* tracking
+	// refs, not refs/heads/entire/checkpoints/v1), and ListCommitted reads
+	// the local ref. Capturing origin's v2/main tree separately also lets
+	// the existence check below treat origin as the authoritative source —
+	// otherwise a checkpoint that's in local v2 but missing from origin
+	// (e.g. a dual-write that never made it through a push race) would be
+	// silently skipped as "already migrated" forever.
+	originV2MainTree, cleanupTmpRefs := prefetchOriginRefsForMigrate(ctx, repo, progressOut)
+	defer cleanupTmpRefs()
+
+	result, freshlyPackedRefs, err := migrateCheckpointsV2(ctx, repo, v1Store, v2Store, originV2MainTree, progressOut, force)
 	if err != nil {
 		return err
 	}
@@ -130,6 +144,121 @@ func runMigrateCheckpointsV2(ctx context.Context, cmd *cobra.Command, force bool
 }
 
 const migrationLogFile = logging.LogsDir + "/entire.log"
+
+// migratePrefetchTimeout caps the per-ref fetch attempt during migrate's
+// origin sync. v1 typically reuses objects from prior fetches (its branch
+// commits and tip blobs are usually already local because the default
+// refspec covers refs/heads/*) so the wire transfer is small; v2 refs are
+// outside the default refspec but each /main commit only adds a few hundred
+// bytes of metadata. A minute is generous for both and bounds the worst
+// case (slow network, cold cache) without making the user wait forever
+// before the migration loop starts producing output.
+const migratePrefetchTimeout = 60 * time.Second
+
+// migrateV1FetchTmpRef is the staging ref for the v1 prefetch. Lives in the
+// shared FetchTmpRefPrefix namespace so cleanup logic works the same way as
+// for V2MainFetchTmpRef.
+const migrateV1FetchTmpRef = strategy.FetchTmpRefPrefix + "migrate-v1"
+
+// prefetchOriginRefsForMigrate fetches origin's v1 metadata branch and v2
+// /main ref into staging refs, fast-forwards the local refs when safe (i.e.
+// when origin is strictly ahead — SafelyAdvanceLocalRef leaves locally-ahead
+// state alone), and returns origin's v2/main root tree hash. The caller uses
+// that tree hash for the per-checkpoint "already migrated" decision so an
+// entry present in local v2 but missing on origin gets re-emitted.
+//
+// Failures are non-fatal: a missing origin v2/main (first migration on this
+// repo) returns plumbing.ZeroHash, which migrateOneCheckpoint interprets as
+// "no origin state available, fall back to local". The returned cleanup
+// function removes both staging refs and is safe to call even when the
+// fetches failed.
+func prefetchOriginRefsForMigrate(ctx context.Context, repo *git.Repository, progressOut io.Writer) (plumbing.Hash, func()) {
+	cleanup := func() {
+		_ = repo.Storer.RemoveReference(plumbing.ReferenceName(migrateV1FetchTmpRef)) //nolint:errcheck // cleanup is best-effort
+		_ = repo.Storer.RemoveReference(strategy.V2MainFetchTmpRef)                   //nolint:errcheck // cleanup is best-effort
+	}
+
+	// Only print to a real terminal — tests redirect stderr and assert
+	// nothing leaks; this matches how startSpinner and startProgressBar
+	// gate their output.
+	if interactive.IsTerminalWriter(progressOut) {
+		fmt.Fprintln(progressOut, "Syncing checkpoint refs with origin...")
+	}
+
+	syncOriginRefForMigrate(ctx, repo,
+		"refs/heads/"+paths.MetadataBranchName,
+		plumbing.ReferenceName(migrateV1FetchTmpRef),
+		plumbing.NewBranchReferenceName(paths.MetadataBranchName),
+		"v1",
+	)
+
+	originV2Tip, ok := syncOriginRefForMigrate(ctx, repo,
+		paths.V2MainRefName,
+		strategy.V2MainFetchTmpRef,
+		plumbing.ReferenceName(paths.V2MainRefName),
+		"v2 /main",
+	)
+	if !ok {
+		return plumbing.ZeroHash, cleanup
+	}
+
+	commit, err := repo.CommitObject(originV2Tip)
+	if err != nil {
+		logging.Warn(ctx, "migrate: could not load origin v2/main commit; falling back to local view",
+			slog.String("hash", originV2Tip.String()),
+			slog.String("error", err.Error()),
+		)
+		return plumbing.ZeroHash, cleanup
+	}
+	return commit.TreeHash, cleanup
+}
+
+// syncOriginRefForMigrate fetches a single ref from origin into tmpRefName,
+// then attempts a safe fast-forward of localRefName from the fetched hash.
+// Returns the origin tip hash and true on success; returns ZeroHash + false
+// when origin lacks the ref or the fetch failed (both non-fatal — migrate
+// proceeds against local state).
+func syncOriginRefForMigrate(ctx context.Context, repo *git.Repository, srcRef string, tmpRefName, localRefName plumbing.ReferenceName, label string) (plumbing.Hash, bool) {
+	fetchCtx, cancel := context.WithTimeout(ctx, migratePrefetchTimeout)
+	defer cancel()
+
+	refSpec := fmt.Sprintf("+%s:%s", srcRef, tmpRefName)
+	if _, err := remote.Fetch(fetchCtx, remote.FetchOptions{
+		Remote:   migrateRemoteName,
+		RefSpecs: []string{refSpec},
+		NoTags:   true,
+		NoFilter: true,
+	}); err != nil {
+		// Common cases: origin has no entire/checkpoints/v1 yet, or no v2/main
+		// yet (first migration on this repo). Either way, proceed with whatever
+		// local state we have.
+		logging.Info(ctx, "migrate: origin sync skipped",
+			slog.String("ref", label),
+			slog.String("error", err.Error()),
+		)
+		return plumbing.ZeroHash, false
+	}
+
+	tmpRef, err := repo.Reference(tmpRefName, true)
+	if err != nil {
+		logging.Warn(ctx, "migrate: tmp ref missing after fetch",
+			slog.String("ref", label),
+			slog.String("tmp_ref", string(tmpRefName)),
+			slog.String("error", err.Error()),
+		)
+		return plumbing.ZeroHash, false
+	}
+
+	if advanceErr := strategy.SafelyAdvanceLocalRef(ctx, repo, localRefName, tmpRef.Hash()); advanceErr != nil {
+		logging.Warn(ctx, "migrate: failed to advance local ref",
+			slog.String("ref", label),
+			slog.String("error", advanceErr.Error()),
+		)
+		// Even when the local advance fails, the tmp ref still holds origin's
+		// tip — return it so callers can use it for read-only comparisons.
+	}
+	return tmpRef.Hash(), true
+}
 
 func printMigrateCompletion(out io.Writer, result *migrateResult) {
 	if result.total == 0 {
@@ -196,7 +325,15 @@ type migratedFullSession struct {
 
 // migrateCheckpointsV2 returns the /full/<n> refs migration wrote so callers
 // can pass them as exclusions to the generation-metadata repair pass.
-func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, progressOut io.Writer, force bool) (*migrateResult, []plumbing.ReferenceName, error) {
+//
+// originV2MainTree, when non-zero, is the v2/main root tree hash captured
+// from the origin remote at the start of the run. It's threaded into
+// migrateOneCheckpoint's "already migrated" check so a checkpoint present in
+// local v2 but missing from origin (e.g. a dual-write that never made it
+// through a push race) gets re-emitted instead of being skipped forever.
+// Pass plumbing.ZeroHash to fall back to the local v2/main ref (e.g. when
+// the prefetch failed or origin has no v2/main yet).
+func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, originV2MainTree plumbing.Hash, progressOut io.Writer, force bool) (*migrateResult, []plumbing.ReferenceName, error) {
 	v1List, err := v1Store.ListCommitted(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list v1 checkpoints: %w", err)
@@ -228,7 +365,7 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 	nextGeneration := 0
 
 	for _, info := range v1List {
-		fullCheckpoint, outcome, migrateErr := migrateOneCheckpoint(ctx, repo, v1Store, v2Store, info, force, fullArtifactsIndex)
+		fullCheckpoint, outcome, migrateErr := migrateOneCheckpoint(ctx, repo, v1Store, v2Store, info, force, fullArtifactsIndex, originV2MainTree)
 		result.missingSessions += outcome.missingSessions
 		if outcome.compactTranscriptSkipped {
 			result.compactTranscriptSkipped++
@@ -335,24 +472,45 @@ type migrateCheckpointOutcome struct {
 	compactTranscriptSkipped bool
 }
 
-func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, force bool, fullArtifacts checkpoint.FullSessionArtifactsIndex) (*migratedFullCheckpoint, migrateCheckpointOutcome, error) {
+func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, force bool, fullArtifacts checkpoint.FullSessionArtifactsIndex, originV2MainTree plumbing.Hash) (*migratedFullCheckpoint, migrateCheckpointOutcome, error) {
 	var outcome migrateCheckpointOutcome
 
-	existing, err := v2Store.ReadCommitted(ctx, info.CheckpointID)
+	// existingLocal drives backfill (compact-transcript fill, /full/* packing)
+	// and tells us whether we need to prune before re-emitting.
+	existingLocal, err := v2Store.ReadCommitted(ctx, info.CheckpointID)
 	if err != nil {
 		return nil, outcome, fmt.Errorf("failed to check v2 for checkpoint %s: %w", info.CheckpointID, err)
 	}
 
-	if existing != nil && !force {
-		// Already in v2. Pack sessions whose /full/* artifacts are missing
-		// (resume an interrupted run) and backfill transcript.jsonl on /main
-		// where it's missing. With nothing to do on either front, return
-		// errAlreadyMigrated so the caller counts it as skipped.
-		fullCheckpoint, err := collectMissingFullCheckpointForPacking(ctx, repo, v1Store, v2Store, info, existing, fullArtifacts)
+	// existingOrigin drives the "already migrated" decision so that an entry
+	// present in local v2 but missing from origin (e.g. dual-write succeeded
+	// locally but the v2/main push got dropped in a merge race) gets
+	// re-emitted instead of being skipped forever. When the prefetch couldn't
+	// capture an origin tree (offline, first migration, etc.) we fall back to
+	// the local view to preserve pre-prefetch behavior.
+	existingOrigin := existingLocal
+	if !originV2MainTree.IsZero() {
+		existingOrigin, err = v2Store.ReadCommittedFromTree(ctx, originV2MainTree, info.CheckpointID)
+		if err != nil {
+			return nil, outcome, fmt.Errorf("failed to check origin v2 for checkpoint %s: %w", info.CheckpointID, err)
+		}
+	}
+
+	if existingOrigin != nil && !force {
+		// Already in v2 on origin. Pack sessions whose /full/* artifacts are
+		// missing (resume an interrupted run) and backfill transcript.jsonl
+		// on /main where it's missing. Backfill targets local; if local
+		// doesn't have the entry (origin did but local v2/main was rewound
+		// and FF declined to clobber locally-ahead history) there's nothing
+		// to backfill and we just count the checkpoint as already migrated.
+		if existingLocal == nil {
+			return nil, outcome, errAlreadyMigrated
+		}
+		fullCheckpoint, err := collectMissingFullCheckpointForPacking(ctx, repo, v1Store, v2Store, info, existingLocal, fullArtifacts)
 		if err != nil && !errors.Is(err, errAlreadyMigrated) {
 			return nil, outcome, err
 		}
-		backfilled, backfillErr := backfillCompactTranscripts(ctx, v1Store, v2Store, info, existing)
+		backfilled, backfillErr := backfillCompactTranscripts(ctx, v1Store, v2Store, info, existingLocal)
 		if errors.Is(backfillErr, errTranscriptNotGeneratable) {
 			outcome.compactTranscriptSkipped = true
 		} else if backfillErr != nil && !errors.Is(backfillErr, errAlreadyMigrated) {
@@ -367,9 +525,12 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 		return fullCheckpoint, outcome, nil
 	}
 
-	if existing != nil && force {
+	// Origin lacks the entry, or force is set: re-emit. If local already
+	// holds a stale copy, prune first so the fresh write produces a non-empty
+	// commit on /main that the next push will deliver.
+	if existingLocal != nil {
 		if pruneErr := pruneV2CheckpointForForce(ctx, repo, v2Store, info.CheckpointID); pruneErr != nil {
-			return nil, outcome, fmt.Errorf("failed to reset existing v2 checkpoint %s before force migration: %w", info.CheckpointID, pruneErr)
+			return nil, outcome, fmt.Errorf("failed to reset existing v2 checkpoint %s before re-migration: %w", info.CheckpointID, pruneErr)
 		}
 	}
 

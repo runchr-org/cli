@@ -34,6 +34,22 @@ func (s *V2GitStore) ReadCommitted(ctx context.Context, checkpointID id.Checkpoi
 		return nil, nil //nolint:nilnil,nilerr // Ref doesn't exist means no checkpoint
 	}
 
+	return s.ReadCommittedFromTree(ctx, rootTreeHash, checkpointID)
+}
+
+// ReadCommittedFromTree reads the checkpoint summary from a specific v2 /main
+// root tree (e.g. one captured from origin before migrate runs). Used by the
+// migration command so the "already migrated" decision reflects what origin
+// already has — independent of whether local v2/main has been advanced. Same
+// nil-on-absent contract as ReadCommitted.
+func (s *V2GitStore) ReadCommittedFromTree(ctx context.Context, rootTreeHash plumbing.Hash, checkpointID id.CheckpointID) (*CheckpointSummary, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err //nolint:wrapcheck // Propagating context cancellation
+	}
+	if rootTreeHash.IsZero() {
+		return nil, nil //nolint:nilnil // Zero hash means no tree to read from
+	}
+
 	rootTree, err := s.repo.TreeObject(rootTreeHash)
 	if err != nil {
 		return nil, nil //nolint:nilnil,nilerr // Tree not readable
