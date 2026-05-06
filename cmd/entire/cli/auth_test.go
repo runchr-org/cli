@@ -482,19 +482,24 @@ func TestRunAuthRevoke_CurrentDelegatesToLogout(t *testing.T) {
 }
 
 // TestRunAuthRevoke_CurrentEnvToken covers the env-source --current path:
-// success, idempotent 401, and warn-and-continue on transient errors. All
-// three must dispatch to revokeCurrent (not revokeByID), print unset-guidance,
-// and leave any lower-priority stored credentials untouched.
+//   - success → "Revoked" message, exit 0
+//   - 401 (already invalid) → idempotent success: same message, exit 0
+//   - non-401 transient error → return error; do NOT print "Revoked" because
+//     the bearer token is still active server-side
+//
+// All cases must dispatch to revokeCurrent (not revokeByID) and leave any
+// lower-priority stored credentials untouched.
 func TestRunAuthRevoke_CurrentEnvToken(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
-		revokeErr   error
-		wantWarning string // empty = stderr must be empty
+		revokeErr      error
+		wantSuccessMsg bool // true = expect "Revoked" stdout + nil error
+		wantErrSubstr  string
 	}{
-		"success":         {nil, ""},
-		"already invalid": {&api.HTTPError{StatusCode: http.StatusUnauthorized, Message: "Not authenticated"}, ""},
-		"transient error": {errors.New("connection refused"), "connection refused"},
+		"success":         {nil, true, ""},
+		"already invalid": {&api.HTTPError{StatusCode: http.StatusUnauthorized, Message: "Not authenticated"}, true, ""},
+		"transient error": {errors.New("connection refused"), false, "connection refused"},
 	}
 
 	for name, tt := range tests {
@@ -521,9 +526,6 @@ func TestRunAuthRevoke_CurrentEnvToken(t *testing.T) {
 			err := runAuthRevoke(context.Background(), &out, &errOut, store,
 				func(context.Context, string) ([]api.Token, error) { return nil, nil },
 				revokeByID, revokeCurrent, testBaseURL, "", true)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
 
 			if revokeByIDCalled {
 				t.Fatal("revokeByID should not be called when --current is set")
@@ -531,23 +533,28 @@ func TestRunAuthRevoke_CurrentEnvToken(t *testing.T) {
 			if revokedToken != testAuthTok {
 				t.Errorf("revokeCurrent token = %q, want %q", revokedToken, testAuthTok)
 			}
-			if tt.wantWarning == "" {
-				if errOut.Len() != 0 {
-					t.Fatalf("stderr = %q, want empty", errOut.String())
-				}
-			} else {
-				if !strings.Contains(errOut.String(), "server-side token revocation failed") {
-					t.Fatalf("stderr = %q, want warning prefix", errOut.String())
-				}
-				if !strings.Contains(errOut.String(), tt.wantWarning) {
-					t.Fatalf("stderr = %q, want underlying error %q", errOut.String(), tt.wantWarning)
-				}
-			}
-			if !strings.Contains(out.String(), auth.AuthTokenEnvVar) {
-				t.Fatalf("output = %q, want env-token guidance", out.String())
-			}
 			if store.deleted[testBaseURL] {
 				t.Fatal("env-token revoke should not delete lower-priority credentials")
+			}
+
+			if tt.wantSuccessMsg {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if !strings.Contains(out.String(), auth.AuthTokenEnvVar) {
+					t.Fatalf("output = %q, want env-token guidance", out.String())
+				}
+				return
+			}
+
+			if err == nil {
+				t.Fatal("expected error for non-401 server failure")
+			}
+			if !strings.Contains(err.Error(), tt.wantErrSubstr) {
+				t.Fatalf("error = %v, want substring %q", err, tt.wantErrSubstr)
+			}
+			if strings.Contains(out.String(), "Revoked") {
+				t.Fatalf("stdout = %q, must not claim revoke success when revoke failed", out.String())
 			}
 		})
 	}

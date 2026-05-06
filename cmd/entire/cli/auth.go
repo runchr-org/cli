@@ -494,11 +494,14 @@ func revokeCurrentToken(
 	info auth.TokenInfo,
 ) error {
 	if info.Source == auth.TokenSourceEnv {
-		// Mirror the non-env branch: 401 means the token was already invalid
-		// server-side (idempotent re-run), other errors warn but still surface
-		// the unset-guidance so a CI re-run isn't blocked by a transient failure.
-		if err := revoke(ctx, info.Value); err != nil && !api.IsHTTPErrorStatus(err, http.StatusUnauthorized) {
-			fmt.Fprintf(errW, "Warning: server-side token revocation failed: %v\n", err)
+		// Env tokens have no local copy to fall back on, so a non-401 server
+		// failure means the token is still active — we MUST NOT print
+		// "Revoked" and exit zero in that case. 401 is treated as idempotent
+		// success (the token was already invalid server-side).
+		if err := revoke(ctx, info.Value); err != nil {
+			if !api.IsHTTPErrorStatus(err, http.StatusUnauthorized) {
+				return fmt.Errorf("revoke current token: %w", err)
+			}
 		}
 		fmt.Fprintf(outW, "Revoked current token supplied by %s. Unset it to stop using it locally.\n", auth.AuthTokenEnvVar)
 		return nil
