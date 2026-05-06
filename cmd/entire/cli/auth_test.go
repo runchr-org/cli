@@ -523,6 +523,68 @@ func TestRunAuthRevoke_CurrentEnvTokenRevokesButDoesNotDelete(t *testing.T) {
 	}
 }
 
+// TestRunAuthRevoke_CurrentEnvTokenServerErrors locks in idempotent re-runs:
+// 401 must be silent (already revoked), other errors must warn-and-continue,
+// and both cases must still print the unset-guidance so a CI re-run isn't
+// blocked by a transient failure.
+func TestRunAuthRevoke_CurrentEnvTokenServerErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		revokeErr   error
+		wantWarning string // empty = stderr must be empty
+	}{
+		"already invalid": {
+			revokeErr:   &api.HTTPError{StatusCode: http.StatusUnauthorized, Message: "Not authenticated"},
+			wantWarning: "",
+		},
+		"transient error": {
+			revokeErr:   errors.New("connection refused"),
+			wantWarning: "connection refused",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newMockTokenStore()
+			store.tokens[testBaseURL] = testAuthTok
+			store.source = auth.TokenSourceEnv
+
+			revokeCurrent := func(context.Context, string) error { return tt.revokeErr }
+
+			var out, errOut bytes.Buffer
+			err := runAuthRevoke(context.Background(), &out, &errOut, store,
+				func(context.Context, string) ([]api.Token, error) { return nil, nil },
+				func(context.Context, string, string) error { return nil },
+				revokeCurrent, testBaseURL, "", true)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.wantWarning == "" {
+				if errOut.Len() != 0 {
+					t.Fatalf("stderr = %q, want empty", errOut.String())
+				}
+			} else {
+				if !strings.Contains(errOut.String(), "server-side token revocation failed") {
+					t.Fatalf("stderr = %q, want warning prefix", errOut.String())
+				}
+				if !strings.Contains(errOut.String(), tt.wantWarning) {
+					t.Fatalf("stderr = %q, want underlying error %q", errOut.String(), tt.wantWarning)
+				}
+			}
+			if !strings.Contains(out.String(), auth.AuthTokenEnvVar) {
+				t.Fatalf("output = %q, want env-token guidance", out.String())
+			}
+			if store.deleted[testBaseURL] {
+				t.Fatal("env-token revoke should not delete lower-priority credentials")
+			}
+		})
+	}
+}
+
 func TestRunAuthRevoke_ByIDEnvSelfRevokeDoesNotDeleteLowerPriority(t *testing.T) {
 	t.Parallel()
 
