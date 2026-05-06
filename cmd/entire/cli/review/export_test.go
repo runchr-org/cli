@@ -1,0 +1,46 @@
+package review
+
+import (
+	"context"
+	"io"
+
+	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
+)
+
+// ExposedComposeSynthesisPrompt exposes composeSynthesisPrompt for
+// package-external tests (synthesis_prompt_test.go, synthesis_sink_test.go).
+// Only compiled during `go test`.
+var ExposedComposeSynthesisPrompt = composeSynthesisPrompt
+
+// SinkComposeInputs is the test-facing alias for multiAgentSinkInputs.
+// It lets external tests drive composeMultiAgentSinks with explicit isTTY
+// and canPrompt values without depending on real TTY detection.
+type SinkComposeInputs struct {
+	Out               io.Writer
+	IsTTY             bool
+	CanPrompt         bool
+	AgentNames        []string
+	CancelRun         context.CancelFunc
+	SynthesisProvider SynthesisProvider
+	PromptYN          func(ctx context.Context, question string, def bool) (bool, error)
+	PerRunPrompt      string
+}
+
+// ExposedComposeMultiAgentSinks exposes composeMultiAgentSinks for tests.
+func ExposedComposeMultiAgentSinks(in SinkComposeInputs) []reviewtypes.Sink {
+	return composeMultiAgentSinks(multiAgentSinkInputs{
+		out:               in.Out,
+		isTTY:             in.IsTTY,
+		canPrompt:         in.CanPrompt,
+		agentNames:        in.AgentNames,
+		cancelRun:         in.CancelRun,
+		synthesisProvider: in.SynthesisProvider,
+		promptYN:          in.PromptYN,
+		perRunPrompt:      in.PerRunPrompt,
+	})
+}
+
+// ExposedFindTUISink exposes findTUISink for tests.
+func ExposedFindTUISink(sinks []reviewtypes.Sink) (*TUISink, bool) {
+	return findTUISink(sinks)
+}
