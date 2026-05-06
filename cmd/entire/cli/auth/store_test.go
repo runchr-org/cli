@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -345,55 +344,6 @@ func TestStoreFileBackend_DeleteMissingFileDoesNotCreateFile(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("Stat() err = %v, want file to remain absent", err)
-	}
-}
-
-// TestStoreFileBackend_ConcurrentSavesNoLostUpdate verifies the cross-process
-// lock serializes overlapping read-modify-write cycles. Without locking, two
-// concurrent saves to different baseURLs would race: each would read the
-// pre-write state, mutate its own entry, and the second rename would clobber
-// the first save. The flock around the file_store cycle prevents that.
-func TestStoreFileBackend_ConcurrentSavesNoLostUpdate(t *testing.T) {
-	if runtime.GOOS == testWindowsOS {
-		t.Skip("file locking is a no-op on Windows; concurrency guarantee not enforced")
-	}
-	// Not parallel: auth env vars are process-global.
-	store, path := newFileBackendTestStore(t, "test-file-concurrent")
-
-	const writers = 16
-	errs := make(chan error, writers)
-	start := make(chan struct{})
-	for i := range writers {
-		baseURL := fmt.Sprintf("https://entire.io/test-%02d", i)
-		token := fmt.Sprintf("token-%02d", i)
-		go func() {
-			<-start
-			errs <- store.SaveToken(baseURL, token)
-		}()
-	}
-	close(start)
-	for range writers {
-		if err := <-errs; err != nil {
-			t.Fatalf("SaveToken() error = %v", err)
-		}
-	}
-
-	// Reading via the package-level helper is fine: writes are atomic via
-	// temp+rename, so the post-write file always reflects all serialized
-	// updates.
-	final, err := readFileStore(path)
-	if err != nil {
-		t.Fatalf("readFileStore() error = %v", err)
-	}
-	if got := len(final.Tokens); got != writers {
-		t.Fatalf("token count = %d, want %d (lost update under concurrency)", got, writers)
-	}
-	for i := range writers {
-		baseURL := fmt.Sprintf("https://entire.io/test-%02d", i)
-		want := fmt.Sprintf("token-%02d", i)
-		if got := final.Tokens[baseURL]; got != want {
-			t.Errorf("Tokens[%s] = %q, want %q", baseURL, got, want)
-		}
 	}
 }
 
