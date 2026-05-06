@@ -348,7 +348,7 @@ Personal overrides, gitignored by default:
 
 ### Authentication Token Storage
 
-By default, `entire login` stores the CLI API token in your operating system keyring. For CI, set `ENTIRE_AUTH_TOKEN` to a CLI API token. For headless machines that need persistent login, set `ENTIRE_SECRETS_PATH` to an absolute path before running `entire login`; the file is plaintext JSON written with `0600` permissions.
+By default, `entire login` stores the CLI API token in your operating system keyring. For CI, set `ENTIRE_AUTH_TOKEN` to a CLI API token. For headless machines that need persistent login, set `ENTIRE_SECRETS_PATH` to an absolute path before running `entire login`; the file is plaintext JSON written with `0600` permissions. Pass `--no-keyring` to `entire login` if you want the command to fail closed when `ENTIRE_SECRETS_PATH` is missing instead of silently falling back to the OS keyring.
 
 `ENTIRE_AUTH_TOKEN` takes precedence over tokens stored in `ENTIRE_SECRETS_PATH`, and the file store takes precedence over the OS keyring. `ENTIRE_AUTH_TOKEN` only applies when the API origin is the production default (`https://entire.io`); custom origins set via `ENTIRE_API_BASE_URL` must use the per-origin file or keyring stores so a stray override can't leak a prod bearer to a staging endpoint. `ENTIRE_CHECKPOINT_TOKEN` is separate and only applies to checkpoint Git fetch/push operations.
 

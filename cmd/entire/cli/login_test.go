@@ -74,6 +74,40 @@ func newSuccessfulLoginClient(token string) *mockClient {
 	}
 }
 
+func TestRequireNonKeyringStorageConfigured(t *testing.T) {
+	t.Run("flag unset is a no-op", func(t *testing.T) {
+		t.Setenv(auth.SecretsPathEnvVar, "")
+		if err := requireNonKeyringStorageConfigured(false); err != nil {
+			t.Fatalf("err = %v, want nil when --no-keyring is unset", err)
+		}
+	})
+
+	t.Run("flag set without ENTIRE_SECRETS_PATH errors before device auth", func(t *testing.T) {
+		t.Setenv(auth.SecretsPathEnvVar, "")
+		err := requireNonKeyringStorageConfigured(true)
+		if err == nil {
+			t.Fatal("expected error when --no-keyring is set with no SECRETS_PATH")
+		}
+		if !strings.Contains(err.Error(), auth.SecretsPathEnvVar) {
+			t.Fatalf("err = %v, want mention of %s", err, auth.SecretsPathEnvVar)
+		}
+	})
+
+	t.Run("flag set with ENTIRE_SECRETS_PATH passes preflight", func(t *testing.T) {
+		t.Setenv(auth.SecretsPathEnvVar, "/tmp/credentials.json")
+		if err := requireNonKeyringStorageConfigured(true); err != nil {
+			t.Fatalf("err = %v, want nil when SECRETS_PATH is set", err)
+		}
+	})
+
+	t.Run("flag set with whitespace-only ENTIRE_SECRETS_PATH errors", func(t *testing.T) {
+		t.Setenv(auth.SecretsPathEnvVar, "   ")
+		if err := requireNonKeyringStorageConfigured(true); err == nil {
+			t.Fatal("whitespace SECRETS_PATH must not satisfy --no-keyring")
+		}
+	})
+}
+
 func TestRunLogin_SaveFailureIncludesHeadlessHint(t *testing.T) {
 	client := newSuccessfulLoginClient("login-token")
 	store := &mockLoginTokenStore{

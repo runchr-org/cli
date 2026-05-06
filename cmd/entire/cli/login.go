@@ -40,6 +40,7 @@ type loginTokenStore interface {
 
 func newLoginCmd() *cobra.Command {
 	var insecureHTTPAuth bool
+	var noKeyring bool
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Log in to Entire",
@@ -47,11 +48,29 @@ func newLoginCmd() *cobra.Command {
 			if err := requireSecureBaseURL(insecureHTTPAuth); err != nil {
 				return err
 			}
+			if err := requireNonKeyringStorageConfigured(noKeyring); err != nil {
+				return err
+			}
 			return runLogin(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), auth.NewClient(nil), openBrowser)
 		},
 	}
+	cmd.Flags().BoolVar(&noKeyring, "no-keyring", false, "Refuse to save the token to the OS keyring; requires ENTIRE_SECRETS_PATH to be set")
 	addInsecureHTTPAuthFlag(cmd, &insecureHTTPAuth)
 	return cmd
+}
+
+// requireNonKeyringStorageConfigured fails closed before device auth when
+// --no-keyring is set without a non-keyring backend configured. The flag
+// exists for headless/CI environments where falling back to the OS keyring
+// silently is unsafe — the user has explicitly opted out of it.
+func requireNonKeyringStorageConfigured(noKeyring bool) error {
+	if !noKeyring {
+		return nil
+	}
+	if strings.TrimSpace(os.Getenv(auth.SecretsPathEnvVar)) == "" {
+		return fmt.Errorf("--no-keyring requires %s to be set to an absolute file path", auth.SecretsPathEnvVar)
+	}
+	return nil
 }
 
 func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient, openURL browserOpenFunc) error {
