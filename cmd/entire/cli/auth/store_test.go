@@ -87,6 +87,36 @@ func TestStoreGetTokenInfo_WhitespaceEnvTokenIgnored(t *testing.T) {
 	}
 }
 
+func TestStoreGetTokenInfo_EnvTokenScopedToDefaultBaseURL(t *testing.T) {
+	// Not parallel: go-keyring's mock provider uses an unprotected map.
+	t.Setenv(AuthTokenEnvVar, "env-token")
+
+	store := NewStoreWithService("test-env-scope")
+	if err := store.SaveToken("http://localhost:8787", "local-keyring-token"); err != nil {
+		t.Fatalf("SaveToken() error = %v", err)
+	}
+
+	// Custom base URL must NOT receive ENTIRE_AUTH_TOKEN — falls through to
+	// the per-origin keyring/file store so a prod bearer can't leak to a
+	// staging/dev override.
+	info, err := store.GetTokenInfo("http://localhost:8787")
+	if err != nil {
+		t.Fatalf("GetTokenInfo(custom) error = %v", err)
+	}
+	if info.Value != "local-keyring-token" || info.Source != TokenSourceKeyring {
+		t.Fatalf("GetTokenInfo(custom) = %#v, want local-keyring-token/keyring", info)
+	}
+
+	// Default base URL still gets ENTIRE_AUTH_TOKEN.
+	info, err = store.GetTokenInfo(api.DefaultBaseURL)
+	if err != nil {
+		t.Fatalf("GetTokenInfo(default) error = %v", err)
+	}
+	if info.Value != "env-token" || info.Source != TokenSourceEnv {
+		t.Fatalf("GetTokenInfo(default) = %#v, want env-token/env", info)
+	}
+}
+
 func TestStoreSaveToken_PreservesOtherBaseURLs(t *testing.T) {
 	// Not parallel: go-keyring's mock provider uses an unprotected map.
 	store := NewStoreWithService("test-preserve")

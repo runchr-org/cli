@@ -63,8 +63,14 @@ func (s *Store) GetToken(baseURL string) (string, error) {
 // GetTokenInfo retrieves a stored token and reports where it came from.
 // Returns an empty TokenInfo (and no error) if no token is stored.
 func (s *Store) GetTokenInfo(baseURL string) (TokenInfo, error) {
-	if token := envAuthToken(); token != "" {
-		return TokenInfo{Value: token, Source: TokenSourceEnv}, nil
+	// ENTIRE_AUTH_TOKEN is scoped to the production API origin so a stray
+	// ENTIRE_API_BASE_URL override can't leak a prod bearer to a staging
+	// or local endpoint. Custom origins must use the per-origin file or
+	// keyring stores, which are already keyed by baseURL.
+	if baseURL == api.DefaultBaseURL {
+		if token := envAuthToken(); token != "" {
+			return TokenInfo{Value: token, Source: TokenSourceEnv}, nil
+		}
 	}
 
 	if path, ok, err := configuredSecretsPath(); err != nil {
