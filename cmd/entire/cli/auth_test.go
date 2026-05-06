@@ -481,67 +481,20 @@ func TestRunAuthRevoke_CurrentDelegatesToLogout(t *testing.T) {
 	}
 }
 
-func TestRunAuthRevoke_CurrentEnvTokenRevokesButDoesNotDelete(t *testing.T) {
-	t.Parallel()
-
-	store := newMockTokenStore()
-	store.tokens[testBaseURL] = testAuthTok
-	store.source = auth.TokenSourceEnv
-
-	revokeByIDCalled := false
-	revokeByID := func(context.Context, string, string) error {
-		revokeByIDCalled = true
-		return nil
-	}
-
-	revokedToken := ""
-	revokeCurrent := func(_ context.Context, token string) error {
-		revokedToken = token
-		return nil
-	}
-
-	list := func(context.Context, string) ([]api.Token, error) { return nil, nil }
-
-	var out, errOut bytes.Buffer
-	err := runAuthRevoke(context.Background(), &out, &errOut, store,
-		list, revokeByID, revokeCurrent, testBaseURL, "", true)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if revokeByIDCalled {
-		t.Fatal("revokeByID should not be called when --current is set")
-	}
-	if revokedToken != testAuthTok {
-		t.Errorf("revokeCurrent called with token %q, want %q", revokedToken, testAuthTok)
-	}
-	if store.deleted[testBaseURL] {
-		t.Fatal("env-token revoke should not delete lower-priority credentials")
-	}
-	if !strings.Contains(out.String(), auth.AuthTokenEnvVar) {
-		t.Fatalf("output = %q, want env-token guidance", out.String())
-	}
-}
-
-// TestRunAuthRevoke_CurrentEnvTokenServerErrors locks in idempotent re-runs:
-// 401 must be silent (already revoked), other errors must warn-and-continue,
-// and both cases must still print the unset-guidance so a CI re-run isn't
-// blocked by a transient failure.
-func TestRunAuthRevoke_CurrentEnvTokenServerErrors(t *testing.T) {
+// TestRunAuthRevoke_CurrentEnvToken covers the env-source --current path:
+// success, idempotent 401, and warn-and-continue on transient errors. All
+// three must dispatch to revokeCurrent (not revokeByID), print unset-guidance,
+// and leave any lower-priority stored credentials untouched.
+func TestRunAuthRevoke_CurrentEnvToken(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
 		revokeErr   error
 		wantWarning string // empty = stderr must be empty
 	}{
-		"already invalid": {
-			revokeErr:   &api.HTTPError{StatusCode: http.StatusUnauthorized, Message: "Not authenticated"},
-			wantWarning: "",
-		},
-		"transient error": {
-			revokeErr:   errors.New("connection refused"),
-			wantWarning: "connection refused",
-		},
+		"success":         {nil, ""},
+		"already invalid": {&api.HTTPError{StatusCode: http.StatusUnauthorized, Message: "Not authenticated"}, ""},
+		"transient error": {errors.New("connection refused"), "connection refused"},
 	}
 
 	for name, tt := range tests {
@@ -552,17 +505,32 @@ func TestRunAuthRevoke_CurrentEnvTokenServerErrors(t *testing.T) {
 			store.tokens[testBaseURL] = testAuthTok
 			store.source = auth.TokenSourceEnv
 
-			revokeCurrent := func(context.Context, string) error { return tt.revokeErr }
+			revokedToken := ""
+			revokeCurrent := func(_ context.Context, token string) error {
+				revokedToken = token
+				return tt.revokeErr
+			}
+
+			revokeByIDCalled := false
+			revokeByID := func(context.Context, string, string) error {
+				revokeByIDCalled = true
+				return nil
+			}
 
 			var out, errOut bytes.Buffer
 			err := runAuthRevoke(context.Background(), &out, &errOut, store,
 				func(context.Context, string) ([]api.Token, error) { return nil, nil },
-				func(context.Context, string, string) error { return nil },
-				revokeCurrent, testBaseURL, "", true)
+				revokeByID, revokeCurrent, testBaseURL, "", true)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
+			if revokeByIDCalled {
+				t.Fatal("revokeByID should not be called when --current is set")
+			}
+			if revokedToken != testAuthTok {
+				t.Errorf("revokeCurrent token = %q, want %q", revokedToken, testAuthTok)
+			}
 			if tt.wantWarning == "" {
 				if errOut.Len() != 0 {
 					t.Fatalf("stderr = %q, want empty", errOut.String())
