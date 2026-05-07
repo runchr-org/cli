@@ -23,6 +23,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/transcript/compact"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
+	"github.com/entireio/cli/perf"
 	"github.com/entireio/cli/redact"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -141,8 +142,15 @@ func runMigrateCheckpointsV2(ctx context.Context, cmd *cobra.Command, force bool
 	out := cmd.OutOrStdout()
 	progressOut := cmd.ErrOrStderr()
 
+	// Root perf span emits a single `perf` log entry on End() with the full
+	// timing tree. Inspect via `entire doctor trace --hook migrate_checkpoints`
+	// (requires log_level: DEBUG in .entire/settings.json or ENTIRE_LOG_LEVEL=DEBUG).
+	ctx, rootSpan := perf.Start(ctx, "migrate_checkpoints")
+	defer rootSpan.End()
+
 	result, freshlyPackedRefs, err := migrateCheckpointsV2(ctx, repo, v1Store, v2Store, progressOut, force)
 	if err != nil {
+		rootSpan.RecordError(err)
 		return err
 	}
 
@@ -154,8 +162,13 @@ func runMigrateCheckpointsV2(ctx context.Context, cmd *cobra.Command, force bool
 	var repairResult *strategy.RepairV2GenerationMetadataResult
 	if len(freshlyPackedRefs) > 0 {
 		stopRepair := startSpinner(cmd.ErrOrStderr(), "Repairing archived generation metadata")
+		_, repairSpan := perf.Start(ctx, "repair_generation_metadata")
 		var repairErr error
 		repairResult, repairErr = strategy.RepairV2GenerationMetadata(ctx, freshlyPackedRefs)
+		if repairErr != nil {
+			repairSpan.RecordError(repairErr)
+		}
+		repairSpan.End()
 		if repairErr != nil {
 			stopRepair(false)
 			return fmt.Errorf("failed to repair archived v2 generation metadata: %w", repairErr)
@@ -248,7 +261,12 @@ type migratedFullSession struct {
 // migrateCheckpointsV2 returns the /full/<n> refs migration wrote so callers
 // can pass them as exclusions to the generation-metadata repair pass.
 func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, progressOut io.Writer, force bool) (*migrateResult, []plumbing.ReferenceName, error) {
+	_, listSpan := perf.Start(ctx, "list_v1_checkpoints")
 	v1List, err := v1Store.ListCommitted(ctx)
+	if err != nil {
+		listSpan.RecordError(err)
+	}
+	listSpan.End()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list v1 checkpoints: %w", err)
 	}
@@ -268,7 +286,12 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 
 	// One up-front tree walk to make per-session "are /full/* artifacts
 	// present?" checks O(1) inside the migration loop.
+	_, indexSpan := perf.Start(ctx, "build_full_artifacts_index")
 	fullArtifactsIndex, err := v2Store.BuildFullSessionArtifactsIndex()
+	if err != nil {
+		indexSpan.RecordError(err)
+	}
+	indexSpan.End()
 	if err != nil {
 		return nil, nil, fmt.Errorf("build v2 /full/* presence index: %w", err)
 	}
@@ -290,6 +313,9 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 		return nil
 	}
 
+	// Span around the migration loop. No per-iteration spans: at 4k+ checkpoints
+	// the resulting attr count would blow past trace.go's 1MB scanner limit.
+	_, processSpan := perf.Start(ctx, "process_checkpoints")
 	for _, info := range v1List {
 		fullCheckpoint, mainOpts, outcome, migrateErr := migrateOneCheckpoint(ctx, repo, v1Store, v2Store, info, force, fullArtifactsIndex)
 		result.missingSessions += outcome.missingSessions
@@ -325,6 +351,8 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 				// Flush /main entries before archiving /full so the index ref
 				// can never lag behind the data ref on a mid-batch crash.
 				if err := flushMain(); err != nil {
+					processSpan.RecordError(err)
+					processSpan.End()
 					return result, writtenRefs, fmt.Errorf("failed to write batched v2 /main entries: %w", err)
 				}
 				if nextGeneration == 0 {
@@ -332,12 +360,16 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 					// force migration may prune existing archived refs earlier in the loop.
 					next, nextErr := v2Store.NextGenerationNumber()
 					if nextErr != nil {
+						processSpan.RecordError(nextErr)
+						processSpan.End()
 						return result, writtenRefs, fmt.Errorf("list archived v2 generations: %w", nextErr)
 					}
 					nextGeneration = next
 				}
 				refName := checkpoint.ArchivedGenerationRefName(nextGeneration)
 				if packErr := writeMigratedFullGeneration(ctx, repo, refName, pendingFull); packErr != nil {
+					processSpan.RecordError(packErr)
+					processSpan.End()
 					return result, writtenRefs, fmt.Errorf("failed to pack migrated raw transcripts: %w", packErr)
 				}
 				writtenRefs = append(writtenRefs, refName)
@@ -349,13 +381,18 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 		progress.Increment()
 	}
 
+	processSpan.End()
+
 	progress.Finish()
 	if err := flushMain(); err != nil {
 		return result, writtenRefs, fmt.Errorf("failed to write batched v2 /main entries: %w", err)
 	}
 	stopFinalize := startSpinner(progressOut, "Packing migrated raw transcripts")
+	_, partialSpan := perf.Start(ctx, "pack_partial_generation")
 	if len(pendingFull) > 0 {
 		if err := writeMigratedFinalFullCurrent(ctx, repo, v2Store, pendingFull); err != nil {
+			partialSpan.RecordError(err)
+			partialSpan.End()
 			stopFinalize(false)
 			return result, writtenRefs, fmt.Errorf("failed to pack migrated raw transcripts: %w", err)
 		}
@@ -364,6 +401,8 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 		// mirrors other v2 ref-merge cases where a generation may exceed the soft
 		// threshold by a small amount.
 		if refName, rotated, err := v2Store.RotateCurrentGenerationIfNeeded(ctx, batchSize); err != nil {
+			partialSpan.RecordError(err)
+			partialSpan.End()
 			stopFinalize(false)
 			return result, writtenRefs, fmt.Errorf("failed to rotate migrated full/current generation: %w", err)
 		} else if rotated {
@@ -371,10 +410,13 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 		}
 	} else if len(writtenRefs) > 0 && !fullCurrentExistsBefore {
 		if err := ensureEmptyV2FullCurrent(ctx, repo); err != nil {
+			partialSpan.RecordError(err)
+			partialSpan.End()
 			stopFinalize(false)
 			return result, writtenRefs, fmt.Errorf("failed to pack migrated raw transcripts: %w", err)
 		}
 	}
+	partialSpan.End()
 	stopFinalize(true)
 
 	return result, writtenRefs, nil
