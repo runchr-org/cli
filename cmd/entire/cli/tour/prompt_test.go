@@ -44,6 +44,18 @@ func TestEscapeForTags_NeutralizesClosingTags(t *testing.T) {
 		// Right-to-left mark inside the tag — \p{Cf} format chars are
 		// stripped before regex match.
 		{"rtl mark in tag", "</p‏ost>", "<\\/post>"},
+		// Pass-3 regression: NBSP between letters of the tag name.
+		// Pass-2's strip only covered \p{Cf}, so this bypassed.
+		// The \p{Z} branch in stripInvisibles now catches it.
+		{"NBSP inside tag name", "</po st>", "<\\/post>"},
+		{"NARROW NBSP inside tag name", "</po st>", "<\\/post>"},
+		{"IDEOGRAPHIC SPACE inside tag name", "</po　st>", "<\\/post>"},
+		// Combined visible+invisible attack.
+		{"NBSP and ZWSP combined", "</p​o st>", "<\\/post>"},
+		// Empty payload should pass through.
+		{"empty payload", "", ""},
+		// Idempotence: escaping twice equals escaping once.
+		{"idempotent on already-escaped", "<\\/post>", "<\\/post>"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

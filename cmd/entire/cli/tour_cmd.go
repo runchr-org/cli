@@ -26,7 +26,7 @@ const tourNotGitRepoMessage = "Entire works inside a git repository. Run 'git in
 
 const tourNoTextGeneratorMessage = `No TextGenerator-capable agent on PATH.
 
-'entire labs tour' renders the tour by piping the discovered command surface
+'entire tour' renders the tour by piping the discovered command surface
 through your locally-installed agent. Install one of: claude, codex, gemini,
 cursor, copilot, or an external entire-agent-* plugin that declares
 text_generator support.`

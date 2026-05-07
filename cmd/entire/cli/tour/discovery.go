@@ -1,5 +1,7 @@
-// Package tour powers `entire labs tour` — a state-aware tour of the
-// installed CLI rendered by the user's locally-installed agent.
+// Package tour powers `entire tour` — a state-aware tour of the
+// installed CLI, served from a pre-rendered embedded markdown for the
+// default path and from a TextGenerator-capable agent for `--latest`
+// (blog feed digest) and `--regenerate` (release-time refresh).
 package tour
 
 import (

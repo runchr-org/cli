@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 )
@@ -242,28 +243,65 @@ func marshalIndentNoHTMLEscape(v any) ([]byte, error) {
 // doesn't trip tag-boundary heuristics on the model's side.
 var closingTagPattern = regexp.MustCompile(`(?i)<[\s\p{Z}\p{Cf}]*/[\s\p{Z}\p{Cf}]*(state|commands|labs|post)[\s\p{Z}\p{Cf}]*>`)
 
-// invisibleCharPattern matches Unicode format characters (zero-width
-// spaces, RTL marks, byte-order marks, etc.) plus C0/C1 control bytes
-// other than common whitespace. These never appear in legitimate
-// command help or blog-post text and an attacker can use them either
-// to split a tag name across the regex's literal alternation or to
-// inject terminal escapes when the agent's output is rendered.
-var invisibleCharPattern = regexp.MustCompile(`[\p{Cf}\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]`)
-
-// escapeForTags neutralizes the literal closing tags in payload data so
-// untrusted help text can't break out of its tag wrapper. We keep
-// SetEscapeHTML(false) above for readability of "<id|sha>" placeholders,
-// so we still need to neutralize closing tags here.
+// stripInvisibles removes characters that should never appear inside a
+// payload but that an attacker might use to bypass closingTagPattern's
+// literal tag-name alternation. Two threats:
 //
-// Two-stage: first strip invisible characters that could be used to
-// split tag names mid-match (e.g. `</po​st>`), then run the
-// case-insensitive whitespace-tolerant tag regex over the cleaned
-// bytes. Both stages must run — the strip alone won't catch
-// `</post >` (legitimate-looking visible whitespace) and the
-// regex alone won't catch zero-width insertions inside the name.
+//   - Zero-width insertions (e.g. ZERO WIDTH SPACE U+200B) between
+//     letters of the tag name. The literal alternation can't tolerate
+//     them. Caught by the unicode.Cf check.
+//   - Visible Unicode whitespace (e.g. NO-BREAK SPACE U+00A0) between
+//     letters of the tag name. Pass-2 only stripped Cf, so NBSP-mid-
+//     name bypassed the escape — `</po<NBSP>st>` survived as-is.
+//     Caught by the unicode.Z check below.
+//
+// We strip every \p{Cf} (format) and every \p{Z} (separator) char
+// EXCEPT regular ASCII space, tab, newline, and CR. ASCII space is
+// load-bearing for legitimate prose; NBSP, NARROW NBSP, IDEOGRAPHIC
+// SPACE, and friends almost never appear in cobra help or blog
+// content and dropping them is safer than letting them through.
+//
+// Also strips C0 controls except \t \n \r, plus DEL (U+007F) and
+// C1 controls (U+0080-U+009F) — none belong in legitimate command
+// help or feed text and they have terminal-injection implications
+// when rendered.
+//
+// strings.Map (vs regex) is faster on the legitimate-content common
+// case where most runes are kept unchanged: a single pass with no
+// transient buffer when nothing matches.
+func stripInvisibles(payload []byte) []byte {
+	return []byte(strings.Map(func(r rune) rune {
+		switch {
+		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
+			return r
+		case unicode.Is(unicode.Cf, r):
+			return -1
+		case unicode.Is(unicode.Z, r):
+			return -1
+		case r < 0x20:
+			return -1
+		case r == 0x7f:
+			return -1
+		case r >= 0x80 && r <= 0x9f:
+			return -1
+		}
+		return r
+	}, string(payload)))
+}
+
+// escapeForTags neutralizes literal closing tags in payload data so
+// untrusted help text can't break out of its tag wrapper. We keep
+// SetEscapeHTML(false) for readability of "<id|sha>" placeholders, so
+// we still need to neutralize closing tags here.
+//
+// stripInvisibles runs first to canonicalize the bytes; then
+// closingTagPattern matches and replaces the now-canonical-form tags.
+// The regex's `[\s\p{Z}\p{Cf}]*` whitespace classes are belt-and-
+// suspenders — strip should make them unnecessary, but they keep the
+// regex correct on its own if the strip step is ever moved or
+// skipped.
 func escapeForTags(payload []byte) []byte {
-	cleaned := invisibleCharPattern.ReplaceAll(payload, nil)
-	return closingTagPattern.ReplaceAll(cleaned, []byte("<\\/$1>"))
+	return closingTagPattern.ReplaceAll(stripInvisibles(payload), []byte("<\\/$1>"))
 }
 
 // latestPromptSystem is the rendering contract for `entire tour --latest`.
