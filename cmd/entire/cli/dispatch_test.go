@@ -23,6 +23,8 @@ func TestParseDispatchFlags_ServerReposAreAllowed(t *testing.T) {
 		[]string{"entireio/cli", "entireio/entire.io"},
 		"",
 		false,
+		"",
+		false,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -53,6 +55,8 @@ func TestParseDispatchFlags_NormalizesRepoScopeValues(t *testing.T) {
 		[]string{" entireio/cli ", "", "entireio/cli", " otherco/service ", "   "},
 		"",
 		false,
+		"",
+		false,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +81,8 @@ func TestParseDispatchFlags_LocalRejectsRepos(t *testing.T) {
 		[]string{"entireio/cli"},
 		"",
 		false,
+		"",
+		false,
 	)
 	if err == nil {
 		t.Fatal("expected error")
@@ -96,6 +102,8 @@ func TestParseDispatchFlags_CloudRejectsAllBranches(t *testing.T) {
 		"",
 		true,
 		[]string{"entireio/cli"},
+		"",
+		false,
 		"",
 		false,
 	)
@@ -120,6 +128,8 @@ func TestParseDispatchFlags_CloudCapsReposAtFive(t *testing.T) {
 		repos,
 		"",
 		false,
+		"",
+		false,
 	)
 	if err == nil {
 		t.Fatal("expected error for too many repos")
@@ -139,6 +149,8 @@ func TestParseDispatchFlags_LocalAllBranchesFlag(t *testing.T) {
 		"",
 		true,
 		nil,
+		"",
+		false,
 		"",
 		false,
 	)
@@ -165,6 +177,8 @@ func TestParseDispatchFlags_InsecureHTTPAuthFlag(t *testing.T) {
 		[]string{"entireio/cli"},
 		"",
 		true,
+		"",
+		false,
 	)
 	if err != nil {
 		t.Fatal(err)

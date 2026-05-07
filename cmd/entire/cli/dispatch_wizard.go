@@ -50,6 +50,10 @@ const (
 	dispatchWizardBranchAll     = "all"
 
 	dispatchWizardVoiceCustom = "custom"
+
+	dispatchWizardScopeEveryone = "everyone"
+	dispatchWizardScopeMe       = "me"
+	dispatchWizardScopeAuthor   = "author"
 )
 
 type dispatchWizardState struct {
@@ -61,6 +65,8 @@ type dispatchWizardState struct {
 	selectedRepos    []string
 	voicePreset      string
 	voiceCustom      string
+	scopeChoice      string
+	authorInput      string
 	confirmRun       bool
 }
 
@@ -70,8 +76,20 @@ func newDispatchWizardState() dispatchWizardState {
 		timeWindowPreset: "7d",
 		localBranchMode:  dispatchWizardBranchCurrent,
 		voicePreset:      "neutral",
+		scopeChoice:      dispatchWizardScopeEveryone,
 		confirmRun:       true,
 	}
+}
+
+func (s dispatchWizardState) authorEmail() string {
+	if s.scopeChoice == dispatchWizardScopeAuthor {
+		return strings.TrimSpace(s.authorInput)
+	}
+	return ""
+}
+
+func (s dispatchWizardState) showAuthorInput() bool {
+	return s.scopeChoice == dispatchWizardScopeAuthor
 }
 
 func (s dispatchWizardState) isLocal() bool {
@@ -126,6 +144,8 @@ func (s dispatchWizardState) resolve() (dispatchpkg.Options, error) {
 		s.resolveCloudRepos(),
 		s.voiceValue(),
 		false,
+		s.authorEmail(),
+		s.scopeChoice == dispatchWizardScopeMe,
 		func() (string, error) {
 			return s.currentBranch, nil
 		},
@@ -163,10 +183,19 @@ func buildDispatchWizardSummary(opts dispatchpkg.Options, scope string) string {
 		mode = "local"
 	}
 
+	author := "everyone"
+	switch {
+	case opts.Me:
+		author = "just me"
+	case opts.Author != "":
+		author = opts.Author
+	}
+
 	return strings.Join([]string{
 		"Mode: " + mode,
 		"Scope: " + scope,
 		"Branches: " + branches,
+		"Author: " + author,
 	}, "\n")
 }
 
@@ -196,6 +225,8 @@ func buildDispatchCommand(opts dispatchpkg.Options) string {
 		mapBoolToFlag(opts.AllBranches, "--all-branches"),
 		renderStringFlag("--repos", strings.Join(opts.RepoPaths, ",")),
 		renderStringFlag("--voice", strings.TrimSpace(opts.Voice)),
+		mapBoolToFlag(opts.Me, "--me"),
+		renderStringFlag("--author", strings.TrimSpace(opts.Author)),
 	}), " ")
 }
 
@@ -299,6 +330,29 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 		).Title("Branch mode").Description("Choose how local dispatch should interpret branch scope.").
 			WithHideFunc(func() bool {
 				return !state.showLocalBranchMode()
+			}),
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Options(
+					huh.NewOption("Everyone", dispatchWizardScopeEveryone),
+					huh.NewOption("Just me", dispatchWizardScopeMe),
+					huh.NewOption("Specific person...", dispatchWizardScopeAuthor),
+				).
+				Value(&state.scopeChoice),
+		).Title("Author scope").Description("Filter checkpoints by author."),
+		huh.NewGroup(
+			huh.NewInput().
+				Placeholder("teammate@example.com").
+				Value(&state.authorInput).
+				Validate(func(value string) error {
+					if state.showAuthorInput() && strings.TrimSpace(value) == "" {
+						return errors.New("enter an author email")
+					}
+					return nil
+				}),
+		).Title("Author email").Description("Filter to checkpoints by this email.").
+			WithHideFunc(func() bool {
+				return !state.showAuthorInput()
 			}),
 		huh.NewGroup(
 			huh.NewSelect[string]().

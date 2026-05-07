@@ -16,6 +16,8 @@ func TestResolveOptions_NormalizesScopeValues(t *testing.T) {
 		[]string{" entireio/cli ", "", "entireio/cli"},
 		"",
 		false,
+		"",
+		false,
 		func() (string, error) { return testDefaultBranchName, nil },
 	)
 	if err != nil {
@@ -40,6 +42,8 @@ func TestResolveOptions_CloudRejectsAllBranches(t *testing.T) {
 		[]string{"entireio/cli"},
 		"",
 		false,
+		"",
+		false,
 		func() (string, error) { return testDefaultBranchName, nil },
 	)
 	if err == nil || !strings.Contains(err.Error(), "--all-branches only applies to --local") {
@@ -59,6 +63,8 @@ func TestResolveOptions_CloudCapsReposAtFive(t *testing.T) {
 		repos,
 		"",
 		false,
+		"",
+		false,
 		func() (string, error) { return testDefaultBranchName, nil },
 	)
 	if err == nil || !strings.Contains(err.Error(), "supports at most 5") {
@@ -75,6 +81,8 @@ func TestResolveOptions_LocalSetsImplicitCurrentBranch(t *testing.T) {
 		"",
 		false,
 		nil,
+		"",
+		false,
 		"",
 		false,
 		func() (string, error) { return "my-feature", nil },
@@ -101,6 +109,8 @@ func TestResolveOptions_ForwardsInsecureHTTPAuth(t *testing.T) {
 		[]string{"entireio/cli"},
 		"",
 		true,
+		"",
+		false,
 		func() (string, error) { return testDefaultBranchName, nil },
 	)
 	if err != nil {
@@ -122,6 +132,8 @@ func TestResolveOptions_LocalAllBranchesSkipsImplicit(t *testing.T) {
 		nil,
 		"",
 		false,
+		"",
+		false,
 		func() (string, error) { return "", nil },
 	)
 	if err != nil {
@@ -138,6 +150,104 @@ func TestResolveOptions_LocalAllBranchesSkipsImplicit(t *testing.T) {
 	}
 }
 
+func TestResolveOptions_PropagatesAuthor(t *testing.T) {
+	t.Parallel()
+
+	opts, err := ResolveOptions(
+		false,
+		"7d",
+		"",
+		false,
+		[]string{"entireio/cli"},
+		"",
+		false,
+		"  Teammate@Example.com  ",
+		false,
+		func() (string, error) { return testDefaultBranchName, nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Author != "Teammate@Example.com" {
+		t.Fatalf("expected trimmed Author, got %q", opts.Author)
+	}
+	if opts.Me {
+		t.Fatal("did not expect Me=true when only --author was set")
+	}
+}
+
+func TestResolveOptions_PropagatesMe(t *testing.T) {
+	t.Parallel()
+
+	opts, err := ResolveOptions(
+		false,
+		"7d",
+		"",
+		false,
+		[]string{"entireio/cli"},
+		"",
+		false,
+		"",
+		true,
+		func() (string, error) { return testDefaultBranchName, nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.Me {
+		t.Fatal("expected Me=true to propagate")
+	}
+	if opts.Author != "" {
+		t.Fatalf("expected empty Author when --me is set, got %q", opts.Author)
+	}
+}
+
+func TestResolveOptions_RejectsAuthorAndMeTogether(t *testing.T) {
+	t.Parallel()
+
+	_, err := ResolveOptions(
+		false,
+		"7d",
+		"",
+		false,
+		[]string{"entireio/cli"},
+		"",
+		false,
+		"someone@example.com",
+		true,
+		func() (string, error) { return testDefaultBranchName, nil },
+	)
+	if err == nil || !strings.Contains(err.Error(), "--author and --me are mutually exclusive") {
+		t.Fatalf("expected mutual-exclusion error, got %v", err)
+	}
+}
+
+func TestResolveOptions_WhitespaceAuthorWithMeIsAllowed(t *testing.T) {
+	t.Parallel()
+
+	opts, err := ResolveOptions(
+		false,
+		"7d",
+		"",
+		false,
+		[]string{"entireio/cli"},
+		"",
+		false,
+		"   ",
+		true,
+		func() (string, error) { return testDefaultBranchName, nil },
+	)
+	if err != nil {
+		t.Fatalf("whitespace --author should normalize to empty and not collide with --me, got %v", err)
+	}
+	if !opts.Me {
+		t.Fatal("expected Me=true to propagate")
+	}
+	if opts.Author != "" {
+		t.Fatalf("expected empty Author after trimming whitespace, got %q", opts.Author)
+	}
+}
+
 func TestResolveOptions_CloudRejectsInvalidRepoSlug(t *testing.T) {
 	t.Parallel()
 
@@ -147,6 +257,8 @@ func TestResolveOptions_CloudRejectsInvalidRepoSlug(t *testing.T) {
 		"",
 		false,
 		[]string{"../../etc/passwd"},
+		"",
+		false,
 		"",
 		false,
 		func() (string, error) { return testDefaultBranchName, nil },

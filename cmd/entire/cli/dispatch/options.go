@@ -17,6 +17,8 @@ func ResolveOptions(
 	flagRepos []string,
 	flagVoice string,
 	flagInsecureHTTPAuth bool,
+	flagAuthor string,
+	flagMe bool,
 	currentBranch func() (string, error),
 ) (Options, error) {
 	flagRepos = normalizeScopeValues(flagRepos)
@@ -34,6 +36,11 @@ func ResolveOptions(
 	}
 	if !flagLocal && len(flagRepos) > CloudRepoLimit {
 		return Options{}, fmt.Errorf("--repos supports at most %d repos per dispatch", CloudRepoLimit)
+	}
+
+	flagAuthor = strings.TrimSpace(flagAuthor)
+	if flagAuthor != "" && flagMe {
+		return Options{}, errors.New("--author and --me are mutually exclusive")
 	}
 
 	mode := ModeServer
@@ -62,6 +69,8 @@ func ResolveOptions(
 		ImplicitCurrentBranch: implicitCurrentBranch,
 		Voice:                 flagVoice,
 		InsecureHTTPAuth:      flagInsecureHTTPAuth,
+		Author:                flagAuthor,
+		Me:                    flagMe,
 	}, nil
 }
 

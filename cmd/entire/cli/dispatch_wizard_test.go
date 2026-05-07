@@ -286,6 +286,93 @@ func TestBuildDispatchCommand_AllBranches(t *testing.T) {
 	}
 }
 
+func TestDispatchWizardState_ResolveScopeMe(t *testing.T) {
+	t.Parallel()
+
+	state := newDispatchWizardState()
+	state.modeChoice = dispatchWizardModeServer
+	state.currentBranch = testDispatchPreviewBranch
+	state.selectedRepos = []string{"entireio/cli"}
+	state.scopeChoice = dispatchWizardScopeMe
+
+	opts, err := state.resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.Me {
+		t.Fatal("expected scope=me to set opts.Me=true")
+	}
+	if opts.Author != "" {
+		t.Fatalf("did not expect Author to be set when scope=me, got %q", opts.Author)
+	}
+}
+
+func TestDispatchWizardState_ResolveScopeAuthor(t *testing.T) {
+	t.Parallel()
+
+	state := newDispatchWizardState()
+	state.modeChoice = dispatchWizardModeServer
+	state.currentBranch = testDispatchPreviewBranch
+	state.selectedRepos = []string{"entireio/cli"}
+	state.scopeChoice = dispatchWizardScopeAuthor
+	state.authorInput = "  teammate@example.com  "
+
+	opts, err := state.resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Me {
+		t.Fatal("did not expect Me=true when scope=author")
+	}
+	if opts.Author != "teammate@example.com" {
+		t.Fatalf("expected trimmed author, got %q", opts.Author)
+	}
+}
+
+func TestDispatchWizardState_ResolveScopeEveryoneIsDefault(t *testing.T) {
+	t.Parallel()
+
+	state := newDispatchWizardState()
+	state.modeChoice = dispatchWizardModeServer
+	state.currentBranch = testDispatchPreviewBranch
+	state.selectedRepos = []string{"entireio/cli"}
+
+	opts, err := state.resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Me {
+		t.Fatal("did not expect Me=true for default scope")
+	}
+	if opts.Author != "" {
+		t.Fatalf("did not expect Author set for default scope, got %q", opts.Author)
+	}
+}
+
+func TestBuildDispatchCommand_RendersAuthorScopeFlags(t *testing.T) {
+	t.Parallel()
+
+	command := buildDispatchCommand(dispatchpkg.Options{
+		Mode:      dispatchpkg.ModeServer,
+		Since:     "7d",
+		RepoPaths: []string{"entireio/cli"},
+		Me:        true,
+	})
+	if !strings.Contains(command, "--me") {
+		t.Fatalf("expected --me flag in rendered command, got %q", command)
+	}
+
+	command = buildDispatchCommand(dispatchpkg.Options{
+		Mode:      dispatchpkg.ModeServer,
+		Since:     "7d",
+		RepoPaths: []string{"entireio/cli"},
+		Author:    "teammate@example.com",
+	})
+	if !strings.Contains(command, "--author teammate@example.com") {
+		t.Fatalf("expected --author flag in rendered command, got %q", command)
+	}
+}
+
 func TestBuildDispatchRepoOptions_DedupesAndPreservesOrder(t *testing.T) {
 	t.Parallel()
 

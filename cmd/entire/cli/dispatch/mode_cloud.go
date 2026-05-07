@@ -76,6 +76,8 @@ func runServer(ctx context.Context, opts Options) (*Dispatch, error) {
 		Until:    normalizedUntil.Format(time.RFC3339),
 		Generate: true,
 		Voice:    resolvedDispatchVoicePreference(opts.Voice),
+		Author:   opts.Author,
+		Me:       opts.Me,
 	}
 	response, err := cloud.CreateDispatch(ctx, reqBody)
 	if err != nil {

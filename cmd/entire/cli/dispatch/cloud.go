@@ -61,6 +61,10 @@ type CreateDispatchRequest struct {
 	Until    string   `json:"until"`
 	Generate bool     `json:"generate"`
 	Voice    string   `json:"voice,omitempty"`
+	// Author filters checkpoints to a specific author email.
+	Author string `json:"author,omitempty"`
+	// Me asks the server to filter to the bearer-token user's checkpoints.
+	Me bool `json:"me,omitempty"`
 }
 
 type CreateDispatchResponse struct {

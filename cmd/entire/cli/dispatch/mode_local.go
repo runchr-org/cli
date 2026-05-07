@@ -50,6 +50,11 @@ func runLocal(ctx context.Context, opts Options) (*Dispatch, error) {
 		return nil, err
 	}
 
+	authorFilter, err := resolveLocalAuthorFilter(ctx, opts, repoRoots)
+	if err != nil {
+		return nil, err
+	}
+
 	allCandidates := make([]candidate, 0)
 	var candidatesMu sync.Mutex
 	group, groupCtx := errgroup.WithContext(ctx)
@@ -59,6 +64,12 @@ func runLocal(ctx context.Context, opts Options) (*Dispatch, error) {
 			if err != nil {
 				return err
 			}
+			if authorFilter != "" {
+				candidates, err = filterCandidatesByAuthor(groupCtx, repoRoot, candidates, authorFilter)
+				if err != nil {
+					return err
+				}
+			}
 			candidatesMu.Lock()
 			allCandidates = append(allCandidates, candidates...)
 			candidatesMu.Unlock()
@@ -67,6 +78,10 @@ func runLocal(ctx context.Context, opts Options) (*Dispatch, error) {
 	}
 	if err := group.Wait(); err != nil {
 		return nil, fmt.Errorf("enumerate repo candidates: %w", err)
+	}
+
+	if authorFilter != "" && len(allCandidates) == 0 {
+		return nil, fmt.Errorf("no checkpoints in window for author %q", authorFilter)
 	}
 
 	fallback := applyFallbackChain(allCandidates)
@@ -349,6 +364,116 @@ func localBranchNames(repo *git.Repository) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// resolveLocalAuthorFilter computes the lowercased email used to filter
+// candidates in local mode. Returns "" when no filter is requested. --me
+// resolves to `git config user.email` from the first repo (cross-repo email
+// mismatches are rare; pass --author <email> to override).
+func resolveLocalAuthorFilter(ctx context.Context, opts Options, repoRoots []string) (string, error) {
+	if opts.Author != "" {
+		return strings.ToLower(opts.Author), nil
+	}
+	if !opts.Me {
+		return "", nil
+	}
+	if len(repoRoots) == 0 {
+		return "", errors.New("--me requires a git repository")
+	}
+	email, err := readGitUserEmail(ctx, repoRoots[0])
+	if err != nil {
+		return "", err
+	}
+	if email == "" {
+		return "", errors.New("--me requires git config user.email; set it or pass --author <email>")
+	}
+	return strings.ToLower(email), nil
+}
+
+func readGitUserEmail(ctx context.Context, repoRoot string) (string, error) {
+	out, err := exec.CommandContext(ctx, "git", "-C", repoRoot, "config", "user.email").Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read git user.email: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// filterCandidatesByAuthor returns the subset of candidates whose
+// entire/checkpoints/v1 metadata commit was authored by authorEmailLower.
+func filterCandidatesByAuthor(ctx context.Context, repoRoot string, candidates []candidate, authorEmailLower string) ([]candidate, error) {
+	if len(candidates) == 0 {
+		return candidates, nil
+	}
+	authors, err := loadCommitAuthorsByCheckpoint(ctx, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]candidate, 0, len(candidates))
+	for _, cand := range candidates {
+		email, ok := authors[cand.CheckpointID]
+		if !ok {
+			continue
+		}
+		if strings.ToLower(email) != authorEmailLower {
+			continue
+		}
+		filtered = append(filtered, cand)
+	}
+	return filtered, nil
+}
+
+// loadCommitAuthorsByCheckpoint maps checkpoint ID → author email by reading
+// commits on entire/checkpoints/v1 (subject is "Checkpoint: <id>"). Returns an
+// empty map when the metadata branch does not exist yet.
+func loadCommitAuthorsByCheckpoint(ctx context.Context, repoRoot string) (map[string]string, error) {
+	cmd := exec.CommandContext(
+		ctx,
+		"git",
+		"-C",
+		repoRoot,
+		"log",
+		"entire/checkpoints/v1",
+		"--format=%ae%x00%s%x00%x00",
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return map[string]string{}, nil
+		}
+		return nil, fmt.Errorf("git log entire/checkpoints/v1: %w", err)
+	}
+
+	authors := make(map[string]string)
+	const prefix = "Checkpoint: "
+	for _, record := range strings.Split(string(output), "\x00\x00") {
+		record = strings.TrimSuffix(record, "\x00")
+		if record == "" {
+			continue
+		}
+		parts := strings.SplitN(record, "\x00", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		email := strings.TrimSpace(parts[0])
+		subject := strings.TrimSpace(parts[1])
+		if !strings.HasPrefix(subject, prefix) {
+			continue
+		}
+		id := strings.TrimSpace(strings.TrimPrefix(subject, prefix))
+		if id == "" {
+			continue
+		}
+		if _, exists := authors[id]; exists {
+			continue
+		}
+		authors[id] = email
+	}
+	return authors, nil
 }
 
 func loadCommitSubjectsByCheckpoint(ctx context.Context, repoRoot string, since time.Time) (map[string]string, error) {

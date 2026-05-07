@@ -301,6 +301,115 @@ func TestCloudClient_CreateDispatch_AcceptsVoiceResponseField(t *testing.T) {
 	}
 }
 
+func TestCloudClient_CreateDispatch_SendsAuthorAndMeWhenSet(t *testing.T) {
+	t.Parallel()
+
+	type bodyAssertion struct {
+		expectAuthor string
+		expectMe     bool
+	}
+	cases := []struct {
+		name string
+		req  CreateDispatchRequest
+		want bodyAssertion
+	}{
+		{
+			name: "author only",
+			req: CreateDispatchRequest{
+				Repos:    []string{"entireio/cli"},
+				Since:    "2026-04-09T00:00:00Z",
+				Until:    "2026-04-16T00:00:00Z",
+				Generate: true,
+				Author:   "teammate@example.com",
+			},
+			want: bodyAssertion{expectAuthor: "teammate@example.com"},
+		},
+		{
+			name: "me only",
+			req: CreateDispatchRequest{
+				Repos:    []string{"entireio/cli"},
+				Since:    "2026-04-09T00:00:00Z",
+				Until:    "2026-04-16T00:00:00Z",
+				Generate: true,
+				Me:       true,
+			},
+			want: bodyAssertion{expectMe: true},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if tc.want.expectAuthor != "" {
+					got, ok := body["author"].(string)
+					if !ok || got != tc.want.expectAuthor {
+						t.Fatalf("expected author %q in body, got %v", tc.want.expectAuthor, body["author"])
+					}
+				} else if _, ok := body["author"]; ok {
+					t.Fatalf("did not expect author in body, got %v", body["author"])
+				}
+				if tc.want.expectMe {
+					got, ok := body["me"].(bool)
+					if !ok || !got {
+						t.Fatalf("expected me=true in body, got %v", body["me"])
+					}
+				} else if _, ok := body["me"]; ok {
+					t.Fatalf("did not expect me in body, got %v", body["me"])
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(`{"window":{"normalized_since":"2026-04-09T00:00:00Z","normalized_until":"2026-04-16T00:00:00Z"},"covered_repos":["entireio/cli"],"repos":[],"generated_markdown":"hi"}`)) //nolint:errcheck // test fixture response
+			}))
+			defer srv.Close()
+
+			client := NewCloudClient(CloudConfig{BaseURL: srv.URL, Token: "t"})
+			if _, err := client.CreateDispatch(ctx, tc.req); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCloudClient_CreateDispatch_OmitsAuthorAndMeWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := body["author"]; ok {
+			t.Fatalf("did not expect author in unset body, got %v", body["author"])
+		}
+		if _, ok := body["me"]; ok {
+			t.Fatalf("did not expect me in unset body, got %v", body["me"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"window":{"normalized_since":"2026-04-09T00:00:00Z","normalized_until":"2026-04-16T00:00:00Z"},"covered_repos":["entireio/cli"],"repos":[],"generated_markdown":"hi"}`)) //nolint:errcheck // test fixture response
+	}))
+	defer srv.Close()
+
+	client := NewCloudClient(CloudConfig{BaseURL: srv.URL, Token: "t"})
+	if _, err := client.CreateDispatch(ctx, CreateDispatchRequest{
+		Repos:    []string{"entireio/cli"},
+		Since:    "2026-04-09T00:00:00Z",
+		Until:    "2026-04-16T00:00:00Z",
+		Generate: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

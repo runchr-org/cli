@@ -708,6 +708,163 @@ func TestLoadCommitSubjectsByCheckpoint_UsesSingleWindowedLogScan(t *testing.T) 
 	}
 }
 
+func TestLocalMode_AuthorFilterKeepsMatchingCheckpoints(t *testing.T) {
+	dir := t.TempDir()
+	stubGeneratedLocalDispatch(t)
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "a.txt", "x")
+	testutil.GitAdd(t, dir, "a.txt")
+	testutil.GitCommit(t, dir, "initial")
+	addOriginRemote(t, dir)
+
+	createdAt := time.Now().UTC()
+	seedCommittedCheckpoint(t, dir, seededCheckpoint{
+		id:           "aaaaaaaaaaaa",
+		branch:       "main",
+		createdAt:    createdAt,
+		filesTouched: []string{"a.txt"},
+		outcome:      "mine",
+		authorName:   "Me",
+		authorEmail:  "me@example.com",
+	})
+	seedCommittedCheckpoint(t, dir, seededCheckpoint{
+		id:           "bbbbbbbbbbbb",
+		branch:       "main",
+		createdAt:    createdAt,
+		filesTouched: []string{"a.txt"},
+		outcome:      "theirs",
+		authorName:   "Them",
+		authorEmail:  "them@example.com",
+	})
+
+	oldNow := nowUTC
+	nowUTC = func() time.Time { return createdAt.Add(2 * time.Hour) }
+	t.Cleanup(func() { nowUTC = oldNow })
+
+	t.Chdir(dir)
+
+	got, err := Run(context.Background(), Options{
+		Mode:     ModeLocal,
+		Since:    "7d",
+		Branches: []string{"main"},
+		Author:   "ME@EXAMPLE.COM",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Repos) != 1 {
+		t.Fatalf("expected 1 repo group, got %d", len(got.Repos))
+	}
+	bullets := got.Repos[0].Sections[0].Bullets
+	if len(bullets) != 1 {
+		t.Fatalf("expected exactly 1 bullet after author filter, got %d (%+v)", len(bullets), bullets)
+	}
+	if bullets[0].Text != "mine" {
+		t.Fatalf("expected mine bullet to survive filter, got %q", bullets[0].Text)
+	}
+}
+
+func TestLocalMode_AuthorFilterEmptyResultErrors(t *testing.T) {
+	dir := t.TempDir()
+	stubGeneratedLocalDispatch(t)
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "a.txt", "x")
+	testutil.GitAdd(t, dir, "a.txt")
+	testutil.GitCommit(t, dir, "initial")
+	addOriginRemote(t, dir)
+
+	createdAt := time.Now().UTC()
+	seedCommittedCheckpoint(t, dir, seededCheckpoint{
+		id:           testCheckpointID,
+		branch:       "main",
+		createdAt:    createdAt,
+		filesTouched: []string{"a.txt"},
+		outcome:      "theirs",
+		authorEmail:  "them@example.com",
+	})
+
+	oldNow := nowUTC
+	nowUTC = func() time.Time { return createdAt.Add(2 * time.Hour) }
+	t.Cleanup(func() { nowUTC = oldNow })
+
+	t.Chdir(dir)
+
+	_, err := Run(context.Background(), Options{
+		Mode:     ModeLocal,
+		Since:    "7d",
+		Branches: []string{"main"},
+		Author:   "nobody@example.com",
+	})
+	if err == nil {
+		t.Fatal("expected error when author filter yields no checkpoints")
+	}
+	if !strings.Contains(err.Error(), `no checkpoints in window for author "nobody@example.com"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLocalMode_MeResolvesToGitConfigUserEmail(t *testing.T) {
+	dir := t.TempDir()
+	stubGeneratedLocalDispatch(t)
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "a.txt", "x")
+	testutil.GitAdd(t, dir, "a.txt")
+	testutil.GitCommit(t, dir, "initial")
+	addOriginRemote(t, dir)
+
+	// testutil.InitRepo sets user.email to a deterministic value; align our
+	// seeded checkpoint with it so --me matches.
+	out, gitErr := exec.CommandContext(context.Background(), "git", "-C", dir, "config", "user.email").Output()
+	if gitErr != nil {
+		t.Fatal(gitErr)
+	}
+	gitEmail := strings.TrimSpace(string(out))
+	if gitEmail == "" {
+		t.Fatal("expected testutil.InitRepo to set git config user.email")
+	}
+
+	createdAt := time.Now().UTC()
+	seedCommittedCheckpoint(t, dir, seededCheckpoint{
+		id:           "aaaaaaaaaaaa",
+		branch:       "main",
+		createdAt:    createdAt,
+		filesTouched: []string{"a.txt"},
+		outcome:      "mine",
+		authorEmail:  gitEmail,
+	})
+	seedCommittedCheckpoint(t, dir, seededCheckpoint{
+		id:           "bbbbbbbbbbbb",
+		branch:       "main",
+		createdAt:    createdAt,
+		filesTouched: []string{"a.txt"},
+		outcome:      "theirs",
+		authorEmail:  "them@example.com",
+	})
+
+	oldNow := nowUTC
+	nowUTC = func() time.Time { return createdAt.Add(2 * time.Hour) }
+	t.Cleanup(func() { nowUTC = oldNow })
+
+	t.Chdir(dir)
+
+	got, err := Run(context.Background(), Options{
+		Mode:     ModeLocal,
+		Since:    "7d",
+		Branches: []string{"main"},
+		Me:       true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Repos) != 1 {
+		t.Fatalf("expected 1 repo group, got %d", len(got.Repos))
+	}
+	bullets := got.Repos[0].Sections[0].Bullets
+	if len(bullets) != 1 || bullets[0].Text != "mine" {
+		t.Fatalf("expected only `mine` bullet to survive --me filter, got %+v", bullets)
+	}
+}
+
 func mustCheckpointID(t *testing.T, value string) checkpointid.CheckpointID {
 	t.Helper()
 
@@ -749,6 +906,8 @@ type seededCheckpoint struct {
 	createdAt    time.Time
 	filesTouched []string
 	outcome      string
+	authorName   string
+	authorEmail  string
 }
 
 func stubGeneratedLocalDispatch(t *testing.T) {
@@ -777,6 +936,14 @@ func seedCommittedCheckpoint(t *testing.T, repoDir string, cp seededCheckpoint) 
 		t.Fatal(err)
 	}
 
+	authorName := cp.authorName
+	if authorName == "" {
+		authorName = "Test User"
+	}
+	authorEmail := cp.authorEmail
+	if authorEmail == "" {
+		authorEmail = "test@example.com"
+	}
 	err = store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
 		CheckpointID:     cpID,
 		SessionID:        "session-1",
@@ -790,8 +957,8 @@ func seedCommittedCheckpoint(t *testing.T, repoDir string, cp seededCheckpoint) 
 		Summary: &checkpoint.Summary{
 			Outcome: cp.outcome,
 		},
-		AuthorName:  "Test User",
-		AuthorEmail: "test@example.com",
+		AuthorName:  authorName,
+		AuthorEmail: authorEmail,
 	})
 	if err != nil {
 		t.Fatal(err)
