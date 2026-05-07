@@ -57,7 +57,7 @@ re-run with --regenerate before each release to refresh it.
 Pass --latest to skip the tour and instead summarize the latest post
 from the entire.io blog feed — a quick "what's new in Entire" digest.
 That path requires a TextGenerator-capable agent on your PATH and a
-working network connection; output streams in once the agent responds.
+working network connection; output appears once the agent responds.
 
 Labs entry: tour is experimental. We are actively refining it based on
 user feedback.
@@ -78,14 +78,14 @@ Examples:
 }
 
 func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFlag, regenerateFlag bool) error {
-	settings, err := LoadEntireSettings(ctx)
+	settings, settingsErr := LoadEntireSettings(ctx)
 	configuredProvider := ""
-	if err == nil && settings.SummaryGeneration != nil {
+	if settingsErr == nil && settings.SummaryGeneration != nil {
 		configuredProvider = settings.SummaryGeneration.Provider
 	}
 
 	opts := tour.Options{
-		LoadSettings:        tourSettingsLoader,
+		LoadSettings:        cachedTourSettingsLoader(settings, settingsErr),
 		ListInstalledAgents: GetAgentsWithHooksInstalled,
 		ConfiguredProvider:  configuredProvider,
 		Labs:                labsRegistryForTour(),
@@ -156,15 +156,18 @@ func translateTourError(err error) error {
 	return err
 }
 
-// tourSettingsLoader adapts the cli package's settings helpers to the
-// (enabled, isSetUp, err) shape the tour package expects. Keeping this
-// adapter at the cli boundary leaves the tour package free of cli imports.
-func tourSettingsLoader(ctx context.Context) (bool, bool, error) {
-	s, err := LoadEntireSettings(ctx)
-	if err != nil {
-		return false, false, err
+// cachedTourSettingsLoader returns a tour.SettingsLoader that closes
+// over a single LoadEntireSettings result so ResolveState doesn't
+// re-read settings.json a second time per invocation. The previous
+// shape of this function unconditionally re-loaded settings, which is
+// cheap but not free for a command we want to keep at ~50ms.
+func cachedTourSettingsLoader(settings *EntireSettings, loadErr error) tour.SettingsLoader {
+	return func(_ context.Context) (bool, bool, error) {
+		if loadErr != nil {
+			return false, false, loadErr
+		}
+		return settings.Enabled, true, nil
 	}
-	return s.Enabled, true, nil
 }
 
 // labsRegistryForTour projects the cli's experimentalCommands list onto

@@ -47,7 +47,6 @@ type Options struct {
 type Result struct {
 	Markdown    string
 	DisplayName string
-	State       State
 }
 
 // ErrNotGitRepo is returned when Generate is called outside a git
@@ -104,16 +103,16 @@ func Generate(ctx context.Context, root *cobra.Command, opts Options) (*Result, 
 
 	switch state.Stage {
 	case StageSetup:
-		return &Result{Markdown: setupPromptText, State: state}, nil
+		return &Result{Markdown: setupPromptText}, nil
 	case StageAgentInstall:
-		return &Result{Markdown: agentInstallPromptText, State: state}, nil
+		return &Result{Markdown: agentInstallPromptText}, nil
 	}
 
 	markdown := embeddedTour
 	if state.Stage == StageFirstCapture {
 		markdown += firstCaptureTail
 	}
-	return &Result{Markdown: markdown, State: state}, nil
+	return &Result{Markdown: markdown}, nil
 }
 
 // regenerateFromAgent runs the original agent-driven generation path.
@@ -137,11 +136,10 @@ func regenerateFromAgent(ctx context.Context, root *cobra.Command, opts Options,
 	}
 	rendered, err := choice.Generator.GenerateText(ctx, prompt, opts.SummarizeModel)
 	if err != nil {
-		return nil, fmt.Errorf("regenerate tour with %s: %w", choice.DisplayName, err)
+		return nil, fmt.Errorf("generate tour with %s: %w", choice.DisplayName, err)
 	}
 	return &Result{
 		Markdown:    rendered,
 		DisplayName: choice.DisplayName,
-		State:       state,
 	}, nil
 }

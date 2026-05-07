@@ -3,6 +3,7 @@ package tour
 import (
 	"bytes"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
@@ -231,17 +232,20 @@ func marshalIndentNoHTMLEscape(v any) ([]byte, error) {
 	return bytes.TrimRight(out, "\n"), nil
 }
 
+// closingTagPattern matches any closing tag for one of the four wrapper
+// tags the system prompt references. Case-insensitive and tolerant of
+// inner whitespace so untrusted content can't sneak past with `</POST>`,
+// `</post >`, `</post\n>`, etc. Replaced with a backslash-escaped form
+// that JSON-decodes back to identical bytes but doesn't trip
+// tag-boundary heuristics on the model's side.
+var closingTagPattern = regexp.MustCompile(`(?i)</\s*(state|commands|labs|post)\s*>`)
+
 // escapeForTags neutralizes the literal closing tags in payload data so
 // untrusted help text can't break out of its tag wrapper. We keep
 // SetEscapeHTML(false) above for readability of "<id|sha>" placeholders,
 // so we still need to neutralize closing tags here.
 func escapeForTags(payload []byte) []byte {
-	s := string(payload)
-	s = strings.ReplaceAll(s, "</state>", "<\\/state>")
-	s = strings.ReplaceAll(s, "</commands>", "<\\/commands>")
-	s = strings.ReplaceAll(s, "</labs>", "<\\/labs>")
-	s = strings.ReplaceAll(s, "</post>", "<\\/post>")
-	return []byte(s)
+	return closingTagPattern.ReplaceAll(payload, []byte("<\\/$1>"))
 }
 
 // latestPromptSystem is the rendering contract for `entire tour --latest`.

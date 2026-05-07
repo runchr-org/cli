@@ -82,10 +82,20 @@ jobs:
             git log --oneline "${BASE_TAG}..HEAD" --no-merges >> "$RUNNER_TEMP/release_notes.md"
           fi
 
+      # Tour regeneration is best-effort: when it fails we still ship,
+      # but with the stub committed in the repo. Both steps below are
+      # continue-on-error so a flaky agent, a missing secret, or an npm
+      # registry blip can't block a release. The follow-up step turns a
+      # failed regen into a visible GitHub annotation so it's not silent.
       - name: Install Claude CLI for tour regeneration
-        run: npm install -g @anthropic-ai/claude-code
+        # Pinned to a known-good version. Bump deliberately — the agent's
+        # output format is part of the tour-regeneration contract.
+        continue-on-error: true
+        run: npm install -g @anthropic-ai/claude-code@2.1.132
 
       - name: Regenerate embedded tour
+        id: regen
+        continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
@@ -99,6 +109,47 @@ jobs:
             cat cmd/entire/cli/tour/embedded/tour.md
             exit 1
           fi
+
+      - name: Note tour regeneration outcome
+        if: always()
+        run: |
+          if [ "${{ steps.regen.outcome }}" != "success" ]; then
+            echo "::warning::Tour regeneration failed (or was skipped); the released binary will ship the committed stub for embedded/tour.md. Users running 'entire tour' will see the placeholder until the next release."
+          else
+            echo "Tour regenerated successfully ($(wc -l < cmd/entire/cli/tour/embedded/tour.md) lines)."
+          fi
+
+      # Tour regeneration is best-effort, so a failure here does NOT fail
+      # the release — but degraded releases (stub shipped) deserve their
+      # own Slack signal. The existing notify-slack job at the bottom only
+      # fires on full job failure, which would no longer trigger.
+      - name: Notify Slack of tour regeneration failure
+        if: steps.regen.outcome != 'success'
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
+        with:
+          webhook: ${{ secrets.E2E_SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": ":warning: *Tour regeneration failed* for `${{ env.RELEASE_TAG }}` — release will proceed with the committed stub. Users will see the placeholder when running `entire tour` until the next release.\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run details>"
+                  }
+                },
+                {
+                  "type": "context",
+                  "elements": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "Tag: `${{ env.RELEASE_TAG }}` by ${{ github.actor }}"
+                    }
+                  ]
+                }
+              ]
+            }
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@1a80836c5c9d9e5755a25cb59ec6f45a3b5f41a8 # v7

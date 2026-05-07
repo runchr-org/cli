@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -131,11 +132,17 @@ type TextGeneratorChoice struct {
 // PATH. Honors a configured summary provider when one is set; otherwise
 // returns the first registered agent that meets both conditions.
 //
-// Unlike `entire explain --generate`, this never prompts. `entire tour`
-// runs non-interactively and a working tour beats a blocking picker —
-// users who want to pin a provider can already set
-// `entire configure --summarize-provider`.
-func ResolveTextGenerator(_ context.Context, configuredProvider string) (TextGeneratorChoice, error) {
+// Discovers external entire-agent-* plugins on PATH first so users with
+// only an external TextGenerator (no built-in claude/codex/etc.) still
+// get a tour. Mirrors what `entire explain --generate` does at
+// resolveCheckpointSummaryProvider in the cli package — minus the
+// interactive picker, since `entire tour` runs non-interactively and a
+// working tour beats a blocking prompt. Users who want to pin a
+// specific provider can set it via `entire configure
+// --summarize-provider`.
+func ResolveTextGenerator(ctx context.Context, configuredProvider string) (TextGeneratorChoice, error) {
+	external.DiscoverAndRegisterAlways(ctx)
+
 	if configuredProvider != "" {
 		if choice, ok := tryGenerator(types.AgentName(configuredProvider)); ok {
 			return choice, nil
@@ -158,7 +165,7 @@ func tryGenerator(name types.AgentName) (TextGeneratorChoice, bool) {
 	if !ok {
 		return TextGeneratorChoice{}, false
 	}
-	if !agent.IsSummaryCLIAvailable(name) {
+	if !isTextGeneratorAvailable(name, ag) {
 		return TextGeneratorChoice{}, false
 	}
 	return TextGeneratorChoice{
@@ -166,4 +173,17 @@ func tryGenerator(name types.AgentName) (TextGeneratorChoice, bool) {
 		DisplayName: string(ag.Type()),
 		Name:        name,
 	}, true
+}
+
+// isTextGeneratorAvailable mirrors the cli package's
+// isSummaryProviderAvailable: external plugins (entire-agent-*) are
+// proven executable by the discovery step and gated only by the
+// TextGenerator capability, while built-ins still need their CLI
+// binary on PATH (claude, codex, gemini, cursor, copilot).
+func isTextGeneratorAvailable(name types.AgentName, ag agent.Agent) bool {
+	if external.IsExternal(ag) {
+		_, ok := agent.AsTextGenerator(ag)
+		return ok
+	}
+	return agent.IsSummaryCLIAvailable(name)
 }
