@@ -146,6 +146,9 @@ func waitForApproval(ctx context.Context, poller deviceAuthClient, deviceCode st
 		case "expired_token":
 			return "", errors.New("device authorization expired")
 		default:
+			if result.ErrorDescription != "" {
+				return "", fmt.Errorf("device authorization failed: %s: %s", result.Error, result.ErrorDescription)
+			}
 			return "", fmt.Errorf("device authorization failed: %s", result.Error)
 		}
 

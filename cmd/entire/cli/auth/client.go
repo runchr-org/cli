@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/entireio/cli/auth/deviceflow"
@@ -21,12 +22,17 @@ type DeviceAuthStart = deviceflow.DeviceCode
 // DeviceAuthPoll is the historical token-poll response shape. The shim
 // flattens deviceflow's typed errors back into the Error field so
 // existing login.go logic that switches on result.Error keeps working.
+//
+// ErrorDescription carries the optional `error_description` from the
+// server's RFC 8628 §3.5 error response, when present. Used to give
+// callers a more actionable message than the bare error code.
 type DeviceAuthPoll struct {
-	AccessToken string
-	TokenType   string
-	ExpiresIn   int
-	Scope       string
-	Error       string
+	AccessToken      string
+	TokenType        string
+	ExpiresIn        int
+	Scope            string
+	Error            string
+	ErrorDescription string
 }
 
 // Client wraps a deviceflow.Client preconfigured for whichever provider
@@ -67,7 +73,10 @@ func (c *Client) PollDeviceAuth(ctx context.Context, deviceCode string) (*Device
 	t, err := c.inner.PollDeviceAuth(ctx, deviceCode)
 	if err != nil {
 		if code := oauthErrorCode(err); code != "" {
-			return &DeviceAuthPoll{Error: code}, nil
+			return &DeviceAuthPoll{
+				Error:            code,
+				ErrorDescription: descriptionFromSentinel(err, code),
+			}, nil
 		}
 		return nil, err
 	}
@@ -94,6 +103,21 @@ func oauthErrorCode(err error) string {
 		return "expired_token"
 	case errors.Is(err, deviceflow.ErrInvalidGrant):
 		return "invalid_grant"
+	}
+	return ""
+}
+
+// descriptionFromSentinel pulls the description suffix out of a wrapped
+// sentinel error. The deviceflow lib uses fmt.Errorf("%w: %s", sentinel,
+// description) when the server included an error_description, so the
+// formatted error reads "<code>: <description>". Stripping the
+// "<code>: " prefix yields the description; absent prefix means the
+// server didn't supply one.
+func descriptionFromSentinel(err error, code string) string {
+	msg := err.Error()
+	prefix := code + ": "
+	if rest, ok := strings.CutPrefix(msg, prefix); ok {
+		return rest
 	}
 	return ""
 }
