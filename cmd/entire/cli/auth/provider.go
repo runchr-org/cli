@@ -25,12 +25,12 @@ type providerConfig struct {
 }
 
 var providers = map[string]providerConfig{
-	"v1": {
+	"v1": { //nolint:gosec // OAuth client_id and endpoint paths, not credentials
 		clientID:       "entire-cli",
 		deviceCodePath: "/oauth/device/code",
 		tokenPath:      "/oauth/token",
 	},
-	"v2": {
+	"v2": { //nolint:gosec // OAuth client_id and endpoint paths, not credentials
 		clientID:       "cli",
 		deviceCodePath: "/api/auth/oauth/device/code",
 		tokenPath:      "/api/auth/token",

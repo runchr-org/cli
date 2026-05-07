@@ -7,11 +7,18 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/api"
 )
 
+// Test-local mirrors of the v1 / v2 client_id values, so assertions
+// don't repeat the same string literal across multiple tests (goconst).
+const (
+	wantClientIDV1 = "entire-cli"
+	wantClientIDV2 = "cli"
+)
+
 func TestCurrentProvider_DefaultsToV1(t *testing.T) {
 	t.Setenv(ProviderVersionEnvVar, "")
 
 	p := currentProvider()
-	if p.clientID != "entire-cli" || p.deviceCodePath != "/oauth/device/code" || p.tokenPath != "/oauth/token" {
+	if p.clientID != wantClientIDV1 || p.deviceCodePath != "/oauth/device/code" || p.tokenPath != "/oauth/token" {
 		t.Fatalf("default provider = %+v, want v1 config", p)
 	}
 }
@@ -20,7 +27,7 @@ func TestCurrentProvider_V1Explicit(t *testing.T) {
 	t.Setenv(ProviderVersionEnvVar, "v1")
 
 	p := currentProvider()
-	if p.clientID != "entire-cli" {
+	if p.clientID != wantClientIDV1 {
 		t.Fatalf("v1 clientID = %q", p.clientID)
 	}
 }
@@ -29,8 +36,8 @@ func TestCurrentProvider_V2(t *testing.T) {
 	t.Setenv(ProviderVersionEnvVar, "v2")
 
 	p := currentProvider()
-	if p.clientID != "cli" {
-		t.Fatalf("v2 clientID = %q, want cli", p.clientID)
+	if p.clientID != wantClientIDV2 {
+		t.Fatalf("v2 clientID = %q, want %s", p.clientID, wantClientIDV2)
 	}
 	if p.deviceCodePath != "/api/auth/oauth/device/code" {
 		t.Fatalf("v2 deviceCodePath = %q", p.deviceCodePath)
@@ -44,7 +51,7 @@ func TestCurrentProvider_UnknownDefaultsToV1(t *testing.T) {
 	t.Setenv(ProviderVersionEnvVar, "v999")
 
 	p := currentProvider()
-	if p.clientID != "entire-cli" {
+	if p.clientID != wantClientIDV1 {
 		t.Fatalf("unknown version should default to v1; got clientID = %q", p.clientID)
 	}
 }
@@ -53,8 +60,8 @@ func TestCurrentProvider_TrimsWhitespace(t *testing.T) {
 	t.Setenv(ProviderVersionEnvVar, "  v2  ")
 
 	p := currentProvider()
-	if p.clientID != "cli" {
-		t.Fatalf("whitespace-padded v2 clientID = %q, want cli", p.clientID)
+	if p.clientID != wantClientIDV2 {
+		t.Fatalf("whitespace-padded v2 clientID = %q, want %s", p.clientID, wantClientIDV2)
 	}
 }
 
@@ -63,8 +70,8 @@ func TestNewClient_HonoursProviderVersion(t *testing.T) {
 	t.Setenv(ProviderVersionEnvVar, "v2")
 
 	c := NewClient(&http.Client{})
-	if c.inner.ClientID != "cli" {
-		t.Errorf("ClientID = %q, want cli", c.inner.ClientID)
+	if c.inner.ClientID != wantClientIDV2 {
+		t.Errorf("ClientID = %q, want %s", c.inner.ClientID, wantClientIDV2)
 	}
 	if c.inner.DeviceCodePath != "/api/auth/oauth/device/code" {
 		t.Errorf("DeviceCodePath = %q", c.inner.DeviceCodePath)
@@ -82,8 +89,8 @@ func TestNewClient_DefaultsToV1(t *testing.T) {
 	t.Setenv(ProviderVersionEnvVar, "")
 
 	c := NewClient(nil)
-	if c.inner.ClientID != "entire-cli" {
-		t.Errorf("ClientID = %q, want entire-cli", c.inner.ClientID)
+	if c.inner.ClientID != wantClientIDV1 {
+		t.Errorf("ClientID = %q, want %s", c.inner.ClientID, wantClientIDV1)
 	}
 	if c.inner.DeviceCodePath != "/oauth/device/code" {
 		t.Errorf("DeviceCodePath = %q", c.inner.DeviceCodePath)

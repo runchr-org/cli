@@ -29,7 +29,7 @@ type TokensResponse struct {
 // cmd/entire/cli/auth's currentProvider(). Duplicated here rather than
 // imported because api/ is a leaf package and shouldn't take a
 // dependency on auth/ for routing.
-const authTokensProviderVersionEnvVar = "ENTIRE_AUTH_PROVIDER_VERSION"
+const authTokensProviderVersionEnvVar = "ENTIRE_AUTH_PROVIDER_VERSION" //nolint:gosec // env var name, not a credential
 
 // authTokensBasePath returns the auth-tokens endpoint family base path
 // for the active provider version. v1 (default) hits /api/v1/auth/tokens;
