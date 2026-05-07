@@ -248,6 +248,43 @@ func TestClassifyApplyPatchPaths_Empty(t *testing.T) {
 	require.Empty(t, deleted)
 }
 
+func TestClassifyApplyPatchPaths_MoveTo(t *testing.T) {
+	t.Parallel()
+	// Codex apply_patch encodes renames as "*** Update File: <old>\n*** Move
+	// to: <new>". Both paths must be tracked: the source is being deleted
+	// (renamed away), the destination is being created.
+	added, modified, deleted := classifyApplyPatchPaths(
+		"*** Begin Patch\n" +
+			"*** Update File: src/old.rs\n" +
+			"*** Move to: src/new.rs\n" +
+			"@@\n-old\n+new\n" +
+			"*** End Patch\n",
+	)
+	require.Equal(t, []string{"src/new.rs"}, added)
+	require.Empty(t, modified)
+	require.Equal(t, []string{"src/old.rs"}, deleted)
+}
+
+func TestClassifyApplyPatchPaths_MoveToWithSiblingHunks(t *testing.T) {
+	t.Parallel()
+	// A patch can mix Move-to renames with regular Add/Delete entries — the
+	// Move handler must scope to the most recent Update File, not collapse
+	// unrelated entries.
+	added, modified, deleted := classifyApplyPatchPaths(
+		"*** Begin Patch\n" +
+			"*** Delete File: gone.txt\n" +
+			"*** Update File: a.rs\n" +
+			"*** Move to: b.rs\n" +
+			"@@\n-x\n+y\n" +
+			"*** Add File: brand-new.go\n" +
+			"+package main\n" +
+			"*** End Patch\n",
+	)
+	require.Equal(t, []string{"b.rs", "brand-new.go"}, added)
+	require.Empty(t, modified)
+	require.Equal(t, []string{"a.rs", "gone.txt"}, deleted)
+}
+
 func TestSplitJSONL(t *testing.T) {
 	t.Parallel()
 

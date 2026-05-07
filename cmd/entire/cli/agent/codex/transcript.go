@@ -83,7 +83,10 @@ const (
 	applyPatchVerbDelete = "Delete"
 )
 
-var applyPatchFileRegex = regexp.MustCompile(`\*\*\* (Add|Update|Delete) File: (.+)`)
+var (
+	applyPatchFileRegex = regexp.MustCompile(`\*\*\* (Add|Update|Delete) File: (.+)`)
+	applyPatchMoveRegex = regexp.MustCompile(`\*\*\* Move to: (.+)`)
+)
 
 // GetTranscriptPosition returns the current line count of a Codex rollout transcript.
 func (c *CodexAgent) GetTranscriptPosition(path string) (int, error) {
@@ -200,24 +203,45 @@ func extractFilesFromApplyPatch(input string) []string {
 }
 
 // classifyApplyPatchPaths splits an apply_patch envelope into added, modified,
-// and deleted file paths. An Add on the same path as an Update wins toward Add
-// — envelopes shouldn't do this, but the more specific intent is preferable.
-// Each bucket is sorted for deterministic output.
+// and deleted file paths. The grammar (codex-rs/apply-patch/src/parser.rs)
+// supports renames via "*** Update File: old\n*** Move to: new", which we
+// reclassify as a Delete on the source path and an Add on the destination.
+// Add and Delete are sticky — subsequent Updates on the same path don't
+// downgrade them. Each bucket is sorted for deterministic output.
 func classifyApplyPatchPaths(input string) (added, modified, deleted []string) {
-	matches := applyPatchFileRegex.FindAllStringSubmatch(input, -1)
-	bucket := make(map[string]string, len(matches))
-	for _, m := range matches {
-		verb := m[1]
-		path := strings.TrimSpace(m[2])
-		if path == "" {
-			continue
-		}
-		if existing, ok := bucket[path]; ok {
-			if existing == applyPatchVerbAdd || existing == applyPatchVerbDelete {
+	bucket := make(map[string]string)
+	var lastUpdate string
+	for _, line := range strings.Split(input, "\n") {
+		if m := applyPatchFileRegex.FindStringSubmatch(line); m != nil {
+			verb := m[1]
+			path := strings.TrimSpace(m[2])
+			if path == "" {
 				continue
 			}
+			if verb == applyPatchVerbUpdate {
+				lastUpdate = path
+			} else {
+				lastUpdate = ""
+			}
+			if existing, ok := bucket[path]; ok {
+				if existing == applyPatchVerbAdd || existing == applyPatchVerbDelete {
+					continue
+				}
+			}
+			bucket[path] = verb
+			continue
 		}
-		bucket[path] = verb
+		if m := applyPatchMoveRegex.FindStringSubmatch(line); m != nil {
+			target := strings.TrimSpace(m[1])
+			if target == "" {
+				continue
+			}
+			if lastUpdate != "" {
+				bucket[lastUpdate] = applyPatchVerbDelete
+			}
+			bucket[target] = applyPatchVerbAdd
+			lastUpdate = ""
+		}
 	}
 	for path, verb := range bucket {
 		switch verb {
