@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/spf13/cobra"
 )
@@ -115,11 +116,16 @@ func Generate(ctx context.Context, root *cobra.Command, opts Options) (*Result, 
 	return &Result{Markdown: markdown}, nil
 }
 
-// regenerateFromAgent runs the original agent-driven generation path.
+// regenerateFromAgent runs the agent-driven generation path.
 // Maintainers invoke it via `entire tour --regenerate` before each
 // release, then commit the captured markdown to embedded/tour.md.
 // Skipped on every normal user invocation so the runtime cost stays
 // at "read embedded file + glamour render".
+//
+// Output is run through StripControlSequences before return: the
+// regen output gets piped to disk and embedded in the binary, so a
+// compromised agent could otherwise smuggle terminal escapes /
+// hyperlinks / title-rewrites into every future `entire tour` user.
 func regenerateFromAgent(ctx context.Context, root *cobra.Command, opts Options, state State) (*Result, error) {
 	choice, err := ResolveTextGenerator(ctx, opts.ConfiguredProvider)
 	if err != nil {
@@ -139,7 +145,40 @@ func regenerateFromAgent(ctx context.Context, root *cobra.Command, opts Options,
 		return nil, fmt.Errorf("generate tour with %s: %w", choice.DisplayName, err)
 	}
 	return &Result{
-		Markdown:    rendered,
+		Markdown:    StripControlSequences(rendered),
 		DisplayName: choice.DisplayName,
 	}, nil
 }
+
+// StripControlSequences removes ANSI escape sequences, OSC sequences,
+// and C0/C1 control bytes other than common whitespace (TAB, LF, CR)
+// from a markdown string. Used on agent output that gets persisted
+// (committed back into embedded/tour.md) or written to a non-TTY
+// destination — a compromised agent or feed could otherwise inject
+// terminal-rewriting controls that survive into pasted logs and
+// user-facing terminals.
+//
+// Glamour-styled output is unaffected because it isn't run through
+// this function — glamour's own ANSI escapes are produced *after*
+// this stripping happens, in the cli layer.
+func StripControlSequences(s string) string {
+	return controlSequencePattern.ReplaceAllString(s, "")
+}
+
+// controlSequencePattern matches:
+//   - ESC followed by CSI/OSC/private-mode parameters and a final byte
+//   - Bare C0 control bytes other than \t \n \r, plus DEL
+//   - C1 control codepoints (U+0080-U+009F)
+//
+// Compiled once at init. Used by StripControlSequences above.
+//
+// The C1 range is written as - because Go regex requires
+// valid UTF-8 input; raw \x80-\x9f are continuation bytes alone and
+// trigger a compile-time panic.
+var controlSequencePattern = regexp.MustCompile(
+	"\x1b\\[[0-?]*[ -/]*[@-~]" + // CSI: ESC [ ... final
+		"|\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)" + // OSC: ESC ] ... BEL or ESC \
+		"|\x1b[@-Z\\\\-_]" + // other ESC sequences
+		"|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]" + // C0 controls excl. \t \n \r, plus DEL
+		"|[-]", // C1 controls
+)

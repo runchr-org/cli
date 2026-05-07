@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"charm.land/glamour/v2/ansi"
 
@@ -133,7 +134,10 @@ func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFl
 	rendered, err := mdrender.RenderForWriterWithOverride(w, result.Markdown, tourHeaderOverride)
 	if err != nil {
 		// mdrender failed — fall back to raw markdown rather than
-		// surfacing a renderer panic to the user.
+		// surfacing a renderer panic to the user. Surface a one-line
+		// breadcrumb to stderr so the failure isn't fully silent; the
+		// user still gets readable (if uncolored) output above.
+		fmt.Fprintf(os.Stderr, "tour: render fallback (%v)\n", err)
 		rendered = result.Markdown
 	}
 	fmt.Fprintln(w, rendered)

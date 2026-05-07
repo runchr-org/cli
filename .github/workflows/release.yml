@@ -94,7 +94,7 @@ jobs:
         run: npm install -g @anthropic-ai/claude-code@2.1.132
 
       - name: Regenerate embedded tour
-        id: regen
+        id: regenerate-tour
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -103,17 +103,15 @@ jobs:
             echo "::error::ANTHROPIC_API_KEY secret is required to regenerate the embedded tour"
             exit 1
           fi
+          # The mise task itself does the atomic write and validation
+          # (>=4 ## headers, docs.entire.io footer present). Anything
+          # short of that aborts before clobbering the committed stub.
           mise run tour:regenerate
-          if ! grep -q '^## ' cmd/entire/cli/tour/embedded/tour.md; then
-            echo "::error::tour:regenerate produced no markdown headers - agent likely returned an error"
-            cat cmd/entire/cli/tour/embedded/tour.md
-            exit 1
-          fi
 
       - name: Note tour regeneration outcome
         if: always()
         run: |
-          if [ "${{ steps.regen.outcome }}" != "success" ]; then
+          if [ "${{ steps.regenerate-tour.outcome }}" != "success" ]; then
             echo "::warning::Tour regeneration failed (or was skipped); the released binary will ship the committed stub for embedded/tour.md. Users running 'entire tour' will see the placeholder until the next release."
           else
             echo "Tour regenerated successfully ($(wc -l < cmd/entire/cli/tour/embedded/tour.md) lines)."
@@ -123,8 +121,13 @@ jobs:
       # the release — but degraded releases (stub shipped) deserve their
       # own Slack signal. The existing notify-slack job at the bottom only
       # fires on full job failure, which would no longer trigger.
+      #
+      # `always()` is required so this fires even after a `continue-on-error`
+      # step failed; the strict `== 'failure'` (rather than `!= 'success'`)
+      # avoids firing on 'skipped' outcomes from earlier-step failures
+      # before regen had a chance to run.
       - name: Notify Slack of tour regeneration failure
-        if: steps.regen.outcome != 'success'
+        if: always() && steps.regenerate-tour.outcome == 'failure'
         uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
           webhook: ${{ secrets.E2E_SLACK_WEBHOOK_URL }}

@@ -45,8 +45,33 @@ run = "CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -o entire-arm64.exe ./cm
 # Local devs can run it manually if they want a "real" tour from a fresh
 # checkout — without it, `entire tour` prints the stub.
 #
+# Atomic write: the regen output goes to a temp file first and only
+# replaces embedded/tour.md after validation succeeds. The previous
+# shell-redirect form truncated the destination *before* the agent
+# finished, so a transient agent failure left the repo with an empty
+# stub. Validation also catches the "agent returned a partial response
+# that happens to have one ## header" failure mode the CI grep alone
+# can't.
+#
 # Requires `claude` (or another TextGenerator-capable agent) on PATH and
 # the corresponding auth (typically ANTHROPIC_API_KEY) in the environment.
 [tasks."tour:regenerate"]
 description = "Refresh cmd/entire/cli/tour/embedded/tour.md via the agent"
-run = "go run ./cmd/entire tour --regenerate > cmd/entire/cli/tour/embedded/tour.md"
+run = '''
+set -euo pipefail
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+go run ./cmd/entire tour --regenerate > "$tmp"
+header_count=$(grep -c '^## ' "$tmp" || true)
+if [ "$header_count" -lt 4 ]; then
+  echo "tour:regenerate produced only $header_count ## headers (expected >= 4); aborting" >&2
+  cat "$tmp" >&2
+  exit 1
+fi
+if ! grep -q 'https://docs.entire.io/cli' "$tmp"; then
+  echo "tour:regenerate missing docs.entire.io footer; aborting" >&2
+  cat "$tmp" >&2
+  exit 1
+fi
+mv "$tmp" cmd/entire/cli/tour/embedded/tour.md
+'''

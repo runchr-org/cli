@@ -234,18 +234,36 @@ func marshalIndentNoHTMLEscape(v any) ([]byte, error) {
 
 // closingTagPattern matches any closing tag for one of the four wrapper
 // tags the system prompt references. Case-insensitive and tolerant of
-// inner whitespace so untrusted content can't sneak past with `</POST>`,
-// `</post >`, `</post\n>`, etc. Replaced with a backslash-escaped form
-// that JSON-decodes back to identical bytes but doesn't trip
-// tag-boundary heuristics on the model's side.
-var closingTagPattern = regexp.MustCompile(`(?i)</\s*(state|commands|labs|post)\s*>`)
+// Unicode whitespace (\p{Z}) and Unicode format characters (\p{Cf})
+// inside the tag — bare `\s` only matches ASCII so a payload containing
+// e.g. `</post >` (NO-BREAK SPACE) or `</po​st>` (ZERO WIDTH
+// SPACE) would otherwise slip past the escape. Replaced with a
+// backslash-escaped form that JSON-decodes back to identical bytes but
+// doesn't trip tag-boundary heuristics on the model's side.
+var closingTagPattern = regexp.MustCompile(`(?i)<[\s\p{Z}\p{Cf}]*/[\s\p{Z}\p{Cf}]*(state|commands|labs|post)[\s\p{Z}\p{Cf}]*>`)
+
+// invisibleCharPattern matches Unicode format characters (zero-width
+// spaces, RTL marks, byte-order marks, etc.) plus C0/C1 control bytes
+// other than common whitespace. These never appear in legitimate
+// command help or blog-post text and an attacker can use them either
+// to split a tag name across the regex's literal alternation or to
+// inject terminal escapes when the agent's output is rendered.
+var invisibleCharPattern = regexp.MustCompile(`[\p{Cf}\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]`)
 
 // escapeForTags neutralizes the literal closing tags in payload data so
 // untrusted help text can't break out of its tag wrapper. We keep
 // SetEscapeHTML(false) above for readability of "<id|sha>" placeholders,
 // so we still need to neutralize closing tags here.
+//
+// Two-stage: first strip invisible characters that could be used to
+// split tag names mid-match (e.g. `</po​st>`), then run the
+// case-insensitive whitespace-tolerant tag regex over the cleaned
+// bytes. Both stages must run — the strip alone won't catch
+// `</post >` (legitimate-looking visible whitespace) and the
+// regex alone won't catch zero-width insertions inside the name.
 func escapeForTags(payload []byte) []byte {
-	return closingTagPattern.ReplaceAll(payload, []byte("<\\/$1>"))
+	cleaned := invisibleCharPattern.ReplaceAll(payload, nil)
+	return closingTagPattern.ReplaceAll(cleaned, []byte("<\\/$1>"))
 }
 
 // latestPromptSystem is the rendering contract for `entire tour --latest`.
