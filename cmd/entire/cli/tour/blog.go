@@ -39,8 +39,8 @@ type BlogPost struct {
 // match content:encoded on its local name so the standard xmlns prefix
 // shape is enough.
 type rssEnvelope struct {
-	XMLName xml.Name    `xml:"rss"`
-	Channel rssChannel  `xml:"channel"`
+	XMLName xml.Name   `xml:"rss"`
+	Channel rssChannel `xml:"channel"`
 }
 
 type rssChannel struct {
@@ -84,7 +84,7 @@ func defaultFetchLatestBlogPost(ctx context.Context) (*BlogPost, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", BlogFeedURL, err)
 	}
-	defer resp.Body.Close() //nolint:errcheck // body close errors are not actionable here
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetch %s: unexpected status %s", BlogFeedURL, resp.Status)

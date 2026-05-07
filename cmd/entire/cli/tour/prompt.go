@@ -2,6 +2,7 @@ package tour
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -228,7 +229,7 @@ func BuildPrompt(input PromptInput) (string, error) {
 func marshalIndentNoHTMLEscape(v any) ([]byte, error) {
 	out, err := jsonutil.MarshalIndentWithNewline(v, "", "  ")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
 	return bytes.TrimRight(out, "\n"), nil
 }
@@ -363,7 +364,7 @@ Render exactly this shape:
 // break out of the <post> tag wrapper.
 func BuildLatestPrompt(post *BlogPost) (string, error) {
 	if post == nil {
-		return "", fmt.Errorf("nil blog post")
+		return "", errors.New("nil blog post")
 	}
 	payload, err := marshalIndentNoHTMLEscape(post)
 	if err != nil {

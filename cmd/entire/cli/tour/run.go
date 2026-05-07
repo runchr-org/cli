@@ -103,17 +103,20 @@ func Generate(ctx context.Context, root *cobra.Command, opts Options) (*Result, 
 	}
 
 	switch state.Stage {
+	case StageNotGitRepo:
+		// Already returned ErrNotGitRepo above; this branch is
+		// unreachable but listed for the exhaustive-switch lint.
+		return nil, ErrNotGitRepo
 	case StageSetup:
 		return &Result{Markdown: setupPromptText}, nil
 	case StageAgentInstall:
 		return &Result{Markdown: agentInstallPromptText}, nil
+	case StageFirstCapture:
+		return &Result{Markdown: embeddedTour + firstCaptureTail}, nil
+	case StageWorkflow:
+		return &Result{Markdown: embeddedTour}, nil
 	}
-
-	markdown := embeddedTour
-	if state.Stage == StageFirstCapture {
-		markdown += firstCaptureTail
-	}
-	return &Result{Markdown: markdown}, nil
+	return nil, fmt.Errorf("unhandled tour stage %q", state.Stage)
 }
 
 // regenerateFromAgent runs the agent-driven generation path.

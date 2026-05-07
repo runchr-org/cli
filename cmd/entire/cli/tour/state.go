@@ -52,7 +52,11 @@ type AgentInstallChecker func(ctx context.Context) []types.AgentName
 // whole point of moving the tour into the CLI.
 func ResolveState(ctx context.Context, loadSettings SettingsLoader, listAgents AgentInstallChecker) (State, error) {
 	if _, err := paths.WorktreeRoot(ctx); err != nil {
-		return State{Stage: StageNotGitRepo}, nil
+		// Not being in a git repo isn't an error — it's a routing
+		// signal for the caller. We return nil here intentionally so
+		// translateTourError can branch on the StageNotGitRepo stage
+		// rather than on a propagated paths error.
+		return State{Stage: StageNotGitRepo}, nil //nolint:nilerr // intentional: not-a-repo is a stage, not an error
 	}
 
 	enabled, isSetUp, err := loadSettings(ctx)

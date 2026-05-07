@@ -10,8 +10,8 @@ import (
 	"charm.land/glamour/v2/ansi"
 
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
-	"github.com/entireio/cli/cmd/entire/cli/tour"
 	"github.com/entireio/cli/cmd/entire/cli/mdrender"
+	"github.com/entireio/cli/cmd/entire/cli/tour"
 	"github.com/spf13/cobra"
 )
 
@@ -120,7 +120,7 @@ func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFl
 		result, generErr = generate(ctx)
 	}
 	if generErr != nil {
-		return translateTourError(generErr)
+		return translateTourError(w, generErr)
 	}
 
 	// --regenerate dumps the raw agent output verbatim so it can be
@@ -148,14 +148,18 @@ func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFl
 }
 
 // translateTourError converts tour.Generate errors into user-facing
-// messages. ErrNotGitRepo and ErrNoTextGenerator print and exit 0;
-// everything else propagates.
-func translateTourError(err error) error {
+// output. ErrNotGitRepo and ErrNoTextGenerator are printed directly to
+// w with their multi-line message and a short SilentError is returned
+// so cobra/main don't reprint the error themselves. Anything else
+// propagates to cobra's normal error path.
+func translateTourError(w io.Writer, err error) error {
 	if errors.Is(err, tour.ErrNotGitRepo) {
-		return NewSilentError(errors.New(tourNotGitRepoMessage))
+		fmt.Fprintln(w, tourNotGitRepoMessage)
+		return NewSilentError(errors.New("not a git repository"))
 	}
 	if errors.Is(err, tour.ErrNoTextGenerator) {
-		return errors.New(tourNoTextGeneratorMessage)
+		fmt.Fprintln(w, tourNoTextGeneratorMessage)
+		return NewSilentError(errors.New("no TextGenerator agent on PATH"))
 	}
 	return err
 }
