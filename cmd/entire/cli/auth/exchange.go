@@ -1,0 +1,90 @@
+package auth
+
+import (
+	"context"
+	"fmt"
+	"sync"
+
+	"github.com/entireio/cli/auth/tokenmanager"
+	"github.com/entireio/cli/cmd/entire/cli/api"
+)
+
+// TokenRequest is the entire-CLI alias of tokenmanager.TokenRequest so
+// callers don't have to import the underlying package for the common
+// case. The two types are interchangeable.
+type TokenRequest = tokenmanager.TokenRequest
+
+// ErrNotLoggedIn re-exports tokenmanager.ErrNotLoggedIn so callers in
+// the cli package can errors.Is against it without an extra import.
+var ErrNotLoggedIn = tokenmanager.ErrNotLoggedIn
+
+var (
+	managerOnce sync.Once
+	manager     *tokenmanager.Manager
+	errManager  error
+
+	// managerForTest, when non-nil, is returned by defaultManager()
+	// instead of constructing the production manager. Tests use
+	// SetManagerForTest to inject a manager that hits a test STS
+	// server / in-memory store. Production code never reads this var.
+	managerForTest *tokenmanager.Manager
+)
+
+// SetManagerForTest installs mgr as the manager returned by
+// defaultManager() and returns a cleanup function. Test-only.
+func SetManagerForTest(t interface{ Helper() }, mgr *tokenmanager.Manager) func() {
+	t.Helper()
+	prev := managerForTest
+	managerForTest = mgr
+	return func() { managerForTest = prev }
+}
+
+// defaultManager returns the package-level Manager built from this
+// CLI's identity (current provider, AuthBaseURL, NewStore service
+// name). Constructed lazily on first use so env-var changes between
+// tests are honoured by the first non-test caller in any given
+// process.
+func defaultManager() (*tokenmanager.Manager, error) {
+	if managerForTest != nil {
+		return managerForTest, nil
+	}
+	managerOnce.Do(func() {
+		provider := currentProvider()
+		m, err := tokenmanager.New(tokenmanager.Config{
+			Issuer:    api.AuthBaseURL(),
+			ClientID:  provider.clientID,
+			STSPath:   provider.tokenPath,
+			Store:     NewStore(),
+			UserAgent: provider.clientID,
+			Scope:     "cli",
+		})
+		manager = m
+		if err != nil {
+			errManager = fmt.Errorf("build token manager: %w", err)
+		}
+	})
+	return manager, errManager
+}
+
+// TokenForResource returns a bearer token suitable for use against
+// resourceBaseURL, performing an RFC 8693 token exchange when the
+// stored core token's audience doesn't already cover that resource.
+// See tokenmanager.Manager.TokenForResource for the resolution rules.
+func TokenForResource(ctx context.Context, resourceBaseURL string) (string, error) {
+	m, err := defaultManager()
+	if err != nil {
+		return "", err
+	}
+	return m.TokenForResource(ctx, resourceBaseURL) //nolint:wrapcheck // shim returns the lib error verbatim
+}
+
+// Token is the full-control entry point. Use TokenForResource for the
+// common case; this exists so callers can override the wire-level
+// Audience, RequestedTokenType, or Scope per call.
+func Token(ctx context.Context, req TokenRequest) (string, error) {
+	m, err := defaultManager()
+	if err != nil {
+		return "", err
+	}
+	return m.Token(ctx, req) //nolint:wrapcheck // shim returns the lib error verbatim
+}

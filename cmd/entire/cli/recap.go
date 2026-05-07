@@ -120,7 +120,7 @@ func runRecap(ctx context.Context, w io.Writer, f *recapFlags) error {
 	if err != nil {
 		return err
 	}
-	client, err := NewAuthenticatedAPIClient(f.insecureHTTP)
+	client, err := NewAuthenticatedAPIClient(ctx, f.insecureHTTP)
 	if err != nil {
 		fmt.Fprintln(w, "Sign in with `entire login` to use `entire recap`.")
 		return NewSilentError(err)

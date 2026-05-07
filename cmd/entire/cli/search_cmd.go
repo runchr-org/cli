@@ -108,7 +108,10 @@ branch:<name>, repo:<owner/name>, and repo:* to search all accessible repos.`,
 
 			serviceURL := os.Getenv("ENTIRE_SEARCH_URL")
 			if serviceURL == "" {
-				serviceURL = search.DefaultServiceURL
+				// Honour ENTIRE_API_BASE_URL: search lives on the data API
+				// host. Fall back to search.DefaultServiceURL only when no
+				// API base URL is configured (production default).
+				serviceURL = api.BaseURL()
 			}
 
 			searchCfg := search.Config{
@@ -207,7 +210,7 @@ branch:<name>, repo:<owner/name>, and repo:* to search all accessible repos.`,
 // must never pollute the user's prompt with error output.
 func completeRepoFlag(cmd *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 	suggestions := []string{"*"}
-	client, err := NewAuthenticatedAPIClient(false)
+	client, err := NewAuthenticatedAPIClient(cmd.Context(), false)
 	if err != nil {
 		return suggestions, cobra.ShellCompDirectiveNoFileComp
 	}

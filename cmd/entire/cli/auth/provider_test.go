@@ -9,9 +9,12 @@ import (
 
 // Test-local mirrors of the v1 / v2 client_id values, so assertions
 // don't repeat the same string literal across multiple tests (goconst).
+// Both providers now share the same client_id; the constants are kept
+// distinct so a future divergence (or a regression that re-splits them)
+// shows up at a single edit site.
 const (
 	wantClientIDV1 = "entire-cli"
-	wantClientIDV2 = "cli"
+	wantClientIDV2 = "entire-cli"
 )
 
 func TestCurrentProvider_DefaultsToV1(t *testing.T) {

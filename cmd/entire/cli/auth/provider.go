@@ -31,7 +31,7 @@ var providers = map[string]providerConfig{
 		tokenPath:      "/oauth/token",
 	},
 	"v2": { //nolint:gosec // OAuth client_id and endpoint paths, not credentials
-		clientID:       "cli",
+		clientID:       "entire-cli",
 		deviceCodePath: "/api/auth/oauth/device/code",
 		tokenPath:      "/api/auth/token",
 	},

@@ -17,6 +17,13 @@ const (
 
 	// BaseURLEnvVar overrides the Entire API origin for local development.
 	BaseURLEnvVar = "ENTIRE_API_BASE_URL"
+
+	// AuthBaseURLEnvVar overrides only the auth/login origin (device flow,
+	// auth-tokens management, keyring key). Falls back to BaseURLEnvVar when
+	// unset, which is the right behavior for single-host deployments. Split
+	// hosts (e.g. auth on us.console.partial.to, data on partial.to) set
+	// both.
+	AuthBaseURLEnvVar = "ENTIRE_AUTH_BASE_URL"
 )
 
 // BaseURL returns the effective Entire API base URL.
@@ -27,6 +34,18 @@ func BaseURL() string {
 	}
 
 	return DefaultBaseURL
+}
+
+// AuthBaseURL returns the origin used for the device-flow login, auth-token
+// management endpoints, and the keyring key under which the bearer token is
+// stored. ENTIRE_AUTH_BASE_URL takes precedence; otherwise it falls back to
+// BaseURL() so single-host deployments keep working unchanged.
+func AuthBaseURL() string {
+	if raw := strings.TrimSpace(os.Getenv(AuthBaseURLEnvVar)); raw != "" {
+		return normalizeBaseURL(raw)
+	}
+
+	return BaseURL()
 }
 
 // ResolveURL joins an API-relative path against the effective base URL.

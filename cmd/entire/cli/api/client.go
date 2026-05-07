@@ -23,8 +23,17 @@ type Client struct {
 	baseURL    string
 }
 
-// NewClient creates a new authenticated API client with an explicit bearer token.
+// NewClient creates a new authenticated API client with an explicit bearer
+// token, targeting the data API base URL (BaseURL()).
 func NewClient(token string) *Client {
+	return NewClientWithBaseURL(token, BaseURL())
+}
+
+// NewClientWithBaseURL creates a new authenticated API client targeting an
+// explicit base URL. Use this for endpoints that live on the auth host (e.g.
+// auth-token management) when ENTIRE_AUTH_BASE_URL splits the auth origin
+// from the data API origin.
+func NewClientWithBaseURL(token, baseURL string) *Client {
 	return &Client{
 		httpClient: &http.Client{
 			Transport: &bearerTransport{
@@ -32,7 +41,7 @@ func NewClient(token string) *Client {
 				base:  http.DefaultTransport,
 			},
 		},
-		baseURL: BaseURL(),
+		baseURL: baseURL,
 	}
 }
 

@@ -53,6 +53,28 @@ func TestRequireSecureURL_RejectsHTTP(t *testing.T) {
 	}
 }
 
+func TestAuthBaseURL_FallsBackToBaseURL(t *testing.T) {
+	t.Setenv(BaseURLEnvVar, "https://partial.to")
+	t.Setenv(AuthBaseURLEnvVar, "")
+
+	if got := AuthBaseURL(); got != "https://partial.to" {
+		t.Fatalf("AuthBaseURL() = %q, want fallback to BaseURL %q", got, "https://partial.to")
+	}
+}
+
+func TestAuthBaseURL_OverridesBaseURL(t *testing.T) {
+	t.Setenv(BaseURLEnvVar, "https://partial.to")
+	t.Setenv(AuthBaseURLEnvVar, " https://us.console.partial.to/ ")
+
+	if got := AuthBaseURL(); got != "https://us.console.partial.to" {
+		t.Fatalf("AuthBaseURL() = %q, want %q", got, "https://us.console.partial.to")
+	}
+
+	if got := BaseURL(); got != "https://partial.to" {
+		t.Fatalf("BaseURL() = %q, want unchanged %q", got, "https://partial.to")
+	}
+}
+
 func TestResolveURL(t *testing.T) {
 	t.Setenv(BaseURLEnvVar, "http://localhost:8787/")
 

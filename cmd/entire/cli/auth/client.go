@@ -48,7 +48,7 @@ func NewClient(httpClient *http.Client) *Client {
 	p := currentProvider()
 	return &Client{inner: &deviceflow.Client{
 		HTTP:           httpClient,
-		BaseURL:        api.BaseURL(),
+		BaseURL:        api.AuthBaseURL(),
 		ClientID:       p.clientID,
 		Scope:          "cli",
 		UserAgent:      p.clientID,
@@ -62,7 +62,7 @@ func (c *Client) BaseURL() string { return c.inner.BaseURL }
 
 // StartDeviceAuth requests a fresh device code.
 func (c *Client) StartDeviceAuth(ctx context.Context) (*DeviceAuthStart, error) {
-	return c.inner.StartDeviceAuth(ctx)
+	return c.inner.StartDeviceAuth(ctx) //nolint:wrapcheck // shim preserves the lib's wrapped errors verbatim
 }
 
 // PollDeviceAuth polls the token endpoint. On any RFC 8628 §3.5 error,
@@ -78,7 +78,7 @@ func (c *Client) PollDeviceAuth(ctx context.Context, deviceCode string) (*Device
 				ErrorDescription: descriptionFromSentinel(err, code),
 			}, nil
 		}
-		return nil, err
+		return nil, err //nolint:wrapcheck // shim returns deviceflow errors verbatim so callers can errors.Is on sentinels
 	}
 
 	return &DeviceAuthPoll{

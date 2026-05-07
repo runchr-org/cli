@@ -40,7 +40,7 @@ func (s *Store) SaveToken(baseURL, token string) error {
 	if token == "" {
 		return errors.New("refusing to save empty token")
 	}
-	return s.inner.SaveTokens(baseURL, tokens.TokenSet{AccessToken: token})
+	return s.inner.SaveTokens(baseURL, tokens.TokenSet{AccessToken: token}) //nolint:wrapcheck // shim returns the lib error verbatim
 }
 
 // GetToken retrieves a stored token for the given base URL. Returns
@@ -71,10 +71,45 @@ func (s *Store) GetToken(baseURL string) (string, error) {
 
 // DeleteToken removes a stored token for the given base URL.
 func (s *Store) DeleteToken(baseURL string) error {
-	return s.inner.DeleteTokens(baseURL)
+	return s.inner.DeleteTokens(baseURL) //nolint:wrapcheck // shim returns the lib error verbatim
 }
 
-// LookupCurrentToken retrieves the token for the current base URL.
+// SaveTokens implements tokenstore.Store. Used by the tokenmanager.
+func (s *Store) SaveTokens(profile string, t tokens.TokenSet) error {
+	return s.inner.SaveTokens(profile, t) //nolint:wrapcheck // shim returns the lib error verbatim
+}
+
+// LoadTokens implements tokenstore.Store, preserving the legacy bare-string
+// fallback path so users with pre-shim keyring entries don't appear logged
+// out after upgrading.
+func (s *Store) LoadTokens(profile string) (tokens.TokenSet, error) {
+	t, err := s.inner.LoadTokens(profile)
+	if err == nil {
+		return t, nil
+	}
+	if !errors.Is(err, tokenstore.ErrNotFound) {
+		return tokens.TokenSet{}, err //nolint:wrapcheck // shim returns the lib error verbatim
+	}
+
+	raw, kerr := keyring.Get(s.inner.Service, profile)
+	if errors.Is(kerr, keyring.ErrNotFound) {
+		return tokens.TokenSet{}, tokenstore.ErrNotFound
+	}
+	if kerr != nil {
+		return tokens.TokenSet{}, fmt.Errorf("get token from keyring: %w", kerr)
+	}
+	return tokens.TokenSet{AccessToken: raw}, nil
+}
+
+// DeleteTokens implements tokenstore.Store.
+func (s *Store) DeleteTokens(profile string) error {
+	return s.inner.DeleteTokens(profile) //nolint:wrapcheck // shim returns the lib error verbatim
+}
+
+// LookupCurrentToken retrieves the token for the current auth base URL.
+// Tokens are keyed by the auth issuer (api.AuthBaseURL()) since that's the
+// host that minted them; in single-host deployments AuthBaseURL falls back
+// to BaseURL so behaviour is unchanged.
 func LookupCurrentToken() (string, error) {
-	return NewStore().GetToken(api.BaseURL())
+	return NewStore().GetToken(api.AuthBaseURL())
 }
