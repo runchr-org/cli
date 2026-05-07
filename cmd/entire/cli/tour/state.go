@@ -1,4 +1,4 @@
-package learn
+package tour
 
 import (
 	"context"
@@ -28,7 +28,7 @@ const (
 	StageWorkflow Stage = "workflow"
 )
 
-// State captures everything `entire learn` needs to know about the user's
+// State captures everything `entire tour` needs to know about the user's
 // repo to choose which tour to render.
 type State struct {
 	Stage           Stage    `json:"stage"`
@@ -38,12 +38,12 @@ type State struct {
 }
 
 // SettingsLoader matches the cli package's LoadEntireSettings signature.
-// Injecting it keeps the learn package free of a dependency on the cli
+// Injecting it keeps the tour package free of a dependency on the cli
 // package (which would create a cycle).
 type SettingsLoader func(ctx context.Context) (enabled bool, isSetUp bool, err error)
 
 // AgentInstallChecker matches the cli package's GetAgentsWithHooksInstalled.
-// Same rationale: avoids a cli→learn→cli import cycle.
+// Same rationale: avoids a cli→tour→cli import cycle.
 type AgentInstallChecker func(ctx context.Context) []types.AgentName
 
 // ResolveState returns the routing stage and supporting state. It does not
@@ -131,7 +131,7 @@ type TextGeneratorChoice struct {
 // PATH. Honors a configured summary provider when one is set; otherwise
 // returns the first registered agent that meets both conditions.
 //
-// Unlike `entire explain --generate`, this never prompts. `entire learn`
+// Unlike `entire explain --generate`, this never prompts. `entire tour`
 // runs non-interactively and a working tour beats a blocking picker —
 // users who want to pin a provider can already set
 // `entire configure --summarize-provider`.

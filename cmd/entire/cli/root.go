@@ -91,7 +91,7 @@ func NewRootCmd() *cobra.Command {
 
 	// Top-level lifecycle and standalone commands.
 	cmd.AddCommand(cliReview.NewCommand(buildReviewDeps(newReviewAttachCmd()))) // hidden during maturation; runs configured review skills
-	cmd.AddCommand(newLearnCmd())                                               // hidden during maturation; advertised under 'entire labs'
+	cmd.AddCommand(newTourCmd())                                               // hidden during maturation; advertised under 'entire labs'
 	cmd.AddCommand(newCleanCmd())
 	cmd.AddCommand(newSetupCmd()) // 'configure' — non-agent settings; agent CRUD lives under 'agent'
 	cmd.AddCommand(newEnableCmd())

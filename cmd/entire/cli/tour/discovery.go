@@ -1,6 +1,6 @@
-// Package learn powers `entire labs learn` — a state-aware tour of the
+// Package tour powers `entire labs tour` — a state-aware tour of the
 // installed CLI rendered by the user's locally-installed agent.
-package learn
+package tour
 
 import (
 	"strings"
@@ -10,7 +10,7 @@ import (
 
 // CommandNode is one node in the discovered cobra command tree.
 //
-// The shape mirrors what `entire learn` hands to a TextGenerator: enough
+// The shape mirrors what `entire tour` hands to a TextGenerator: enough
 // detail for the model to write recipes for each capability without being
 // told to invent any specific command name.
 type CommandNode struct {

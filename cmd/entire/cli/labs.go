@@ -20,9 +20,9 @@ var experimentalCommands = []experimentalCommandInfo{
 		Summary:    "Run configured review skills against the current branch",
 	},
 	{
-		Name:       "learn",
-		Invocation: "entire learn",
-		Summary:    "Tour the Entire CLI tailored to your repo state",
+		Name:       "tour",
+		Invocation: "entire tour",
+		Summary:    "Tour the Entire CLI",
 	},
 }
 
@@ -63,7 +63,7 @@ to try now, but details may change based on feedback.
 Available experimental commands:
 ` + renderExperimentalCommands(experimentalCommands) + `
 Try:
-  entire learn --help
+  entire tour --help
   entire review --help
 `
 }

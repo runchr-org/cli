@@ -1,4 +1,4 @@
-package learn
+package tour
 
 import (
 	"context"
@@ -29,7 +29,7 @@ type Options struct {
 
 	// Labs is the cli's experimental-commands registry, surfaced under the
 	// rendered Labs section. Cli builds this slice from its own
-	// experimentalCommands list — passing it through keeps the learn
+	// experimentalCommands list — passing it through keeps the tour
 	// package free of cli imports while still giving the agent enough
 	// information to talk about commands like 'entire review' that are
 	// Hidden in the cobra tree.
@@ -46,7 +46,34 @@ type Result struct {
 
 // ErrNotGitRepo is returned when Generate is called outside a git
 // repository. Callers translate it to a friendly user message.
-var ErrNotGitRepo = errors.New("entire learn: not a git repository")
+var ErrNotGitRepo = errors.New("entire tour: not a git repository")
+
+// GenerateLatest fetches the latest entry from the entire.io blog feed
+// and asks the configured TextGenerator to summarize it. Unlike Generate,
+// this does not require a git repo or any session history — it's a
+// pure "what's new in the CLI" call. Returns the raw markdown.
+func GenerateLatest(ctx context.Context, opts Options) (*Result, error) {
+	choice, err := ResolveTextGenerator(ctx, opts.ConfiguredProvider)
+	if err != nil {
+		return nil, err
+	}
+	post, err := FetchLatestBlogPost(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fetch blog feed: %w", err)
+	}
+	prompt, err := BuildLatestPrompt(post)
+	if err != nil {
+		return nil, err
+	}
+	rendered, err := choice.Generator.GenerateText(ctx, prompt, opts.SummarizeModel)
+	if err != nil {
+		return nil, fmt.Errorf("generate latest dispatch with %s: %w", choice.DisplayName, err)
+	}
+	return &Result{
+		Markdown:    rendered,
+		DisplayName: choice.DisplayName,
+	}, nil
+}
 
 // Generate is the headless entry point: classify the repo, discover the
 // command surface, build the prompt, and ask the configured TextGenerator

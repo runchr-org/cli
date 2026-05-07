@@ -30,7 +30,7 @@ const DefaultTerminalWidth = 80
 
 // StyleOverride mutates the resolved StyleConfig before glamour builds
 // the renderer. Used by commands that want to tweak a single field of the
-// shared palette (e.g., `entire labs learn` recoloring H2 to match its
+// shared palette (e.g., `entire labs tour` recoloring H2 to match its
 // capability framing) without forking the whole config.
 type StyleOverride func(*ansi.StyleConfig)
 

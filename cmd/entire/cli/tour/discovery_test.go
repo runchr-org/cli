@@ -1,4 +1,4 @@
-package learn
+package tour
 
 import (
 	"testing"

@@ -105,7 +105,7 @@ func TestLabsRegistryCommandsExistAtCanonicalPaths(t *testing.T) {
 		// Invocation has the form "entire <segments...>"; cobra's Find
 		// takes the path after "entire". Splitting on whitespace handles
 		// both top-level commands ("entire review") and subcommands
-		// ("entire labs learn").
+		// ("entire labs tour").
 		segments := strings.Fields(strings.TrimPrefix(info.Invocation, "entire "))
 		cmd, _, err := root.Find(segments)
 		if err != nil {
