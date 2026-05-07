@@ -37,3 +37,16 @@ run = "CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o entire.exe ./cmd/enti
 [tasks."build:windows-arm64"]
 description = "Cross-compile for Windows arm64"
 run = "CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -o entire-arm64.exe ./cmd/entire/"
+
+# tour:regenerate refreshes the embedded `entire tour` markdown by running
+# the agent-driven generation path against the current cobra command tree.
+# Required before each release so the shipped binary reflects the live
+# command surface; the release CI workflow runs this prior to GoReleaser.
+# Local devs can run it manually if they want a "real" tour from a fresh
+# checkout — without it, `entire tour` prints the stub.
+#
+# Requires `claude` (or another TextGenerator-capable agent) on PATH and
+# the corresponding auth (typically ANTHROPIC_API_KEY) in the environment.
+[tasks."tour:regenerate"]
+description = "Refresh cmd/entire/cli/tour/embedded/tour.md via the agent"
+run = "go run ./cmd/entire tour --regenerate > cmd/entire/cli/tour/embedded/tour.md"

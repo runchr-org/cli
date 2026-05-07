@@ -35,7 +35,10 @@ text_generator support.`
 // `entire labs` and runs normally for users who already know the name.
 // Mirrors the registration shape of `entire review`.
 func newTourCmd() *cobra.Command {
-	var latestFlag bool
+	var (
+		latestFlag     bool
+		regenerateFlag bool
+	)
 
 	cmd := &cobra.Command{
 		Use: "tour",
@@ -44,36 +47,37 @@ func newTourCmd() *cobra.Command {
 		// `entire tour --help` and the command works normally.
 		Hidden: true,
 		Short:  "Tour the Entire CLI",
-		Long: `Generate a state-aware tour of the Entire CLI.
+		Long: `Render a state-aware tour of the Entire CLI.
 
-Detects whether Entire is enabled, which agents are installed, and whether
-this repo has captured history. Then asks a locally-installed TextGenerator
-agent (claude, codex, gemini, cursor, copilot, or an external entire-agent-*
-plugin that declares text_generator) to render an actionable tour against
-the live command surface.
+The default tour reads from a pre-rendered markdown file shipped with
+the binary, so it returns instantly with no agent or network call. The
+content reflects the CLI surface as of the last release; maintainers
+re-run with --regenerate before each release to refresh it.
 
 Pass --latest to skip the tour and instead summarize the latest post
 from the entire.io blog feed — a quick "what's new in Entire" digest.
+That path requires a TextGenerator-capable agent on your PATH and a
+working network connection; output streams in once the agent responds.
 
 Labs entry: tour is experimental. We are actively refining it based on
 user feedback.
-
-Requires a TextGenerator-capable agent on your PATH. Output is rendered
-through the shared markdown palette in interactive terminals; pipelines
-get raw markdown so they remain grep-friendly.
 
 Examples:
   entire tour
   entire tour --latest`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return executeTour(cmd.Context(), cmd.OutOrStdout(), cmd.Root(), latestFlag)
+			return executeTour(cmd.Context(), cmd.OutOrStdout(), cmd.Root(), latestFlag, regenerateFlag)
 		},
 	}
 	cmd.Flags().BoolVar(&latestFlag, "latest", false, "Summarize the latest entire.io blog post instead of touring the CLI")
+	cmd.Flags().BoolVar(&regenerateFlag, "regenerate", false, "Force the agent-driven path and write the result to stdout (for refreshing the embedded tour before a release)")
+	if err := cmd.Flags().MarkHidden("regenerate"); err != nil {
+		panic(fmt.Sprintf("hide regenerate flag: %v", err))
+	}
 	return cmd
 }
 
-func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFlag bool) error {
+func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFlag, regenerateFlag bool) error {
 	settings, err := LoadEntireSettings(ctx)
 	configuredProvider := ""
 	if err == nil && settings.SummaryGeneration != nil {
@@ -85,7 +89,11 @@ func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFl
 		ListInstalledAgents: GetAgentsWithHooksInstalled,
 		ConfiguredProvider:  configuredProvider,
 		Labs:                labsRegistryForTour(),
+		Regenerate:          regenerateFlag,
 	}
+
+	usedTUI := interactive.IsTerminalWriter(w) && !IsAccessibleMode()
+	needsAgent := latestFlag || regenerateFlag
 
 	generate := func(ctx context.Context) (*tour.Result, error) {
 		if latestFlag {
@@ -94,17 +102,15 @@ func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFl
 		return runTourGenerate(ctx, root, opts)
 	}
 
-	usedTUI := interactive.IsTerminalWriter(w) && !IsAccessibleMode()
-	title, subtitle := "Generating tour", "This can take a moment."
-	if latestFlag {
-		title = "Fetching the latest dispatch"
-	}
-
 	var (
 		result   *tour.Result
 		generErr error
 	)
-	if usedTUI {
+	if usedTUI && needsAgent {
+		title, subtitle := "Regenerating tour", "This can take a moment."
+		if latestFlag {
+			title = "Fetching the latest dispatch"
+		}
 		result, generErr = runTourTUI(ctx, w, title, subtitle, generate)
 		if errors.Is(generErr, errTourCancelled) {
 			return nil
@@ -116,6 +122,14 @@ func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFl
 		return translateTourError(generErr)
 	}
 
+	// --regenerate dumps the raw agent output verbatim so it can be
+	// piped into embedded/tour.md. Skip glamour and the attribution
+	// footer so the captured file stays clean markdown.
+	if regenerateFlag {
+		fmt.Fprintln(w, result.Markdown)
+		return nil
+	}
+
 	rendered, err := mdrender.RenderForWriterWithOverride(w, result.Markdown, tourHeaderOverride)
 	if err != nil {
 		// mdrender failed — fall back to raw markdown rather than
@@ -123,7 +137,7 @@ func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFl
 		rendered = result.Markdown
 	}
 	fmt.Fprintln(w, rendered)
-	if usedTUI {
+	if usedTUI && result.DisplayName != "" {
 		fmt.Fprintf(w, "(rendered by %s)\n", result.DisplayName)
 	}
 	return nil

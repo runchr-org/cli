@@ -34,6 +34,12 @@ type Options struct {
 	// information to talk about commands like 'entire review' that are
 	// Hidden in the cobra tree.
 	Labs []LabsCommand
+
+	// Regenerate forces the agent-driven path even when the embedded
+	// tour is available. Used by the `--regenerate` maintainer flag to
+	// produce the markdown that gets committed back into
+	// embedded/tour.md before each release.
+	Regenerate bool
 }
 
 // Result is the markdown returned by an agent plus enough context for the
@@ -75,10 +81,14 @@ func GenerateLatest(ctx context.Context, opts Options) (*Result, error) {
 	}, nil
 }
 
-// Generate is the headless entry point: classify the repo, discover the
-// command surface, build the prompt, and ask the configured TextGenerator
-// to render the tour. Returns the raw markdown — printing and styling
-// (spinner TUI, glamour) are the caller's responsibility.
+// Generate is the headless entry point: classify the repo, then return
+// the right tour for the user's stage. By default the workflow / first-
+// capture stages serve from the embedded pre-rendered markdown
+// (instant, deterministic across users for a given CLI version), and
+// the setup / agent-install stages render hand-written prose. Pass
+// Options.Regenerate=true to force the agent-driven path — used by
+// the maintainer-only `--regenerate` flag to produce the markdown
+// that gets committed back into embedded/tour.md before a release.
 func Generate(ctx context.Context, root *cobra.Command, opts Options) (*Result, error) {
 	state, err := ResolveState(ctx, opts.LoadSettings, opts.ListInstalledAgents)
 	if err != nil {
@@ -88,11 +98,34 @@ func Generate(ctx context.Context, root *cobra.Command, opts Options) (*Result, 
 		return nil, ErrNotGitRepo
 	}
 
+	if opts.Regenerate {
+		return regenerateFromAgent(ctx, root, opts, state)
+	}
+
+	switch state.Stage {
+	case StageSetup:
+		return &Result{Markdown: setupPromptText, State: state}, nil
+	case StageAgentInstall:
+		return &Result{Markdown: agentInstallPromptText, State: state}, nil
+	}
+
+	markdown := embeddedTour
+	if state.Stage == StageFirstCapture {
+		markdown += firstCaptureTail
+	}
+	return &Result{Markdown: markdown, State: state}, nil
+}
+
+// regenerateFromAgent runs the original agent-driven generation path.
+// Maintainers invoke it via `entire tour --regenerate` before each
+// release, then commit the captured markdown to embedded/tour.md.
+// Skipped on every normal user invocation so the runtime cost stays
+// at "read embedded file + glamour render".
+func regenerateFromAgent(ctx context.Context, root *cobra.Command, opts Options, state State) (*Result, error) {
 	choice, err := ResolveTextGenerator(ctx, opts.ConfiguredProvider)
 	if err != nil {
 		return nil, err
 	}
-
 	surface := Discover(root)
 	prompt, err := BuildPrompt(PromptInput{
 		State:   state,
@@ -102,12 +135,10 @@ func Generate(ctx context.Context, root *cobra.Command, opts Options) (*Result, 
 	if err != nil {
 		return nil, err
 	}
-
 	rendered, err := choice.Generator.GenerateText(ctx, prompt, opts.SummarizeModel)
 	if err != nil {
-		return nil, fmt.Errorf("generate tour with %s: %w", choice.DisplayName, err)
+		return nil, fmt.Errorf("regenerate tour with %s: %w", choice.DisplayName, err)
 	}
-
 	return &Result{
 		Markdown:    rendered,
 		DisplayName: choice.DisplayName,

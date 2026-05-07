@@ -82,6 +82,24 @@ jobs:
             git log --oneline "${BASE_TAG}..HEAD" --no-merges >> "$RUNNER_TEMP/release_notes.md"
           fi
 
+      - name: Install Claude CLI for tour regeneration
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Regenerate embedded tour
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret is required to regenerate the embedded tour"
+            exit 1
+          fi
+          mise run tour:regenerate
+          if ! grep -q '^## ' cmd/entire/cli/tour/embedded/tour.md; then
+            echo "::error::tour:regenerate produced no markdown headers - agent likely returned an error"
+            cat cmd/entire/cli/tour/embedded/tour.md
+            exit 1
+          fi
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@1a80836c5c9d9e5755a25cb59ec6f45a3b5f41a8 # v7
         with:
