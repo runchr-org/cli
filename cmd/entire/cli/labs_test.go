@@ -102,12 +102,20 @@ func TestLabsRegistryCommandsExistAtCanonicalPaths(t *testing.T) {
 
 	root := NewRootCmd()
 	for _, info := range experimentalCommands {
-		cmd, _, err := root.Find([]string{info.Name})
+		// Invocation has the form "entire <segments...>"; cobra's Find
+		// takes the path after "entire". Splitting on whitespace handles
+		// both top-level commands ("entire review") and subcommands
+		// ("entire labs learn").
+		segments := strings.Fields(strings.TrimPrefix(info.Invocation, "entire "))
+		cmd, _, err := root.Find(segments)
 		if err != nil {
-			t.Fatalf("labs command %q should exist at canonical path: %v", info.Name, err)
+			t.Fatalf("labs command %q should exist at canonical path %q: %v", info.Name, info.Invocation, err)
 		}
 		if cmd == nil {
 			t.Fatalf("labs command %q resolved to nil command", info.Name)
+		}
+		if cmd.Name() != info.Name {
+			t.Fatalf("labs command %q resolved to %q at path %q", info.Name, cmd.Name(), info.Invocation)
 		}
 	}
 }

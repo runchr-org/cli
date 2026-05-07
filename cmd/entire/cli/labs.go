@@ -19,6 +19,11 @@ var experimentalCommands = []experimentalCommandInfo{
 		Invocation: "entire review",
 		Summary:    "Run configured review skills against the current branch",
 	},
+	{
+		Name:       "learn",
+		Invocation: "entire learn",
+		Summary:    "Tour the Entire CLI tailored to your repo state",
+	},
 }
 
 func newLabsCmd() *cobra.Command {
@@ -30,10 +35,9 @@ func newLabsCmd() *cobra.Command {
 			if len(args) == 0 {
 				return nil
 			}
-			err := fmt.Errorf("unknown labs topic %q", args[0])
-			fmt.Fprintf(cmd.ErrOrStderr(),
-				"%v\n\nRun `entire labs` to see available experimental commands, or run `entire review --help` for command-specific help.\n",
-				err)
+			topic := args[0]
+			err := fmt.Errorf("unknown labs topic %q", topic)
+			fmt.Fprintf(cmd.ErrOrStderr(), "%v\n\n%s\n", err, labsTopicHint(topic))
 			return NewSilentError(err)
 		},
 		Run: func(cmd *cobra.Command, _ []string) {
@@ -59,15 +63,36 @@ to try now, but details may change based on feedback.
 Available experimental commands:
 ` + renderExperimentalCommands(experimentalCommands) + `
 Try:
+  entire learn --help
   entire review --help
 `
 }
 
+// labsTopicHint returns the redirect string shown when the user types
+// `entire labs <topic>` and topic is not a real labs subcommand. When the
+// topic matches a known experimental command (e.g. `entire labs review`
+// when review actually lives at the top level), point at its canonical
+// invocation instead of leaving the user to guess.
+func labsTopicHint(topic string) string {
+	for _, info := range experimentalCommands {
+		if info.Name == topic {
+			return fmt.Sprintf("%s lives at `%s`. Run `%s --help` for command-specific help.", info.Name, info.Invocation, info.Invocation)
+		}
+	}
+	return "Run `entire labs` to see available experimental commands."
+}
+
 func renderExperimentalCommands(commands []experimentalCommandInfo) string {
+	width := 16
+	for _, info := range commands {
+		if l := len(info.Invocation); l > width {
+			width = l
+		}
+	}
 	var out strings.Builder
 	for _, info := range commands {
 		out.WriteString("  ")
-		out.WriteString(padRight(info.Invocation, 16))
+		out.WriteString(padRight(info.Invocation, width))
 		out.WriteByte(' ')
 		out.WriteString(info.Summary)
 		out.WriteByte('\n')

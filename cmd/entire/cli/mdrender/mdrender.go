@@ -28,6 +28,12 @@ import (
 // is available. Matches the cap used by status_style.getTerminalWidth.
 const DefaultTerminalWidth = 80
 
+// StyleOverride mutates the resolved StyleConfig before glamour builds
+// the renderer. Used by commands that want to tweak a single field of the
+// shared palette (e.g., `entire labs learn` recoloring H2 to match its
+// capability framing) without forking the whole config.
+type StyleOverride func(*ansi.StyleConfig)
+
 // Render produces a glamour-styled string from markdown using the entire
 // CLI palette. width is the word-wrap target; darkBackground selects the
 // dark or light palette variant.
@@ -37,6 +43,15 @@ const DefaultTerminalWidth = 80
 // than a runtime condition. Renderer panics are recovered and returned as
 // errors so callers can fall back to raw markdown instead of crashing.
 func Render(markdown string, width int, darkBackground bool) (rendered string, err error) {
+	return RenderWithOverride(markdown, width, darkBackground, nil)
+}
+
+// RenderWithOverride is Render with an optional palette transform applied
+// after the shared palette is resolved. A nil override is equivalent to
+// calling Render. Callers that need to recolor a single heading level or
+// adjust list bullets should reach for this rather than reimplementing
+// the renderer construction.
+func RenderWithOverride(markdown string, width int, darkBackground bool, override StyleOverride) (rendered string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			rendered = ""
@@ -44,8 +59,13 @@ func Render(markdown string, width int, darkBackground bool) (rendered string, e
 		}
 	}()
 
+	styles := stylesForBackground(darkBackground)
+	if override != nil {
+		override(&styles)
+	}
+
 	renderer, err := glamour.NewTermRenderer(
-		glamour.WithStyles(stylesForBackground(darkBackground)),
+		glamour.WithStyles(styles),
 		glamour.WithWordWrap(width),
 		glamour.WithPreservedNewLines(),
 	)
@@ -67,11 +87,24 @@ func Render(markdown string, width int, darkBackground bool) (rendered string, e
 // Width is auto-detected from w (capped at 80); background palette is
 // detected via termenv.HasDarkBackground.
 func RenderForWriter(w io.Writer, markdown string) (string, error) {
+	return RenderForWriterWithOverride(w, markdown, nil)
+}
+
+// RenderForWriterWithOverride is RenderForWriter plus an optional palette
+// transform. Like RenderForWriter, it returns the input unchanged when w is
+// not a terminal or NO_COLOR is set, so the override never applies in those
+// cases — pipelines stay grep-friendly.
+func RenderForWriterWithOverride(w io.Writer, markdown string, override StyleOverride) (string, error) {
 	if !shouldRender(w) {
 		return markdown, nil
 	}
-	return Render(markdown, terminalWidth(w), termenv.HasDarkBackground())
+	return RenderWithOverride(markdown, terminalWidth(w), termenv.HasDarkBackground(), override)
 }
+
+// StringPtr returns a pointer to v. Exposed so callers building a
+// StyleOverride can set glamour's `*string` color fields without
+// reimplementing the helper.
+func StringPtr(v string) *string { return &v }
 
 // shouldRender returns true if w is a terminal writer and NO_COLOR is unset.
 func shouldRender(w io.Writer) bool {
