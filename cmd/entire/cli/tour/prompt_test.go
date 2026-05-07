@@ -1,13 +1,17 @@
 package tour
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // TestEscapeForTags_NeutralizesClosingTags asserts that every closing
 // tag the system prompt wraps content in gets escaped to a backslash
-// form regardless of case or interior whitespace. The prompt's threat
-// model is "untrusted feed/tree content can't break out of its
-// <state>/<commands>/<labs>/<post> tag wrapper" — tightening this
-// regex was a security-sensitive change so it gets table coverage.
+// form regardless of case, interior whitespace, or Unicode bypass
+// attempts. Tightening this regex was a security-sensitive change so
+// it gets table coverage with explicit \uXXXX escapes — invisible
+// Unicode characters render identically to ASCII in source, and
+// readers cannot tell what's being asserted without the escapes.
 func TestEscapeForTags_NeutralizesClosingTags(t *testing.T) {
 	cases := []struct {
 		name string
@@ -33,29 +37,39 @@ func TestEscapeForTags_NeutralizesClosingTags(t *testing.T) {
 		{"non-target tag is left alone", "</statement>", "</statement>"},
 		{"prefix non-match", "</states>", "</states>"},
 		{"close-only is required", "<post>", "<post>"},
+
 		// Unicode bypass attempts (codex adversarial-review findings).
-		// Zero-width space inside the tag name splits the literal
-		// alternation match — we strip invisible chars first so the
-		// regex sees `</post>` and escapes it.
+		// Zero-width space (U+200B) inside the tag name splits the
+		// literal alternation match — stripInvisibles drops \p{Cf}
+		// chars before the regex sees the bytes.
 		{"zero-width space in tag name", "</po​st>", "<\\/post>"},
-		// NO-BREAK SPACE between name and >. \s only matches ASCII; the
-		// extended class catches \p{Z}.
+		// NO-BREAK SPACE (U+00A0) before the close. Falls in \p{Z}.
 		{"no-break space before close", "</post >", "<\\/post>"},
-		// Right-to-left mark inside the tag — \p{Cf} format chars are
-		// stripped before regex match.
+		// Right-to-left mark (U+200F) inside the tag name. \p{Cf}.
 		{"rtl mark in tag", "</p‏ost>", "<\\/post>"},
-		// Pass-3 regression: NBSP between letters of the tag name.
-		// Pass-2's strip only covered \p{Cf}, so this bypassed.
-		// The \p{Z} branch in stripInvisibles now catches it.
-		{"NBSP inside tag name", "</po st>", "<\\/post>"},
-		{"NARROW NBSP inside tag name", "</po st>", "<\\/post>"},
-		{"IDEOGRAPHIC SPACE inside tag name", "</po　st>", "<\\/post>"},
+
+		// Pass-3 regression: visible Unicode whitespace BETWEEN
+		// letters of the tag name. Pass-2's strip only covered
+		// \p{Cf}; NBSP (U+00A0) is \p{Zs} and bypassed the escape.
+		// Test all four tag names so the fix isn't accidentally
+		// post-specific.
+		{"NBSP inside post", "</po st>", "<\\/post>"},
+		{"NBSP inside state", "</st ate>", "<\\/state>"},
+		{"NBSP inside commands", "</com mands>", "<\\/commands>"},
+		{"NBSP inside labs", "</la bs>", "<\\/labs>"},
+		// Other \p{Z} variants that had the same bypass.
+		{"narrow NBSP inside tag name", "</po st>", "<\\/post>"},
+		{"ideographic space inside tag name", "</po　st>", "<\\/post>"},
 		// Combined visible+invisible attack.
 		{"NBSP and ZWSP combined", "</p​o st>", "<\\/post>"},
+
 		// Empty payload should pass through.
 		{"empty payload", "", ""},
-		// Idempotence: escaping twice equals escaping once.
-		{"idempotent on already-escaped", "<\\/post>", "<\\/post>"},
+		// Already-escaped form should not double-escape — the regex
+		// requires `</tag>` not `<\/tag>` so the literal backslash
+		// breaks the match. (This is a non-match assertion, not a
+		// true idempotence proof; see the round-trip test below.)
+		{"already-escaped form is left alone", "<\\/post>", "<\\/post>"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -67,7 +81,31 @@ func TestEscapeForTags_NeutralizesClosingTags(t *testing.T) {
 	}
 }
 
-// TestStripControlSequences asserts that ANSI escapes, OSC sequences,
+// TestEscapeForTags_Idempotent asserts the real idempotence property:
+// applying escapeForTags twice produces the same result as applying
+// it once. Distinct from "already-escaped form is left alone" — that
+// only checks one specific shape; this checks the property over a
+// representative input.
+func TestEscapeForTags_Idempotent(t *testing.T) {
+	inputs := []string{
+		"</state>",
+		"</post >",
+		"before </state> middle </post> end",
+		"no tags here",
+		"",
+	}
+	for _, in := range inputs {
+		t.Run(fmt.Sprintf("%q", in), func(t *testing.T) {
+			once := escapeForTags([]byte(in))
+			twice := escapeForTags(once)
+			if string(once) != string(twice) {
+				t.Errorf("escapeForTags(escapeForTags(%q)) = %q, want %q", in, twice, once)
+			}
+		})
+	}
+}
+
+// TeststripControlSequences asserts that ANSI escapes, OSC sequences,
 // and C0/C1 control bytes are removed from agent output that gets
 // piped to disk on --regenerate. A compromised agent could otherwise
 // embed terminal-rewriting controls into the committed tour.md and
@@ -93,9 +131,9 @@ func TestStripControlSequences(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := StripControlSequences(tc.in)
+			got := stripControlSequences(tc.in)
 			if got != tc.want {
-				t.Errorf("StripControlSequences(%q) = %q, want %q", tc.in, got, tc.want)
+				t.Errorf("stripControlSequences(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}

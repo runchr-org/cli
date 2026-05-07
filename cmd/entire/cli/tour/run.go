@@ -122,7 +122,7 @@ func Generate(ctx context.Context, root *cobra.Command, opts Options) (*Result, 
 // Skipped on every normal user invocation so the runtime cost stays
 // at "read embedded file + glamour render".
 //
-// Output is run through StripControlSequences before return: the
+// Output is run through stripControlSequences before return: the
 // regen output gets piped to disk and embedded in the binary, so a
 // compromised agent could otherwise smuggle terminal escapes /
 // hyperlinks / title-rewrites into every future `entire tour` user.
@@ -145,12 +145,12 @@ func regenerateFromAgent(ctx context.Context, root *cobra.Command, opts Options,
 		return nil, fmt.Errorf("generate tour with %s: %w", choice.DisplayName, err)
 	}
 	return &Result{
-		Markdown:    StripControlSequences(rendered),
+		Markdown:    stripControlSequences(rendered),
 		DisplayName: choice.DisplayName,
 	}, nil
 }
 
-// StripControlSequences removes ANSI escape sequences, OSC sequences,
+// stripControlSequences removes ANSI escape sequences, OSC sequences,
 // and C0/C1 control bytes other than common whitespace (TAB, LF, CR)
 // from a markdown string. Used on agent output that gets persisted
 // (committed back into embedded/tour.md) or written to a non-TTY
@@ -161,7 +161,7 @@ func regenerateFromAgent(ctx context.Context, root *cobra.Command, opts Options,
 // Glamour-styled output is unaffected because it isn't run through
 // this function — glamour's own ANSI escapes are produced *after*
 // this stripping happens, in the cli layer.
-func StripControlSequences(s string) string {
+func stripControlSequences(s string) string {
 	return controlSequencePattern.ReplaceAllString(s, "")
 }
 
@@ -170,7 +170,7 @@ func StripControlSequences(s string) string {
 //   - Bare C0 control bytes other than \t \n \r, plus DEL
 //   - C1 control codepoints (U+0080-U+009F)
 //
-// Compiled once at init. Used by StripControlSequences above.
+// Compiled once at init. Used by stripControlSequences above.
 //
 // The C1 range is written as - because Go regex requires
 // valid UTF-8 input; raw \x80-\x9f are continuation bytes alone and

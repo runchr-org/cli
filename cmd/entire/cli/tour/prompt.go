@@ -266,12 +266,20 @@ var closingTagPattern = regexp.MustCompile(`(?i)<[\s\p{Z}\p{Cf}]*/[\s\p{Z}\p{Cf}
 // help or feed text and they have terminal-injection implications
 // when rendered.
 //
-// strings.Map (vs regex) is faster on the legitimate-content common
-// case where most runes are kept unchanged: a single pass with no
-// transient buffer when nothing matches.
+// Implementation: strings.Map fast-paths the no-change case (returns
+// the original string when every rune is kept unchanged), so this
+// function pays its byte/string-conversion overhead but does no extra
+// scan work for legitimate cobra-help payloads. The earlier regex
+// approach on []byte was zero-alloc on no-match; this version is
+// not, but the difference is negligible — the function runs only on
+// the --latest and --regenerate paths, both of which are dwarfed by
+// the agent call that follows.
 func stripInvisibles(payload []byte) []byte {
 	return []byte(strings.Map(func(r rune) rune {
 		switch {
+		// IMPORTANT: ASCII space is in unicode.Z (Zs); without this
+		// early-keep case the Z branch below would strip every
+		// legitimate space and break prose. Order matters.
 		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
 			return r
 		case unicode.Is(unicode.Cf, r):
