@@ -216,6 +216,38 @@ func TestExtractFilesFromApplyPatch(t *testing.T) {
 	}
 }
 
+func TestClassifyApplyPatchPaths(t *testing.T) {
+	t.Parallel()
+
+	added, modified, deleted := classifyApplyPatchPaths(
+		"*** Begin Patch\n*** Add File: a.txt\n+hi\n*** Update File: b.txt\n@@\n-old\n+new\n*** Delete File: c.txt\n*** End Patch\n",
+	)
+	require.Equal(t, []string{"a.txt"}, added)
+	require.Equal(t, []string{"b.txt"}, modified)
+	require.Equal(t, []string{"c.txt"}, deleted)
+}
+
+func TestClassifyApplyPatchPaths_AddWinsOverUpdate(t *testing.T) {
+	t.Parallel()
+	// If a path appears with both Add and Update verbs (envelopes shouldn't do
+	// this, but we're defensive), the more specific intent — Add — wins so
+	// callers route the file into NewFiles rather than ModifiedFiles.
+	added, modified, deleted := classifyApplyPatchPaths(
+		"*** Add File: a.txt\n*** Update File: a.txt\n",
+	)
+	require.Equal(t, []string{"a.txt"}, added)
+	require.Empty(t, modified)
+	require.Empty(t, deleted)
+}
+
+func TestClassifyApplyPatchPaths_Empty(t *testing.T) {
+	t.Parallel()
+	added, modified, deleted := classifyApplyPatchPaths("*** Begin Patch\n*** End Patch\n")
+	require.Empty(t, added)
+	require.Empty(t, modified)
+	require.Empty(t, deleted)
+}
+
 func TestSplitJSONL(t *testing.T) {
 	t.Parallel()
 

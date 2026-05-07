@@ -54,7 +54,7 @@ func (c *CodexAgent) InstallHooks(ctx context.Context, localDev bool, force bool
 	}
 
 	// Parse event types we manage
-	var sessionStart, userPromptSubmit, stop []MatcherGroup
+	var sessionStart, userPromptSubmit, stop, postToolUse []MatcherGroup
 	if err := parseHookType(rawHooks, "SessionStart", &sessionStart); err != nil {
 		return 0, err
 	}
@@ -64,11 +64,15 @@ func (c *CodexAgent) InstallHooks(ctx context.Context, localDev bool, force bool
 	if err := parseHookType(rawHooks, "Stop", &stop); err != nil {
 		return 0, err
 	}
+	if err := parseHookType(rawHooks, "PostToolUse", &postToolUse); err != nil {
+		return 0, err
+	}
 
 	if force {
 		sessionStart = removeEntireHooks(sessionStart)
 		userPromptSubmit = removeEntireHooks(userPromptSubmit)
 		stop = removeEntireHooks(stop)
+		postToolUse = removeEntireHooks(postToolUse)
 	}
 
 	// Build hook commands
@@ -84,9 +88,11 @@ func (c *CodexAgent) InstallHooks(ctx context.Context, localDev bool, force bool
 	}
 	userPromptSubmitCmd := cmdPrefix + "user-prompt-submit"
 	stopCmd := cmdPrefix + "stop"
+	postToolUseCmd := cmdPrefix + "post-tool-use"
 	if !localDev {
 		userPromptSubmitCmd = agent.WrapProductionSilentHookCommand(userPromptSubmitCmd)
 		stopCmd = agent.WrapProductionSilentHookCommand(stopCmd)
+		postToolUseCmd = agent.WrapProductionSilentHookCommand(postToolUseCmd)
 	}
 
 	count := 0
@@ -103,6 +109,10 @@ func (c *CodexAgent) InstallHooks(ctx context.Context, localDev bool, force bool
 		stop = addHook(stop, stopCmd)
 		count++
 	}
+	if !hookCommandExists(postToolUse, postToolUseCmd) {
+		postToolUse = addHook(postToolUse, postToolUseCmd)
+		count++
+	}
 
 	if count == 0 {
 		// Still ensure the feature flag is configured even if hooks
@@ -117,6 +127,7 @@ func (c *CodexAgent) InstallHooks(ctx context.Context, localDev bool, force bool
 	marshalHookType(rawHooks, "SessionStart", sessionStart)
 	marshalHookType(rawHooks, "UserPromptSubmit", userPromptSubmit)
 	marshalHookType(rawHooks, "Stop", stop)
+	marshalHookType(rawHooks, "PostToolUse", postToolUse)
 
 	// Preserve existing top-level keys (e.g., $schema) by reusing the parsed file
 	topLevel := make(map[string]json.RawMessage)
@@ -181,7 +192,7 @@ func (c *CodexAgent) UninstallHooks(ctx context.Context) error {
 		return nil
 	}
 
-	var sessionStart, userPromptSubmit, stop []MatcherGroup
+	var sessionStart, userPromptSubmit, stop, postToolUse []MatcherGroup
 	if err := parseHookType(rawHooks, "SessionStart", &sessionStart); err != nil {
 		return err
 	}
@@ -191,14 +202,19 @@ func (c *CodexAgent) UninstallHooks(ctx context.Context) error {
 	if err := parseHookType(rawHooks, "Stop", &stop); err != nil {
 		return err
 	}
+	if err := parseHookType(rawHooks, "PostToolUse", &postToolUse); err != nil {
+		return err
+	}
 
 	sessionStart = removeEntireHooks(sessionStart)
 	userPromptSubmit = removeEntireHooks(userPromptSubmit)
 	stop = removeEntireHooks(stop)
+	postToolUse = removeEntireHooks(postToolUse)
 
 	marshalHookType(rawHooks, "SessionStart", sessionStart)
 	marshalHookType(rawHooks, "UserPromptSubmit", userPromptSubmit)
 	marshalHookType(rawHooks, "Stop", stop)
+	marshalHookType(rawHooks, "PostToolUse", postToolUse)
 
 	if len(rawHooks) > 0 {
 		hooksJSON, err := jsonutil.MarshalWithNoHTMLEscape(rawHooks)
@@ -240,7 +256,8 @@ func (c *CodexAgent) AreHooksInstalled(ctx context.Context) bool {
 
 	return hasEntireHook(hooksFile.Hooks.SessionStart) &&
 		hasEntireHook(hooksFile.Hooks.UserPromptSubmit) &&
-		hasEntireHook(hooksFile.Hooks.Stop)
+		hasEntireHook(hooksFile.Hooks.Stop) &&
+		hasEntireHook(hooksFile.Hooks.PostToolUse)
 }
 
 // --- Helpers ---

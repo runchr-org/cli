@@ -77,6 +77,11 @@ type tokenUsageData struct {
 // Matches "*** Add File: <path>", "*** Update File: <path>", "*** Delete File: <path>"
 var applyPatchFileRegex = regexp.MustCompile(`\*\*\* (?:Add|Update|Delete) File: (.+)`)
 
+// applyPatchClassifiedRegex splits apply_patch entries by intent so callers can
+// route files into NewFiles/ModifiedFiles/DeletedFiles. Capture group 1 is the
+// verb (Add|Update|Delete), group 2 is the path.
+var applyPatchClassifiedRegex = regexp.MustCompile(`\*\*\* (Add|Update|Delete) File: (.+)`)
+
 // GetTranscriptPosition returns the current line count of a Codex rollout transcript.
 func (c *CodexAgent) GetTranscriptPosition(path string) (int, error) {
 	if path == "" {
@@ -192,6 +197,39 @@ func extractFilesFromApplyPatch(input string) []string {
 		}
 	}
 	return files
+}
+
+// classifyApplyPatchPaths splits an apply_patch envelope into added, modified,
+// and deleted file paths. Each list is deduped within itself; an Update on the
+// same path as an Add wins toward Add (envelopes shouldn't do this, but if one
+// does the more specific intent is preferable). Empty paths are dropped.
+func classifyApplyPatchPaths(input string) (added, modified, deleted []string) {
+	matches := applyPatchClassifiedRegex.FindAllStringSubmatch(input, -1)
+	bucket := make(map[string]string, len(matches))
+	for _, m := range matches {
+		verb := m[1]
+		path := strings.TrimSpace(m[2])
+		if path == "" {
+			continue
+		}
+		if existing, ok := bucket[path]; ok {
+			if existing == "Add" || existing == "Delete" {
+				continue
+			}
+		}
+		bucket[path] = verb
+	}
+	for path, verb := range bucket {
+		switch verb {
+		case "Add":
+			added = append(added, path)
+		case "Update":
+			modified = append(modified, path)
+		case "Delete":
+			deleted = append(deleted, path)
+		}
+	}
+	return added, modified, deleted
 }
 
 // CalculateTokenUsage computes token usage from the transcript starting at the given line offset.
