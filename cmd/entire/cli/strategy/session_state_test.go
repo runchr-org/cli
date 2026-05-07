@@ -269,6 +269,49 @@ func TestRecordFilesTouched_EmptyInputsIsNoop(t *testing.T) {
 	require.Equal(t, []string{"keep.txt"}, loaded.FilesTouched)
 }
 
+// TestMutateSessionState_NestedCallsAreReentrant verifies that calling
+// MutateSessionState from within an outer MutateSessionState callback
+// doesn't deadlock. POSIX flock isn't reentrant across distinct FDs in the
+// same process, so the gate's goroutine-ID ownership tracking has to skip
+// the flock re-acquire on the inner call.
+func TestMutateSessionState_NestedCallsAreReentrant(t *testing.T) {
+	dir := t.TempDir()
+	_, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	t.Chdir(dir)
+
+	state := &SessionState{
+		SessionID:  "ft-nested",
+		BaseCommit: "deadbeef",
+		StartedAt:  time.Now(),
+	}
+	require.NoError(t, SaveSessionState(context.Background(), state))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		err := MutateSessionState(context.Background(), "ft-nested", func(outer *SessionState) error {
+			outer.LastPrompt = "outer"
+			return MutateSessionState(context.Background(), "ft-nested", func(inner *SessionState) error {
+				inner.ModelName = "inner"
+				return nil
+			})
+		})
+		assert.NoError(t, err)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("nested MutateSessionState deadlocked")
+	}
+
+	loaded, err := LoadSessionState(context.Background(), "ft-nested")
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, "outer", loaded.LastPrompt)
+	assert.Equal(t, "inner", loaded.ModelName)
+}
+
 // TestRecordFilesTouched_ParallelMergesAreSerialized verifies the file-lock
 // in RecordFilesTouched: many concurrent callers, each merging a unique
 // file, must all land in FilesTouched. Without the lock, parallel

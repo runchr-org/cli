@@ -7,8 +7,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
@@ -365,74 +368,213 @@ func LoadAgentTypeHint(ctx context.Context, sessionID string) types.AgentType {
 	return types.AgentType(strings.TrimSpace(string(data)))
 }
 
-// RecordFilesTouched merges paths into the session's FilesTouched, used by
-// mid-turn lifecycle events (per-tool-use hooks) so PostCommit's carry-forward
-// decision sees an accurate file list. Caller must pre-normalize paths to
-// repo-relative form. No-ops when the session state doesn't exist (event
-// arrived before InitializeSession) or the merge produced no changes.
-//
-// Concurrency: PostToolUse fires after every Codex tool call and may run in
-// parallel for parallel tool dispatch, so the load → merge → save runs
-// under an OS-level advisory file lock against
-// .git/entire-sessions/<id>.lock. Two PostToolUse processes cannot lose
-// each other's FilesTouched merges. Other writers (TurnEnd, PostCommit) do
-// not yet participate in the lock — a stale save here can still revert
-// fields they updated between our load and our save. The window is small
-// (lock is only held for the load+save) but real, and the residual race is
-// tracked for a follow-up that converts all session-state mutations to a
-// shared MutateSessionState(ctx, fn) helper.
-func RecordFilesTouched(ctx context.Context, sessionID string, modified, added, deleted []string) error {
-	if sessionID == "" {
-		return nil
-	}
-	if len(modified) == 0 && len(added) == 0 && len(deleted) == 0 {
-		return nil
-	}
+// sessionMutationGate provides per-process serialization layered over the
+// OS-level flock so that nested MutateSessionState calls in the same
+// goroutine don't deadlock or lose updates. POSIX flock isn't reentrant
+// across distinct file descriptors in the same process; on top of that, a
+// nested call that did its own load → save would have its save overwritten
+// by the outer save. The gate fixes both: nested calls in the same
+// goroutine reuse the outer's state pointer (no second load, no second
+// save), and only the outermost release drops the flock.
+var sessionMutationGate sync.Map // map[string]*sessionGate
 
-	lockPath, err := stateLockPath(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("resolve state lock path: %w", err)
+type sessionGate struct {
+	mu          sync.Mutex
+	owner       int64 // goroutine ID of the current holder, 0 when unlocked
+	depth       int
+	flockRel    func()
+	activeState *SessionState // shared state pointer for nested mutations
+}
+
+// goroutineID extracts the runtime goroutine ID from the stack header. Used
+// only as a reentrancy key for the session mutation gate — never as a
+// security boundary or for application logic.
+func goroutineID() int64 {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	const prefix = "goroutine "
+	s := string(buf[:n])
+	if !strings.HasPrefix(s, prefix) {
+		return 0
 	}
-	release, err := acquireStateFileLock(lockPath)
+	s = s[len(prefix):]
+	end := strings.IndexByte(s, ' ')
+	if end < 0 {
+		return 0
+	}
+	id, err := strconv.ParseInt(s[:end], 10, 64)
 	if err != nil {
-		return fmt.Errorf("acquire state lock: %w", err)
+		return 0
+	}
+	return id
+}
+
+// MutateSessionState is the safe load → mutate → save helper. It takes an
+// OS-level advisory lock against .git/entire-session-locks/<id>.lock for the
+// duration of the read+write so concurrent processes cannot lose each
+// other's updates. fn receives the freshly-loaded state and mutates it in
+// place; returning ErrMutationSkip skips the save. The lock is held for fn's
+// full duration, so fn must avoid arbitrary blocking work. Reentrant within
+// the same goroutine: nested calls share the outer's state pointer and skip
+// the inner load/save, so all mutations are flushed by the outermost call.
+//
+// Returns ErrStateNotFound if the state file doesn't exist (event arrived
+// before InitializeSession). Errors from fn or from load/save propagate.
+//
+// All session-state mutations funnel through this helper so the hot-path
+// PostToolUse hook cannot revert fields written by lifecycle handlers
+// (TurnEnd, PostCommit, ModelUpdate) that ran between our load and our save.
+func MutateSessionState(ctx context.Context, sessionID string, fn func(*SessionState) error) error {
+	if sessionID == "" {
+		return ErrStateNotFound
+	}
+	gate, isOuter, release, err := acquireSessionGate(ctx, sessionID)
+	if err != nil {
+		return err
 	}
 	defer release()
+
+	if !isOuter {
+		// Nested call: reuse the outer's state pointer. The outer save will
+		// flush our mutations; we don't load or save here.
+		if gate.activeState == nil {
+			return ErrStateNotFound
+		}
+		if err := fn(gate.activeState); err != nil && !errors.Is(err, ErrMutationSkip) {
+			return err
+		}
+		return nil
+	}
 
 	state, err := LoadSessionState(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("load session state: %w", err)
 	}
 	if state == nil {
-		return nil
+		return ErrStateNotFound
 	}
-	merged := mergeFilesTouched(state.FilesTouched, modified, added, deleted)
-	if slices.Equal(merged, state.FilesTouched) {
-		return nil
+	gate.activeState = state
+	defer func() { gate.activeState = nil }()
+
+	if err := fn(state); err != nil {
+		if errors.Is(err, ErrMutationSkip) {
+			return nil
+		}
+		return err
 	}
-	state.FilesTouched = merged
 	if err := SaveSessionState(ctx, state); err != nil {
 		return fmt.Errorf("save session state: %w", err)
 	}
 	return nil
 }
 
-// stateLockPath returns a sibling .lock path next to the session state file.
-// A separate file (rather than locking the state file itself) keeps the
-// lock holder distinct from the data — Save's atomic-rename pattern would
+// acquireSessionGate takes the per-process gate (in-memory) and, on the
+// outermost call, the cross-process flock. Returns isOuter=true on the
+// outermost call so MutateSessionState knows whether to load/save.
+func acquireSessionGate(ctx context.Context, sessionID string) (gate *sessionGate, isOuter bool, release func(), err error) {
+	val, _ := sessionMutationGate.LoadOrStore(sessionID, &sessionGate{})
+	gate, ok := val.(*sessionGate)
+	if !ok {
+		return nil, false, nil, fmt.Errorf("session gate type assertion failed for %s", sessionID)
+	}
+
+	gid := goroutineID()
+	gate.mu.Lock()
+	if gate.owner == gid {
+		gate.depth++
+		gate.mu.Unlock()
+		return gate, false, func() {
+			gate.mu.Lock()
+			gate.depth--
+			gate.mu.Unlock()
+		}, nil
+	}
+	gate.mu.Unlock()
+
+	lockPath, err := stateLockPath(ctx, sessionID)
+	if err != nil {
+		return nil, false, nil, fmt.Errorf("resolve state lock path: %w", err)
+	}
+	flockRel, err := acquireStateFileLock(lockPath)
+	if err != nil {
+		return nil, false, nil, fmt.Errorf("acquire state lock: %w", err)
+	}
+
+	gate.mu.Lock()
+	gate.owner = gid
+	gate.depth = 1
+	gate.flockRel = flockRel
+	gate.mu.Unlock()
+
+	return gate, true, func() {
+		gate.mu.Lock()
+		gate.depth--
+		if gate.depth == 0 {
+			rel := gate.flockRel
+			gate.flockRel = nil
+			gate.owner = 0
+			gate.mu.Unlock()
+			rel()
+			return
+		}
+		gate.mu.Unlock()
+	}, nil
+}
+
+// ErrMutationSkip signals MutateSessionState to skip the save without
+// treating fn's return as an error. Use it when the mutation function
+// observes the loaded state and decides no write is needed (for example,
+// when a merge produces no new entries).
+var ErrMutationSkip = errors.New("session state mutation skipped")
+
+// ErrStateNotFound is returned by MutateSessionState when no state file
+// exists for the session ID (typically because the event arrived before
+// InitializeSession ran). Callers that need to distinguish "no state"
+// from a successful no-op can branch on errors.Is(err, ErrStateNotFound).
+var ErrStateNotFound = errors.New("session state not found")
+
+// RecordFilesTouched merges paths into the session's FilesTouched, used by
+// mid-turn lifecycle events (per-tool-use hooks) so PostCommit's carry-forward
+// decision sees an accurate file list. Caller must pre-normalize paths to
+// repo-relative form. No-ops when the session state doesn't exist or the
+// merge produced no changes.
+func RecordFilesTouched(ctx context.Context, sessionID string, modified, added, deleted []string) error {
+	if len(modified) == 0 && len(added) == 0 && len(deleted) == 0 {
+		return nil
+	}
+	err := MutateSessionState(ctx, sessionID, func(state *SessionState) error {
+		merged := mergeFilesTouched(state.FilesTouched, modified, added, deleted)
+		if slices.Equal(merged, state.FilesTouched) {
+			return ErrMutationSkip
+		}
+		state.FilesTouched = merged
+		return nil
+	})
+	if errors.Is(err, ErrStateNotFound) {
+		return nil
+	}
+	return err
+}
+
+// stateLockPath returns the lock file path for a session. Lock files live in
+// .git/entire-session-locks/ (a sibling to entire-sessions/) so callers that
+// enumerate session state files don't have to filter lock entries. A
+// separate file (rather than locking the state file itself) keeps the lock
+// holder distinct from the data — Save's atomic-rename pattern would
 // otherwise unlink the inode the flock is held on.
 func stateLockPath(ctx context.Context, sessionID string) (string, error) {
 	if err := validation.ValidateSessionID(sessionID); err != nil {
 		return "", fmt.Errorf("invalid session ID: %w", err)
 	}
-	stateDir, err := getSessionStateDir(ctx)
+	commonDir, err := GetGitCommonDir(ctx)
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(stateDir, 0o750); err != nil {
-		return "", fmt.Errorf("create session state directory: %w", err)
+	lockDir := filepath.Join(commonDir, "entire-session-locks")
+	if err := os.MkdirAll(lockDir, 0o750); err != nil {
+		return "", fmt.Errorf("create session lock directory: %w", err)
 	}
-	return filepath.Join(stateDir, sessionID+".lock"), nil
+	return filepath.Join(lockDir, sessionID+".lock"), nil
 }
 
 // ClearSessionState removes the session state file for the given session ID.
@@ -451,6 +593,12 @@ func ClearSessionState(ctx context.Context, sessionID string) error {
 	matches, _ := filepath.Glob(filepath.Join(stateDir, sessionID+".*")) //nolint:errcheck // pattern is always valid
 	for _, f := range matches {
 		_ = os.Remove(f)
+	}
+
+	// Lock files live under entire-session-locks/ — sweep them too so a
+	// re-created session for the same ID starts with a fresh lock file.
+	if commonDir, cdErr := GetGitCommonDir(ctx); cdErr == nil {
+		_ = os.Remove(filepath.Join(commonDir, "entire-session-locks", sessionID+".lock"))
 	}
 
 	return nil

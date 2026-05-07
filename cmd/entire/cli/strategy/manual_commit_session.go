@@ -279,21 +279,21 @@ func (s *ManualCommitStrategy) CountOtherActiveSessionsWithCheckpoints(ctx conte
 // transcriptPath is the path to the live transcript file (for mid-session commit detection).
 // userPrompt is the user's prompt text (stored truncated as LastPrompt for display).
 // model is the LLM model identifier (e.g., "claude-sonnet-4-20250514"); empty if unknown.
-func (s *ManualCommitStrategy) initializeSession(ctx context.Context, repo *git.Repository, sessionID string, agentType types.AgentType, transcriptPath string, userPrompt string, model string) (*SessionState, error) {
+func (s *ManualCommitStrategy) initializeSession(ctx context.Context, repo *git.Repository, sessionID string, agentType types.AgentType, transcriptPath string, userPrompt string, model string) error {
 	head, err := repo.Head()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get HEAD: %w", err)
+		return fmt.Errorf("failed to get HEAD: %w", err)
 	}
 
 	worktreePath, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get worktree path: %w", err)
+		return fmt.Errorf("failed to get worktree path: %w", err)
 	}
 
 	// Get worktree ID for shadow branch naming
 	worktreeID, err := paths.GetWorktreeID(worktreePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get worktree ID: %w", err)
+		return fmt.Errorf("failed to get worktree ID: %w", err)
 	}
 
 	// Capture untracked files at session start to preserve them during rewind
@@ -306,7 +306,7 @@ func (s *ManualCommitStrategy) initializeSession(ctx context.Context, repo *git.
 	// Generate TurnID for the first turn
 	turnID, err := id.Generate()
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate turn ID: %w", err)
+		return fmt.Errorf("failed to generate turn ID: %w", err)
 	}
 
 	now := time.Now()
@@ -329,11 +329,14 @@ func (s *ManualCommitStrategy) initializeSession(ctx context.Context, repo *git.
 		LastPrompt:            truncatePromptForStorage(userPrompt),
 	}
 
-	if err := s.saveSessionState(ctx, state); err != nil {
-		return nil, err
+	// Persist under the session gate so a concurrent first-turn hook for the
+	// same session can't lose the write.
+	_, _, release, lockErr := acquireSessionGate(ctx, sessionID)
+	if lockErr != nil {
+		return fmt.Errorf("acquire state lock: %w", lockErr)
 	}
-
-	return state, nil
+	defer release()
+	return s.saveSessionState(ctx, state)
 }
 
 // getShadowBranchNameForCommit returns the shadow branch name for the given base commit and worktree ID.
