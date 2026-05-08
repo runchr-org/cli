@@ -494,6 +494,7 @@ func runStopSession(ctx context.Context, cmd *cobra.Command, sessionID string, f
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title(fmt.Sprintf("Stop session %s?", sessionID)).
+					Description(stopSessionConfirmDescription()).
 					Value(&confirmed),
 			),
 		)
@@ -522,6 +523,7 @@ func runStopAll(ctx context.Context, cmd *cobra.Command, activeSessions []*strat
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title(fmt.Sprintf("Stop %d session(s)?", len(activeSessions))).
+					Description(stopSessionConfirmDescription()).
 					Value(&confirmed),
 			),
 		)
@@ -582,6 +584,7 @@ func runStopMultiSelect(ctx context.Context, cmd *cobra.Command, activeSessions 
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title(fmt.Sprintf("Stop %d session(s)?", len(selectedIDs))).
+					Description(stopSessionConfirmDescription()).
 					Value(&confirmed),
 			),
 		)
@@ -612,6 +615,10 @@ func runStopMultiSelect(ctx context.Context, cmd *cobra.Command, activeSessions 
 
 func stopSessionSelectionDescription() string {
 	return "Use space to select, enter to confirm, ctrl+c to cancel."
+}
+
+func stopSessionConfirmDescription() string {
+	return "Press enter to submit, y/n to choose, or ctrl+c to cancel."
 }
 
 // stopSelectedSessions stops each session in the list and prints a result line.

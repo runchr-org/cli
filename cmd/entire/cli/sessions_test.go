@@ -46,6 +46,17 @@ func makeSessionState(id string, phase session.Phase) *strategy.SessionState {
 	}
 }
 
+func TestStopSessionConfirmDescription(t *testing.T) {
+	t.Parallel()
+
+	got := stopSessionConfirmDescription()
+	for _, want := range []string{"enter", "y", "n", "ctrl+c", "cancel"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("stopSessionConfirmDescription() = %q, missing %q", got, want)
+		}
+	}
+}
+
 func TestStopCmd_NoActiveSessions(t *testing.T) {
 	setupStopTestRepo(t)
 
