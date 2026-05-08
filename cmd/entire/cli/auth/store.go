@@ -84,6 +84,9 @@ func (s *Store) GetToken(baseURL string) (string, error) {
 	if kerr != nil {
 		return "", fmt.Errorf("get token from keyring: %w", kerr)
 	}
+	if !looksLikeBareToken(raw) {
+		return "", nil
+	}
 	return raw, nil
 }
 
@@ -109,6 +112,12 @@ func (s *Store) SaveTokens(profile string, t tokens.TokenSet) error {
 // keyring errors (transport, permission denied) propagate; only
 // ErrMalformed triggers the fallback. ErrNotFound surfaces verbatim
 // so the manager's "not logged in" branch still works.
+//
+// The fallback also guards against well-formed-but-empty entries (e.g.
+// "{}" or an unrelated CLI's blob keyed against the same service/profile):
+// those surface as ErrMalformed from the lib, but using their raw bytes
+// as a bearer token would be wrong. looksLikeBareToken filters them out,
+// converting back to ErrNotFound so the caller sees "not logged in".
 func (s *Store) LoadTokens(profile string) (tokens.TokenSet, error) {
 	t, err := s.inner.LoadTokens(profile)
 	if err == nil {
@@ -125,7 +134,27 @@ func (s *Store) LoadTokens(profile string) (tokens.TokenSet, error) {
 	if kerr != nil {
 		return tokens.TokenSet{}, fmt.Errorf("get token from keyring: %w", kerr)
 	}
+	if !looksLikeBareToken(raw) {
+		return tokens.TokenSet{}, tokenstore.ErrNotFound
+	}
 	return tokens.TokenSet{AccessToken: raw}, nil
+}
+
+// looksLikeBareToken reports whether raw is plausibly a pre-shim bare
+// access token rather than a JSON blob. Real bearer tokens are JWTs or
+// opaque ASCII strings; they don't start with the JSON object/array
+// delimiters. Trims whitespace first so a stray newline doesn't fool
+// the check.
+func looksLikeBareToken(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return false
+	}
+	switch trimmed[0] {
+	case '{', '[':
+		return false
+	}
+	return true
 }
 
 // DeleteTokens implements tokenstore.Store.

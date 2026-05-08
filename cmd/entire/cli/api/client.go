@@ -21,6 +21,26 @@ const (
 type Client struct {
 	httpClient *http.Client
 	baseURL    string
+
+	// authTokensPath is the base path for the auth-tokens management
+	// endpoints (list / revoke). Set via WithAuthTokensPath when the
+	// client targets the auth host. Empty for data-API-only clients;
+	// auth-tokens methods error out if called against an empty path.
+	authTokensPath string
+}
+
+// WithAuthTokensPath sets the base path used by ListTokens,
+// RevokeCurrentToken, and RevokeToken. The path is supplied by the
+// auth shim from auth.CurrentProvider().AuthTokensPath, which is the
+// single source of truth for provider-version routing — the api
+// package no longer reads ENTIRE_AUTH_PROVIDER_VERSION itself.
+//
+// Returns the receiver for chaining at construction:
+//
+//	c := api.NewClientWithBaseURL(token, base).WithAuthTokensPath(p)
+func (c *Client) WithAuthTokensPath(path string) *Client {
+	c.authTokensPath = path
+	return c
 }
 
 // NewClient creates a new authenticated API client with an explicit bearer

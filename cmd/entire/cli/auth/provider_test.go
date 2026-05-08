@@ -17,69 +17,94 @@ const (
 	wantClientIDV2 = "entire-cli"
 )
 
-func TestCurrentProvider_DefaultsToV1(t *testing.T) {
-	t.Setenv(ProviderVersionEnvVar, "")
+// resolveProvider is a pure function — no env reads — so the routing
+// table can be exercised without t.Setenv (and without the
+// process-wide sync.Once in CurrentProvider freezing the first
+// observation forever).
 
-	p := currentProvider()
-	if p.clientID != wantClientIDV1 || p.deviceCodePath != "/oauth/device/code" || p.tokenPath != "/oauth/token" {
+func TestResolveProvider_DefaultsToV1(t *testing.T) {
+	t.Parallel()
+	p := resolveProvider("")
+	if p.ClientID != wantClientIDV1 || p.DeviceCodePath != "/oauth/device/code" || p.TokenPath != "/oauth/token" {
 		t.Fatalf("default provider = %+v, want v1 config", p)
 	}
+	if p.AuthTokensPath != "/api/v1/auth/tokens" {
+		t.Fatalf("default AuthTokensPath = %q, want /api/v1/auth/tokens", p.AuthTokensPath)
+	}
 }
 
-func TestCurrentProvider_V1Explicit(t *testing.T) {
-	t.Setenv(ProviderVersionEnvVar, "v1")
-
-	p := currentProvider()
-	if p.clientID != wantClientIDV1 {
-		t.Fatalf("v1 clientID = %q", p.clientID)
+func TestResolveProvider_V1Explicit(t *testing.T) {
+	t.Parallel()
+	p := resolveProvider("v1")
+	if p.ClientID != wantClientIDV1 {
+		t.Fatalf("v1 ClientID = %q", p.ClientID)
 	}
 	// v1 is single-host (entire.io); no STS surface, same-host shortcut
-	// always wins. Empty stsPath is the contract.
-	if p.stsPath != "" {
-		t.Fatalf("v1 stsPath = %q, want empty (single-host, no STS)", p.stsPath)
+	// always wins. Empty STSPath is the contract.
+	if p.STSPath != "" {
+		t.Fatalf("v1 STSPath = %q, want empty (single-host, no STS)", p.STSPath)
 	}
 }
 
-func TestCurrentProvider_V2(t *testing.T) {
-	t.Setenv(ProviderVersionEnvVar, "v2")
-
-	p := currentProvider()
-	if p.clientID != wantClientIDV2 {
-		t.Fatalf("v2 clientID = %q, want %s", p.clientID, wantClientIDV2)
+func TestResolveProvider_V2(t *testing.T) {
+	t.Parallel()
+	p := resolveProvider("v2")
+	if p.ClientID != wantClientIDV2 {
+		t.Fatalf("v2 ClientID = %q, want %s", p.ClientID, wantClientIDV2)
 	}
-	if p.deviceCodePath != "/api/auth/oauth/device/code" {
-		t.Fatalf("v2 deviceCodePath = %q", p.deviceCodePath)
+	if p.DeviceCodePath != "/api/auth/oauth/device/code" {
+		t.Fatalf("v2 DeviceCodePath = %q", p.DeviceCodePath)
 	}
-	if p.tokenPath != "/api/auth/token" {
-		t.Fatalf("v2 tokenPath = %q", p.tokenPath)
+	if p.TokenPath != "/api/auth/token" {
+		t.Fatalf("v2 TokenPath = %q", p.TokenPath)
 	}
-	if p.stsPath != "/api/authz/sts/token" {
-		t.Fatalf("v2 stsPath = %q", p.stsPath)
+	if p.STSPath != "/api/authz/sts/token" {
+		t.Fatalf("v2 STSPath = %q", p.STSPath)
 	}
-}
-
-func TestCurrentProvider_UnknownDefaultsToV1(t *testing.T) {
-	t.Setenv(ProviderVersionEnvVar, "v999")
-
-	p := currentProvider()
-	if p.clientID != wantClientIDV1 {
-		t.Fatalf("unknown version should default to v1; got clientID = %q", p.clientID)
+	if p.AuthTokensPath != "/api/auth/tokens" {
+		t.Fatalf("v2 AuthTokensPath = %q, want /api/auth/tokens", p.AuthTokensPath)
 	}
 }
 
-func TestCurrentProvider_TrimsWhitespace(t *testing.T) {
-	t.Setenv(ProviderVersionEnvVar, "  v2  ")
-
-	p := currentProvider()
-	if p.clientID != wantClientIDV2 {
-		t.Fatalf("whitespace-padded v2 clientID = %q, want %s", p.clientID, wantClientIDV2)
+func TestResolveProvider_UnknownDefaultsToV1(t *testing.T) {
+	t.Parallel()
+	p := resolveProvider("v999")
+	if p.ClientID != wantClientIDV1 {
+		t.Fatalf("unknown version should default to v1; got ClientID = %q", p.ClientID)
 	}
 }
 
-func TestNewClient_HonoursProviderVersion(t *testing.T) {
+func TestResolveProvider_TrimsWhitespace(t *testing.T) {
+	t.Parallel()
+	p := resolveProvider("  v2  ")
+	if p.ClientID != wantClientIDV2 {
+		t.Fatalf("whitespace-padded v2 ClientID = %q, want %s", p.ClientID, wantClientIDV2)
+	}
+}
+
+// TestSetProviderForTest_OverridesCurrentProvider locks in the test
+// seam: any test that pins a provider via SetProviderForTest must see
+// it from CurrentProvider regardless of process-wide singleton state.
+func TestSetProviderForTest_OverridesCurrentProvider(t *testing.T) {
+	pinned := Provider{
+		ClientID:       "test-client",
+		DeviceCodePath: "/test/device",
+		TokenPath:      "/test/token",
+		STSPath:        "/test/sts",
+		AuthTokensPath: "/test/tokens",
+	}
+	SetProviderForTest(t, pinned)
+
+	got := CurrentProvider()
+	if got != pinned {
+		t.Fatalf("CurrentProvider() = %+v, want %+v", got, pinned)
+	}
+}
+
+func TestNewClient_HonoursPinnedProvider(t *testing.T) {
 	t.Setenv(api.BaseURLEnvVar, "https://example.test")
 	t.Setenv(api.AuthBaseURLEnvVar, "")
-	t.Setenv(ProviderVersionEnvVar, "v2")
+	SetProviderForTest(t, resolveProvider("v2"))
 
 	c := NewClient(&http.Client{})
 	if c.inner.ClientID != wantClientIDV2 {
@@ -96,10 +121,10 @@ func TestNewClient_HonoursProviderVersion(t *testing.T) {
 	}
 }
 
-func TestNewClient_DefaultsToV1(t *testing.T) {
+func TestNewClient_DefaultsToV1WhenPinned(t *testing.T) {
 	t.Setenv(api.BaseURLEnvVar, "https://example.test")
 	t.Setenv(api.AuthBaseURLEnvVar, "")
-	t.Setenv(ProviderVersionEnvVar, "")
+	SetProviderForTest(t, resolveProvider(""))
 
 	c := NewClient(nil)
 	if c.inner.ClientID != wantClientIDV1 {
