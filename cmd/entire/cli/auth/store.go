@@ -55,11 +55,11 @@ func (s *Store) SaveToken(baseURL, token string) error {
 // GetToken retrieves a stored token for the given base URL. Returns
 // an empty string (and no error) if no token is stored.
 //
-// Falls back to a bare-string read when the stored entry is malformed
-// JSON, to handle pre-shim entries that stored the raw access token
-// rather than a JSON-encoded TokenSet. Real keyring errors (transport,
-// permission denied) propagate; only ErrNotFound and ErrMalformed
-// trigger the fallback.
+// ErrNotFound short-circuits to the empty-string return without a
+// further keyring read. ErrMalformed (a stored entry exists but can't
+// be decoded as a TokenSet) triggers a bare-string fallback to handle
+// pre-shim entries that stored the raw access token verbatim. Real
+// keyring errors (transport, permission denied) propagate.
 //
 // Deprecated: prefer LoadTokens (the tokenstore.Store interface method)
 // for new callers — it returns the full TokenSet so refresh tokens and

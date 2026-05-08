@@ -65,17 +65,21 @@ func (c *Client) StartDeviceAuth(ctx context.Context) (*DeviceAuthStart, error) 
 	return c.inner.StartDeviceAuth(ctx) //nolint:wrapcheck // shim preserves the lib's wrapped errors verbatim
 }
 
-// PollDeviceAuth polls the token endpoint. On any RFC 8628 §3.5 error,
-// the wire-side error code is returned in DeviceAuthPoll.Error so the
-// existing polling loop in login.go can branch on it. Non-RFC errors
-// (network, decode) are returned as a real error.
+// PollDeviceAuth polls the token endpoint. On any OAuth-protocol error
+// (recognised RFC 8628 §3.5 sentinel or unknown but spec-shaped code
+// like invalid_request / invalid_client / server_error), the wire-side
+// code is returned in DeviceAuthPoll.Error so the existing polling
+// loop in login.go can branch on it — known codes hit the dedicated
+// switch arms, unknown codes fall through to the default arm and fail
+// fast. Non-protocol errors (network, decode) are returned as a real
+// error and treated as transient by the polling loop.
 func (c *Client) PollDeviceAuth(ctx context.Context, deviceCode string) (*DeviceAuthPoll, error) {
 	t, err := c.inner.PollDeviceAuth(ctx, deviceCode)
 	if err != nil {
-		if code := oauthErrorCode(err); code != "" {
+		if code, description, ok := oauthErrorParts(err); ok {
 			return &DeviceAuthPoll{
 				Error:            code,
-				ErrorDescription: descriptionFromSentinel(err, code),
+				ErrorDescription: description,
 			}, nil
 		}
 		return nil, err //nolint:wrapcheck // shim returns deviceflow errors verbatim so callers can errors.Is on sentinels
@@ -89,31 +93,56 @@ func (c *Client) PollDeviceAuth(ctx context.Context, deviceCode string) (*Device
 	}, nil
 }
 
-// oauthErrorCode returns the wire-side code for a recognised RFC 8628
-// sentinel error, or "" if err isn't one.
-func oauthErrorCode(err error) string {
+// oauthErrorParts inspects err for either a recognised RFC 8628 §3.5
+// sentinel or the generic "oauth error: <code>" wrapper deviceflow uses
+// for unrecognised but spec-shaped codes (RFC 6749 §5.2: invalid_request,
+// invalid_client, server_error, …).
+//
+// On a match, returns the wire-side code, any error_description the
+// server included, and ok=true. Otherwise returns "", "", false — the
+// caller should treat the error as a transport/decode failure.
+//
+// Surfacing unknown codes as ok=true is what keeps login.go's polling
+// loop fast-failing on terminal OAuth rejections instead of treating
+// them as transient and retrying ~5 times.
+func oauthErrorParts(err error) (code, description string, ok bool) {
 	switch {
 	case errors.Is(err, deviceflow.ErrAuthorizationPending):
-		return "authorization_pending"
+		code = "authorization_pending"
 	case errors.Is(err, deviceflow.ErrSlowDown):
-		return "slow_down"
+		code = "slow_down"
 	case errors.Is(err, deviceflow.ErrAccessDenied):
-		return "access_denied"
+		code = "access_denied"
 	case errors.Is(err, deviceflow.ErrExpiredToken):
-		return "expired_token"
+		code = "expired_token"
 	case errors.Is(err, deviceflow.ErrInvalidGrant):
-		return "invalid_grant"
+		code = "invalid_grant"
+	default:
+		// Unknown but legitimate OAuth codes come back from
+		// deviceflow.errCodeToSentinel as fmt.Errorf("oauth error: %s",
+		// code), optionally wrapped a second time with ": <description>"
+		// when the server supplied error_description.
+		const oauthPrefix = "oauth error: "
+		rest, hadPrefix := strings.CutPrefix(err.Error(), oauthPrefix)
+		if !hadPrefix {
+			return "", "", false
+		}
+		if c, d, hasDesc := strings.Cut(rest, ": "); hasDesc {
+			return c, d, true
+		}
+		return rest, "", true
 	}
-	return ""
+	description = descriptionFromSentinelError(err, code)
+	return code, description, true
 }
 
-// descriptionFromSentinel pulls the description suffix out of a wrapped
-// sentinel error. The deviceflow lib uses fmt.Errorf("%w: %s", sentinel,
-// description) when the server included an error_description, so the
-// formatted error reads "<code>: <description>". Stripping the
-// "<code>: " prefix yields the description; absent prefix means the
-// server didn't supply one.
-func descriptionFromSentinel(err error, code string) string {
+// descriptionFromSentinelError pulls the description suffix out of a
+// wrapped sentinel error. The deviceflow lib uses
+// fmt.Errorf("%w: %s", sentinel, description) when the server included
+// an error_description, so the formatted error reads
+// "<code>: <description>". Stripping the "<code>: " prefix yields the
+// description; absent prefix means the server didn't supply one.
+func descriptionFromSentinelError(err error, code string) string {
 	msg := err.Error()
 	prefix := code + ": "
 	if rest, ok := strings.CutPrefix(msg, prefix); ok {

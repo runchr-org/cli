@@ -61,10 +61,6 @@ func (c *Client) ListTokens(ctx context.Context) ([]Token, error) {
 }
 
 // RevokeCurrentToken revokes the bearer token used to authenticate this client.
-//
-// v1 has a dedicated /current endpoint. v2 doesn't expose one yet
-// (would require a family_id claim on the JWT — tracked separately);
-// callers can find the active family via ListTokens and revoke by ID.
 func (c *Client) RevokeCurrentToken(ctx context.Context) error {
 	resp, err := c.Delete(ctx, authTokensBasePath()+"/current")
 	if err != nil {
