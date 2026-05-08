@@ -90,16 +90,31 @@ func GenerateLatest(ctx context.Context, opts Options) (*Result, error) {
 // the maintainer-only `--regenerate` flag to produce the markdown
 // that gets committed back into embedded/tour.md before a release.
 func Generate(ctx context.Context, root *cobra.Command, opts Options) (*Result, error) {
+	if opts.Regenerate {
+		// --regenerate produces the canonical tour that gets committed
+		// back into embedded/tour.md and shipped to all users. The
+		// embedded markdown is only ever served to first-capture /
+		// workflow stages (the setup and agent-install stages render
+		// hand-written prose constants), so the regen output should
+		// always be authored as if for StageWorkflow regardless of the
+		// running repo's actual state. Skipping ResolveState here also
+		// lets `--regenerate` succeed in CI checkouts that have no
+		// .entire/settings.json — without this, ResolveState routes to
+		// StageSetup and the agent produces a 4-line stub that the
+		// release-pipeline validation rejects.
+		return regenerateFromAgent(ctx, root, opts, State{
+			Stage:      StageWorkflow,
+			Enabled:    true,
+			HasHistory: true,
+		})
+	}
+
 	state, err := ResolveState(ctx, opts.LoadSettings, opts.ListInstalledAgents)
 	if err != nil {
 		return nil, err
 	}
 	if state.Stage == StageNotGitRepo {
 		return nil, ErrNotGitRepo
-	}
-
-	if opts.Regenerate {
-		return regenerateFromAgent(ctx, root, opts, state)
 	}
 
 	switch state.Stage {
