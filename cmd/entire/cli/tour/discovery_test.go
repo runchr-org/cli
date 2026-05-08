@@ -7,6 +7,7 @@ import (
 )
 
 func TestDiscover_StripsHiddenAndDeprecated(t *testing.T) {
+	t.Parallel()
 	root := &cobra.Command{Use: "entire", Short: "root"}
 	root.AddCommand(&cobra.Command{Use: "enable", Short: "enable entire"})
 	root.AddCommand(&cobra.Command{Use: "internal-thing", Short: "private", Hidden: true})
@@ -23,6 +24,7 @@ func TestDiscover_StripsHiddenAndDeprecated(t *testing.T) {
 }
 
 func TestDiscover_RecursesIntoSubcommands(t *testing.T) {
+	t.Parallel()
 	root := &cobra.Command{Use: "entire"}
 	checkpoint := &cobra.Command{Use: "checkpoint", Short: "checkpoint group"}
 	checkpoint.AddCommand(&cobra.Command{Use: "list", Short: "list checkpoints"})
@@ -43,6 +45,7 @@ func TestDiscover_RecursesIntoSubcommands(t *testing.T) {
 }
 
 func TestTrimDescription_KeepsFirstParagraph(t *testing.T) {
+	t.Parallel()
 	long := "First paragraph that explains the command.\n\nSecond paragraph with examples and details that should be omitted from the tour."
 	got := trimDescription(long)
 	want := "First paragraph that explains the command."

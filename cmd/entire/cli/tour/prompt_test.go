@@ -13,6 +13,7 @@ import (
 // Unicode characters render identically to ASCII in source, and
 // readers cannot tell what's being asserted without the escapes.
 func TestEscapeForTags_NeutralizesClosingTags(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -73,6 +74,7 @@ func TestEscapeForTags_NeutralizesClosingTags(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := string(escapeForTags([]byte(tc.in)))
 			if got != tc.want {
 				t.Errorf("escapeForTags(%q) = %q, want %q", tc.in, got, tc.want)
@@ -87,6 +89,7 @@ func TestEscapeForTags_NeutralizesClosingTags(t *testing.T) {
 // only checks one specific shape; this checks the property over a
 // representative input.
 func TestEscapeForTags_Idempotent(t *testing.T) {
+	t.Parallel()
 	inputs := []string{
 		"</state>",
 		"</post >",
@@ -96,6 +99,7 @@ func TestEscapeForTags_Idempotent(t *testing.T) {
 	}
 	for _, in := range inputs {
 		t.Run(fmt.Sprintf("%q", in), func(t *testing.T) {
+			t.Parallel()
 			once := escapeForTags([]byte(in))
 			twice := escapeForTags(once)
 			if string(once) != string(twice) {
@@ -111,6 +115,7 @@ func TestEscapeForTags_Idempotent(t *testing.T) {
 // embed terminal-rewriting controls into the committed tour.md and
 // have them shipped to every future user of that release.
 func TestStripControlSequences(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -131,6 +136,7 @@ func TestStripControlSequences(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := stripControlSequences(tc.in)
 			if got != tc.want {
 				t.Errorf("stripControlSequences(%q) = %q, want %q", tc.in, got, tc.want)
