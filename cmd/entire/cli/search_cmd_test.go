@@ -76,3 +76,28 @@ func TestWriteSearchJSON_ZeroLimitFallsBackToDefaultPageSize(t *testing.T) {
 		t.Fatalf("output missing total_pages:\n%s", output)
 	}
 }
+
+func TestSearchTokenResourceURL_NormalizesToOrigin(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		serviceURL string
+		want       string
+	}{
+		{"plain origin", "https://entire.io", "https://entire.io"},
+		{"trailing slash", "https://entire.io/", "https://entire.io"},
+		{"pathful search URL", "https://entire.io/custom/search", "https://entire.io"},
+		{"localhost port", "http://localhost:8787/search", "http://localhost:8787"},
+		{"parse fallback", "://not-a-url", "://not-a-url"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := searchTokenResourceURL(tt.serviceURL); got != tt.want {
+				t.Fatalf("searchTokenResourceURL(%q) = %q, want %q", tt.serviceURL, got, tt.want)
+			}
+		})
+	}
+}

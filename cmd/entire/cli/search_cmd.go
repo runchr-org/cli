@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 
@@ -112,7 +113,7 @@ branch:<name>, repo:<owner/name>, and repo:* to search all accessible repos.`,
 			// carries the data-API audience rather than the auth-host one;
 			// single-host setups hit the same-host shortcut and return the
 			// core token unchanged.
-			ghToken, err := auth.TokenForResource(ctx, serviceURL)
+			ghToken, err := auth.TokenForResource(ctx, searchTokenResourceURL(serviceURL))
 			if errors.Is(err, auth.ErrNotLoggedIn) {
 				return errors.New("not authenticated. Run 'entire login' to authenticate")
 			}
@@ -207,6 +208,15 @@ branch:<name>, repo:<owner/name>, and repo:* to search all accessible repos.`,
 	cmd.RegisterFlagCompletionFunc("repo", completeRepoFlag) //nolint:errcheck,gosec // only fails if the flag isn't defined; defined directly above
 
 	return cmd
+}
+
+func searchTokenResourceURL(serviceURL string) string {
+	raw := strings.TrimSpace(serviceURL)
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return raw
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
 }
 
 // completeRepoFlag returns shell-completion suggestions for the search
