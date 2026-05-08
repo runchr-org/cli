@@ -67,9 +67,10 @@ type Response struct {
 // Config holds the configuration for a search request.
 type Config struct {
 	ServiceURL string // Base URL of the search service
-	// GitHubToken is a misnomer kept for backwards compatibility: callers
-	// populate it with the OAuth bearer from auth.LookupCurrentToken().
-	// The wire format is unchanged (Authorization: Bearer <token>).
+	// GitHubToken is a misnomer kept for backwards compatibility:
+	// callers populate it with the resource-scoped OAuth bearer from
+	// auth.TokenForResource(ctx, ServiceURL). The wire format is
+	// unchanged (Authorization: Bearer <token>).
 	GitHubToken string
 	Owner       string
 	Repo        string

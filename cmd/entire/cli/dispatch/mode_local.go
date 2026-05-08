@@ -22,8 +22,20 @@ import (
 )
 
 var (
+	// lookupCurrentToken is retained for test-injection back-compat. The
+	// cloud-mode runner now resolves its bearer via lookupResourceToken
+	// so it picks up the RFC 8693 exchange in split-host deployments;
+	// existing tests that swap lookupCurrentToken keep working because
+	// the default lookupResourceToken delegates to it.
 	lookupCurrentToken = auth.LookupCurrentToken
-	nowUTC             = func() time.Time { return time.Now().UTC() }
+
+	// lookupResourceToken returns a bearer scoped to the given resource
+	// origin. Production wiring goes through auth.TokenForResource so
+	// the tokenmanager's same-host shortcut, JWT-aud shortcut, and
+	// exchange dispatch all apply. Tests swap to a fixed-token closure.
+	lookupResourceToken = auth.TokenForResource
+
+	nowUTC = func() time.Time { return time.Now().UTC() }
 )
 
 func runLocal(ctx context.Context, opts Options) (*Dispatch, error) {

@@ -339,6 +339,32 @@ if settings.IsSummarizeEnabled() {
 - `settings/settings.go` - `EntireSettings` struct, `Load()`, and helper methods
 - `config.go` - Higher-level config functions that use settings (for `cli` package consumers)
 
+### Auth and token resolution
+
+The CLI uses a shareable auth library at `auth/` (subpackages: `deviceflow`, `sts`, `tokens`, `tokenstore`, `tokenmanager`). The `cmd/entire/cli/auth/` package wraps it with entire-specific config (provider table, keyring service name) and exposes the call surface that command code should use.
+
+**For every data-API call, get the bearer through one of these two entry points — never read the keyring directly:**
+
+```go
+// Preferred — for callers that need an *api.Client.
+client, err := cli.NewAuthenticatedAPIClient(ctx, insecureHTTP)
+
+// Direct — for callers that hand the bearer to a non-api package
+// (e.g. the search service client, dispatch CloudClient).
+bearer, err := auth.TokenForResource(ctx, serviceURL)
+```
+
+Both route through `tokenmanager.Manager.Token`, which:
+
+1. Returns `auth.ErrNotLoggedIn` when the keyring is empty.
+2. Hits the same-host shortcut when `api.AuthBaseURL() == resourceURL`.
+3. Hits the JWT-`aud`-includes-resource shortcut when the core token is already valid for `resourceURL` (caller didn't request an explicit `Audience`).
+4. Otherwise runs an RFC 8693 token exchange against the auth host's STS endpoint and caches the result per `(core token, resource, audience, requested-token-type, scope)`.
+
+**Don't use `auth.LookupCurrentToken` for data-API calls.** It returns the raw core token (audience = auth host). On split-host deployments (`ENTIRE_AUTH_BASE_URL` set) the data API will reject it with 401. `LookupCurrentToken` is correct only for auth-host-targeted commands (`auth list/revoke/status`, `logout`) — they intentionally hold the auth-audience bearer.
+
+**Test injection:** at the cmd layer use `auth.SetManagerForTest(t, mgr)` with a `tokenmanager.Manager` constructed via `tokenmanager.New(Config{Exchange: ...})`. The manager's `Config.Exchange` and `Config.Now` fields are test seams — production callers leave them nil.
+
 ### Logging vs User Output
 
 - **Internal/debug logging**: Use `logging.Debug/Info/Warn/Error(ctx, msg, attrs...)` from `cmd/entire/cli/logging/`. Writes to `.entire/logs/`.
