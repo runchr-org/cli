@@ -543,48 +543,64 @@ func TestWaitForTranscriptFlush_NonexistentFile_ReturnsImmediately(t *testing.T)
 	}
 }
 
-func TestFindTranscriptByID(t *testing.T) {
+const testClaudeProjectsBase = "/home/u/.claude/projects"
+
+func TestWorktreeParentCandidate(t *testing.T) {
 	t.Parallel()
 
-	base := t.TempDir()
-	// projects/<encoded-A>/<id>.jsonl is the actual stored location
-	storedDir := filepath.Join(base, "-Users-foo-Development-repo")
-	wrongDir := filepath.Join(base, "-Users-foo-Development-repo--claude-worktrees-feature")
-	if err := os.MkdirAll(storedDir, 0o755); err != nil {
-		t.Fatalf("mkdir stored: %v", err)
-	}
-	if err := os.MkdirAll(wrongDir, 0o755); err != nil {
-		t.Fatalf("mkdir wrong: %v", err)
-	}
-	sessionID := "abc-123-def"
-	transcript := filepath.Join(storedDir, sessionID+".jsonl")
-	if err := os.WriteFile(transcript, []byte(`{"type":"human"}`+"\n"), 0o600); err != nil {
-		t.Fatalf("write transcript: %v", err)
-	}
-
-	got := findTranscriptByID(base, sessionID)
-	if got != transcript {
-		t.Errorf("findTranscriptByID = %q, want %q", got, transcript)
+	reported := filepath.Join(testClaudeProjectsBase, "-Users-foo-Development-repo--claude-worktrees-feature", "sess-1.jsonl")
+	got := worktreeParentCandidate(testClaudeProjectsBase, reported, "sess-1")
+	want := filepath.Join(testClaudeProjectsBase, "-Users-foo-Development-repo", "sess-1.jsonl")
+	if got != want {
+		t.Errorf("worktreeParentCandidate = %q, want %q", got, want)
 	}
 }
 
-func TestFindTranscriptByID_NoMatch(t *testing.T) {
+func TestWorktreeParentCandidate_NoMarker(t *testing.T) {
 	t.Parallel()
 
-	base := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(base, "some-project"), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if got := findTranscriptByID(base, "missing-id"); got != "" {
-		t.Errorf("expected empty result for missing id, got %q", got)
+	reported := filepath.Join(testClaudeProjectsBase, "-Users-foo-Development-repo", "sess-1.jsonl")
+	if got := worktreeParentCandidate(testClaudeProjectsBase, reported, "sess-1"); got != "" {
+		t.Errorf("expected empty (no marker), got %q", got)
 	}
 }
 
-func TestFindTranscriptByID_NonexistentBase(t *testing.T) {
+func TestWorktreeParentCandidate_OutsideBase(t *testing.T) {
 	t.Parallel()
 
-	if got := findTranscriptByID("/definitely/not/a/real/path", "anything"); got != "" {
-		t.Errorf("expected empty result for nonexistent base dir, got %q", got)
+	if got := worktreeParentCandidate("/a/base", "/somewhere/else/sess-1.jsonl", "sess-1"); got != "" {
+		t.Errorf("expected empty (outside base), got %q", got)
+	}
+}
+
+// TestWorktreeParentCandidate_MarkerInRepoRoot covers a repo whose sanitized
+// root already contains the literal "--claude-worktrees-" token (e.g. checked
+// out under a directory literally named "acme--claude-worktrees-tools"). Only
+// the trailing, synthetic occurrence — the suffix Claude appends from
+// .claude/worktrees/<branch> — should be stripped. Cutting at the first
+// occurrence would point at the wrong project dir and re-introduce the
+// dropped-checkpoint bug for that class of repos.
+func TestWorktreeParentCandidate_MarkerInRepoRoot(t *testing.T) {
+	t.Parallel()
+
+	parent := "-Users-me-acme--claude-worktrees-tools-repo"
+	worktree := parent + "--claude-worktrees-feature"
+	reported := filepath.Join(testClaudeProjectsBase, worktree, "sess-1.jsonl")
+	got := worktreeParentCandidate(testClaudeProjectsBase, reported, "sess-1")
+	want := filepath.Join(testClaudeProjectsBase, parent, "sess-1.jsonl")
+	if got != want {
+		t.Errorf("worktreeParentCandidate = %q, want %q (must strip only the trailing synthetic marker)", got, want)
+	}
+}
+
+func TestWorktreeParentCandidate_MarkerAtStart(t *testing.T) {
+	t.Parallel()
+
+	// Marker at index 0 of the project segment is meaningless — there is no
+	// parent path to recover. Helper returns "".
+	reported := filepath.Join(testClaudeProjectsBase, "--claude-worktrees-feature", "sess-1.jsonl")
+	if got := worktreeParentCandidate(testClaudeProjectsBase, reported, "sess-1"); got != "" {
+		t.Errorf("expected empty (marker at start), got %q", got)
 	}
 }
 
@@ -642,6 +658,28 @@ func TestResolveTranscriptPath_WorktreeFallback(t *testing.T) {
 	got := ag.resolveTranscriptPath(reported, sessionID)
 	if got != realPath {
 		t.Errorf("resolveTranscriptPath = %q, want %q (real location)", got, realPath)
+	}
+}
+
+// TestResolveTranscriptPath_NoMarker_Passthrough verifies that when the
+// reported path is under the projects base but the project segment does not
+// carry the worktree marker, the resolver returns the original path unchanged
+// rather than fabricating a candidate.
+func TestResolveTranscriptPath_NoMarker_Passthrough(t *testing.T) {
+	// Cannot t.Parallel() — uses t.Setenv on HOME.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	base := filepath.Join(tmpHome, ".claude", "projects")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatalf("mkdir base: %v", err)
+	}
+	reported := filepath.Join(base, "-Users-foo-Development-repo", "missing.jsonl")
+
+	ag := &ClaudeCodeAgent{}
+	got := ag.resolveTranscriptPath(reported, "any-id")
+	if got != reported {
+		t.Errorf("resolveTranscriptPath = %q, want passthrough %q", got, reported)
 	}
 }
 

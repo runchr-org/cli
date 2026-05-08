@@ -188,19 +188,33 @@ func (c *ClaudeCodeAgent) parseSubagentEnd(stdin io.Reader) (*agent.Event, error
 	return event, nil
 }
 
+// claudeWorktreeMarker is the substring that appears in an encoded project-dir
+// segment when Claude Code is invoked from inside its worktree feature.
+// SanitizePathForClaude replaces every non-alphanumeric character with '-',
+// so a CWD ending in "/.claude/worktrees/<branch>" produces a project segment
+// containing "--claude-worktrees-<branch-encoded>".
+const claudeWorktreeMarker = "--claude-worktrees-"
+
 // resolveTranscriptPath returns the canonical path to a Claude transcript file,
 // recovering from the Claude Code worktree-feature mismatch where
 // transcript_path encodes the worktree CWD (e.g. .claude/worktrees/<branch>) but
-// the file is stored under the parent repo's project dir. Falls back to scanning
-// ~/.claude/projects/*/<sessionID>.jsonl when the reported path doesn't exist.
+// the file is stored under the parent repo's project dir.
 //
-// The fallback is gated to keep cost and risk minimal:
-//   - Only triggers on os.IsNotExist (permission/IO errors are returned as-is so
-//     real problems aren't masked by a scan).
+// When the reported path doesn't exist, the resolver strips the worktree marker
+// from the project segment and checks the parent-repo candidate. The lookup is
+// fully deterministic — no directory scanning, no chance of crossing into an
+// unrelated project that happens to share a session ID.
+//
+// The fallback is gated to keep risk minimal:
+//   - Only triggers on os.IsNotExist (permission/IO errors are returned as-is
+//     so real problems aren't masked).
 //   - Only triggers when the reported path is under the Claude projects base
-//     dir; for any other path the scan can't produce a better answer.
-//   - The session ID is validated with validation.ValidateAgentSessionID before
-//     being used in filepath.Join, blocking traversal via hostile hook input.
+//     dir.
+//   - Only triggers when the project segment contains claudeWorktreeMarker.
+//   - The session ID is validated with validation.ValidateAgentSessionID
+//     before being used in filepath.Join, blocking traversal via hostile hook
+//     input.
+//   - The candidate path must itself exist before being returned.
 func (c *ClaudeCodeAgent) resolveTranscriptPath(sessionRef, sessionID string) string {
 	if sessionRef == "" || sessionID == "" {
 		return sessionRef
@@ -217,44 +231,49 @@ func (c *ClaudeCodeAgent) resolveTranscriptPath(sessionRef, sessionID string) st
 	if err != nil {
 		return sessionRef
 	}
-	cleanedRef := filepath.Clean(sessionRef)
-	cleanedBase := filepath.Clean(base)
-	if !strings.HasPrefix(cleanedRef, cleanedBase+string(os.PathSeparator)) {
+	candidate := worktreeParentCandidate(filepath.Clean(base), filepath.Clean(sessionRef), sessionID)
+	if candidate == "" {
 		return sessionRef
 	}
-	found := findTranscriptByID(cleanedBase, sessionID)
-	if found == "" {
+	if _, err := os.Stat(candidate); err != nil {
 		return sessionRef
 	}
 	logging.Info(logging.WithComponent(context.Background(), "agent.claudecode"),
-		"resolved transcript via fallback scan",
+		"resolved transcript via worktree fallback",
 		slog.String("reported", sessionRef),
-		slog.String("found", found),
+		slog.String("found", candidate),
 		slog.String("session_id", sessionID),
 	)
-	return found
+	return candidate
 }
 
-// findTranscriptByID scans baseDir's immediate child directories for a file
-// named "<sessionID>.jsonl" and returns the first match, or "" if none.
-// Callers must validate sessionID with validation.ValidateAgentSessionID first
-// — this function trusts the input and uses it verbatim in filepath.Join.
-func findTranscriptByID(baseDir, sessionID string) string {
-	entries, err := os.ReadDir(baseDir)
-	if err != nil {
+// worktreeParentCandidate returns the parent-repo equivalent of a reported
+// transcript path when the project segment carries the Claude Code worktree
+// marker. Returns "" if reported is not under base, has no project segment,
+// or has no worktree marker. Callers must validate sessionID before calling.
+//
+// strings.LastIndex (not Index) is used because the *synthetic* worktree
+// marker is always the trailing occurrence in the project segment: Claude
+// appends "/.claude/worktrees/<branch>" to the cwd, and SanitizePathForClaude
+// preserves left-to-right order, so the suffix carrying the bug is the last
+// one. Cutting at the first match would mis-strip repos whose sanitized root
+// already contains the token (e.g. repos checked out under a directory
+// literally named "...--claude-worktrees-...").
+func worktreeParentCandidate(base, reported, sessionID string) string {
+	sep := string(os.PathSeparator)
+	prefix := base + sep
+	if !strings.HasPrefix(reported, prefix) {
 		return ""
 	}
-	fname := sessionID + ".jsonl"
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		candidate := filepath.Join(baseDir, e.Name(), fname)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
+	projectSeg, _, ok := strings.Cut(reported[len(prefix):], sep)
+	if !ok || projectSeg == "" {
+		return ""
 	}
-	return ""
+	idx := strings.LastIndex(projectSeg, claudeWorktreeMarker)
+	if idx <= 0 {
+		return ""
+	}
+	return filepath.Join(base, projectSeg[:idx], sessionID+".jsonl")
 }
 
 // --- Transcript flush sentinel ---
