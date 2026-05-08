@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -370,6 +371,20 @@ func TestRunDispatchWizard_ProceedsWhenCurrentBranchCannotBeResolved(t *testing.
 	_, err := runDispatchWizard(cmd)
 	if err == nil || !strings.Contains(err.Error(), "run dispatch wizard") {
 		t.Fatalf("expected form execution error instead of eager branch failure, got %v", err)
+	}
+}
+
+func TestDispatchWizardKeyMapQuitsWithEscAndCtrlC(t *testing.T) {
+	t.Parallel()
+
+	quitKeys := dispatchWizardKeyMap().Quit.Keys()
+	for _, want := range []string{"esc", "ctrl+c"} {
+		if !slices.Contains(quitKeys, want) {
+			t.Fatalf("dispatch wizard quit keys = %v, missing %q", quitKeys, want)
+		}
+	}
+	if slices.Contains(quitKeys, "q") {
+		t.Fatalf("dispatch wizard quit keys = %v, should not include q because custom voice is a text input", quitKeys)
 	}
 }
 

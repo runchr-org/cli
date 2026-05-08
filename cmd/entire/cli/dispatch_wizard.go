@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/huh/v2"
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	dispatchpkg "github.com/entireio/cli/cmd/entire/cli/dispatch"
@@ -348,7 +349,7 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 				Negative("Cancel").
 				Value(&state.confirmRun),
 		).Title("Confirm").Description("Review the resolved command and run it."),
-	)
+	).WithKeyMap(dispatchWizardKeyMap())
 
 	fmt.Fprintln(cmd.OutOrStdout())
 
@@ -364,6 +365,15 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 	}
 
 	return state.resolve()
+}
+
+func dispatchWizardKeyMap() *huh.KeyMap {
+	keymap := huh.NewDefaultKeyMap()
+	keymap.Quit = key.NewBinding(
+		key.WithKeys("esc", "ctrl+c"),
+		key.WithHelp("esc/ctrl+c", "cancel"),
+	)
+	return keymap
 }
 
 // newLazyOptions returns a func that runs loader once (under sync.Once) and
