@@ -1079,11 +1079,11 @@ func agentSelectionDescription() string {
 }
 
 func accessibleManageAgentsDescription() string {
-	return "Enter a number to select/deselect an agent. Enter 0 to confirm; press ctrl+c to cancel. No changes: leave selections unchanged and enter 0."
+	return "Enter a number to select/deselect an agent. Enter 0 to confirm. No changes: leave selections unchanged and enter 0."
 }
 
 func accessibleAgentSelectionDescription() string {
-	return "Enter a number to select/deselect an agent. Enter 0 to confirm; press ctrl+c to cancel."
+	return "Enter a number to select/deselect an agent. Enter 0 to confirm."
 }
 
 func agentMenuKeyMap() *huh.KeyMap {

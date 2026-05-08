@@ -1150,6 +1150,26 @@ func TestManageAgentsDescription(t *testing.T) {
 	}
 }
 
+func TestAccessibleAgentDescriptionsDoNotAdvertiseUnsupportedCancelKeys(t *testing.T) {
+	t.Parallel()
+
+	for name, got := range map[string]string{
+		"manage": accessibleManageAgentsDescription(),
+		"setup":  accessibleAgentSelectionDescription(),
+	} {
+		for _, want := range []string{"Enter a number", "Enter 0 to confirm"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%s accessible description = %q, missing %q", name, got, want)
+			}
+		}
+		for _, wrong := range []string{"q", "esc", "ctrl+c", "cancel"} {
+			if strings.Contains(strings.ToLower(got), wrong) {
+				t.Fatalf("%s accessible description = %q, should not advertise unsupported %q", name, got, wrong)
+			}
+		}
+	}
+}
+
 func TestAgentMenuKeyMapQuitsWithQEscAndCtrlC(t *testing.T) {
 	t.Parallel()
 
@@ -1855,12 +1875,12 @@ func TestManageAgents_AccessiblePromptShowsCancellationGuidance(t *testing.T) {
 	}
 
 	output := buf.String()
-	for _, want := range []string{"Enter 0 to confirm", "ctrl+c to cancel"} {
+	for _, want := range []string{"Enter 0 to confirm", "leave selections unchanged and enter 0"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("accessible agent prompt output = %q, missing %q", output, want)
 		}
 	}
-	for _, wrong := range []string{"q/esc", "esc/ctrl+c"} {
+	for _, wrong := range []string{"q", "esc", "ctrl+c", "cancel"} {
 		if strings.Contains(output, wrong) {
 			t.Fatalf("accessible agent prompt output = %q, should not advertise unsupported %q cancellation", output, wrong)
 		}
