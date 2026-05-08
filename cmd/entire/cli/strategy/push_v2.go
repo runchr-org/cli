@@ -705,10 +705,9 @@ func updateGenerationTimestamps(repo *git.Repository, genBlobHash plumbing.Hash,
 }
 
 // pushV2Refs pushes v2 checkpoint refs to the target.
-// Pushes /main, /full/current, and the latest archived generation (if any) in
-// one git push. Older archived generations are immutable and were pushed when created.
+// Pushes /main, /full/current, and archived generations in one git push.
 func pushV2Refs(ctx context.Context, target string) {
-	refs := v2RefsToPush(ctx)
+	refs := v2RefsToPush(ctx, target)
 	if len(refs) == 0 {
 		return
 	}
@@ -757,7 +756,7 @@ func printV2PartialPushResult(w io.Writer, successfulRefs []plumbing.ReferenceNa
 	}
 }
 
-func v2RefsToPush(ctx context.Context) []plumbing.ReferenceName {
+func v2RefsToPush(ctx context.Context, target string) []plumbing.ReferenceName {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
 		return nil
@@ -773,14 +772,14 @@ func v2RefsToPush(ctx context.Context) []plumbing.ReferenceName {
 		}
 	}
 
-	// Push only the latest archived generation (most likely to be newly created).
-	store := checkpoint.NewV2GitStore(repo, "")
+	store := checkpoint.NewV2GitStore(repo, target)
 	archived, err := store.ListArchivedGenerations()
 	if err != nil || len(archived) == 0 {
 		return refs
 	}
-	latest := archived[len(archived)-1]
-	refs = append(refs, plumbing.ReferenceName(paths.V2FullRefPrefix+latest))
+	for _, archive := range archived {
+		refs = append(refs, plumbing.ReferenceName(paths.V2FullRefPrefix+archive))
+	}
 
 	return refs
 }

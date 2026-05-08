@@ -252,7 +252,8 @@ func TestPushV2Refs_PushesAllRefs(t *testing.T) {
 	// Write a checkpoint (creates both /main and /full/current)
 	writeV2Checkpoint(t, repo, id.MustCheckpointID("aabbccddeeff"), "test-session")
 
-	// Create two fake archived generation refs — only the latest should be pushed
+	// Create two fake archived generation refs. Migration can create multiple
+	// archive refs before the next push, so all local archives should be pushed.
 	fullRef, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
 	require.NoError(t, err)
 	for _, num := range []string{"0000000000001", "0000000000002"} {
@@ -289,10 +290,10 @@ func TestPushV2Refs_PushesAllRefs(t *testing.T) {
 	require.NoError(t, err, "latest archived generation should exist in bare repo")
 
 	_, err = bareRepo.Reference(plumbing.ReferenceName(paths.V2FullRefPrefix+"0000000000001"), true)
-	require.Error(t, err, "older archived generation should NOT be pushed")
+	require.NoError(t, err, "older archived generation should exist in bare repo")
 
 	assert.Contains(t, output, "[entire] Syncing and pushing v2 checkpoints...")
-	assert.Contains(t, output, "[entire] Pushing v2/main, v2/full/current, v2/full/0000000000002...")
+	assert.Contains(t, output, "[entire] Pushing v2/main, v2/full/current, v2/full/0000000000001, v2/full/0000000000002...")
 	assert.Contains(t, output, "[entire] All v2 checkpoints pushed")
 	assert.NotContains(t, output, "[entire] Successfully pushed", "successful refs should only be listed on partial failure")
 	assert.NotContains(t, output, "Pushing v2/main to", "per-ref progress should stay quiet")
