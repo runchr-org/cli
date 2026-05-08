@@ -97,18 +97,8 @@ func TestTUISink_AgentEvent_BeforeStart_IsNoOp(t *testing.T) {
 	sink.AgentEvent("agent-a", reviewtypes.AssistantText{Text: "hello"})
 }
 
-// TestTUISink_RunFinished_UnblockAfterQuit verifies that RunFinished unblocks
-// when the Bubble Tea program receives a quit (sent via the model's any-key
-// handler after finished=true).
-//
-// We cannot easily drive keystrokes into the Bubble Tea program in a unit
-// test without a real terminal, so we trigger the quit path by sending
-// RunFinished which sets finished=true in the model, then the program exits
-// on the first internal message that causes tea.Quit.
-//
-// In practice: after RunFinished is sent, the program sets finished=true and
-// the next tick or key press causes Quit. Since we're not in a TTY environment
-// here the program exits quickly because it can't read from stdin.
+// TestTUISink_RunFinished_EventuallyUnblocks verifies that RunFinished unblocks
+// once the finished TUI receives the same any-key dismissal used by a user.
 func TestTUISink_RunFinished_EventuallyUnblocks(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer

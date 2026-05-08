@@ -26,15 +26,19 @@ type Store struct {
 
 // NewStore returns a Store backed by the system keyring.
 func NewStore() *Store {
+	return newStoreWithService(keyringService)
+}
+
+func newStoreWithService(service string) *Store {
 	return &Store{
-		service:       keyringService,
+		service:       service,
 		testStoreFile: os.Getenv(testAuthStoreFileEnv),
 	}
 }
 
 // NewStoreWithService returns a Store with a custom keyring service name (for testing).
 func NewStoreWithService(service string) *Store {
-	return &Store{service: service}
+	return newStoreWithService(service)
 }
 
 // SaveToken persists an access token for the given base URL.
@@ -170,6 +174,9 @@ func (s *Store) writeTokenFile(tokens map[string]map[string]string) error {
 	}
 	if err := os.WriteFile(s.testStoreFile, data, 0o600); err != nil {
 		return fmt.Errorf("write test auth store: %w", err)
+	}
+	if err := os.Chmod(s.testStoreFile, 0o600); err != nil {
+		return fmt.Errorf("restrict test auth store permissions: %w", err)
 	}
 	return nil
 }
