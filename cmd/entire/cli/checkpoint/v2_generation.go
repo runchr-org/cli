@@ -570,18 +570,18 @@ func (s *V2GitStore) RotateCurrentGenerationIfNeeded(ctx context.Context, maxChe
 		return archiveRefName, false, nil
 	}
 
-	if err := s.AppendPendingFullRotation(ctx, PendingV2FullRotation{
-		ArchiveRefName:             archiveRefName.String(),
-		PreviousFullCurrentHash:    currentRef.Hash().String(),
-		ArchivedFullGenerationHash: archiveCommitHash.String(),
-		ResetFullCurrentRootHash:   orphanCommitHash.String(),
-		RotatedAt:                  time.Now().UTC(),
+	if err := s.AppendPendingFullGenerationPublication(ctx, PendingV2FullGenerationPublication{
+		ArchiveRefName:           archiveRefName.String(),
+		ArchiveCommitHash:        archiveCommitHash.String(),
+		PreviousFullCurrentHash:  currentRef.Hash().String(),
+		ResetFullCurrentRootHash: orphanCommitHash.String(),
+		QueuedAt:                 time.Now().UTC(),
 	}); err != nil {
 		logging.Warn(ctx, "rotation: failed to record pending full rotation; continuing with rotated refs",
 			"error", err,
 			slog.String("archive_ref", string(archiveRefName)),
 			slog.String("previous_full_current_hash", currentRef.Hash().String()),
-			slog.String("archived_full_generation_hash", archiveCommitHash.String()),
+			slog.String("archive_commit_hash", archiveCommitHash.String()),
 			slog.String("reset_full_current_root_hash", orphanCommitHash.String()),
 		)
 	}

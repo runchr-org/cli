@@ -361,6 +361,12 @@ func TestMigrateCheckpointsV2_PacksFullGenerationsOldestFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"0000000000001", "0000000000002"}, archived)
 
+	pendingPublications, err := v2Store.ReadPendingFullGenerationPublications(ctx)
+	require.NoError(t, err)
+	require.Len(t, pendingPublications, 2)
+	assert.Equal(t, paths.V2FullRefPrefix+"0000000000001", pendingPublications[0].ArchiveRefName)
+	assert.Equal(t, paths.V2FullRefPrefix+"0000000000002", pendingPublications[1].ArchiveRefName)
+
 	expectedBatches := [][]int{
 		{0, 1},
 		{2, 3},

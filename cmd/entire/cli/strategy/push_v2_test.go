@@ -239,10 +239,11 @@ func TestFetchAndMergeRef_MergesTrees(t *testing.T) {
 	assert.True(t, has11, "merged tree should contain checkpoint 112233445566")
 }
 
-// TestPushV2Refs_PushesAllRefs verifies that pushV2Refs pushes /main,
-// /full/current, and any archived generations to a bare repo.
+// TestPushV2Refs_SkipsUnrecordedArchiveRefs verifies that pushV2Refs pushes
+// /main and /full/current, but does not push archived generations unless a
+// local handoff records them as needing publication.
 // Not parallel: uses t.Chdir()
-func TestPushV2Refs_PushesAllRefs(t *testing.T) {
+func TestPushV2Refs_SkipsUnrecordedArchiveRefs(t *testing.T) {
 	ctx := context.Background()
 
 	tmpDir := setupRepoWithV2Ref(t)
@@ -252,8 +253,8 @@ func TestPushV2Refs_PushesAllRefs(t *testing.T) {
 	// Write a checkpoint (creates both /main and /full/current)
 	writeV2Checkpoint(t, repo, id.MustCheckpointID("aabbccddeeff"), "test-session")
 
-	// Create two fake archived generation refs. Migration can create multiple
-	// archive refs before the next push, so all local archives should be pushed.
+	// Create two fake archived generation refs without recording a pending
+	// publication handoff.
 	fullRef, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
 	require.NoError(t, err)
 	for _, num := range []string{"0000000000001", "0000000000002"} {
@@ -276,7 +277,7 @@ func TestPushV2Refs_PushesAllRefs(t *testing.T) {
 	pushV2Refs(ctx, bareDir)
 	output := restore()
 
-	// Verify all three refs exist in bare repo
+	// Verify only active refs exist in bare repo.
 	bareRepo, err := git.PlainOpen(bareDir)
 	require.NoError(t, err)
 
@@ -287,17 +288,71 @@ func TestPushV2Refs_PushesAllRefs(t *testing.T) {
 	require.NoError(t, err, "/full/current ref should exist in bare repo")
 
 	_, err = bareRepo.Reference(plumbing.ReferenceName(paths.V2FullRefPrefix+"0000000000002"), true)
-	require.NoError(t, err, "latest archived generation should exist in bare repo")
+	require.Error(t, err, "unrecorded latest archived generation should not be pushed")
 
 	_, err = bareRepo.Reference(plumbing.ReferenceName(paths.V2FullRefPrefix+"0000000000001"), true)
-	require.NoError(t, err, "older archived generation should exist in bare repo")
+	require.Error(t, err, "unrecorded older archived generation should not be pushed")
 
 	assert.Contains(t, output, "[entire] Syncing and pushing v2 checkpoints...")
-	assert.Contains(t, output, "[entire] Pushing v2/main, v2/full/current, v2/full/0000000000001, v2/full/0000000000002...")
+	assert.Contains(t, output, "[entire] Pushing v2/main, v2/full/current...")
 	assert.Contains(t, output, "[entire] All v2 checkpoints pushed")
 	assert.NotContains(t, output, "[entire] Successfully pushed", "successful refs should only be listed on partial failure")
 	assert.NotContains(t, output, "Pushing v2/main to", "per-ref progress should stay quiet")
 	assert.NotContains(t, output, "Syncing v2/main with remote", "per-ref sync progress should stay quiet")
+}
+
+// TestPushV2Refs_PushesPendingArchivePublications verifies migration-created
+// archived generations can be queued for the next pre-push without making every
+// local archived generation part of the default push set.
+//
+// Not parallel: uses t.Chdir()
+func TestPushV2Refs_PushesPendingArchivePublications(t *testing.T) {
+	ctx := context.Background()
+
+	tmpDir := setupRepoWithV2Ref(t)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+	store := checkpoint.NewV2GitStore(repo, "origin")
+
+	writeV2Checkpoint(t, repo, id.MustCheckpointID("aabbccddeeff"), "test-session")
+
+	fullRef, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
+	require.NoError(t, err)
+
+	var publications []checkpoint.PendingV2FullGenerationPublication
+	for _, num := range []string{"0000000000001", "0000000000002"} {
+		refName := plumbing.ReferenceName(paths.V2FullRefPrefix + num)
+		ref := plumbing.NewHashReference(refName, fullRef.Hash())
+		require.NoError(t, repo.Storer.SetReference(ref))
+		publications = append(publications, checkpoint.PendingV2FullGenerationPublication{
+			ArchiveRefName:    refName.String(),
+			ArchiveCommitHash: fullRef.Hash().String(),
+		})
+	}
+	require.NoError(t, store.AppendPendingFullGenerationPublications(ctx, publications))
+
+	t.Chdir(tmpDir)
+
+	bareDir := t.TempDir()
+	initCmd := exec.CommandContext(ctx, "git", "init", "--bare")
+	initCmd.Dir = bareDir
+	initCmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, initCmd.Run())
+
+	restore := captureStderr(t)
+	pushV2Refs(ctx, bareDir)
+	_ = restore()
+
+	bareRepo, err := git.PlainOpen(bareDir)
+	require.NoError(t, err)
+	for _, num := range []string{"0000000000001", "0000000000002"} {
+		_, err = bareRepo.Reference(plumbing.ReferenceName(paths.V2FullRefPrefix+num), true)
+		require.NoError(t, err, "pending archived generation should exist in bare repo")
+	}
+
+	remaining, err := store.ReadPendingFullGenerationPublications(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "pending archive publications should be cleared after push")
 }
 
 // TestPushV2Refs_LocalRotationDoesNotRehydrateArchivedCurrent verifies that

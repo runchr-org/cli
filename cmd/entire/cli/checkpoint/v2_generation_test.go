@@ -459,7 +459,7 @@ func TestRotateGeneration_SucceedsWhenPendingMarkerCannotBeRecorded(t *testing.T
 
 	worktree, err := repo.Worktree()
 	require.NoError(t, err)
-	blockingPath := filepath.Join(worktree.Filesystem.Root(), ".git", pendingV2FullRotationDirName)
+	blockingPath := filepath.Join(worktree.Filesystem.Root(), ".git", pendingV2FullGenerationPublicationDirName)
 	require.NoError(t, os.WriteFile(blockingPath, []byte("not a directory"), 0o600))
 
 	refName, rotated, err := store.RotateCurrentGenerationIfNeeded(ctx, 3)

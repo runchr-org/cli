@@ -57,11 +57,11 @@ func tryPushV2Refs(ctx context.Context, target string, refs []plumbing.Reference
 }
 
 func pushV2RefsWithRecovery(ctx context.Context, target string, refs []plumbing.ReferenceName) []v2RefPushResult {
-	publishedPending, pendingErr := publishPendingV2FullRotations(ctx, target)
+	publishedCurrentReset, pendingErr := publishPendingV2FullGenerationPublications(ctx, target)
 	if pendingErr != nil {
 		return []v2RefPushResult{{
 			refName: plumbing.ReferenceName(paths.V2FullCurrentRefName),
-			err:     fmt.Errorf("couldn't publish pending v2 full rotation: %w", pendingErr),
+			err:     fmt.Errorf("couldn't publish pending v2 full generation refs: %w", pendingErr),
 		}}
 	}
 
@@ -77,10 +77,10 @@ func pushV2RefsWithRecovery(ctx context.Context, target string, refs []plumbing.
 			resultsByRef[result.refName] = result
 			continue
 		}
-		if publishedPending && result.refName == plumbing.ReferenceName(paths.V2FullCurrentRefName) {
+		if publishedCurrentReset && result.refName == plumbing.ReferenceName(paths.V2FullCurrentRefName) {
 			resultsByRef[result.refName] = v2RefPushResult{
 				refName: result.refName,
-				err:     fmt.Errorf("failed to push %s after publishing pending rotation: %w", shortRefName(result.refName), result.err),
+				err:     fmt.Errorf("failed to push %s after publishing pending current reset: %w", shortRefName(result.refName), result.err),
 			}
 			continue
 		}
@@ -119,27 +119,35 @@ func pushV2RefsWithRecovery(ctx context.Context, target string, refs []plumbing.
 	return results
 }
 
-func publishPendingV2FullRotations(ctx context.Context, target string) (bool, error) {
+func publishPendingV2FullGenerationPublications(ctx context.Context, target string) (bool, error) {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
 		return false, fmt.Errorf("open repository: %w", err)
 	}
 	store := checkpoint.NewV2GitStore(repo, target)
-	rotations, err := store.ReadPendingFullRotations(ctx)
+	publications, err := store.ReadPendingFullGenerationPublications(ctx)
 	if err != nil {
-		return false, fmt.Errorf("read pending v2 full rotations: %w", err)
+		return false, fmt.Errorf("read pending v2 full generation publications: %w", err)
 	}
-	if len(rotations) == 0 {
+	if len(publications) == 0 {
 		return false, nil
 	}
 
-	archiveRefs := pendingRotationArchiveRefs(rotations)
+	archiveRefs := pendingFullArchiveRefs(publications)
 	if len(archiveRefs) > 0 {
 		for _, result := range tryPushV2Refs(ctx, target, archiveRefs) {
 			if result.err != nil {
 				return true, fmt.Errorf("push pending archive %s: %w", shortRefName(result.refName), result.err)
 			}
 		}
+	}
+
+	resetPublications := pendingFullCurrentResetPublications(publications)
+	if len(resetPublications) == 0 {
+		if err := store.ClearPendingFullGenerationPublications(ctx); err != nil {
+			return false, fmt.Errorf("clear pending v2 full generation publications: %w", err)
+		}
+		return false, nil
 	}
 
 	currentRefName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
@@ -153,13 +161,13 @@ func publishPendingV2FullRotations(ctx context.Context, target string) (bool, er
 		return true, fmt.Errorf("read remote %s: %w", shortRefName(currentRefName), err)
 	}
 	if remoteCurrentFound && remoteCurrentHash == localCurrentRef.Hash() {
-		if err := store.ClearPendingFullRotations(ctx); err != nil {
-			return true, fmt.Errorf("clear pending v2 full rotations: %w", err)
+		if err := store.ClearPendingFullGenerationPublications(ctx); err != nil {
+			return true, fmt.Errorf("clear pending v2 full generation publications: %w", err)
 		}
 		return true, nil
 	}
 
-	if remoteCurrentFound && !pendingRotationsContainAncestor(ctx, repo, rotations, remoteCurrentHash) {
+	if remoteCurrentFound && !pendingResetPublicationsContainAncestor(ctx, repo, resetPublications, remoteCurrentHash) {
 		return true, fmt.Errorf("remote %s at %s is not covered by pending local archives", shortRefName(currentRefName), remoteCurrentHash)
 	}
 
@@ -172,17 +180,17 @@ func publishPendingV2FullRotations(ctx context.Context, target string) (bool, er
 		return true, fmt.Errorf("push rotated %s: %w", shortRefName(currentRefName), err)
 	}
 
-	if err := store.ClearPendingFullRotations(ctx); err != nil {
-		return true, fmt.Errorf("clear pending v2 full rotations: %w", err)
+	if err := store.ClearPendingFullGenerationPublications(ctx); err != nil {
+		return true, fmt.Errorf("clear pending v2 full generation publications: %w", err)
 	}
 	return true, nil
 }
 
-func pendingRotationArchiveRefs(rotations []checkpoint.PendingV2FullRotation) []plumbing.ReferenceName {
-	seen := make(map[plumbing.ReferenceName]struct{}, len(rotations))
-	refs := make([]plumbing.ReferenceName, 0, len(rotations))
-	for _, rotation := range rotations {
-		refName := plumbing.ReferenceName(rotation.ArchiveRefName)
+func pendingFullArchiveRefs(publications []checkpoint.PendingV2FullGenerationPublication) []plumbing.ReferenceName {
+	seen := make(map[plumbing.ReferenceName]struct{}, len(publications))
+	refs := make([]plumbing.ReferenceName, 0, len(publications))
+	for _, publication := range publications {
+		refName := plumbing.ReferenceName(publication.ArchiveRefName)
 		if refName == "" {
 			continue
 		}
@@ -195,12 +203,23 @@ func pendingRotationArchiveRefs(rotations []checkpoint.PendingV2FullRotation) []
 	return refs
 }
 
-func pendingRotationsContainAncestor(ctx context.Context, repo *git.Repository, rotations []checkpoint.PendingV2FullRotation, hash plumbing.Hash) bool {
-	for _, rotation := range rotations {
-		if rotation.ArchivedFullGenerationHash == "" {
+func pendingFullCurrentResetPublications(publications []checkpoint.PendingV2FullGenerationPublication) []checkpoint.PendingV2FullGenerationPublication {
+	resetPublications := make([]checkpoint.PendingV2FullGenerationPublication, 0, len(publications))
+	for _, publication := range publications {
+		if publication.PreviousFullCurrentHash == "" && publication.ResetFullCurrentRootHash == "" {
 			continue
 		}
-		if IsAncestorOf(ctx, repo, hash, plumbing.NewHash(rotation.ArchivedFullGenerationHash)) {
+		resetPublications = append(resetPublications, publication)
+	}
+	return resetPublications
+}
+
+func pendingResetPublicationsContainAncestor(ctx context.Context, repo *git.Repository, publications []checkpoint.PendingV2FullGenerationPublication, hash plumbing.Hash) bool {
+	for _, publication := range publications {
+		if publication.ArchiveCommitHash == "" {
+			continue
+		}
+		if IsAncestorOf(ctx, repo, hash, plumbing.NewHash(publication.ArchiveCommitHash)) {
 			return true
 		}
 	}
@@ -705,9 +724,10 @@ func updateGenerationTimestamps(repo *git.Repository, genBlobHash plumbing.Hash,
 }
 
 // pushV2Refs pushes v2 checkpoint refs to the target.
-// Pushes /main, /full/current, and archived generations in one git push.
+// Pushes active refs in one git push. Pending full-generation publications are
+// handled separately before /full/current recovery.
 func pushV2Refs(ctx context.Context, target string) {
-	refs := v2RefsToPush(ctx, target)
+	refs := v2RefsToPush(ctx)
 	if len(refs) == 0 {
 		return
 	}
@@ -756,7 +776,7 @@ func printV2PartialPushResult(w io.Writer, successfulRefs []plumbing.ReferenceNa
 	}
 }
 
-func v2RefsToPush(ctx context.Context, target string) []plumbing.ReferenceName {
+func v2RefsToPush(ctx context.Context) []plumbing.ReferenceName {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
 		return nil
@@ -770,15 +790,6 @@ func v2RefsToPush(ctx context.Context, target string) []plumbing.ReferenceName {
 		if _, err := repo.Reference(refName, true); err == nil {
 			refs = append(refs, refName)
 		}
-	}
-
-	store := checkpoint.NewV2GitStore(repo, target)
-	archived, err := store.ListArchivedGenerations()
-	if err != nil || len(archived) == 0 {
-		return refs
-	}
-	for _, archive := range archived {
-		refs = append(refs, plumbing.ReferenceName(paths.V2FullRefPrefix+archive))
 	}
 
 	return refs

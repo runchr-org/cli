@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
@@ -343,10 +344,15 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 					nextGeneration = next
 				}
 				refName := checkpoint.ArchivedGenerationRefName(nextGeneration)
-				if packErr := writeMigratedFullGeneration(ctx, repo, refName, pendingFull); packErr != nil {
+				if packErr := writeMigratedFullGeneration(ctx, repo, v2Store, refName, pendingFull); packErr != nil {
 					processSpan.RecordError(packErr)
 					processSpan.End()
 					return result, writtenRefs, fmt.Errorf("failed to pack migrated raw transcripts: %w", packErr)
+				}
+				if queueErr := queueMigratedFullGenerationPublication(ctx, repo, v2Store, refName); queueErr != nil {
+					processSpan.RecordError(queueErr)
+					processSpan.End()
+					return result, writtenRefs, fmt.Errorf("failed to queue migrated raw transcript generation for push: %w", queueErr)
 				}
 				writtenRefs = append(writtenRefs, refName)
 				nextGeneration++
@@ -667,7 +673,7 @@ func repoWorktreeRoot(repo *git.Repository) (string, error) {
 	return root, nil
 }
 
-func writeMigratedFullGeneration(ctx context.Context, repo *git.Repository, refName plumbing.ReferenceName, checkpoints []migratedFullCheckpoint) error {
+func writeMigratedFullGeneration(ctx context.Context, repo *git.Repository, v2Store *checkpoint.V2GitStore, refName plumbing.ReferenceName, checkpoints []migratedFullCheckpoint) error {
 	fullEntries, err := buildMigratedFullEntrySet(ctx, repo, checkpoints)
 	if err != nil {
 		return fmt.Errorf("write migrated generation entries: %w", err)
@@ -680,7 +686,6 @@ func writeMigratedFullGeneration(ctx context.Context, repo *git.Repository, refN
 		return fmt.Errorf("build migrated generation tree: %w", err)
 	}
 
-	v2Store := checkpoint.NewV2GitStore(repo, migrateRemoteName)
 	// Reuse the transcripts already in memory rather than walking the tree
 	// we just built — same first/last-event range, no redundant blob reads.
 	gen, found := checkpoint.AggregateTranscriptTimestamps(migratedTranscripts(checkpoints))
@@ -712,6 +717,21 @@ func writeMigratedFullGeneration(ctx context.Context, repo *git.Repository, refN
 
 	if err := repo.Storer.SetReference(plumbing.NewHashReference(refName, commitHash)); err != nil {
 		return fmt.Errorf("update migrated generation ref %s: %w", refName, err)
+	}
+	return nil
+}
+
+func queueMigratedFullGenerationPublication(ctx context.Context, repo *git.Repository, v2Store *checkpoint.V2GitStore, refName plumbing.ReferenceName) error {
+	ref, err := repo.Reference(refName, true)
+	if err != nil {
+		return fmt.Errorf("read migrated generation ref %s: %w", refName, err)
+	}
+	if err := v2Store.AppendPendingFullGenerationPublications(ctx, []checkpoint.PendingV2FullGenerationPublication{{
+		ArchiveRefName:    refName.String(),
+		ArchiveCommitHash: ref.Hash().String(),
+		QueuedAt:          time.Now().UTC(),
+	}}); err != nil {
+		return fmt.Errorf("append pending archive publication for %s: %w", refName, err)
 	}
 	return nil
 }
