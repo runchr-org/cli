@@ -13,6 +13,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/validation"
 )
 
 // Compile-time interface assertions for new interfaces.
@@ -192,18 +193,36 @@ func (c *ClaudeCodeAgent) parseSubagentEnd(stdin io.Reader) (*agent.Event, error
 // transcript_path encodes the worktree CWD (e.g. .claude/worktrees/<branch>) but
 // the file is stored under the parent repo's project dir. Falls back to scanning
 // ~/.claude/projects/*/<sessionID>.jsonl when the reported path doesn't exist.
+//
+// The fallback is gated to keep cost and risk minimal:
+//   - Only triggers on os.IsNotExist (permission/IO errors are returned as-is so
+//     real problems aren't masked by a scan).
+//   - Only triggers when the reported path is under the Claude projects base
+//     dir; for any other path the scan can't produce a better answer.
+//   - The session ID is validated with validation.ValidateAgentSessionID before
+//     being used in filepath.Join, blocking traversal via hostile hook input.
 func (c *ClaudeCodeAgent) resolveTranscriptPath(sessionRef, sessionID string) string {
 	if sessionRef == "" || sessionID == "" {
 		return sessionRef
 	}
 	if _, err := os.Stat(sessionRef); err == nil {
 		return sessionRef
+	} else if !os.IsNotExist(err) {
+		return sessionRef
+	}
+	if err := validation.ValidateAgentSessionID(sessionID); err != nil {
+		return sessionRef
 	}
 	base, err := c.GetSessionBaseDir()
 	if err != nil {
 		return sessionRef
 	}
-	found := findTranscriptByID(base, sessionID)
+	cleanedRef := filepath.Clean(sessionRef)
+	cleanedBase := filepath.Clean(base)
+	if !strings.HasPrefix(cleanedRef, cleanedBase+string(os.PathSeparator)) {
+		return sessionRef
+	}
+	found := findTranscriptByID(cleanedBase, sessionID)
 	if found == "" {
 		return sessionRef
 	}
@@ -218,6 +237,8 @@ func (c *ClaudeCodeAgent) resolveTranscriptPath(sessionRef, sessionID string) st
 
 // findTranscriptByID scans baseDir's immediate child directories for a file
 // named "<sessionID>.jsonl" and returns the first match, or "" if none.
+// Callers must validate sessionID with validation.ValidateAgentSessionID first
+// — this function trusts the input and uses it verbatim in filepath.Join.
 func findTranscriptByID(baseDir, sessionID string) string {
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {

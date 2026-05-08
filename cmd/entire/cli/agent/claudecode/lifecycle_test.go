@@ -644,3 +644,53 @@ func TestResolveTranscriptPath_WorktreeFallback(t *testing.T) {
 		t.Errorf("resolveTranscriptPath = %q, want %q (real location)", got, realPath)
 	}
 }
+
+// TestResolveTranscriptPath_OutsideBaseDir verifies the resolver does not scan
+// when the reported path is outside the Claude projects base dir — scanning
+// elsewhere couldn't produce a more correct answer and just adds I/O.
+func TestResolveTranscriptPath_OutsideBaseDir(t *testing.T) {
+	// Cannot t.Parallel() — uses t.Setenv on HOME.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	// A real transcript exists under the projects base, but the reported path
+	// is somewhere else entirely. Resolver should not redirect.
+	base := filepath.Join(tmpHome, ".claude", "projects")
+	dir := filepath.Join(base, "some-project")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	sessionID := "outside-session"
+	if err := os.WriteFile(filepath.Join(dir, sessionID+".jsonl"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	reported := filepath.Join(t.TempDir(), "elsewhere", sessionID+".jsonl") // not under base
+	ag := &ClaudeCodeAgent{}
+	got := ag.resolveTranscriptPath(reported, sessionID)
+	if got != reported {
+		t.Errorf("resolveTranscriptPath = %q, want passthrough %q (path outside base)", got, reported)
+	}
+}
+
+// TestResolveTranscriptPath_RejectsTraversalSessionID verifies that a session
+// ID containing path separators is rejected before being used in filepath.Join.
+func TestResolveTranscriptPath_RejectsTraversalSessionID(t *testing.T) {
+	// Cannot t.Parallel() — uses t.Setenv on HOME.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	base := filepath.Join(tmpHome, ".claude", "projects", "proj")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// A file with a traversal-shaped name exists; the resolver must NOT match it.
+	traversalID := "../../etc/passwd"
+	reported := filepath.Join(tmpHome, ".claude", "projects", "proj", "missing.jsonl")
+
+	ag := &ClaudeCodeAgent{}
+	got := ag.resolveTranscriptPath(reported, traversalID)
+	if got != reported {
+		t.Errorf("resolveTranscriptPath = %q, want passthrough %q (traversal id rejected)", got, reported)
+	}
+}
