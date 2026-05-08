@@ -132,6 +132,52 @@ func TestStoreDeleteToken_NotFoundIsNoop(t *testing.T) {
 	}
 }
 
+// TestStoreGetToken_LegacyBareStringFallback verifies that a pre-shim
+// keyring entry (raw access-token string, not a JSON-encoded TokenSet)
+// is still readable via GetToken after the shim landed. Without the
+// fallback, pre-shim users would appear logged out after upgrading.
+func TestStoreGetToken_LegacyBareStringFallback(t *testing.T) {
+	// Not parallel: go-keyring's mock provider uses an unprotected map.
+	const service = "test-legacy-getoken"
+	const profile = "https://legacy.example.com"
+	const bareToken = "ent_pre_shim_raw_token"
+
+	if err := keyring.Set(service, profile, bareToken); err != nil {
+		t.Fatalf("seed keyring: %v", err)
+	}
+
+	got, err := NewStoreWithService(service).GetToken(profile)
+	if err != nil {
+		t.Fatalf("GetToken: %v", err)
+	}
+	if got != bareToken {
+		t.Fatalf("GetToken() = %q, want bare token %q", got, bareToken)
+	}
+}
+
+// TestStoreLoadTokens_LegacyBareStringFallback is the tokenstore.Store
+// counterpart of the above. The tokenmanager calls LoadTokens, so this
+// path is what determines whether the manager-backed code path
+// recognises pre-shim entries.
+func TestStoreLoadTokens_LegacyBareStringFallback(t *testing.T) {
+	// Not parallel: go-keyring's mock provider uses an unprotected map.
+	const service = "test-legacy-loadtokens"
+	const profile = "https://legacy.example.com"
+	const bareToken = "ent_pre_shim_raw_token"
+
+	if err := keyring.Set(service, profile, bareToken); err != nil {
+		t.Fatalf("seed keyring: %v", err)
+	}
+
+	got, err := NewStoreWithService(service).LoadTokens(profile)
+	if err != nil {
+		t.Fatalf("LoadTokens: %v", err)
+	}
+	if got.AccessToken != bareToken {
+		t.Fatalf("LoadTokens AccessToken = %q, want %q", got.AccessToken, bareToken)
+	}
+}
+
 func TestLookupCurrentToken(t *testing.T) {
 	t.Setenv(api.BaseURLEnvVar, "http://localhost:8787")
 

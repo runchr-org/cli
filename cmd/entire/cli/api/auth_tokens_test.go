@@ -198,3 +198,56 @@ func TestClient_RevokeToken_ReturnsErrorBody(t *testing.T) {
 		t.Errorf("IsHTTPErrorStatus(err, 404) = false; err = %v", err)
 	}
 }
+
+// TestAuthTokensBasePath_ProviderVersionRouting locks in the path
+// switch so v2 doesn't silently regress to v1's path family. The whole
+// reason the version env var exists is to route requests at this layer.
+func TestAuthTokensBasePath_ProviderVersionRouting(t *testing.T) {
+	cases := []struct {
+		name    string
+		version string
+		want    string
+	}{
+		{"unset defaults to v1", "", "/api/v1/auth/tokens"},
+		{"v1 explicit", "v1", "/api/v1/auth/tokens"},
+		{"v2", "v2", "/api/auth/tokens"},
+		{"unrecognised defaults to v1", "v999", "/api/v1/auth/tokens"},
+		// Whitespace trimming must match auth.currentProvider() — both
+		// trim, so the api and auth packages agree on what "v2" means.
+		// If either side stops trimming, these tests diverge first.
+		{"trims whitespace then matches v2", "  v2  ", "/api/auth/tokens"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(authTokensProviderVersionEnvVar, tc.version)
+			if got := authTokensBasePath(); got != tc.want {
+				t.Fatalf("authTokensBasePath() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestClient_ListTokens_RoutesV2Path is an end-to-end check that the
+// version switch flows through the public Client API, not just the
+// internal helper.
+func TestClient_ListTokens_RoutesV2Path(t *testing.T) {
+	t.Setenv(authTokensProviderVersionEnvVar, "v2")
+
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"tokens":[]}`)) //nolint:errcheck // test handler
+	}))
+	defer server.Close()
+
+	c := NewClient("tok")
+	c.baseURL = server.URL
+
+	if _, err := c.ListTokens(context.Background()); err != nil {
+		t.Fatalf("ListTokens: %v", err)
+	}
+	if gotPath != "/api/auth/tokens" {
+		t.Fatalf("path = %q, want /api/auth/tokens (v2)", gotPath)
+	}
+}

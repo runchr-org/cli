@@ -16,7 +16,8 @@ import (
 // it directly (single-host setup, or when the core token's `aud` already
 // covers api.BaseURL()) or performs an RFC 8693 token exchange against
 // the auth host to obtain a token scoped to the data API. Exchanged
-// tokens are cached in-memory per (core-token, resource) pair.
+// tokens are cached in-memory keyed off the wire-affecting fields of
+// the request — see tokenmanager.cacheKey for the precise key shape.
 //
 // Pass insecureHTTP=true to allow plain HTTP base URLs for local
 // development. Both api.BaseURL() and api.AuthBaseURL() are validated:

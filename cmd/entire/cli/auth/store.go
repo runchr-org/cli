@@ -46,8 +46,11 @@ func (s *Store) SaveToken(baseURL, token string) error {
 // GetToken retrieves a stored token for the given base URL. Returns
 // an empty string (and no error) if no token is stored.
 //
-// Falls back to a bare-string read to surface tokens written before
-// the shim landed.
+// Falls back to a bare-string read when the stored entry is malformed
+// JSON, to handle pre-shim entries that stored the raw access token
+// rather than a JSON-encoded TokenSet. Real keyring errors (transport,
+// permission denied) propagate; only ErrNotFound and ErrMalformed
+// trigger the fallback.
 func (s *Store) GetToken(baseURL string) (string, error) {
 	t, err := s.inner.LoadTokens(baseURL)
 	if err == nil {
@@ -56,9 +59,10 @@ func (s *Store) GetToken(baseURL string) (string, error) {
 	if errors.Is(err, tokenstore.ErrNotFound) {
 		return "", nil
 	}
+	if !errors.Is(err, tokenstore.ErrMalformed) {
+		return "", fmt.Errorf("load token from keyring: %w", err)
+	}
 
-	// Legacy fallback: pre-shim entries stored the raw access token
-	// rather than a JSON-encoded TokenSet.
 	raw, kerr := keyring.Get(s.inner.Service, baseURL)
 	if errors.Is(kerr, keyring.ErrNotFound) {
 		return "", nil
@@ -82,13 +86,19 @@ func (s *Store) SaveTokens(profile string, t tokens.TokenSet) error {
 // LoadTokens implements tokenstore.Store, preserving the legacy bare-string
 // fallback path so users with pre-shim keyring entries don't appear logged
 // out after upgrading.
+//
+// Falls back to a bare-string read when the stored entry is malformed
+// JSON (pre-shim entries stored the raw access token verbatim). Real
+// keyring errors (transport, permission denied) propagate; only
+// ErrMalformed triggers the fallback. ErrNotFound surfaces verbatim
+// so the manager's "not logged in" branch still works.
 func (s *Store) LoadTokens(profile string) (tokens.TokenSet, error) {
 	t, err := s.inner.LoadTokens(profile)
 	if err == nil {
 		return t, nil
 	}
-	if !errors.Is(err, tokenstore.ErrNotFound) {
-		return tokens.TokenSet{}, err //nolint:wrapcheck // shim returns the lib error verbatim
+	if !errors.Is(err, tokenstore.ErrMalformed) {
+		return tokens.TokenSet{}, err //nolint:wrapcheck // surface ErrNotFound and real keyring errors verbatim
 	}
 
 	raw, kerr := keyring.Get(s.inner.Service, profile)

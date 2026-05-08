@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -298,5 +299,25 @@ func TestDecodeJSONResponse(t *testing.T) {
 	}
 	if result.Status != "ok" {
 		t.Errorf("Status = %q, want %q", result.Status, "ok")
+	}
+}
+
+// TestBearerTransport_RejectsEmptyToken locks in the early-failure
+// behaviour for an accidentally-empty bearer. Without this guard the
+// CLI would put "Authorization: Bearer " on the wire and the server
+// would respond with a confusing 401.
+func TestBearerTransport_RejectsEmptyToken(t *testing.T) {
+	t.Parallel()
+
+	c := NewClientWithBaseURL("", "https://example.test")
+	resp, err := c.Get(context.Background(), "/probe")
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("Get with empty token must error")
+	}
+	if !errors.Is(err, errEmptyBearerToken) {
+		t.Fatalf("err = %v, want errEmptyBearerToken sentinel", err)
 	}
 }

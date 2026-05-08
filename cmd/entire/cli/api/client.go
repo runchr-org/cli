@@ -51,7 +51,15 @@ type bearerTransport struct {
 	base  http.RoundTripper
 }
 
+// errEmptyBearerToken surfaces at first request rather than at construction
+// because NewClient* don't return errors. An empty bearer otherwise becomes
+// "Authorization: Bearer " on the wire and produces a confusing 401.
+var errEmptyBearerToken = errors.New("api: refusing to send request with empty bearer token (construct via NewAuthenticatedAPIClient)")
+
 func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.token == "" {
+		return nil, errEmptyBearerToken
+	}
 	// Clone the request to avoid mutating the caller's request.
 	r := req.Clone(req.Context())
 	r.Header.Set("Authorization", "Bearer "+t.token)

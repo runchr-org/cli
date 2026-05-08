@@ -100,9 +100,10 @@ branch:<name>, repo:<owner/name>, and repo:* to search all accessible repos.`,
 
 			serviceURL := os.Getenv("ENTIRE_SEARCH_URL")
 			if serviceURL == "" {
-				// Honour ENTIRE_API_BASE_URL: search lives on the data API
-				// host. Fall back to search.DefaultServiceURL only when no
-				// API base URL is configured (production default).
+				// Search lives on the data API host. Fall back to
+				// api.BaseURL() so ENTIRE_API_BASE_URL applies; the search
+				// package's DefaultServiceURL is only consulted by callers
+				// that bypass this entry point.
 				serviceURL = api.BaseURL()
 			}
 

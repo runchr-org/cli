@@ -41,9 +41,10 @@ func SetManagerForTest(t interface{ Helper() }, mgr *tokenmanager.Manager) func(
 
 // defaultManager returns the package-level Manager built from this
 // CLI's identity (current provider, AuthBaseURL, NewStore service
-// name). Constructed lazily on first use so env-var changes between
-// tests are honoured by the first non-test caller in any given
-// process.
+// name). Constructed lazily on first use so any env-var setup
+// (ENTIRE_AUTH_BASE_URL, ENTIRE_AUTH_PROVIDER_VERSION) lands before
+// construction. sync.Once means later env-var changes within the same
+// process are ignored; tests bypass the singleton via SetManagerForTest.
 func defaultManager() (*tokenmanager.Manager, error) {
 	if managerForTest != nil {
 		return managerForTest, nil
@@ -69,7 +70,7 @@ func defaultManager() (*tokenmanager.Manager, error) {
 // TokenForResource returns a bearer token suitable for use against
 // resourceBaseURL, performing an RFC 8693 token exchange when the
 // stored core token's audience doesn't already cover that resource.
-// See tokenmanager.Manager.TokenForResource for the resolution rules.
+// See tokenmanager.Manager.Token for the full resolution rules.
 func TokenForResource(ctx context.Context, resourceBaseURL string) (string, error) {
 	m, err := defaultManager()
 	if err != nil {
