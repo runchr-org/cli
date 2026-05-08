@@ -52,6 +52,14 @@ func Doctor(t *testing.T, dir string) string {
 	return run(t, dir, "doctor", "--force")
 }
 
+// DoctorOutput runs `entire doctor --force` and returns the captured
+// output, ignoring the exit code. Useful for preflight scans where the
+// caller wants to grep for specific findings without failing on
+// unrelated non-zero exits (e.g. v2 generation health drift).
+func DoctorOutput(dir string) (string, error) {
+	return runOutput(dir, "doctor", "--force")
+}
+
 // CleanDryRun runs `entire clean --dry-run` and returns the output.
 func CleanDryRun(t *testing.T, dir string) string {
 	t.Helper()

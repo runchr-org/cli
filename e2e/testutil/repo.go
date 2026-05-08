@@ -179,7 +179,47 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 		}
 	})
 
+	verifyDoctorClean(t, dir, artDir)
+
 	return state
+}
+
+// hookDriftMarkers are doctor output substrings that signal an
+// actionable hook-installation problem. Scoped narrowly so unrelated
+// findings (e.g. v2 generation health on dev machines) don't trip
+// preflight.
+var hookDriftMarkers = []string{
+	"OUT OF DATE",   // codex hooks.json missing a canonical event
+	"REVIEW NEEDED", // codex hook trust gap
+}
+
+// verifyDoctorClean runs `entire doctor --force` and fails the test if
+// the output contains any hook-drift marker. The full output is dumped
+// to <artDir>/doctor-preflight.log either way so failure traces include
+// the diagnosis. Run after `entire enable` and any agent-specific
+// post-enable tweaks — drift here means the test would fail later in
+// confusing ways.
+func verifyDoctorClean(t *testing.T, dir, artDir string) {
+	t.Helper()
+	out, _ := entire.DoctorOutput(dir)
+	if artDir != "" {
+		_ = os.WriteFile(filepath.Join(artDir, "doctor-preflight.log"), []byte(out), 0o644)
+	}
+	if marker, ok := findHookDrift(out); ok {
+		t.Fatalf("preflight: entire doctor reports hook drift (%q):\n%s", marker, out)
+	}
+}
+
+// findHookDrift returns the first hookDriftMarkers substring present in
+// out, or "" + false when none match. Pulled out so the marker contract
+// is unit-testable without spawning the entire binary.
+func findHookDrift(out string) (string, bool) {
+	for _, marker := range hookDriftMarkers {
+		if strings.Contains(out, marker) {
+			return marker, true
+		}
+	}
+	return "", false
 }
 
 // ApplySuiteCheckpointsMode configures an arbitrary repo for the current
