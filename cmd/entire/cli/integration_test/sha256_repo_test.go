@@ -16,25 +16,29 @@ func TestSHA256Repository_EnableAndFirstCheckpoint(t *testing.T) {
 	requireGitSHA256Support(t)
 
 	env := NewTestEnv(t)
-	env.ExtraEnv = append(env.ExtraEnv,
-		"GIT_DEFAULT_HASH=sha256",
-		"GIT_CONFIG_COUNT=2",
-		"GIT_CONFIG_KEY_0=user.name",
-		"GIT_CONFIG_VALUE_0=Test User",
-		"GIT_CONFIG_KEY_1=user.email",
-		"GIT_CONFIG_VALUE_1=test@example.com",
-	)
+
+	// Set up the SHA-256 repo and initial commit directly via git CLI rather
+	// than going through `entire enable --init-repo`. The bootstrap path
+	// installs hooks that shell out to `entire` on PATH and then runs
+	// `git commit` itself; on CI runners (no `entire` on PATH) the commit-msg
+	// hook fails with "entire: not found". Integration tests deliberately
+	// avoid that path — they invoke hooks via getTestBinary() instead.
+	gitOutput(t, "", "init", "--object-format=sha256", env.RepoDir)
+	gitOutput(t, env.RepoDir, "config", "user.name", "Test User")
+	gitOutput(t, env.RepoDir, "config", "user.email", "test@example.com")
+	gitOutput(t, env.RepoDir, "config", "commit.gpgsign", "false")
+	env.WriteFile("README.md", "# SHA-256 repo\n")
+	gitOutput(t, env.RepoDir, "add", "README.md")
+	gitOutput(t, env.RepoDir, "commit", "-m", "Initial SHA-256 commit")
 
 	output := env.RunCLI(
 		"enable",
-		"--init-repo",
 		"--no-github",
 		"--agent", "claude-code",
 		"--telemetry=false",
-		"--initial-commit-message", "Initial SHA-256 commit",
 	)
-	if !strings.Contains(output, "Initialized empty git repository") {
-		t.Fatalf("expected enable to initialize git repo, got output:\n%s", output)
+	if !strings.Contains(output, paths.MetadataBranchName) {
+		t.Fatalf("expected enable to create %s branch, got output:\n%s", paths.MetadataBranchName, output)
 	}
 
 	if got := gitOutput(t, env.RepoDir, "rev-parse", "--show-object-format=storage"); got != "sha256" {
@@ -45,11 +49,6 @@ func TestSHA256Repository_EnableAndFirstCheckpoint(t *testing.T) {
 	requireHexLen(t, "initial HEAD", initialHead, 64)
 	initialMetadataHead := gitOutput(t, env.RepoDir, "rev-parse", paths.MetadataBranchName)
 	requireHexLen(t, "initial metadata branch HEAD", initialMetadataHead, 64)
-
-	// Persist local identity for later git/go-git helper commits and hook subprocesses.
-	gitOutput(t, env.RepoDir, "config", "user.name", "Test User")
-	gitOutput(t, env.RepoDir, "config", "user.email", "test@example.com")
-	gitOutput(t, env.RepoDir, "config", "commit.gpgsign", "false")
 
 	sess := env.NewSession()
 	prompt := "Create a file in the SHA-256 repo"
@@ -116,11 +115,16 @@ func requireGitSHA256Support(t *testing.T) {
 	}
 }
 
+// gitOutput runs `git <args...>` and returns trimmed combined output. An empty
+// dir leaves cmd.Dir unset, which is appropriate for commands that take a path
+// argument (e.g. `git init <dir>`).
 func gitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 
 	cmd := exec.Command("git", args...) //nolint:noctx // test helper
-	cmd.Dir = dir
+	if dir != "" {
+		cmd.Dir = dir
+	}
 	cmd.Env = testutil.GitIsolatedEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
