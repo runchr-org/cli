@@ -85,13 +85,52 @@ func runTrailShow(ctx context.Context, w io.Writer, insecureHTTP bool) error {
 		return runTrailListAll(ctx, w, "", false, false, insecureHTTP)
 	}
 
-	printTrailDetails(w, found.ToMetadata())
+	detail, err := fetchTrailDetail(ctx, client, host, owner, repo, found)
+	if err != nil {
+		return err
+	}
+
+	printTrailDetails(w, detail.Trail.ToMetadata(), &detail.Discussion)
 	return nil
 }
 
-func printTrailDetails(w io.Writer, m *trail.Metadata) {
+func fetchTrailDetail(ctx context.Context, client *api.Client, host, owner, repo string, found *api.TrailResource) (*api.TrailDetailResponse, error) {
+	trailPathID := trailResourcePathID(found)
+	if trailPathID == "" {
+		return &api.TrailDetailResponse{Trail: *found}, nil
+	}
+
+	resp, err := client.Get(ctx, trailsBasePath(host, owner, repo)+"/"+trailPathID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch trail detail: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkTrailResponse(resp); err != nil {
+		return nil, err
+	}
+
+	var detail api.TrailDetailResponse
+	if err := api.DecodeJSON(resp, &detail); err != nil {
+		return nil, fmt.Errorf("failed to decode trail detail: %w", err)
+	}
+	return &detail, nil
+}
+
+func trailResourcePathID(resource *api.TrailResource) string {
+	if resource.TrailID != "" {
+		return resource.TrailID
+	}
+	if resource.Number > 0 {
+		return fmt.Sprintf("%d", resource.Number)
+	}
+	return ""
+}
+
+func printTrailDetails(w io.Writer, m *trail.Metadata, discussion *trail.Discussion) {
 	fmt.Fprintf(w, "Trail: %s\n", m.Title)
-	fmt.Fprintf(w, "  ID:      %s\n", m.TrailID)
+	if !m.TrailID.IsEmpty() {
+		fmt.Fprintf(w, "  ID:      %s\n", m.TrailID)
+	}
 	fmt.Fprintf(w, "  Branch:  %s\n", m.Branch)
 	fmt.Fprintf(w, "  Base:    %s\n", m.Base)
 	fmt.Fprintf(w, "  Status:  %s\n", m.Status)
@@ -107,6 +146,43 @@ func printTrailDetails(w io.Writer, m *trail.Metadata) {
 	}
 	fmt.Fprintf(w, "  Created: %s\n", m.CreatedAt.Format("2006-01-02T15:04:05Z07:00"))
 	fmt.Fprintf(w, "  Updated: %s\n", m.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"))
+	printTrailDiscussion(w, discussion)
+}
+
+func printTrailDiscussion(w io.Writer, discussion *trail.Discussion) {
+	if discussion == nil || len(discussion.Comments) == 0 {
+		return
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Comments:")
+	for _, comment := range discussion.Comments {
+		status := "open"
+		if comment.Resolved {
+			status = "resolved"
+		}
+		fmt.Fprintf(w, "  %s %s (%s)\n", comment.Author, comment.CreatedAt.Format("2006-01-02T15:04:05Z07:00"), status)
+		for _, line := range strings.Split(stripTrailCommentMarkers(comment.Body), "\n") {
+			if strings.TrimSpace(line) == "" {
+				fmt.Fprintln(w)
+				continue
+			}
+			fmt.Fprintf(w, "    %s\n", line)
+		}
+	}
+}
+
+func stripTrailCommentMarkers(body string) string {
+	lines := strings.Split(body, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "<!-- entire-run:") && strings.HasSuffix(trimmed, "-->") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 func newTrailListCmd() *cobra.Command {

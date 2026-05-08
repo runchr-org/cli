@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/trail"
@@ -16,6 +17,7 @@ type TrailListResponse struct {
 
 // TrailResource represents a single trail from the API.
 type TrailResource struct {
+	Number          int              `json:"number,omitempty"`
 	TrailID         string           `json:"trail_id"`
 	Branch          string           `json:"branch"`
 	Base            string           `json:"base"`
@@ -86,9 +88,9 @@ type TrailCreateResponse struct {
 
 // TrailDetailResponse is the response from GET /api/v1/trails/:org/:repo/:trailId.
 type TrailDetailResponse struct {
-	Trail       TrailResource     `json:"trail"`
-	Discussion  trail.Discussion  `json:"discussion"`
-	Checkpoints trail.Checkpoints `json:"checkpoints"`
+	Trail       TrailResource    `json:"trail"`
+	Discussion  trail.Discussion `json:"discussion"`
+	Checkpoints json.RawMessage  `json:"checkpoints"`
 }
 
 // TrailUpdateRequest is the body for PATCH /api/v1/trails/:host/:owner/:repo/:trailId.
