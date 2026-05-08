@@ -76,14 +76,6 @@ branch:<name>, repo:<owner/name>, and repo:* to search all accessible repos.`,
 				return errors.New("query required when using --json, accessible mode, or piped output. Usage: entire search <query>")
 			}
 
-			ghToken, err := auth.LookupCurrentToken()
-			if err != nil {
-				return fmt.Errorf("reading credentials: %w", err)
-			}
-			if ghToken == "" {
-				return errors.New("not authenticated. Run 'entire login' to authenticate")
-			}
-
 			// Get the repo's GitHub remote URL
 			repo, err := strategy.OpenRepository(ctx)
 			if err != nil {
@@ -112,6 +104,19 @@ branch:<name>, repo:<owner/name>, and repo:* to search all accessible repos.`,
 				// host. Fall back to search.DefaultServiceURL only when no
 				// API base URL is configured (production default).
 				serviceURL = api.BaseURL()
+			}
+
+			// Resolve a bearer scoped to the search service host. In split-host
+			// deployments this triggers an RFC 8693 exchange so the bearer
+			// carries the data-API audience rather than the auth-host one;
+			// single-host setups hit the same-host shortcut and return the
+			// core token unchanged.
+			ghToken, err := auth.TokenForResource(ctx, serviceURL)
+			if errors.Is(err, auth.ErrNotLoggedIn) {
+				return errors.New("not authenticated. Run 'entire login' to authenticate")
+			}
+			if err != nil {
+				return fmt.Errorf("reading credentials: %w", err)
 			}
 
 			searchCfg := search.Config{
