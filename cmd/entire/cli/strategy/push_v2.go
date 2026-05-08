@@ -462,44 +462,122 @@ func detectRemoteRotationArchives(ctx context.Context, target string, repo *git.
 	return remoteRotationArchives, nil
 }
 
-// handleRotationConflict handles the case where remote /full/current was rotated.
-// Merges local /full/current into the latest remote archived generation to avoid
-// duplicating checkpoint data, then adopts remote's /full/current as local.
-func handleRotationConflict(ctx context.Context, target, fetchTarget string, repo *git.Repository, refName, tmpRefName plumbing.ReferenceName, remoteOnlyArchives []string) error {
-	// Use the latest remote-only archive
-	latestArchive := remoteOnlyArchives[len(remoteOnlyArchives)-1]
-	archiveRefName := plumbing.ReferenceName(paths.V2FullRefPrefix + latestArchive)
+type fetchedRemoteRotationArchive struct {
+	refName    plumbing.ReferenceName
+	tmpRefName plumbing.ReferenceName
+	ref        *plumbing.Reference
+	tree       *object.Tree
+}
 
-	// Fetch the latest archived generation
-	archiveTmpRef := plumbing.ReferenceName("refs/entire-fetch-tmp/archive-" + latestArchive)
-	archiveRefSpec := fmt.Sprintf("+%s:%s", archiveRefName, archiveTmpRef)
-	if output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
-		Remote:    fetchTarget,
-		RefSpecs:  []string{archiveRefSpec},
-		NoTags:    true,
-		ExtraArgs: []string{"--no-write-fetch-head"},
-	}); fetchErr != nil {
-		return fmt.Errorf("fetch archived generation failed: %s", output)
-	}
-	defer func() {
-		_ = repo.Storer.RemoveReference(archiveTmpRef) //nolint:errcheck // cleanup is best-effort
-	}()
-
-	// Get archived generation state
+func readFetchedRemoteRotationArchive(repo *git.Repository, archive string) (fetchedRemoteRotationArchive, error) {
+	archiveRefName := plumbing.ReferenceName(paths.V2FullRefPrefix + archive)
+	archiveTmpRef := plumbing.ReferenceName("refs/entire-fetch-tmp/archive-" + archive)
 	archiveRef, err := repo.Reference(archiveTmpRef, true)
 	if err != nil {
-		return fmt.Errorf("failed to get archived ref: %w", err)
+		return fetchedRemoteRotationArchive{}, fmt.Errorf("failed to get archived ref: %w", err)
 	}
 	archiveCommit, err := repo.CommitObject(archiveRef.Hash())
 	if err != nil {
-		return fmt.Errorf("failed to get archive commit: %w", err)
+		return fetchedRemoteRotationArchive{}, fmt.Errorf("failed to get archive commit: %w", err)
 	}
 	archiveTree, err := archiveCommit.Tree()
 	if err != nil {
-		return fmt.Errorf("failed to get archive tree: %w", err)
+		return fetchedRemoteRotationArchive{}, fmt.Errorf("failed to get archive tree: %w", err)
 	}
 
-	// Get local /full/current state
+	return fetchedRemoteRotationArchive{
+		refName:    archiveRefName,
+		tmpRefName: archiveTmpRef,
+		ref:        archiveRef,
+		tree:       archiveTree,
+	}, nil
+}
+
+func fetchRelatedRemoteRotationArchive(ctx context.Context, fetchTarget string, repo *git.Repository, archives []string, localCurrentHash plumbing.Hash) (fetchedRemoteRotationArchive, error) {
+	refSpecs := make([]string, 0, len(archives))
+	for _, archive := range archives {
+		archiveRefName := plumbing.ReferenceName(paths.V2FullRefPrefix + archive)
+		archiveTmpRef := plumbing.ReferenceName("refs/entire-fetch-tmp/archive-" + archive)
+		refSpecs = append(refSpecs, fmt.Sprintf("+%s:%s", archiveRefName, archiveTmpRef))
+	}
+	if output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
+		Remote:    fetchTarget,
+		RefSpecs:  refSpecs,
+		NoTags:    true,
+		ExtraArgs: []string{"--no-write-fetch-head"},
+	}); fetchErr != nil {
+		return fetchedRemoteRotationArchive{}, fmt.Errorf("fetch archived generations failed: %s", output)
+	}
+
+	for _, archive := range archives {
+		fetched, err := readFetchedRemoteRotationArchive(repo, archive)
+		if err != nil {
+			return fetchedRemoteRotationArchive{}, err
+		}
+		if archiveContainsCurrentGenerationBase(ctx, repo, localCurrentHash, fetched.ref.Hash()) {
+			return fetched, nil
+		}
+		_ = repo.Storer.RemoveReference(fetched.tmpRefName) //nolint:errcheck // cleanup is best-effort
+	}
+	return fetchedRemoteRotationArchive{}, errors.New("no remote archive shares history with local /full/current")
+}
+
+func archiveContainsCurrentGenerationBase(ctx context.Context, repo *git.Repository, currentHash, archiveHash plumbing.Hash) bool {
+	if currentHash == archiveHash {
+		return true
+	}
+
+	ancestors := make(map[plumbing.Hash]struct{})
+	iter, err := repo.Log(&git.LogOptions{From: currentHash})
+	if err != nil {
+		return false
+	}
+	count := 0
+	_ = iter.ForEach(func(c *object.Commit) error { //nolint:errcheck // Best-effort search, errors are non-fatal
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
+		count++
+		if count > MaxCommitTraversalDepth {
+			return errStop
+		}
+		ancestors[c.Hash] = struct{}{}
+		return nil
+	})
+	iter.Close()
+
+	iter, err = repo.Log(&git.LogOptions{From: archiveHash})
+	if err != nil {
+		return false
+	}
+	defer iter.Close()
+
+	found := false
+	count = 0
+	_ = iter.ForEach(func(c *object.Commit) error { //nolint:errcheck // Best-effort search, errors are non-fatal
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
+		count++
+		if count > MaxCommitTraversalDepth {
+			return errStop
+		}
+		if _, ok := ancestors[c.Hash]; ok {
+			found = true
+			return errStop
+		}
+		return nil
+	})
+	return found
+}
+
+// handleRotationConflict handles the case where remote /full/current was rotated.
+// Merges local /full/current into the related remote archived generation to avoid
+// duplicating checkpoint data, then adopts remote's /full/current as local.
+func handleRotationConflict(ctx context.Context, target, fetchTarget string, repo *git.Repository, refName, tmpRefName plumbing.ReferenceName, remoteRotationArchives []string) error {
+	// Get local /full/current state before selecting an archive. If the remote
+	// rotated multiple times, the latest archive may belong to a different
+	// generation chain.
 	localRef, err := repo.Reference(refName, true)
 	if err != nil {
 		return fmt.Errorf("failed to get local ref: %w", err)
@@ -513,10 +591,18 @@ func handleRotationConflict(ctx context.Context, target, fetchTarget string, rep
 		return fmt.Errorf("failed to get local tree: %w", err)
 	}
 
+	archive, err := fetchRelatedRemoteRotationArchive(ctx, fetchTarget, repo, remoteRotationArchives, localRef.Hash())
+	if err != nil {
+		return fmt.Errorf("failed to find related archived generation: %w", err)
+	}
+	defer func() {
+		_ = repo.Storer.RemoveReference(archive.tmpRefName) //nolint:errcheck // cleanup is best-effort
+	}()
+
 	// Tree-merge local /full/current into archived generation.
 	// Git content-addressing deduplicates shared shard paths automatically.
 	entries := make(map[string]object.TreeEntry)
-	if err := checkpoint.FlattenTree(repo, archiveTree, "", entries); err != nil {
+	if err := checkpoint.FlattenTree(repo, archive.tree, "", entries); err != nil {
 		return fmt.Errorf("failed to flatten archive tree: %w", err)
 	}
 	if err := checkpoint.FlattenTree(repo, localTree, "", entries); err != nil {
@@ -543,19 +629,19 @@ func handleRotationConflict(ctx context.Context, target, fetchTarget string, rep
 
 	// Create commit parented on archive's commit (fast-forward)
 	mergeCommitHash, err := createMergeCommitCommon(ctx, repo, mergedTreeHash,
-		[]plumbing.Hash{archiveRef.Hash()},
+		[]plumbing.Hash{archive.ref.Hash()},
 		"Merge local checkpoints into archived generation")
 	if err != nil {
 		return fmt.Errorf("failed to create merge commit: %w", err)
 	}
 
 	// Update local archived ref and push it
-	newArchiveRef := plumbing.NewHashReference(archiveRefName, mergeCommitHash)
+	newArchiveRef := plumbing.NewHashReference(archive.refName, mergeCommitHash)
 	if err := repo.Storer.SetReference(newArchiveRef); err != nil {
 		return fmt.Errorf("failed to update archive ref: %w", err)
 	}
 
-	if pushErr := tryPushRef(ctx, target, archiveRefName); pushErr != nil {
+	if pushErr := tryPushRef(ctx, target, archive.refName); pushErr != nil {
 		return fmt.Errorf("failed to push updated archive: %w", pushErr)
 	}
 
