@@ -319,7 +319,7 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 			continue
 		}
 
-		fullCheckpoint, mainOpts, outcome, migrateErr := migrateOneCheckpointWithExisting(ctx, repo, v1Store, v2Store, info, existing, force, fullArtifactsIndex, state.compactOffsets)
+		fullCheckpoint, mainOpts, outcome, migrateErr := migrateOneCheckpoint(ctx, repo, v1Store, v2Store, info, existing, force, fullArtifactsIndex, state.compactOffsets)
 		result.missingSessions += outcome.missingSessions
 		if outcome.compactTranscriptSkipped {
 			result.compactTranscriptSkipped++
@@ -452,7 +452,7 @@ func (s *migrateLoopState) packCurrentBatch(ctx context.Context, repo *git.Repos
 	return nil
 }
 
-// recordMigrationSkipOrFailure classifies a failing migrateOneCheckpointWithExisting
+// recordMigrationSkipOrFailure classifies a failing migrateOneCheckpoint
 // outcome into the appropriate result counter and emits a log line.
 func recordMigrationSkipOrFailure(ctx context.Context, result *migrateResult, cpID id.CheckpointID, err error) {
 	switch {
@@ -506,13 +506,13 @@ type migrateCheckpointOutcome struct {
 	compactTranscriptSkipped bool
 }
 
-// migrateOneCheckpointWithExisting returns the prepared /main
+// migrateOneCheckpoint returns the prepared /main
 // WriteCommittedOptions alongside the in-memory full-checkpoint structure.
 // The caller batches the /main writes across many checkpoints into a single
 // ref CAS via V2GitStore.WriteCommittedMainBatch. The resume path
 // (already-in-v2 without force) returns nil mainOpts; its /main updates flow
 // through backfillCompactTranscripts which uses UpdateCommitted.
-func migrateOneCheckpointWithExisting(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, existing *checkpoint.CheckpointSummary, force bool, fullArtifacts checkpoint.FullSessionArtifactsIndex, compactOffsets *migrateCompactOffsetCache) (*migratedFullCheckpoint, []checkpoint.WriteCommittedOptions, migrateCheckpointOutcome, error) {
+func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, existing *checkpoint.CheckpointSummary, force bool, fullArtifacts checkpoint.FullSessionArtifactsIndex, compactOffsets *migrateCompactOffsetCache) (*migratedFullCheckpoint, []checkpoint.WriteCommittedOptions, migrateCheckpointOutcome, error) {
 	var outcome migrateCheckpointOutcome
 
 	if existing != nil && !force {
