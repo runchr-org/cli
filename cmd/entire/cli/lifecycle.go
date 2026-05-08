@@ -395,6 +395,10 @@ func handleLifecycleTurnStart(ctx context.Context, ag agent.Agent, event *agent.
 	// is no file race across worktrees. Errors in load/save must not fail the turn.
 	if mutErr := strategy.MutateSessionState(ctx, sessionID, func(state *strategy.SessionState) error {
 		before := *state
+		// Slice fields share their backing array under struct copy. If
+		// adoptReviewEnv ever mutates ReviewSkills in place, the diff check
+		// below would silently miss it. Clone to keep the comparison honest.
+		before.ReviewSkills = slices.Clone(state.ReviewSkills)
 		adoptReviewEnv(logCtx, state, string(ag.Name()))
 		if state.Kind == before.Kind && state.ReviewPrompt == before.ReviewPrompt && slices.Equal(state.ReviewSkills, before.ReviewSkills) {
 			return strategy.ErrMutationSkip

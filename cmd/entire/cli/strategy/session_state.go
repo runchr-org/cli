@@ -376,6 +376,11 @@ func LoadAgentTypeHint(ctx context.Context, sessionID string) types.AgentType {
 // by the outer save. The gate fixes both: nested calls in the same
 // goroutine reuse the outer's state pointer (no second load, no second
 // save), and only the outermost release drops the flock.
+//
+// Growth: the map accumulates one entry per session ID touched by this
+// process and is never trimmed. Fine today because hook invocations are
+// short-lived subprocesses; a future long-running daemon (status watcher,
+// MCP server) would need a TTL or eviction pass.
 var sessionMutationGate sync.Map // map[string]*sessionGate
 
 type sessionGate struct {
@@ -413,10 +418,16 @@ func goroutineID() int64 {
 // OS-level advisory lock against .git/entire-session-locks/<id>.lock for the
 // duration of the read+write so concurrent processes cannot lose each
 // other's updates. fn receives the freshly-loaded state and mutates it in
-// place; returning ErrMutationSkip skips the save. The lock is held for fn's
-// full duration, so fn must avoid arbitrary blocking work. Reentrant within
-// the same goroutine: nested calls share the outer's state pointer and skip
-// the inner load/save, so all mutations are flushed by the outermost call.
+// place; returning ErrMutationSkip skips the save. Reentrant within the same
+// goroutine: nested calls share the outer's state pointer and skip the
+// inner load/save, so all mutations are flushed by the outermost call.
+//
+// fn may hold the lock for slow operations — PostCommit's callback, for
+// example, runs CondenseSession (shadow-branch tree builds, transcript
+// compaction) inside the gate. That's deliberate: PostToolUse must not slip
+// in mid-condense and revert CheckpointTranscriptStart or files_touched.
+// A concurrent PostToolUse on the same session waits for the commit to
+// finish.
 //
 // Returns ErrStateNotFound if the state file doesn't exist (event arrived
 // before InitializeSession). Errors from fn or from load/save propagate.

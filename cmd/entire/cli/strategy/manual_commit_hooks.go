@@ -1158,6 +1158,10 @@ func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(
 // postCommitProcessSession handles a single session within the PostCommit loop.
 // Pre-resolved git objects (headTree, parentTree) are shared across all sessions;
 // per-session shadow ref/tree are resolved once here and threaded through sub-calls.
+//
+// MUST be called from inside MutateSessionState. Mutations to state are persisted
+// by the caller's outer save — calling this function standalone silently loses
+// every field change (StepCount, FilesTouched, CheckpointTranscriptStart, …).
 func (s *ManualCommitStrategy) postCommitProcessSession(
 	ctx context.Context,
 	repo *git.Repository,
