@@ -103,6 +103,11 @@ func agentNamesAsStrings(names []types.AgentName) []string {
 // the skill's "no history on this branch" gate produced false negatives
 // for users with prior work on other branches, and dispatch already
 // learned that lesson the hard way.
+//
+// Checks BOTH v1 and v2 checkpoint stores. Users on
+// `checkpoints_version: 2` write all checkpoints under v2 refs, so a
+// v1-only check would always report "no history" for them — flagged
+// by bugbot review as a real bug.
 func repoHasHistory(ctx context.Context) (bool, error) {
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
@@ -112,12 +117,18 @@ func repoHasHistory(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("open repo: %w", err)
 	}
-	store := checkpoint.NewGitStore(repo)
-	infos, err := store.ListCommitted(ctx)
+	v1Infos, err := checkpoint.NewGitStore(repo).ListCommitted(ctx)
 	if err != nil {
-		return false, fmt.Errorf("list committed checkpoints: %w", err)
+		return false, fmt.Errorf("list v1 committed checkpoints: %w", err)
 	}
-	return len(infos) > 0, nil
+	if len(v1Infos) > 0 {
+		return true, nil
+	}
+	v2Infos, err := checkpoint.NewV2GitStore(repo, "origin").ListCommitted(ctx)
+	if err != nil {
+		return false, fmt.Errorf("list v2 committed checkpoints: %w", err)
+	}
+	return len(v2Infos) > 0, nil
 }
 
 // ErrNoTextGenerator is returned by ResolveTextGenerator when no

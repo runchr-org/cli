@@ -42,11 +42,11 @@ func TestEscapeForTags_NeutralizesClosingTags(t *testing.T) {
 		// Zero-width space (U+200B) inside the tag name splits the
 		// literal alternation match — stripInvisibles drops \p{Cf}
 		// chars before the regex sees the bytes.
-		{"zero-width space in tag name", "</po​st>", "<\\/post>"},
+		{"zero-width space in tag name", "</po\u200bst>", "<\\/post>"},
 		// NO-BREAK SPACE (U+00A0) before the close. Falls in \p{Z}.
 		{"no-break space before close", "</post >", "<\\/post>"},
 		// Right-to-left mark (U+200F) inside the tag name. \p{Cf}.
-		{"rtl mark in tag", "</p‏ost>", "<\\/post>"},
+		{"rtl mark in tag", "</p\u200fost>", "<\\/post>"},
 
 		// Pass-3 regression: visible Unicode whitespace BETWEEN
 		// letters of the tag name. Pass-2's strip only covered
@@ -61,7 +61,7 @@ func TestEscapeForTags_NeutralizesClosingTags(t *testing.T) {
 		{"narrow NBSP inside tag name", "</po st>", "<\\/post>"},
 		{"ideographic space inside tag name", "</po　st>", "<\\/post>"},
 		// Combined visible+invisible attack.
-		{"NBSP and ZWSP combined", "</p​o st>", "<\\/post>"},
+		{"NBSP and ZWSP combined", "</p\u200bo st>", "<\\/post>"},
 
 		// Empty payload should pass through.
 		{"empty payload", "", ""},
@@ -125,7 +125,7 @@ func TestStripControlSequences(t *testing.T) {
 		// invalid UTF-8 and pass through string-based regex unchanged —
 		// they also can't form a terminal control sequence in any modern
 		// UTF-8 terminal, so passthrough is acceptable.
-		{"strips C1 controls", "beforeafter", "beforeafter"},
+		{"strips C1 controls", "before\u009bafter", "beforeafter"},
 		{"preserves tab/newline/carriage-return", "line1\tcol\nline2\r\n", "line1\tcol\nline2\r\n"},
 		{"strips title-rewrite OSC", "ok\x1b]0;malicious title\x07ok", "okok"},
 	}

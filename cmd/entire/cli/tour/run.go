@@ -73,7 +73,7 @@ func GenerateLatest(ctx context.Context, opts Options) (*Result, error) {
 	}
 	rendered, err := choice.Generator.GenerateText(ctx, prompt, opts.SummarizeModel)
 	if err != nil {
-		return nil, fmt.Errorf("generate latest dispatch with %s: %w", choice.DisplayName, err)
+		return nil, fmt.Errorf("summarize latest blog post with %s: %w", choice.DisplayName, err)
 	}
 	return &Result{
 		Markdown:    rendered,
@@ -183,5 +183,5 @@ var controlSequencePattern = regexp.MustCompile(
 		"|\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)" + // OSC: ESC ] ... BEL or ESC \
 		"|\x1b[@-Z\\\\-_]" + // other ESC sequences
 		"|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]" + // C0 controls excl. \t \n \r, plus DEL
-		"|[-]", // C1 controls
+		"|[\u0080-\u009f]", // C1 controls
 )

@@ -11,6 +11,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/mdrender"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/tour"
 	"github.com/spf13/cobra"
 )
@@ -26,10 +27,11 @@ const tourNotGitRepoMessage = "Entire works inside a git repository. Run 'git in
 
 const tourNoTextGeneratorMessage = `No TextGenerator-capable agent on PATH.
 
-'entire tour' renders the tour by piping the discovered command surface
-through your locally-installed agent. Install one of: claude, codex, gemini,
-cursor, copilot, or an external entire-agent-* plugin that declares
-text_generator support.`
+The default 'entire tour' uses a pre-rendered markdown file shipped with
+the binary, but '--latest' and '--regenerate' both call out to your
+locally-installed agent. Install one of: claude, codex, gemini, cursor,
+copilot, or an external entire-agent-* plugin that declares
+text_generator support — or drop the flag to read the embedded tour.`
 
 // newTourCmd builds the `entire tour` cobra command. Hidden from
 // `entire help` while the feature matures — discoverable via
@@ -79,16 +81,23 @@ Examples:
 }
 
 func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFlag, regenerateFlag bool) error {
-	settings, settingsErr := LoadEntireSettings(ctx)
-	configuredProvider := ""
-	if settingsErr == nil && settings.SummaryGeneration != nil {
-		configuredProvider = settings.SummaryGeneration.Provider
+	loadedSettings, settingsErr := LoadEntireSettings(ctx)
+	// settings.Load returns a non-nil EntireSettings with default values
+	// even when no settings.json exists, so isSetUp can't be inferred from
+	// loadErr alone — we have to ask whether the files are actually on
+	// disk. Bugbot pass-2 flagged the previous always-true return.
+	isSetUp := settings.IsSetUpAny(ctx)
+	configuredProvider, configuredModel := "", ""
+	if settingsErr == nil && loadedSettings.SummaryGeneration != nil {
+		configuredProvider = loadedSettings.SummaryGeneration.Provider
+		configuredModel = loadedSettings.SummaryGeneration.Model
 	}
 
 	opts := tour.Options{
-		LoadSettings:        cachedTourSettingsLoader(settings, settingsErr),
+		LoadSettings:        cachedTourSettingsLoader(loadedSettings, isSetUp, settingsErr),
 		ListInstalledAgents: GetAgentsWithHooksInstalled,
 		ConfiguredProvider:  configuredProvider,
+		SummarizeModel:      configuredModel,
 		Labs:                labsRegistryForTour(),
 		Regenerate:          regenerateFlag,
 	}
@@ -110,7 +119,7 @@ func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFl
 	if usedTUI && needsAgent {
 		title, subtitle := "Regenerating tour", "This can take a moment."
 		if latestFlag {
-			title = "Fetching the latest dispatch"
+			title = "Fetching the latest post"
 		}
 		result, generErr = runTourTUI(ctx, w, title, subtitle, generate)
 		if errors.Is(generErr, errTourCancelled) {
@@ -165,16 +174,20 @@ func translateTourError(w io.Writer, err error) error {
 }
 
 // cachedTourSettingsLoader returns a tour.SettingsLoader that closes
-// over a single LoadEntireSettings result so ResolveState doesn't
-// re-read settings.json a second time per invocation. The previous
-// shape of this function unconditionally re-loaded settings, which is
-// cheap but not free for a command we want to keep at ~50ms.
-func cachedTourSettingsLoader(settings *EntireSettings, loadErr error) tour.SettingsLoader {
+// over a single LoadEntireSettings result + the resolved isSetUp
+// flag, so ResolveState doesn't re-read settings.json (or stat the
+// settings files) a second time per invocation.
+//
+// isSetUp must be passed in (rather than derived from loadErr) because
+// settings.Load returns a non-nil EntireSettings with default values
+// even when no settings.json exists. The caller resolves it via
+// settings.IsSetUpAny.
+func cachedTourSettingsLoader(s *EntireSettings, isSetUp bool, loadErr error) tour.SettingsLoader {
 	return func(_ context.Context) (bool, bool, error) {
 		if loadErr != nil {
 			return false, false, loadErr
 		}
-		return settings.Enabled, true, nil
+		return s.Enabled, isSetUp, nil
 	}
 }
 

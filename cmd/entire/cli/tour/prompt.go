@@ -224,8 +224,9 @@ func BuildPrompt(input PromptInput) (string, error) {
 }
 
 // marshalIndentNoHTMLEscape preserves "<" and ">" in command help strings —
-// json.Marshal's default escaping would turn "<id|sha>" into "<id|sha>",
-// which the model then echoes back verbatim and the user sees in their tour.
+// json.Marshal's default escaping would turn "<id|sha>" into
+// `<id|sha>`, which the model then echoes back verbatim and
+// the user sees in their tour.
 func marshalIndentNoHTMLEscape(v any) ([]byte, error) {
 	out, err := jsonutil.MarshalIndentWithNewline(v, "", "  ")
 	if err != nil {
