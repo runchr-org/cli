@@ -76,8 +76,12 @@ External agents, Skills, Other commands):
   rather than the orange inline-code palette, so the lines lose their
   visual weight.
 - Inside a capability section, list commands as a bulleted list, one
-  bullet per command, with optional ' — <short description>' after the
-  backticked command.
+  bullet per command, formatted as the backticked command, an em dash,
+  and a short description. Use the cobra short description verbatim,
+  or rephrase it to fit the capability's scope when the verbatim text
+  is too generic. The description is required, not optional — every
+  command bullet gets one so capability sections read consistently
+  with Labs and Other commands.
 
 What to render, by stage:
 
