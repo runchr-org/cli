@@ -542,3 +542,105 @@ func TestWaitForTranscriptFlush_NonexistentFile_ReturnsImmediately(t *testing.T)
 		t.Errorf("expected immediate return for nonexistent file, but took %v", elapsed)
 	}
 }
+
+func TestFindTranscriptByID(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	// projects/<encoded-A>/<id>.jsonl is the actual stored location
+	storedDir := filepath.Join(base, "-Users-foo-Development-repo")
+	wrongDir := filepath.Join(base, "-Users-foo-Development-repo--claude-worktrees-feature")
+	if err := os.MkdirAll(storedDir, 0o755); err != nil {
+		t.Fatalf("mkdir stored: %v", err)
+	}
+	if err := os.MkdirAll(wrongDir, 0o755); err != nil {
+		t.Fatalf("mkdir wrong: %v", err)
+	}
+	sessionID := "abc-123-def"
+	transcript := filepath.Join(storedDir, sessionID+".jsonl")
+	if err := os.WriteFile(transcript, []byte(`{"type":"human"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	got := findTranscriptByID(base, sessionID)
+	if got != transcript {
+		t.Errorf("findTranscriptByID = %q, want %q", got, transcript)
+	}
+}
+
+func TestFindTranscriptByID_NoMatch(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "some-project"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if got := findTranscriptByID(base, "missing-id"); got != "" {
+		t.Errorf("expected empty result for missing id, got %q", got)
+	}
+}
+
+func TestFindTranscriptByID_NonexistentBase(t *testing.T) {
+	t.Parallel()
+
+	if got := findTranscriptByID("/definitely/not/a/real/path", "anything"); got != "" {
+		t.Errorf("expected empty result for nonexistent base dir, got %q", got)
+	}
+}
+
+func TestResolveTranscriptPath_PassthroughWhenExists(t *testing.T) {
+	t.Parallel()
+
+	transcript := filepath.Join(t.TempDir(), "real.jsonl")
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	ag := &ClaudeCodeAgent{}
+	got := ag.resolveTranscriptPath(transcript, "any-session-id")
+	if got != transcript {
+		t.Errorf("resolveTranscriptPath returned %q, want passthrough %q", got, transcript)
+	}
+}
+
+func TestResolveTranscriptPath_EmptyInputs(t *testing.T) {
+	t.Parallel()
+
+	ag := &ClaudeCodeAgent{}
+	if got := ag.resolveTranscriptPath("", "id"); got != "" {
+		t.Errorf("empty sessionRef should pass through; got %q", got)
+	}
+	if got := ag.resolveTranscriptPath("/some/path", ""); got != "/some/path" {
+		t.Errorf("empty sessionID should pass through; got %q", got)
+	}
+}
+
+// TestResolveTranscriptPath_WorktreeFallback simulates the Claude Code worktree
+// bug: the agent reports a transcript_path under a "--claude-worktrees-<branch>"
+// project dir that doesn't exist, while the actual transcript was written under
+// the parent repo's project dir. The resolver should find the real file by
+// scanning the projects base dir for the session ID.
+func TestResolveTranscriptPath_WorktreeFallback(t *testing.T) {
+	// Cannot t.Parallel() — uses t.Setenv on HOME (process-global).
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	base := filepath.Join(tmpHome, ".claude", "projects")
+	parentDir := filepath.Join(base, "-Users-foo-Development-repo")
+	if err := os.MkdirAll(parentDir, 0o755); err != nil {
+		t.Fatalf("mkdir parent project: %v", err)
+	}
+	sessionID := "wt-session-uuid"
+	realPath := filepath.Join(parentDir, sessionID+".jsonl")
+	if err := os.WriteFile(realPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	// Reported path encodes the worktree CWD — does not exist on disk.
+	reported := filepath.Join(base, "-Users-foo-Development-repo--claude-worktrees-feature", sessionID+".jsonl")
+
+	ag := &ClaudeCodeAgent{}
+	got := ag.resolveTranscriptPath(reported, sessionID)
+	if got != realPath {
+		t.Errorf("resolveTranscriptPath = %q, want %q (real location)", got, realPath)
+	}
+}

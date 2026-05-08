@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -104,7 +105,7 @@ func (c *ClaudeCodeAgent) parseSessionStart(stdin io.Reader) (*agent.Event, erro
 	return &agent.Event{
 		Type:       agent.SessionStart,
 		SessionID:  raw.SessionID,
-		SessionRef: raw.TranscriptPath,
+		SessionRef: c.resolveTranscriptPath(raw.TranscriptPath, raw.SessionID),
 		Model:      raw.Model,
 		Timestamp:  time.Now(),
 	}, nil
@@ -118,7 +119,7 @@ func (c *ClaudeCodeAgent) parseTurnStart(stdin io.Reader) (*agent.Event, error) 
 	return &agent.Event{
 		Type:       agent.TurnStart,
 		SessionID:  raw.SessionID,
-		SessionRef: raw.TranscriptPath,
+		SessionRef: c.resolveTranscriptPath(raw.TranscriptPath, raw.SessionID),
 		Prompt:     raw.Prompt,
 		Timestamp:  time.Now(),
 	}, nil
@@ -132,7 +133,7 @@ func (c *ClaudeCodeAgent) parseTurnEnd(stdin io.Reader) (*agent.Event, error) {
 	return &agent.Event{
 		Type:       agent.TurnEnd,
 		SessionID:  raw.SessionID,
-		SessionRef: raw.TranscriptPath,
+		SessionRef: c.resolveTranscriptPath(raw.TranscriptPath, raw.SessionID),
 		Model:      raw.Model,
 		Timestamp:  time.Now(),
 	}, nil
@@ -146,7 +147,7 @@ func (c *ClaudeCodeAgent) parseSessionEnd(stdin io.Reader) (*agent.Event, error)
 	return &agent.Event{
 		Type:       agent.SessionEnd,
 		SessionID:  raw.SessionID,
-		SessionRef: raw.TranscriptPath,
+		SessionRef: c.resolveTranscriptPath(raw.TranscriptPath, raw.SessionID),
 		Model:      raw.Model,
 		Timestamp:  time.Now(),
 	}, nil
@@ -160,7 +161,7 @@ func (c *ClaudeCodeAgent) parseSubagentStart(stdin io.Reader) (*agent.Event, err
 	return &agent.Event{
 		Type:       agent.SubagentStart,
 		SessionID:  raw.SessionID,
-		SessionRef: raw.TranscriptPath,
+		SessionRef: c.resolveTranscriptPath(raw.TranscriptPath, raw.SessionID),
 		ToolUseID:  raw.ToolUseID,
 		ToolInput:  raw.ToolInput,
 		Timestamp:  time.Now(),
@@ -175,7 +176,7 @@ func (c *ClaudeCodeAgent) parseSubagentEnd(stdin io.Reader) (*agent.Event, error
 	event := &agent.Event{
 		Type:       agent.SubagentEnd,
 		SessionID:  raw.SessionID,
-		SessionRef: raw.TranscriptPath,
+		SessionRef: c.resolveTranscriptPath(raw.TranscriptPath, raw.SessionID),
 		ToolUseID:  raw.ToolUseID,
 		ToolInput:  raw.ToolInput,
 		Timestamp:  time.Now(),
@@ -184,6 +185,55 @@ func (c *ClaudeCodeAgent) parseSubagentEnd(stdin io.Reader) (*agent.Event, error
 		event.SubagentID = raw.ToolResponse.AgentID
 	}
 	return event, nil
+}
+
+// resolveTranscriptPath returns the canonical path to a Claude transcript file,
+// recovering from the Claude Code worktree-feature mismatch where
+// transcript_path encodes the worktree CWD (e.g. .claude/worktrees/<branch>) but
+// the file is stored under the parent repo's project dir. Falls back to scanning
+// ~/.claude/projects/*/<sessionID>.jsonl when the reported path doesn't exist.
+func (c *ClaudeCodeAgent) resolveTranscriptPath(sessionRef, sessionID string) string {
+	if sessionRef == "" || sessionID == "" {
+		return sessionRef
+	}
+	if _, err := os.Stat(sessionRef); err == nil {
+		return sessionRef
+	}
+	base, err := c.GetSessionBaseDir()
+	if err != nil {
+		return sessionRef
+	}
+	found := findTranscriptByID(base, sessionID)
+	if found == "" {
+		return sessionRef
+	}
+	logging.Info(logging.WithComponent(context.Background(), "agent.claudecode"),
+		"resolved transcript via fallback scan",
+		slog.String("reported", sessionRef),
+		slog.String("found", found),
+		slog.String("session_id", sessionID),
+	)
+	return found
+}
+
+// findTranscriptByID scans baseDir's immediate child directories for a file
+// named "<sessionID>.jsonl" and returns the first match, or "" if none.
+func findTranscriptByID(baseDir, sessionID string) string {
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		return ""
+	}
+	fname := sessionID + ".jsonl"
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		candidate := filepath.Join(baseDir, e.Name(), fname)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // --- Transcript flush sentinel ---
