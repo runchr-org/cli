@@ -11,6 +11,10 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
+// keyringService is the OS-keyring service name for this CLI. Renaming
+// would orphan every existing user's stored credentials — they'd appear
+// logged out until they ran `entire login` again. Don't change this
+// without a migration path.
 const keyringService = "entire-cli"
 
 // Store manages CLI authentication tokens in the OS keyring.
@@ -35,6 +39,11 @@ func NewStoreWithService(service string) *Store {
 }
 
 // SaveToken persists an access token for the given base URL.
+//
+// Deprecated: prefer SaveTokens (the tokenstore.Store interface method)
+// for new callers. SaveToken is kept for the legacy direct-bearer call
+// sites (login, logout, auth status/list/revoke) that don't go through
+// the tokenmanager.
 func (s *Store) SaveToken(baseURL, token string) error {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -51,6 +60,11 @@ func (s *Store) SaveToken(baseURL, token string) error {
 // rather than a JSON-encoded TokenSet. Real keyring errors (transport,
 // permission denied) propagate; only ErrNotFound and ErrMalformed
 // trigger the fallback.
+//
+// Deprecated: prefer LoadTokens (the tokenstore.Store interface method)
+// for new callers — it returns the full TokenSet so refresh tokens and
+// expiry survive the round trip. GetToken is retained for the direct-
+// bearer call sites that only need the access token string.
 func (s *Store) GetToken(baseURL string) (string, error) {
 	t, err := s.inner.LoadTokens(baseURL)
 	if err == nil {
@@ -74,6 +88,9 @@ func (s *Store) GetToken(baseURL string) (string, error) {
 }
 
 // DeleteToken removes a stored token for the given base URL.
+//
+// Deprecated: prefer DeleteTokens (the tokenstore.Store interface
+// method). DeleteToken is retained for direct-bearer call sites.
 func (s *Store) DeleteToken(baseURL string) error {
 	return s.inner.DeleteTokens(baseURL) //nolint:wrapcheck // shim returns the lib error verbatim
 }

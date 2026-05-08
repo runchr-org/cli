@@ -86,7 +86,10 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 
 	store := auth.NewStore()
 
-	if err := store.SaveToken(client.BaseURL(), token); err != nil {
+	// Login deliberately uses the legacy SaveToken (string, string)
+	// surface — we only have an access-token string at this point;
+	// the deviceflow client doesn't return a TokenSet here.
+	if err := store.SaveToken(client.BaseURL(), token); err != nil { //nolint:staticcheck // SA1019: legacy direct-bearer call site, see Store.SaveToken doc
 		return fmt.Errorf("save auth token: %w", err)
 	}
 
