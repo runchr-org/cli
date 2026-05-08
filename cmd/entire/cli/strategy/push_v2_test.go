@@ -98,6 +98,17 @@ func writeV2Checkpoint(t *testing.T, repo *git.Repository, cpID id.CheckpointID,
 	require.NoError(t, err)
 }
 
+func v2CheckpointCountInRef(t *testing.T, repo *git.Repository, refName plumbing.ReferenceName) int {
+	t.Helper()
+
+	store := checkpoint.NewV2GitStore(repo, "origin")
+	_, treeHash, err := store.GetRefState(refName)
+	require.NoError(t, err)
+	count, err := store.CountCheckpointsInTree(treeHash)
+	require.NoError(t, err)
+	return count
+}
+
 // TestFetchAndMergeRef_MergesTrees verifies that fetchAndMergeRef correctly
 // merges divergent trees from two repos sharing a common ref.
 // Not parallel: uses t.Chdir()
@@ -221,6 +232,61 @@ func TestPushV2Refs_PushesAllRefs(t *testing.T) {
 	assert.NotContains(t, output, "[entire] Successfully pushed", "successful refs should only be listed on partial failure")
 	assert.NotContains(t, output, "Pushing v2/main to", "per-ref progress should stay quiet")
 	assert.NotContains(t, output, "Syncing v2/main with remote", "per-ref sync progress should stay quiet")
+}
+
+// TestPushV2Refs_LocalRotationDoesNotRehydrateArchivedCurrent verifies that
+// publishing a locally rotated generation does not merge the remote old
+// /full/current tree back into the fresh local /full/current.
+//
+// Not parallel: uses t.Chdir() and os.Stderr redirection.
+func TestPushV2Refs_LocalRotationDoesNotRehydrateArchivedCurrent(t *testing.T) {
+	ctx := context.Background()
+	fullCurrentRef := plumbing.ReferenceName(paths.V2FullCurrentRefName)
+	archiveRef := plumbing.ReferenceName(paths.V2FullRefPrefix + "0000000000001")
+
+	localDir := setupRepoWithV2Ref(t)
+	localRepo, err := git.PlainOpen(localDir)
+	require.NoError(t, err)
+	localStore := checkpoint.NewV2GitStore(localRepo, "origin")
+
+	for i, cpID := range []id.CheckpointID{
+		id.MustCheckpointID("000000000001"),
+		id.MustCheckpointID("000000000002"),
+		id.MustCheckpointID("000000000003"),
+	} {
+		writeV2Checkpoint(t, localRepo, cpID, "session-before-rotation-"+string(rune('a'+i)))
+	}
+
+	bareDir := t.TempDir()
+	initCmd := exec.CommandContext(ctx, "git", "init", "--bare")
+	initCmd.Dir = bareDir
+	initCmd.Env = testutil.GitIsolatedEnv()
+	out, err := initCmd.CombinedOutput()
+	require.NoError(t, err, "git init --bare failed: %s", out)
+
+	pushCurrent := exec.CommandContext(ctx, "git", "push", bareDir,
+		string(fullCurrentRef)+":"+string(fullCurrentRef))
+	pushCurrent.Dir = localDir
+	out, err = pushCurrent.CombinedOutput()
+	require.NoError(t, err, "initial full/current push failed: %s", out)
+
+	refName, rotated, err := localStore.RotateCurrentGenerationIfNeeded(ctx, 3)
+	require.NoError(t, err)
+	require.True(t, rotated)
+	require.Equal(t, archiveRef, refName)
+	assert.Equal(t, 0, v2CheckpointCountInRef(t, localRepo, fullCurrentRef))
+	assert.Equal(t, 3, v2CheckpointCountInRef(t, localRepo, archiveRef))
+
+	t.Chdir(localDir)
+	restore := captureStderr(t)
+	pushV2Refs(ctx, bareDir)
+	_ = restore()
+
+	bareRepo, err := git.PlainOpen(bareDir)
+	require.NoError(t, err)
+	assert.Equal(t, 3, v2CheckpointCountInRef(t, bareRepo, archiveRef))
+	assert.Equal(t, 0, v2CheckpointCountInRef(t, bareRepo, fullCurrentRef),
+		"remote /full/current must stay fresh after publishing a local rotation")
 }
 
 func TestPrintV2PartialPushResult(t *testing.T) {

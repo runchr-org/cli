@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -445,6 +447,37 @@ func TestRotateGeneration_ArchivesCurrentAndCreatesNewOrphan(t *testing.T) {
 	freshTree, err := freshCommit.Tree()
 	require.NoError(t, err)
 	assert.Empty(t, freshTree.Entries, "fresh tree should be empty (no generation.json)")
+}
+
+func TestRotateGeneration_SucceedsWhenPendingMarkerCannotBeRecorded(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	ctx := context.Background()
+
+	populateFullCurrent(t, store, 3, 0)
+
+	worktree, err := repo.Worktree()
+	require.NoError(t, err)
+	blockingPath := filepath.Join(worktree.Filesystem.Root(), ".git", pendingV2FullRotationDirName)
+	require.NoError(t, os.WriteFile(blockingPath, []byte("not a directory"), 0o600))
+
+	refName, rotated, err := store.RotateCurrentGenerationIfNeeded(ctx, 3)
+	require.NoError(t, err)
+	require.True(t, rotated)
+	require.Equal(t, ArchivedGenerationRefName(1), refName)
+
+	_, currentTreeHash, err := store.GetRefState(plumbing.ReferenceName(paths.V2FullCurrentRefName))
+	require.NoError(t, err)
+	currentCount, err := store.CountCheckpointsInTree(currentTreeHash)
+	require.NoError(t, err)
+	assert.Equal(t, 0, currentCount)
+
+	_, archiveTreeHash, err := store.GetRefState(refName)
+	require.NoError(t, err)
+	archiveCount, err := store.CountCheckpointsInTree(archiveTreeHash)
+	require.NoError(t, err)
+	assert.Equal(t, 3, archiveCount)
 }
 
 func TestResetFullCurrentRefIfUnchangedRejectsConcurrentChange(t *testing.T) {

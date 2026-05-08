@@ -25,7 +25,7 @@ import (
 )
 
 // tryPushRef attempts to push a custom ref using an explicit refspec.
-func tryPushRef(ctx context.Context, target string, refName plumbing.ReferenceName) (pushResult, error) {
+func tryPushRef(ctx context.Context, target string, refName plumbing.ReferenceName) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
@@ -33,10 +33,10 @@ func tryPushRef(ctx context.Context, target string, refName plumbing.ReferenceNa
 	result, err := remote.Push(ctx, target, refSpec)
 	outputStr := result.Output
 	if err != nil {
-		return pushResult{}, classifyPushFailure(ctx, outputStr, err)
+		return classifyPushFailure(ctx, outputStr, err)
 	}
 
-	return parsePushResult(outputStr), nil
+	return nil
 }
 
 type v2RefPushResult struct {
@@ -57,6 +57,14 @@ func tryPushV2Refs(ctx context.Context, target string, refs []plumbing.Reference
 }
 
 func pushV2RefsWithRecovery(ctx context.Context, target string, refs []plumbing.ReferenceName) []v2RefPushResult {
+	publishedPending, pendingErr := publishPendingV2FullRotations(ctx, target)
+	if pendingErr != nil {
+		return []v2RefPushResult{{
+			refName: plumbing.ReferenceName(paths.V2FullCurrentRefName),
+			err:     fmt.Errorf("couldn't publish pending v2 full rotation: %w", pendingErr),
+		}}
+	}
+
 	resultsByRef := make(map[plumbing.ReferenceName]v2RefPushResult, len(refs))
 	var retryRefs []plumbing.ReferenceName
 
@@ -67,6 +75,13 @@ func pushV2RefsWithRecovery(ctx context.Context, target string, refs []plumbing.
 		}
 		if !errors.Is(result.err, errNonFastForward) {
 			resultsByRef[result.refName] = result
+			continue
+		}
+		if publishedPending && result.refName == plumbing.ReferenceName(paths.V2FullCurrentRefName) {
+			resultsByRef[result.refName] = v2RefPushResult{
+				refName: result.refName,
+				err:     fmt.Errorf("failed to push %s after publishing pending rotation: %w", shortRefName(result.refName), result.err),
+			}
 			continue
 		}
 
@@ -104,6 +119,118 @@ func pushV2RefsWithRecovery(ctx context.Context, target string, refs []plumbing.
 	return results
 }
 
+func publishPendingV2FullRotations(ctx context.Context, target string) (bool, error) {
+	repo, err := OpenRepository(ctx)
+	if err != nil {
+		return false, fmt.Errorf("open repository: %w", err)
+	}
+	store := checkpoint.NewV2GitStore(repo, target)
+	rotations, err := store.ReadPendingFullRotations(ctx)
+	if err != nil {
+		return false, fmt.Errorf("read pending v2 full rotations: %w", err)
+	}
+	if len(rotations) == 0 {
+		return false, nil
+	}
+
+	archiveRefs := pendingRotationArchiveRefs(rotations)
+	if len(archiveRefs) > 0 {
+		for _, result := range tryPushV2Refs(ctx, target, archiveRefs) {
+			if result.err != nil {
+				return true, fmt.Errorf("push pending archive %s: %w", shortRefName(result.refName), result.err)
+			}
+		}
+	}
+
+	currentRefName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
+	localCurrentRef, err := repo.Reference(currentRefName, true)
+	if err != nil {
+		return true, fmt.Errorf("read local %s: %w", shortRefName(currentRefName), err)
+	}
+
+	remoteCurrentHash, remoteCurrentFound, err := lsRemoteRefHash(ctx, target, currentRefName)
+	if err != nil {
+		return true, fmt.Errorf("read remote %s: %w", shortRefName(currentRefName), err)
+	}
+	if remoteCurrentFound && remoteCurrentHash == localCurrentRef.Hash() {
+		if err := store.ClearPendingFullRotations(ctx); err != nil {
+			return true, fmt.Errorf("clear pending v2 full rotations: %w", err)
+		}
+		return true, nil
+	}
+
+	if remoteCurrentFound && !pendingRotationsContainAncestor(ctx, repo, rotations, remoteCurrentHash) {
+		return true, fmt.Errorf("remote %s at %s is not covered by pending local archives", shortRefName(currentRefName), remoteCurrentHash)
+	}
+
+	expectedRemoteHash := ""
+	if remoteCurrentFound {
+		expectedRemoteHash = remoteCurrentHash.String()
+	}
+	currentRefSpec := fmt.Sprintf("%s:%s", currentRefName, currentRefName)
+	if err := pushWithLease(ctx, target, currentRefSpec, currentRefName.String(), expectedRemoteHash, "push rotated "+shortRefName(currentRefName)); err != nil {
+		return true, fmt.Errorf("push rotated %s: %w", shortRefName(currentRefName), err)
+	}
+
+	if err := store.ClearPendingFullRotations(ctx); err != nil {
+		return true, fmt.Errorf("clear pending v2 full rotations: %w", err)
+	}
+	return true, nil
+}
+
+func pendingRotationArchiveRefs(rotations []checkpoint.PendingV2FullRotation) []plumbing.ReferenceName {
+	seen := make(map[plumbing.ReferenceName]struct{}, len(rotations))
+	refs := make([]plumbing.ReferenceName, 0, len(rotations))
+	for _, rotation := range rotations {
+		refName := plumbing.ReferenceName(rotation.ArchiveRefName)
+		if refName == "" {
+			continue
+		}
+		if _, ok := seen[refName]; ok {
+			continue
+		}
+		seen[refName] = struct{}{}
+		refs = append(refs, refName)
+	}
+	return refs
+}
+
+func pendingRotationsContainAncestor(ctx context.Context, repo *git.Repository, rotations []checkpoint.PendingV2FullRotation, hash plumbing.Hash) bool {
+	for _, rotation := range rotations {
+		if rotation.ArchivedFullGenerationHash == "" {
+			continue
+		}
+		if IsAncestorOf(ctx, repo, hash, plumbing.NewHash(rotation.ArchivedFullGenerationHash)) {
+			return true
+		}
+	}
+	return false
+}
+
+func lsRemoteRefHash(ctx context.Context, target string, refName plumbing.ReferenceName) (plumbing.Hash, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	output, err := remote.LsRemote(ctx, target, refName.String())
+	if err != nil {
+		return plumbing.ZeroHash, false, fmt.Errorf("ls-remote %s: %w", refName, err)
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 || parts[1] != refName.String() {
+			continue
+		}
+		if len(parts[0]) != 40 {
+			return plumbing.ZeroHash, false, fmt.Errorf("invalid remote hash %q for %s", parts[0], refName)
+		}
+		return plumbing.NewHash(parts[0]), true, nil
+	}
+	return plumbing.ZeroHash, false, nil
+}
+
 func refSpecsForRefs(refs []plumbing.ReferenceName) []string {
 	refSpecs := make([]string, 0, len(refs))
 	for _, refName := range refs {
@@ -114,7 +241,7 @@ func refSpecsForRefs(refs []plumbing.ReferenceName) []string {
 
 func parsePushRefResults(ctx context.Context, output string, refs []plumbing.ReferenceName, pushErr error) []v2RefPushResult {
 	parsed := make(map[plumbing.ReferenceName]v2RefPushResult, len(refs))
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		result, ok := parsePushRefStatusLine(line)
 		if ok {
 			parsed[result.refName] = result
@@ -307,7 +434,7 @@ func detectRemoteOnlyArchives(ctx context.Context, target string, repo *git.Repo
 	}
 
 	var remoteOnly []string
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
 		if line == "" {
 			continue
 		}
@@ -425,7 +552,7 @@ func handleRotationConflict(ctx context.Context, target, fetchTarget string, rep
 		return fmt.Errorf("failed to update archive ref: %w", err)
 	}
 
-	if _, pushErr := tryPushRef(ctx, target, archiveRefName); pushErr != nil {
+	if pushErr := tryPushRef(ctx, target, archiveRefName); pushErr != nil {
 		return fmt.Errorf("failed to push updated archive: %w", pushErr)
 	}
 
