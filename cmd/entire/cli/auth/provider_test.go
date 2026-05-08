@@ -33,6 +33,11 @@ func TestCurrentProvider_V1Explicit(t *testing.T) {
 	if p.clientID != wantClientIDV1 {
 		t.Fatalf("v1 clientID = %q", p.clientID)
 	}
+	// v1 is single-host (entire.io); no STS surface, same-host shortcut
+	// always wins. Empty stsPath is the contract.
+	if p.stsPath != "" {
+		t.Fatalf("v1 stsPath = %q, want empty (single-host, no STS)", p.stsPath)
+	}
 }
 
 func TestCurrentProvider_V2(t *testing.T) {
@@ -47,6 +52,9 @@ func TestCurrentProvider_V2(t *testing.T) {
 	}
 	if p.tokenPath != "/api/auth/token" {
 		t.Fatalf("v2 tokenPath = %q", p.tokenPath)
+	}
+	if p.stsPath != "/api/authz/sts/token" {
+		t.Fatalf("v2 stsPath = %q", p.stsPath)
 	}
 }
 

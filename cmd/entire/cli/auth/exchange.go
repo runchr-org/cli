@@ -53,7 +53,7 @@ func defaultManager() (*tokenmanager.Manager, error) {
 		m, err := tokenmanager.New(tokenmanager.Config{
 			Issuer:    api.AuthBaseURL(),
 			ClientID:  provider.clientID,
-			STSPath:   provider.tokenPath,
+			STSPath:   provider.stsPath,
 			Store:     NewStore(),
 			UserAgent: provider.clientID,
 			Scope:     "cli",

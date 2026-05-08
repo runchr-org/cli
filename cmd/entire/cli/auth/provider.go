@@ -18,10 +18,18 @@ import (
 const ProviderVersionEnvVar = "ENTIRE_AUTH_PROVIDER_VERSION"
 
 // providerConfig captures the per-surface bits of OAuth wiring.
+//
+// stsPath is the RFC 8693 token-exchange endpoint. v1 is the legacy
+// single-host surface where the auth and data API live at the same
+// origin (entire.io); the same-host shortcut in tokenmanager.Token
+// always wins and STS is never invoked, so v1.stsPath is left empty.
+// v2 exposes a dedicated STS path because it's used in split-host
+// deployments (e.g. us.auth.partial.to mints, partial.to consumes).
 type providerConfig struct {
 	clientID       string
 	deviceCodePath string
 	tokenPath      string
+	stsPath        string
 }
 
 var providers = map[string]providerConfig{
@@ -34,6 +42,7 @@ var providers = map[string]providerConfig{
 		clientID:       "entire-cli",
 		deviceCodePath: "/api/auth/oauth/device/code",
 		tokenPath:      "/api/auth/token",
+		stsPath:        "/api/authz/sts/token",
 	},
 }
 
