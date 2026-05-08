@@ -118,7 +118,7 @@ func newDispatchStatusModel(
 		title:    title,
 		subtitle: subtitle,
 		details:  dispatchStatusDetails(opts),
-		footer:   "Press ctrl+c to cancel",
+		footer:   "Press q, esc, or ctrl+c to cancel",
 		width:    ss.width,
 		height:   12,
 		run:      run,

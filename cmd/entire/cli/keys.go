@@ -2,26 +2,33 @@ package cli
 
 import "charm.land/bubbles/v2/key"
 
+const topLevelExitHelp = "Press q, esc, or ctrl+c to quit."
+
 // keyMap defines the keybindings used across the CLI's TUIs. Single source of
 // truth so help text and matching logic stay aligned, and so the strings "esc",
 // "ctrl+c", etc. live in exactly one place.
 type keyMap struct {
-	Quit     key.Binding
-	Back     key.Binding
-	Search   key.Binding
-	Confirm  key.Binding
-	Up       key.Binding
-	Down     key.Binding
-	NextPage key.Binding
-	PrevPage key.Binding
-	Home     key.Binding
-	End      key.Binding
+	Quit      key.Binding
+	Interrupt key.Binding
+	Back      key.Binding
+	Search    key.Binding
+	Confirm   key.Binding
+	Up        key.Binding
+	Down      key.Binding
+	NextPage  key.Binding
+	PrevPage  key.Binding
+	Home      key.Binding
+	End       key.Binding
 }
 
 var keys = keyMap{
 	Quit: key.NewBinding(
 		key.WithKeys("q", "ctrl+c"),
-		key.WithHelp("q", "quit"),
+		key.WithHelp("q/ctrl+c", "quit"),
+	),
+	Interrupt: key.NewBinding(
+		key.WithKeys("ctrl+c"),
+		key.WithHelp("ctrl+c", "quit"),
 	),
 	Back: key.NewBinding(
 		key.WithKeys("esc"),

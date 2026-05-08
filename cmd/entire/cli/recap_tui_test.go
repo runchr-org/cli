@@ -215,7 +215,7 @@ func TestRecapTUIModel_FooterFitsWidth(t *testing.T) {
 	if got := lipgloss.Width(footer); got > m.width {
 		t.Fatalf("wide footer width = %d, want <= %d: %q", got, m.width, footer)
 	}
-	for _, want := range []string{"t range", "v view", "a agent", "r refresh", "↑/↓ scroll", "q quit"} {
+	for _, want := range []string{"t range", "v view", "a agent", "r refresh", "↑/↓ scroll", "esc exit", "q/ctrl+c quit"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("wide footer missing %q: %q", want, footer)
 		}
@@ -226,8 +226,26 @@ func TestRecapTUIModel_FooterFitsWidth(t *testing.T) {
 	if got := lipgloss.Width(footer); got > m.width {
 		t.Fatalf("narrow footer width = %d, want <= %d: %q", got, m.width, footer)
 	}
-	if !strings.Contains(footer, "q quit") {
+	if !strings.Contains(footer, "q/ctrl+c quit") {
 		t.Fatalf("narrow footer should keep quit help: %q", footer)
+	}
+}
+
+func TestRecapTUIModel_LoadingAndErrorViewsDocumentExitKeys(t *testing.T) {
+	t.Parallel()
+
+	loading := recapTUIModel{loading: true}.View().Content
+	for _, want := range []string{"q", "esc", "ctrl+c", "quit"} {
+		if !strings.Contains(loading, want) {
+			t.Fatalf("loading view missing %q: %q", want, loading)
+		}
+	}
+
+	failure := recapTUIModel{loadErr: errors.New("boom")}.View().Content
+	for _, want := range []string{"q", "esc", "ctrl+c", "quit"} {
+		if !strings.Contains(failure, want) {
+			t.Fatalf("error view missing %q: %q", want, failure)
+		}
 	}
 }
 

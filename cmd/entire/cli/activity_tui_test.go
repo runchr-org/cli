@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -146,6 +147,24 @@ func TestActivityModel_QuitKeys(t *testing.T) {
 	}
 }
 
+func TestActivityModel_LoadingAndErrorViewsDocumentExitKeys(t *testing.T) {
+	t.Parallel()
+
+	loading := activityModel{loading: true}.View().Content
+	for _, want := range []string{"q", "esc", "ctrl+c", "quit"} {
+		if !strings.Contains(loading, want) {
+			t.Fatalf("loading view missing %q: %q", want, loading)
+		}
+	}
+
+	failure := activityModel{loadErr: errors.New("boom")}.View().Content
+	for _, want := range []string{"q", "esc", "ctrl+c", "quit"} {
+		if !strings.Contains(failure, want) {
+			t.Fatalf("error view missing %q: %q", want, failure)
+		}
+	}
+}
+
 func TestActivityModel_FooterDocumentsVisibleControlsOnly(t *testing.T) {
 	t.Parallel()
 
@@ -153,7 +172,7 @@ func TestActivityModel_FooterDocumentsVisibleControlsOnly(t *testing.T) {
 	m.sty = newActivityStylesWithWidth(m.width, true)
 
 	footer := m.renderFooter()
-	for _, want := range []string{"↑/↓, j/k", " scroll", "home/end, g/G", " top/bottom", "q", " quit"} {
+	for _, want := range []string{"↑/↓, j/k", " scroll", "home/end, g/G", " top/bottom", "esc", " exit", "q/ctrl+c", " quit"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer missing %q: %q", want, footer)
 		}
@@ -178,12 +197,12 @@ func TestActivityModel_FooterScrollPercentFitsWidth(t *testing.T) {
 	if got := lipgloss.Width(footer); got != m.width {
 		t.Fatalf("compact footer width = %d, want %d: %q", got, m.width, footer)
 	}
-	for _, want := range []string{"↑/↓", " scroll", "home/end", " top/bottom", "q", " quit"} {
+	for _, want := range []string{"↑/↓", " scroll", "esc", " exit", "q/ctrl+c", " quit"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("compact footer missing %q: %q", want, footer)
 		}
 	}
-	for _, hidden := range []string{"j/k", "g/G"} {
+	for _, hidden := range []string{"j/k", "home/end", "top/bottom", "g/G"} {
 		if strings.Contains(footer, hidden) {
 			t.Fatalf("compact footer should drop %q: %q", hidden, footer)
 		}

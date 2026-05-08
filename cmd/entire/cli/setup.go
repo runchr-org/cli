@@ -20,6 +20,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/vercelconfig"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/huh/v2"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -441,15 +442,16 @@ func runManageAgents(ctx context.Context, w io.Writer, opts EnableOptions, selec
 			return fmt.Errorf("agent selection cancelled: %w", err)
 		}
 	} else {
+		printAccessiblePromptGuidance(w, accessibleManageAgentsDescription())
 		form := NewAccessibleForm(
 			huh.NewGroup(
 				huh.NewMultiSelect[string]().
 					Title("Manage agents").
-					Description("Use space to select/deselect, enter to confirm.").
+					Description(manageAgentsDescription()).
 					Options(options...).
 					Value(&selectedAgentNames),
 			),
-		)
+		).WithKeyMap(agentMenuKeyMap())
 		if err := form.Run(); err != nil {
 			return fmt.Errorf("agent selection cancelled: %w", err)
 		}
@@ -1068,6 +1070,37 @@ func runEnable(ctx context.Context, w io.Writer, useProjectSettings bool) error 
 	return nil
 }
 
+func manageAgentsDescription() string {
+	return "Use space to select/deselect, enter to confirm, q/esc/ctrl+c to cancel. No changes: leave selections unchanged and press enter."
+}
+
+func agentSelectionDescription() string {
+	return "Use space to select, enter to confirm, q/esc/ctrl+c to cancel."
+}
+
+func accessibleManageAgentsDescription() string {
+	return "Enter a number to select/deselect an agent. Enter 0 to confirm; press ctrl+c to cancel. No changes: leave selections unchanged and enter 0."
+}
+
+func accessibleAgentSelectionDescription() string {
+	return "Enter a number to select/deselect an agent. Enter 0 to confirm; press ctrl+c to cancel."
+}
+
+func agentMenuKeyMap() *huh.KeyMap {
+	keymap := huh.NewDefaultKeyMap()
+	keymap.Quit = key.NewBinding(
+		key.WithKeys("q", "esc", "ctrl+c"),
+		key.WithHelp("q/esc/ctrl+c", "cancel"),
+	)
+	return keymap
+}
+
+func printAccessiblePromptGuidance(w io.Writer, guidance string) {
+	if IsAccessibleMode() {
+		fmt.Fprintln(w, guidance)
+	}
+}
+
 func runDisable(ctx context.Context, w io.Writer, useProjectSettings bool) error {
 	s, err := LoadEntireSettings(ctx)
 	if err != nil {
@@ -1350,11 +1383,12 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 			return nil, errors.New("no agents selected")
 		}
 	} else {
+		printAccessiblePromptGuidance(w, accessibleAgentSelectionDescription())
 		form := NewAccessibleForm(
 			huh.NewGroup(
 				huh.NewMultiSelect[string]().
 					Title("Select the agents you want to use").
-					Description("Use space to select, enter to confirm.").
+					Description(agentSelectionDescription()).
 					Options(options...).
 					Validate(func(selected []string) error {
 						if len(selected) == 0 {
@@ -1364,7 +1398,7 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 					}).
 					Value(&selectedAgentNames),
 			),
-		)
+		).WithKeyMap(agentMenuKeyMap())
 		if err := form.Run(); err != nil {
 			return nil, fmt.Errorf("agent selection cancelled: %w", err)
 		}

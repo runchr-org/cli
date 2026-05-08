@@ -262,7 +262,12 @@ func (m searchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 
 func (m searchModel) updateSearchMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) { //nolint:ireturn // bubbletea pattern
 	switch {
+	case key.Matches(msg, keys.Interrupt):
+		return m, tea.Quit
 	case key.Matches(msg, keys.Back):
+		if !m.hasBrowseContext() {
+			return m, tea.Quit
+		}
 		m.mode = modeBrowse
 		m.input.Blur()
 		m = m.refreshBrowseContent()
@@ -299,6 +304,10 @@ func (m searchModel) updateSearchMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+func (m searchModel) hasBrowseContext() bool {
+	return m.results != nil || m.apiPage > 0 || m.total > 0
 }
 
 func (m searchModel) updateBrowseMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) { //nolint:ireturn // bubbletea pattern
@@ -724,7 +733,8 @@ func (m searchModel) viewHelp() string {
 
 	if m.mode == modeSearch {
 		return m.styles.helpItem(keys.Confirm.Help().Key, "search") + dot +
-			m.styles.helpItem(keys.Back.Help().Key, "cancel") + "\n"
+			m.styles.helpItem(keys.Back.Help().Key, "cancel") + dot +
+			m.styles.helpItem(keys.Interrupt.Help().Key, keys.Interrupt.Help().Desc) + "\n"
 	}
 
 	pages := m.totalPages()
@@ -735,7 +745,8 @@ func (m searchModel) viewHelp() string {
 	if pages > 1 {
 		left += dot + m.styles.helpItem("n/p", "page")
 	}
-	left += dot + m.styles.helpItem(keys.Quit.Help().Key, keys.Quit.Help().Desc)
+	left += dot + m.styles.helpItem(keys.Back.Help().Key, "exit") + dot +
+		m.styles.helpItem(keys.Quit.Help().Key, keys.Quit.Help().Desc)
 
 	right := fmt.Sprintf("%d results", m.total)
 	if pages > 1 {

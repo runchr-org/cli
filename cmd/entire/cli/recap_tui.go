@@ -177,11 +177,11 @@ func (m recapTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:iretu
 func (m recapTUIModel) View() tea.View {
 	v := tea.View{AltScreen: true}
 	if m.loadErr != nil {
-		v.SetContent(fmt.Sprintf("\n  Failed to load recap: %s\n\n  Press r to retry or q to quit.\n", m.loadErr))
+		v.SetContent(fmt.Sprintf("\n  Failed to load recap: %s\n\n  Press r to retry. %s\n", m.loadErr, topLevelExitHelp))
 		return v
 	}
 	if m.loading && m.resp == nil {
-		v.SetContent("\n  Loading recap...\n\n  Press q to quit.\n")
+		v.SetContent("\n  Loading recap...\n\n  " + topLevelExitHelp + "\n")
 		return v
 	}
 	if !m.ready {
@@ -228,21 +228,28 @@ func (m recapTUIModel) renderFooter() string {
 			{"a", "agent"},
 			{"r", "refresh"},
 			{"↑/↓", "scroll"},
-			{"q", "quit"},
+			{keys.Back.Help().Key, "exit"},
+			{keys.Quit.Help().Key, keys.Quit.Help().Desc},
 		}),
 		recapFooterLine(m.color, []recapHelpItem{
 			{"t", "range"},
 			{"v", "view"},
 			{"a", "agent"},
-			{"q", "quit"},
+			{keys.Back.Help().Key, "exit"},
+			{keys.Quit.Help().Key, keys.Quit.Help().Desc},
 		}),
 		recapFooterLine(m.color, []recapHelpItem{
 			{"t", "range"},
 			{"v", "view"},
-			{"q", "quit"},
+			{keys.Back.Help().Key, "exit"},
+			{keys.Quit.Help().Key, keys.Quit.Help().Desc},
 		}),
 		recapFooterLine(m.color, []recapHelpItem{
-			{"q", "quit"},
+			{keys.Back.Help().Key, "exit"},
+			{keys.Quit.Help().Key, keys.Quit.Help().Desc},
+		}),
+		recapFooterLine(m.color, []recapHelpItem{
+			{keys.Quit.Help().Key, keys.Quit.Help().Desc},
 		}),
 	}
 	for _, choice := range choices {

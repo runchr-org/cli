@@ -230,6 +230,74 @@ func TestSearchModel_Quit(t *testing.T) {
 	}
 }
 
+func TestSearchModel_BrowseEscQuitsAtTopLevel(t *testing.T) {
+	t.Parallel()
+	m := testModel()
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("expected esc in browse mode to quit")
+	}
+	if msg := cmd(); msg != (tea.QuitMsg{}) {
+		t.Fatalf("expected QuitMsg, got %T", msg)
+	}
+}
+
+func TestSearchModel_SearchModeCtrlCQuits(t *testing.T) {
+	t.Parallel()
+	m := testModel()
+	m = updateModel(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("expected ctrl+c in search mode to quit")
+	}
+	if msg := cmd(); msg != (tea.QuitMsg{}) {
+		t.Fatalf("expected QuitMsg, got %T", msg)
+	}
+}
+
+func TestSearchModel_SearchModeQEditsInput(t *testing.T) {
+	t.Parallel()
+	m := testModel()
+	m = updateModel(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+	m.input.SetValue("")
+
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	if cmd != nil {
+		if msg := cmd(); msg == (tea.QuitMsg{}) {
+			t.Fatal("q in search mode should edit text, not quit")
+		}
+	}
+	m, ok := updated.(searchModel)
+	if !ok {
+		t.Fatalf("Update returned %T, want searchModel", updated)
+	}
+	if m.input.Value() != "q" {
+		t.Fatalf("input value = %q, want q", m.input.Value())
+	}
+	if m.mode != modeSearch {
+		t.Fatalf("mode = %d, want modeSearch", m.mode)
+	}
+}
+
+func TestSearchModel_DetailModeQQuits(t *testing.T) {
+	t.Parallel()
+	m := testModel()
+	m = updateModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.mode != modeDetail {
+		t.Fatalf("mode = %d, want modeDetail", m.mode)
+	}
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	if cmd == nil {
+		t.Fatal("expected q in detail mode to quit")
+	}
+	if msg := cmd(); msg != (tea.QuitMsg{}) {
+		t.Fatalf("expected QuitMsg, got %T", msg)
+	}
+}
+
 func TestSearchModel_SearchMode(t *testing.T) {
 	t.Parallel()
 	m := testModel()
@@ -246,6 +314,22 @@ func TestSearchModel_SearchMode(t *testing.T) {
 	m = updateModel(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.mode != modeBrowse {
 		t.Errorf("after esc: mode = %d, want modeBrowse", m.mode)
+	}
+}
+
+func TestSearchModel_InitialSearchModeEscQuitsWithoutBrowseContext(t *testing.T) {
+	t.Parallel()
+	ss := statusStyles{colorEnabled: false, width: 100}
+	m := newSearchModel(nil, "", 0, search.Config{}, ss)
+	m.mode = modeSearch
+	m.input.Focus()
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("expected esc in initial search mode to quit")
+	}
+	if msg := cmd(); msg != (tea.QuitMsg{}) {
+		t.Fatalf("expected QuitMsg, got %T", msg)
 	}
 }
 
@@ -361,7 +445,8 @@ func TestSearchModel_BrowseFooterHelp(t *testing.T) {
 		"/ search",
 		"↑/↓, j/k scroll",
 		"home/end, g/G top/bottom",
-		"q quit",
+		"esc exit",
+		"q/ctrl+c quit",
 	}
 	lastIndex := -1
 	for _, want := range wantParts {
@@ -402,7 +487,8 @@ func TestSearchModel_BrowseFooterHelpIncludesPagingForMultiplePages(t *testing.T
 		"↑/↓, j/k scroll",
 		"home/end, g/G top/bottom",
 		"n/p page",
-		"q quit",
+		"esc exit",
+		"q/ctrl+c quit",
 	}
 	lastIndex := -1
 	for _, want := range wantParts {
@@ -414,6 +500,33 @@ func TestSearchModel_BrowseFooterHelpIncludesPagingForMultiplePages(t *testing.T
 			t.Fatalf("footer control %q rendered out of order: %q", want, footer)
 		}
 		lastIndex = idx
+	}
+}
+
+func TestSearchModel_ViewSearchModeAdvertisesCtrlCQuit(t *testing.T) {
+	t.Parallel()
+	m := testModel()
+	m.mode = modeSearch
+	m.input.Focus()
+
+	view := m.View().Content
+	for _, want := range []string{"esc", "cancel", "ctrl+c", "quit"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("search view missing %q in help: %s", want, view)
+		}
+	}
+}
+
+func TestSearchModel_DetailModeAdvertisesCtrlCQuit(t *testing.T) {
+	t.Parallel()
+	m := testModel()
+	m = updateModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	view := m.View().Content
+	for _, want := range []string{"esc", "back", "q/ctrl+c", "quit"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("detail view missing %q in help: %s", want, view)
+		}
 	}
 }
 

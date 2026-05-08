@@ -177,12 +177,12 @@ func (m activityModel) withViewport() activityModel {
 func (m activityModel) View() tea.View {
 	v := tea.View{AltScreen: true}
 	if m.loadErr != nil {
-		v.SetContent(fmt.Sprintf("\n  Failed to load activity: %s\n\n  Press q to quit.\n", m.loadErr))
+		v.SetContent(fmt.Sprintf("\n  Failed to load activity: %s\n\n  %s\n", m.loadErr, topLevelExitHelp))
 		return v
 	}
 
 	if m.loading {
-		v.SetContent(fmt.Sprintf("\n  %s Loading activity...\n", m.spinner.View()))
+		v.SetContent(fmt.Sprintf("\n  %s Loading activity...\n\n  %s\n", m.spinner.View(), topLevelExitHelp))
 		return v
 	}
 
@@ -231,15 +231,17 @@ func (m activityModel) renderFooter() string {
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
 	sep := helpStyle.Render(" · ")
+	exitHelp := keyStyle.Render(keys.Back.Help().Key) + helpStyle.Render(" exit") +
+		sep + keyStyle.Render(keys.Quit.Help().Key) + helpStyle.Render(" "+keys.Quit.Help().Desc)
 
 	fullHelp := keyStyle.Render("↑/↓, j/k") + helpStyle.Render(" scroll") +
 		sep + keyStyle.Render("home/end, g/G") + helpStyle.Render(" top/bottom") +
-		sep + keyStyle.Render(keys.Quit.Help().Key) + helpStyle.Render(" "+keys.Quit.Help().Desc)
+		sep + exitHelp
 	standardHelp := keyStyle.Render("↑/↓") + helpStyle.Render(" scroll") +
 		sep + keyStyle.Render("home/end") + helpStyle.Render(" top/bottom") +
-		sep + keyStyle.Render(keys.Quit.Help().Key) + helpStyle.Render(" "+keys.Quit.Help().Desc)
-	shortHelp := keyStyle.Render("↑/↓") + helpStyle.Render(" scroll")
-	quitHelp := keyStyle.Render(keys.Quit.Help().Key) + helpStyle.Render(" "+keys.Quit.Help().Desc)
+		sep + exitHelp
+	shortHelp := keyStyle.Render("↑/↓") + helpStyle.Render(" scroll") + sep + exitHelp
+	quitHelp := exitHelp
 	helpChoices := []string{fullHelp, standardHelp, shortHelp, quitHelp}
 
 	if m.viewport.TotalLineCount() <= m.viewport.Height() {

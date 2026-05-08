@@ -555,7 +555,7 @@ func runStopMultiSelect(ctx context.Context, cmd *cobra.Command, activeSessions 
 		huh.NewGroup(
 			huh.NewMultiSelect[string]().
 				Title("Select sessions to stop").
-				Description("Use space to select, enter to confirm.").
+				Description(stopSessionSelectionDescription()).
 				Options(options...).
 				Value(&selectedIDs),
 		),
@@ -608,6 +608,10 @@ func runStopMultiSelect(ctx context.Context, cmd *cobra.Command, activeSessions 
 		return nil
 	}
 	return stopSelectedSessions(ctx, cmd, toStop)
+}
+
+func stopSessionSelectionDescription() string {
+	return "Use space to select, enter to confirm, ctrl+c to cancel."
 }
 
 // stopSelectedSessions stops each session in the list and prints a result line.

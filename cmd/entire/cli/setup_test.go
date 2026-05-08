@@ -1128,6 +1128,50 @@ func TestEnableCmd_ForceAndStrategyFlagsOnConfiguredDisabledRepo_ReenablesAndUpd
 
 // Tests for detectOrSelectAgent
 
+func TestAgentSelectionDescription(t *testing.T) {
+	t.Parallel()
+
+	got := agentSelectionDescription()
+	for _, want := range []string{"space", "enter", "q", "esc", "ctrl+c", "cancel"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("agentSelectionDescription() = %q, missing %q", got, want)
+		}
+	}
+}
+
+func TestManageAgentsDescription(t *testing.T) {
+	t.Parallel()
+
+	got := manageAgentsDescription()
+	for _, want := range []string{"space", "enter", "q", "esc", "ctrl+c", "cancel", "No changes"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("manageAgentsDescription() = %q, missing %q", got, want)
+		}
+	}
+}
+
+func TestAgentMenuKeyMapQuitsWithQEscAndCtrlC(t *testing.T) {
+	t.Parallel()
+
+	quitKeys := agentMenuKeyMap().Quit.Keys()
+	for _, want := range []string{"q", "esc", "ctrl+c"} {
+		if !slices.Contains(quitKeys, want) {
+			t.Fatalf("agent menu quit keys = %v, missing %q", quitKeys, want)
+		}
+	}
+}
+
+func TestStopSessionSelectionDescription(t *testing.T) {
+	t.Parallel()
+
+	got := stopSessionSelectionDescription()
+	for _, want := range []string{"space", "enter", "ctrl+c", "cancel"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("stopSessionSelectionDescription() = %q, missing %q", got, want)
+		}
+	}
+}
+
 func TestDetectOrSelectAgent_AgentDetected(t *testing.T) {
 	// Cannot use t.Parallel() because we use t.Chdir
 	setupTestRepo(t)
@@ -1767,6 +1811,59 @@ func TestManageAgents_NoChanges(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "No changes made.") {
 		t.Errorf("Expected 'No changes made.' output, got: %s", buf.String())
+	}
+}
+
+func TestManageAgents_AccessiblePromptShowsCancellationGuidance(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir, t.Setenv, and os.Stdin.
+	setupTestRepo(t)
+	t.Setenv("ACCESSIBLE", "1")
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	writeSettings(t, testSettingsEnabled)
+	writeClaudeHooksFixture(t)
+
+	stdin := os.Stdin
+	r, pipeW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdin pipe: %v", err)
+	}
+	os.Stdin = r
+	t.Cleanup(func() {
+		os.Stdin = stdin
+		_ = r.Close()
+		_ = pipeW.Close()
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, writeErr := pipeW.WriteString("0\n")
+		closeErr := pipeW.Close()
+		if writeErr != nil {
+			done <- writeErr
+			return
+		}
+		done <- closeErr
+	}()
+
+	var buf bytes.Buffer
+	err = runManageAgents(context.Background(), &buf, EnableOptions{}, nil)
+	if err != nil {
+		t.Fatalf("runManageAgents() error = %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("write stdin: %v", err)
+	}
+
+	output := buf.String()
+	for _, want := range []string{"Enter 0 to confirm", "ctrl+c to cancel"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("accessible agent prompt output = %q, missing %q", output, want)
+		}
+	}
+	for _, wrong := range []string{"q/esc", "esc/ctrl+c"} {
+		if strings.Contains(output, wrong) {
+			t.Fatalf("accessible agent prompt output = %q, should not advertise unsupported %q cancellation", output, wrong)
+		}
 	}
 }
 

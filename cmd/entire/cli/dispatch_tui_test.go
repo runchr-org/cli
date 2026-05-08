@@ -72,6 +72,20 @@ func TestDispatchStatusModel_ViewRendersInlineCard(t *testing.T) {
 	}
 }
 
+func TestDispatchStatusModel_FooterDocumentsCancelKeys(t *testing.T) {
+	t.Parallel()
+
+	model := newDispatchStatusModel(io.Discard, dispatchpkg.Options{Since: "7d"}, func(context.Context) (string, error) {
+		return "", nil
+	})
+
+	for _, want := range []string{"q", "ctrl+c", "esc", "cancel"} {
+		if !strings.Contains(model.footer, want) {
+			t.Fatalf("footer missing %q: %q", want, model.footer)
+		}
+	}
+}
+
 func TestDefaultRenderTerminalMarkdown_RendersHyperlinks(t *testing.T) {
 	t.Parallel()
 
