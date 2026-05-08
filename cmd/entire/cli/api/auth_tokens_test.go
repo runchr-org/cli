@@ -10,7 +10,7 @@ import (
 )
 
 func TestClient_RevokeCurrentToken_SendsDeleteWithBearer(t *testing.T) {
-	t.Parallel()
+	t.Setenv(authTokensProviderVersionEnvVar, "")
 
 	var gotMethod, gotPath, gotAuth string
 
@@ -71,7 +71,7 @@ func TestClient_RevokeCurrentToken_ReturnsHTTPErrorOn401(t *testing.T) {
 }
 
 func TestClient_ListTokens_DecodesResponse(t *testing.T) {
-	t.Parallel()
+	t.Setenv(authTokensProviderVersionEnvVar, "")
 
 	var gotMethod, gotPath, gotAuth string
 
@@ -142,7 +142,7 @@ func TestClient_ListTokens_ReturnsHTTPErrorOn401(t *testing.T) {
 }
 
 func TestClient_RevokeToken_SendsDeleteWithEscapedID(t *testing.T) {
-	t.Parallel()
+	t.Setenv(authTokensProviderVersionEnvVar, "")
 
 	var gotMethod, gotEscapedPath, gotDecodedPath string
 

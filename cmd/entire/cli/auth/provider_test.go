@@ -78,6 +78,7 @@ func TestCurrentProvider_TrimsWhitespace(t *testing.T) {
 
 func TestNewClient_HonoursProviderVersion(t *testing.T) {
 	t.Setenv(api.BaseURLEnvVar, "https://example.test")
+	t.Setenv(api.AuthBaseURLEnvVar, "")
 	t.Setenv(ProviderVersionEnvVar, "v2")
 
 	c := NewClient(&http.Client{})
@@ -97,6 +98,7 @@ func TestNewClient_HonoursProviderVersion(t *testing.T) {
 
 func TestNewClient_DefaultsToV1(t *testing.T) {
 	t.Setenv(api.BaseURLEnvVar, "https://example.test")
+	t.Setenv(api.AuthBaseURLEnvVar, "")
 	t.Setenv(ProviderVersionEnvVar, "")
 
 	c := NewClient(nil)

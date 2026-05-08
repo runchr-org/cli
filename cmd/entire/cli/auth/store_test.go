@@ -180,6 +180,7 @@ func TestStoreLoadTokens_LegacyBareStringFallback(t *testing.T) {
 
 func TestLookupCurrentToken(t *testing.T) {
 	t.Setenv(api.BaseURLEnvVar, "http://localhost:8787")
+	t.Setenv(api.AuthBaseURLEnvVar, "")
 
 	store := NewStore()
 	if err := store.SaveToken("http://localhost:8787", "local-token"); err != nil {
