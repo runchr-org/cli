@@ -64,6 +64,11 @@ const checkpointSyncFooter = "Transcripts may contain sensitive data. Redaction 
 // destination. Modifies opts based on the user's selection.
 // In non-interactive or --yes mode, prints an informational notice instead.
 func promptCheckpointSync(w io.Writer, opts *EnableOptions) error {
+	// Skip if the user already specified a checkpoint destination via flags.
+	if opts.CheckpointRemote != "" || opts.SkipPushSessions {
+		return nil
+	}
+
 	if opts.Yes || !interactive.CanPromptInteractively() {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Checkpoints will sync to this repo's remote.")
@@ -129,8 +134,10 @@ func promptCheckpointSync(w io.Writer, opts *EnableOptions) error {
 func applyCheckpointSyncChoice(choice string, opts *EnableOptions) error {
 	switch choice {
 	case checkpointSyncThisRemote:
-		// Default — no changes needed.
+		opts.CheckpointRemote = ""
+		opts.SkipPushSessions = false
 	case checkpointSyncLocal:
+		opts.CheckpointRemote = ""
 		opts.SkipPushSessions = true
 	default:
 		// Treat as a checkpoint remote value (e.g. "github:org/repo").
@@ -138,6 +145,7 @@ func applyCheckpointSyncChoice(choice string, opts *EnableOptions) error {
 			return fmt.Errorf("invalid checkpoint repo: %w", err)
 		}
 		opts.CheckpointRemote = choice
+		opts.SkipPushSessions = false
 	}
 	return nil
 }
