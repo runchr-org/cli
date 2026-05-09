@@ -161,19 +161,35 @@ func (a *PiAgent) ParseHookEvent(ctx context.Context, hookName string, stdin io.
 
 const activeSessionFile = "pi-active-session"
 
-// resolveSessionDir returns the per-repo Pi staging directory.
-// Mirrors GetSessionDir: <repo>/.entire/tmp/pi.
+// piHookCacheSubdir is the subdirectory under .entire/tmp/ where the hook
+// flow caches the active-session ID file and the agent_end transcript
+// snapshot. Agent-specific (not just .entire/tmp/) so other agents'
+// integration tests and tooling don't shadow each other under the cache
+// root.
+const piHookCacheSubdir = "pi"
+
+// resolveSessionDir returns the per-repo hook cache directory used by
+// cacheSessionID / readCachedSessionID / clearCachedSessionID and
+// captureTranscript.
+//
+// This is intentionally distinct from PiAgent.GetSessionDir, which
+// points at Pi's native session store (~/.pi/agent/sessions/...) so
+// cold attach can resolve transcripts that were never hook-captured.
+// The cache here is hook-internal and only reachable via Pi hooks
+// firing; the framework records the cached path as SessionRef in
+// checkpoint metadata, so subsequent operations on hooked sessions go
+// through the recorded path rather than re-resolving via GetSessionDir.
 func resolveSessionDir(ctx context.Context) string {
 	root, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		//nolint:forbidigo // fallback when no git repo (tests run outside repos)
 		wd, wdErr := os.Getwd()
 		if wdErr != nil {
-			return filepath.Join(paths.EntireTmpDir, piSessionSubdir)
+			return filepath.Join(paths.EntireTmpDir, piHookCacheSubdir)
 		}
 		root = wd
 	}
-	return filepath.Join(root, paths.EntireTmpDir, piSessionSubdir)
+	return filepath.Join(root, paths.EntireTmpDir, piHookCacheSubdir)
 }
 
 func cacheSessionID(ctx context.Context, id string) {
@@ -210,7 +226,7 @@ func clearCachedSessionID(ctx context.Context) {
 // <repo>/.entire/tmp/pi/<id>.json so Entire has a stable transcript
 // reference. Returns the path to the cached file, or "" if either input is
 // missing. The pi/ namespace under .entire/tmp/ is intentional — see
-// GetSessionDir / piSessionSubdir for the rationale.
+// piHookCacheSubdir for the rationale.
 func captureTranscript(ctx context.Context, sessionID, piSessionFile string) string {
 	if sessionID == "" || piSessionFile == "" {
 		return ""
