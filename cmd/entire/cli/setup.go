@@ -73,7 +73,8 @@ func promptCheckpointSync(w io.Writer, opts *EnableOptions) error {
 	}
 
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, checkpointSyncFooter)
+	fmt.Fprintln(w, "  "+checkpointSyncFooter)
+	fmt.Fprintln(w)
 
 	choice := checkpointSyncThisRemote
 	form := NewAccessibleForm(
