@@ -3005,8 +3005,8 @@ func TestPromptCheckpointSync_NonInteractive(t *testing.T) {
 	if !strings.Contains(out, "sensitive data") {
 		t.Error("notice should mention sensitive data")
 	}
-	if !strings.Contains(out, "best-effort") {
-		t.Error("notice should mention best-effort redaction")
+	if !strings.Contains(out, "Review before sharing") {
+		t.Error("notice should mention Review before sharing redaction")
 	}
 	// opts should remain unchanged (defaults)
 	if opts.SkipPushSessions {
@@ -3148,7 +3148,7 @@ func TestCheckpointSyncFooter_Content(t *testing.T) {
 	if !strings.Contains(checkpointSyncFooter, "sensitive data") {
 		t.Error("footer should mention sensitive data")
 	}
-	if !strings.Contains(checkpointSyncFooter, "best-effort") {
-		t.Error("footer should mention best-effort redaction")
+	if !strings.Contains(checkpointSyncFooter, "Review before sharing") {
+		t.Error("footer should mention Review before sharing redaction")
 	}
 }

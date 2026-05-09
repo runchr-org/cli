@@ -58,7 +58,7 @@ const (
 	checkpointSyncLocal      = "local"
 )
 
-const checkpointSyncFooter = "Transcripts may contain sensitive data. Redaction is best-effort."
+const checkpointSyncFooter = "Transcripts may contain sensitive data. Review before sharing."
 
 // promptCheckpointSync shows an interactive picker for checkpoint sync
 // destination. Modifies opts based on the user's selection.
