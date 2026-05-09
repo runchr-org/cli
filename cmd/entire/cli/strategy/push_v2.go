@@ -193,10 +193,11 @@ func pendingFullArchiveRefs(publications []checkpoint.PendingV2FullGenerationPub
 	seen := make(map[plumbing.ReferenceName]struct{}, len(publications))
 	refs := make([]plumbing.ReferenceName, 0, len(publications))
 	for _, publication := range publications {
-		refName := plumbing.ReferenceName(publication.ArchiveRefName)
-		if refName == "" {
+		suffix, ok := strings.CutPrefix(publication.ArchiveRefName, paths.V2FullRefPrefix)
+		if !ok || !checkpoint.GenerationRefPattern.MatchString(suffix) {
 			continue
 		}
+		refName := plumbing.ReferenceName(paths.V2FullRefPrefix + suffix)
 		if _, ok := seen[refName]; ok {
 			continue
 		}

@@ -469,6 +469,27 @@ func TestPushV2Refs_PendingPublicationReadErrorDoesNotReportActiveRefFailures(t 
 	require.Error(t, err, "/full/current should not be pushed after pending-publication read failure")
 }
 
+func TestPendingFullArchiveRefs_OnlyReturnsV2ArchiveGenerationRefs(t *testing.T) {
+	t.Parallel()
+
+	refs := pendingFullArchiveRefs([]checkpoint.PendingV2FullGenerationPublication{
+		{ArchiveRefName: paths.V2FullRefPrefix + "0000000000001"},
+		{ArchiveRefName: paths.V2FullRefPrefix + "0000000000001"},
+		{ArchiveRefName: paths.V2FullRefPrefix + "0000000000002"},
+		{ArchiveRefName: paths.V2FullCurrentRefName},
+		{ArchiveRefName: paths.V2FullRefPrefix + "not-a-generation"},
+		{ArchiveRefName: paths.V2FullRefPrefix + "0000000000003/extra"},
+		{ArchiveRefName: paths.V2MainRefName},
+		{ArchiveRefName: "refs/heads/main"},
+		{ArchiveRefName: ""},
+	})
+
+	assert.Equal(t, []plumbing.ReferenceName{
+		plumbing.ReferenceName(paths.V2FullRefPrefix + "0000000000001"),
+		plumbing.ReferenceName(paths.V2FullRefPrefix + "0000000000002"),
+	}, refs)
+}
+
 // TestPushV2Refs_LocalRotationDoesNotRehydrateArchivedCurrent verifies that
 // publishing a locally rotated generation does not merge the remote old
 // /full/current tree back into the fresh local /full/current.
