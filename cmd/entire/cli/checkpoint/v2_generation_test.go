@@ -449,7 +449,7 @@ func TestRotateGeneration_ArchivesCurrentAndCreatesNewOrphan(t *testing.T) {
 	assert.Empty(t, freshTree.Entries, "fresh tree should be empty (no generation.json)")
 }
 
-func TestRotateGeneration_SucceedsWhenPendingMarkerCannotBeRecorded(t *testing.T) {
+func TestRotateGeneration_FailsBeforeResetWhenPendingMarkerCannotBeRecorded(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
 	store := NewV2GitStore(repo, "origin")
@@ -463,21 +463,19 @@ func TestRotateGeneration_SucceedsWhenPendingMarkerCannotBeRecorded(t *testing.T
 	require.NoError(t, os.WriteFile(blockingPath, []byte("not a directory"), 0o600))
 
 	refName, rotated, err := store.RotateCurrentGenerationIfNeeded(ctx, 3)
-	require.NoError(t, err)
-	require.True(t, rotated)
-	require.Equal(t, ArchivedGenerationRefName(1), refName)
+	require.Error(t, err)
+	require.False(t, rotated)
+	require.Empty(t, refName)
+	assert.Contains(t, err.Error(), "failed to record pending full rotation")
 
 	_, currentTreeHash, err := store.GetRefState(plumbing.ReferenceName(paths.V2FullCurrentRefName))
 	require.NoError(t, err)
 	currentCount, err := store.CountCheckpointsInTree(currentTreeHash)
 	require.NoError(t, err)
-	assert.Equal(t, 0, currentCount)
+	assert.Equal(t, 3, currentCount)
 
-	_, archiveTreeHash, err := store.GetRefState(refName)
-	require.NoError(t, err)
-	archiveCount, err := store.CountCheckpointsInTree(archiveTreeHash)
-	require.NoError(t, err)
-	assert.Equal(t, 3, archiveCount)
+	_, _, err = store.GetRefState(ArchivedGenerationRefName(1))
+	require.Error(t, err)
 }
 
 func TestRemovePendingFullGenerationPublications_PreservesLaterQueuedEntries(t *testing.T) {

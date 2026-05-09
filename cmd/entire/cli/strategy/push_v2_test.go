@@ -469,6 +469,62 @@ func TestPushV2Refs_PendingPublicationReadErrorDoesNotReportActiveRefFailures(t 
 	require.Error(t, err, "/full/current should not be pushed after pending-publication read failure")
 }
 
+// TestPushV2Refs_DropsPendingResetPublicationWhenCurrentWasNotReset verifies
+// that a marker recorded before a failed/crashed reset does not publish the
+// would-be archive while /full/current still points at the old generation.
+//
+// Not parallel: uses t.Chdir() and os.Stderr redirection.
+func TestPushV2Refs_DropsPendingResetPublicationWhenCurrentWasNotReset(t *testing.T) {
+	ctx := context.Background()
+
+	tmpDir := setupRepoWithV2Ref(t)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+	store := checkpoint.NewV2GitStore(repo, "origin")
+
+	writeV2Checkpoint(t, repo, id.MustCheckpointID("aabbccddeeff"), "test-session")
+	currentRef, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
+	require.NoError(t, err)
+
+	emptyTree, err := checkpoint.BuildTreeFromEntries(ctx, repo, map[string]object.TreeEntry{})
+	require.NoError(t, err)
+	resetRoot, err := checkpoint.CreateCommit(ctx, repo, emptyTree, plumbing.ZeroHash,
+		"Start generation", "Test", "test@test.com")
+	require.NoError(t, err)
+
+	archiveRef := plumbing.ReferenceName(paths.V2FullRefPrefix + "0000000000001")
+	require.NoError(t, store.AppendPendingFullGenerationPublication(ctx, checkpoint.PendingV2FullGenerationPublication{
+		ArchiveRefName:           archiveRef.String(),
+		ArchiveCommitHash:        currentRef.Hash().String(),
+		PreviousFullCurrentHash:  currentRef.Hash().String(),
+		ResetFullCurrentRootHash: resetRoot.String(),
+		QueuedAt:                 time.Now().UTC(),
+	}))
+
+	t.Chdir(tmpDir)
+
+	bareDir := t.TempDir()
+	initCmd := exec.CommandContext(ctx, "git", "init", "--bare")
+	initCmd.Dir = bareDir
+	initCmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, initCmd.Run())
+
+	restore := captureStderr(t)
+	pushV2Refs(ctx, bareDir)
+	output := restore()
+
+	bareRepo, err := git.PlainOpen(bareDir)
+	require.NoError(t, err)
+	_, err = bareRepo.Reference(archiveRef, true)
+	require.Error(t, err, "stale pending archive should not be pushed")
+
+	remaining, err := store.ReadPendingFullGenerationPublications(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "stale pending reset publication should be cleared")
+	assert.Contains(t, output, "[entire] All v2 checkpoints pushed")
+	assert.NotContains(t, output, "push pending archive")
+}
+
 func TestPendingFullArchiveRefs_OnlyReturnsV2ArchiveGenerationRefs(t *testing.T) {
 	t.Parallel()
 

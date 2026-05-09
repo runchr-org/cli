@@ -126,6 +126,28 @@ func publishPendingV2FullGenerationPublications(
 		return result, nil
 	}
 
+	currentRefName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
+	var localCurrentRef *plumbing.Reference
+	for {
+		latestResetPublicationIndex := latestPendingFullCurrentResetPublicationIndex(publications)
+		if latestResetPublicationIndex == -1 {
+			break
+		}
+		var err error
+		localCurrentRef, err = repo.Reference(currentRefName, true)
+		if err != nil {
+			return result, fmt.Errorf("read local %s: %w", shortRefName(currentRefName), err)
+		}
+		latestResetPublication := publications[latestResetPublicationIndex]
+		if pendingResetPublicationMatchesLocalCurrent(ctx, repo, latestResetPublication, localCurrentRef.Hash()) {
+			break
+		}
+		if err := store.RemovePendingFullGenerationPublications(ctx, []checkpoint.PendingV2FullGenerationPublication{latestResetPublication}); err != nil {
+			return result, fmt.Errorf("clear stale pending v2 full generation publications: %w", err)
+		}
+		publications = slices.Delete(publications, latestResetPublicationIndex, latestResetPublicationIndex+1)
+	}
+
 	archiveRefs := pendingFullArchiveRefs(publications)
 	if len(archiveRefs) > 0 {
 		var archivePushErr error
@@ -149,12 +171,6 @@ func publishPendingV2FullGenerationPublications(
 			return result, fmt.Errorf("clear pending v2 full generation publications: %w", err)
 		}
 		return result, nil
-	}
-
-	currentRefName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
-	localCurrentRef, err := repo.Reference(currentRefName, true)
-	if err != nil {
-		return result, fmt.Errorf("read local %s: %w", shortRefName(currentRefName), err)
 	}
 
 	remoteCurrentHash, remoteCurrentFound, err := lsRemoteRefHash(ctx, target, currentRefName)
@@ -229,6 +245,23 @@ func pendingResetPublicationsContainAncestor(ctx context.Context, repo *git.Repo
 		}
 	}
 	return false
+}
+
+func latestPendingFullCurrentResetPublicationIndex(publications []checkpoint.PendingV2FullGenerationPublication) int {
+	for i := len(publications) - 1; i >= 0; i-- {
+		if publications[i].PreviousFullCurrentHash == "" && publications[i].ResetFullCurrentRootHash == "" {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+func pendingResetPublicationMatchesLocalCurrent(ctx context.Context, repo *git.Repository, publication checkpoint.PendingV2FullGenerationPublication, localCurrentHash plumbing.Hash) bool {
+	if len(publication.ResetFullCurrentRootHash) != 40 {
+		return false
+	}
+	return IsAncestorOf(ctx, repo, plumbing.NewHash(publication.ResetFullCurrentRootHash), localCurrentHash)
 }
 
 func lsRemoteRefHash(ctx context.Context, target string, refName plumbing.ReferenceName) (plumbing.Hash, bool, error) {
