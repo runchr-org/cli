@@ -2984,3 +2984,114 @@ func TestConfigureCmd_FreshRepo_PointsAtEnable(t *testing.T) {
 		t.Errorf("expected hint pointing at 'entire enable', got stderr: %s", stderr.String())
 	}
 }
+
+func TestPromptCheckpointSync_NonInteractive(t *testing.T) {
+	t.Parallel()
+	// --yes mode should print the notice without prompting.
+	var buf bytes.Buffer
+	opts := EnableOptions{Yes: true}
+	err := promptCheckpointSync(&buf, &opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "Checkpoints will sync") {
+		t.Error("notice should mention checkpoint syncing")
+	}
+	if !strings.Contains(out, "--checkpoint-remote") {
+		t.Error("notice should suggest --checkpoint-remote")
+	}
+	if !strings.Contains(out, "sensitive data") {
+		t.Error("notice should mention sensitive data")
+	}
+	if !strings.Contains(out, "best-effort") {
+		t.Error("notice should mention best-effort redaction")
+	}
+	// opts should remain unchanged (defaults)
+	if opts.SkipPushSessions {
+		t.Error("SkipPushSessions should not be set in --yes mode")
+	}
+	if opts.CheckpointRemote != "" {
+		t.Error("CheckpointRemote should not be set in --yes mode")
+	}
+}
+
+func TestApplyCheckpointSyncChoice_ThisRemote(t *testing.T) {
+	t.Parallel()
+	opts := EnableOptions{}
+	err := applyCheckpointSyncChoice(checkpointSyncThisRemote, &opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts.SkipPushSessions {
+		t.Error("SkipPushSessions should not be set for this-remote")
+	}
+	if opts.CheckpointRemote != "" {
+		t.Error("CheckpointRemote should not be set for this-remote")
+	}
+}
+
+func TestApplyCheckpointSyncChoice_Local(t *testing.T) {
+	t.Parallel()
+	opts := EnableOptions{}
+	err := applyCheckpointSyncChoice(checkpointSyncLocal, &opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !opts.SkipPushSessions {
+		t.Error("SkipPushSessions should be set for local-only")
+	}
+	if opts.CheckpointRemote != "" {
+		t.Error("CheckpointRemote should not be set for local-only")
+	}
+}
+
+func TestApplyCheckpointSyncChoice_SeparateRepo(t *testing.T) {
+	t.Parallel()
+	opts := EnableOptions{}
+	err := applyCheckpointSyncChoice("github:myorg/private-checkpoints", &opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts.CheckpointRemote != "github:myorg/private-checkpoints" {
+		t.Errorf("expected CheckpointRemote to be set, got %q", opts.CheckpointRemote)
+	}
+	if opts.SkipPushSessions {
+		t.Error("SkipPushSessions should not be set for separate repo")
+	}
+}
+
+func TestApplyCheckpointSyncChoice_InvalidRepo(t *testing.T) {
+	t.Parallel()
+	opts := EnableOptions{}
+	err := applyCheckpointSyncChoice("not-valid", &opts)
+	if err == nil {
+		t.Fatal("expected error for invalid repo format")
+	}
+	if !strings.Contains(err.Error(), "invalid checkpoint repo") {
+		t.Errorf("expected 'invalid checkpoint repo' in error, got: %v", err)
+	}
+}
+
+func TestApplyCheckpointSyncChoice_UnsupportedProvider(t *testing.T) {
+	t.Parallel()
+	opts := EnableOptions{}
+	err := applyCheckpointSyncChoice("gitlab:org/repo", &opts)
+	if err == nil {
+		t.Fatal("expected error for unsupported provider")
+	}
+	if !strings.Contains(err.Error(), "unsupported provider") {
+		t.Errorf("expected 'unsupported provider' in error, got: %v", err)
+	}
+}
+
+func TestCheckpointSyncFooter_Content(t *testing.T) {
+	t.Parallel()
+	if !strings.Contains(checkpointSyncFooter, "sensitive data") {
+		t.Error("footer should mention sensitive data")
+	}
+	if !strings.Contains(checkpointSyncFooter, "best-effort") {
+		t.Error("footer should mention best-effort redaction")
+	}
+}
