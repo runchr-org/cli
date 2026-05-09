@@ -118,9 +118,10 @@ func (a *PiAgent) ParseHookEvent(ctx context.Context, hookName string, stdin io.
 		if sessionID == "" {
 			sessionID = readCachedSessionID(ctx)
 		}
-		// Capture the Pi JSONL into <repo>/.entire/tmp/<id>.json so the
+		// Capture the Pi JSONL into <repo>/.entire/tmp/pi/<id>.json so the
 		// strategy has a stable transcript reference even if the user later
-		// deletes Pi sessions.
+		// deletes Pi sessions. The pi/ subdir avoids colliding with paths
+		// other agents (or test harnesses) stage under .entire/tmp/.
 		sessionRef := captureTranscript(ctx, sessionID, payload.SessionFile)
 		return &agent.Event{
 			Type:       agent.TurnEnd,
@@ -205,9 +206,11 @@ func clearCachedSessionID(ctx context.Context) {
 	_ = os.Remove(filepath.Join(dir, activeSessionFile))
 }
 
-// captureTranscript copies the Pi JSONL session file to <repo>/.entire/tmp/<id>.json
-// so Entire has a stable transcript reference. Returns the path to the cached
-// file, or "" if either input is missing.
+// captureTranscript copies the Pi JSONL session file to
+// <repo>/.entire/tmp/pi/<id>.json so Entire has a stable transcript
+// reference. Returns the path to the cached file, or "" if either input is
+// missing. The pi/ namespace under .entire/tmp/ is intentional — see
+// GetSessionDir / piSessionSubdir for the rationale.
 func captureTranscript(ctx context.Context, sessionID, piSessionFile string) string {
 	if sessionID == "" || piSessionFile == "" {
 		return ""

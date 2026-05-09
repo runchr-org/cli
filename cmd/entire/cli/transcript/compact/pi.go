@@ -1,11 +1,12 @@
 package compact
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent/pi/pijsonl"
 )
 
 // --- pi format support ---
@@ -20,17 +21,11 @@ import (
 // active branch (root → most-recent message) so abandoned tool calls don't
 // pollute the compact transcript.
 //
-// Ported from github.com/entireio/external-agents/agents/entire-agent-pi
-// (internal/pi/compact.go) so the in-tree built-in agent and the external
-// plugin produce byte-identical compact transcripts.
+// Parsing primitives (Entry/Message/ContentItem types, ResolveActiveBranch,
+// SkipLines, NewScanner) are shared with the pi agent package via
+// cmd/entire/cli/agent/pi/pijsonl so a fix applied here also lands there.
 
 const (
-	piEntryTypeMessage    = "message"
-	piEntryTypeSession    = "session"
-	piRoleUser            = "user"
-	piRoleAssistant       = "assistant"
-	piRoleToolResult      = "toolResult"
-	piContentTypeText     = "text"
 	piToolResultStatusOK  = "success"
 	piToolResultStatusErr = "error"
 )
@@ -43,18 +38,10 @@ var piToolNameMap = map[string]string{
 	"write": "Write",
 }
 
-const piMaxScannerLine = 1 << 20
-
-func piNewScanner(data []byte) *bufio.Scanner {
-	s := bufio.NewScanner(bytes.NewReader(data))
-	s.Buffer(make([]byte, 0, piMaxScannerLine), piMaxScannerLine)
-	return s
-}
-
 // isPiFormat reports whether content looks like a Pi session JSONL file.
 // Anchored on the persisted session header that pi writes as the first line.
 func isPiFormat(content []byte) bool {
-	scanner := piNewScanner(content)
+	scanner := pijsonl.NewScanner(content)
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
@@ -68,39 +55,9 @@ func isPiFormat(content []byte) bool {
 			return false
 		}
 		// Pi auto-migrates v1/v2 to v3 on load; accept any positive version.
-		return probe.Type == piEntryTypeSession && probe.Version > 0
+		return probe.Type == "session" && probe.Version > 0
 	}
 	return false
-}
-
-type piMessageEntry struct {
-	Type      string    `json:"type"`
-	ID        string    `json:"id"`
-	Timestamp string    `json:"timestamp"`
-	Message   piMessage `json:"message"`
-}
-
-type piMessage struct {
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content"`
-	Usage      *piMsgUsage     `json:"usage,omitempty"`
-	StopReason string          `json:"stopReason,omitempty"`
-	ToolCallID string          `json:"toolCallId,omitempty"`
-	ToolName   string          `json:"toolName,omitempty"`
-	IsError    bool            `json:"isError,omitempty"`
-}
-
-type piMsgUsage struct {
-	Input  int `json:"input"`
-	Output int `json:"output"`
-}
-
-type piContentItem struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
 }
 
 // --- output structures (compact format) ---
@@ -130,30 +87,36 @@ type piCompactToolResult struct {
 // compactPi converts a Pi JSONL transcript into the Entire compact format.
 //
 // opts.StartLine is treated as a JSONL line offset.
+//
+// IMPORTANT: active-branch resolution and tool-result collection BOTH run on
+// the original (untruncated) content. A truncated buffer breaks parentId
+// chains and toolCallId references, which would let abandoned-branch entries
+// and orphaned tool results leak into the compact output.
 func compactPi(content []byte, opts MetadataFields) ([]byte, error) {
-	if opts.StartLine > 0 {
-		content = piSkipLines(content, opts.StartLine)
-		if content == nil {
-			return []byte{}, nil
-		}
-	}
-
-	active := piResolveActiveBranch(content)
+	active := pijsonl.ResolveActiveBranch(content)
 	results, err := piCollectToolResults(content, active)
 	if err != nil {
 		return nil, err
 	}
 
+	emit := content
+	if opts.StartLine > 0 {
+		emit = pijsonl.SkipLines(content, opts.StartLine)
+		if emit == nil {
+			return []byte{}, nil
+		}
+	}
+
 	base := newTranscriptLine(opts)
 	var out []byte
 
-	scanner := piNewScanner(content)
+	scanner := pijsonl.NewScanner(emit)
 	for scanner.Scan() {
-		var entry piMessageEntry
+		var entry pijsonl.Entry
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
-		if entry.Type != piEntryTypeMessage {
+		if entry.Type != pijsonl.EntryTypeMessage {
 			continue
 		}
 		if active != nil && !active[entry.ID] {
@@ -161,7 +124,7 @@ func compactPi(content []byte, opts MetadataFields) ([]byte, error) {
 		}
 
 		switch entry.Message.Role {
-		case piRoleUser:
+		case pijsonl.RoleUser:
 			blocks := piEmitUserContent(entry.Message.Content)
 			if len(blocks) == 0 {
 				continue
@@ -171,12 +134,12 @@ func compactPi(content []byte, opts MetadataFields) ([]byte, error) {
 				return nil, fmt.Errorf("marshal pi user content: %w", err)
 			}
 			line := base
-			line.Type = piRoleUser
+			line.Type = pijsonl.RoleUser
 			line.TS = piTimestampJSON(entry.Timestamp)
 			line.Content = contentJSON
 			appendLine(&out, line)
 
-		case piRoleAssistant:
+		case pijsonl.RoleAssistant:
 			blocks := piEmitAssistantContent(entry.Message.Content, results)
 			if len(blocks) == 0 {
 				continue
@@ -186,7 +149,7 @@ func compactPi(content []byte, opts MetadataFields) ([]byte, error) {
 				return nil, fmt.Errorf("marshal pi assistant content: %w", err)
 			}
 			line := base
-			line.Type = piRoleAssistant
+			line.Type = pijsonl.RoleAssistant
 			line.TS = piTimestampJSON(entry.Timestamp)
 			line.ID = entry.ID
 			line.Content = contentJSON
@@ -206,16 +169,16 @@ func compactPi(content []byte, opts MetadataFields) ([]byte, error) {
 // piEmitUserContent decodes a Pi user message's content (string or block array)
 // into compact user blocks.
 func piEmitUserContent(raw json.RawMessage) []piCompactUserBlock {
-	if text := piDecodeString(raw); text != "" {
+	if text := pijsonl.DecodeStringContent(raw); text != "" {
 		return []piCompactUserBlock{{Text: text}}
 	}
-	var items []piContentItem
+	var items []pijsonl.ContentItem
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil
 	}
 	blocks := make([]piCompactUserBlock, 0, len(items))
 	for _, item := range items {
-		if item.Type == piContentTypeText && item.Text != "" {
+		if item.Type == pijsonl.ContentTypeText && item.Text != "" {
 			blocks = append(blocks, piCompactUserBlock{Text: item.Text})
 		}
 	}
@@ -226,20 +189,20 @@ func piEmitUserContent(raw json.RawMessage) []piCompactUserBlock {
 // compact assistant blocks (text + tool_use). Tool results are spliced in
 // from `results` keyed by toolCallID.
 func piEmitAssistantContent(raw json.RawMessage, results map[string]piCompactToolResult) []any {
-	if text := piDecodeString(raw); text != "" {
-		return []any{piCompactAssistantTextBlock{Type: piContentTypeText, Text: text}}
+	if text := pijsonl.DecodeStringContent(raw); text != "" {
+		return []any{piCompactAssistantTextBlock{Type: pijsonl.ContentTypeText, Text: text}}
 	}
-	var items []piContentItem
+	var items []pijsonl.ContentItem
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil
 	}
 	blocks := make([]any, 0, len(items))
 	for _, item := range items {
 		switch item.Type {
-		case piContentTypeText:
+		case pijsonl.ContentTypeText:
 			if item.Text != "" {
 				blocks = append(blocks, piCompactAssistantTextBlock{
-					Type: piContentTypeText,
+					Type: pijsonl.ContentTypeText,
 					Text: item.Text,
 				})
 			}
@@ -260,16 +223,17 @@ func piEmitAssistantContent(raw json.RawMessage, results map[string]piCompactToo
 }
 
 // piCollectToolResults walks the transcript and returns a map of tool-call id
-// to spliceable result. Branch-aware.
+// to spliceable result. Branch-aware. Pass FULL transcript bytes — splicing
+// requires resolving toolCallIds across the whole tree.
 func piCollectToolResults(data []byte, active map[string]bool) (map[string]piCompactToolResult, error) {
 	results := map[string]piCompactToolResult{}
-	scanner := piNewScanner(data)
+	scanner := pijsonl.NewScanner(data)
 	for scanner.Scan() {
-		var entry piMessageEntry
+		var entry pijsonl.Entry
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
-		if entry.Type != piEntryTypeMessage || entry.Message.Role != piRoleToolResult {
+		if entry.Type != pijsonl.EntryTypeMessage || entry.Message.Role != pijsonl.RoleToolResult {
 			continue
 		}
 		if active != nil && !active[entry.ID] {
@@ -287,69 +251,6 @@ func piCollectToolResults(data []byte, active map[string]bool) (map[string]piCom
 		return nil, fmt.Errorf("scan pi tool results: %w", err)
 	}
 	return results, nil
-}
-
-// piResolveActiveBranch returns the set of message IDs on the active branch
-// (root → most-recent message). Returns nil if the transcript has no tree
-// references — caller treats nil as "all entries are active".
-func piResolveActiveBranch(data []byte) map[string]bool {
-	type node struct {
-		Type     string  `json:"type"`
-		ID       string  `json:"id"`
-		ParentID *string `json:"parentId"`
-	}
-	var lastMessageID string
-	hasTree := false
-	parentOf := make(map[string]string)
-
-	scanner := piNewScanner(data)
-	for scanner.Scan() {
-		var n node
-		if err := json.Unmarshal(scanner.Bytes(), &n); err != nil || n.ID == "" {
-			continue
-		}
-		if n.ParentID != nil {
-			parentOf[n.ID] = *n.ParentID
-			if *n.ParentID != "" {
-				hasTree = true
-			}
-		}
-		if n.Type == piEntryTypeMessage {
-			lastMessageID = n.ID
-		}
-	}
-	if !hasTree || lastMessageID == "" {
-		return nil
-	}
-	active := make(map[string]bool)
-	for cur := lastMessageID; cur != ""; {
-		if active[cur] {
-			break // cycle protection
-		}
-		active[cur] = true
-		parent, ok := parentOf[cur]
-		if !ok {
-			break
-		}
-		cur = parent
-	}
-	return active
-}
-
-// piSkipLines removes the first n newline-terminated lines from data.
-func piSkipLines(data []byte, n int) []byte {
-	if n <= 0 {
-		return data
-	}
-	off := 0
-	for i := 0; i < n && off < len(data); i++ {
-		idx := bytes.IndexByte(data[off:], '\n')
-		if idx < 0 {
-			return nil
-		}
-		off += idx + 1
-	}
-	return data[off:]
 }
 
 func piNormalizeToolName(name string) string {
@@ -370,26 +271,15 @@ func piDecodeArguments(raw json.RawMessage) any {
 	return decoded
 }
 
-func piDecodeString(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return ""
-	}
-	return s
-}
-
 func piDecodeResultOutput(raw json.RawMessage) string {
-	if text := piDecodeString(raw); text != "" {
+	if text := pijsonl.DecodeStringContent(raw); text != "" {
 		return text
 	}
-	var items []piContentItem
+	var items []pijsonl.ContentItem
 	if err := json.Unmarshal(raw, &items); err == nil {
 		texts := make([]string, 0, len(items))
 		for _, item := range items {
-			if item.Type == piContentTypeText && item.Text != "" {
+			if item.Type == pijsonl.ContentTypeText && item.Text != "" {
 				texts = append(texts, item.Text)
 			}
 		}

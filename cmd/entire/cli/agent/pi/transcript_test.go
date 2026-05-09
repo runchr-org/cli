@@ -224,57 +224,10 @@ func TestCalculateTokenUsage_FlatTranscript(t *testing.T) {
 	}
 }
 
-// --- resolveActiveBranch ---
-
-func TestResolveActiveBranch_LinearChain(t *testing.T) {
-	t.Parallel()
-	data := []byte(`{"type":"session","id":"s1"}
-{"type":"model_change","id":"mc1","parentId":null}
-{"type":"message","id":"m1","parentId":"mc1"}
-{"type":"message","id":"m2","parentId":"m1"}
-{"type":"message","id":"m3","parentId":"m2"}
-`)
-	active := resolveActiveBranch(data)
-	for _, id := range []string{"m3", "m2", "m1", "mc1"} {
-		if !active[id] {
-			t.Errorf("expected %q in active set", id)
-		}
-	}
-}
-
-func TestResolveActiveBranch_FlatReturnsNil(t *testing.T) {
-	t.Parallel()
-	if resolveActiveBranch([]byte(testFlatSessionJSONL)) != nil {
-		t.Error("expected nil for flat transcript")
-	}
-}
-
-func TestResolveActiveBranch_TwoBranchesPicksLast(t *testing.T) {
-	t.Parallel()
-	data := []byte(`{"type":"message","id":"a","parentId":"root"}
-{"type":"message","id":"root","parentId":null}
-{"type":"message","id":"b","parentId":"a"}
-{"type":"message","id":"c","parentId":"a"}
-`)
-	active := resolveActiveBranch(data)
-	if !active["c"] || !active["a"] {
-		t.Errorf("expected c+a in active, got %v", active)
-	}
-	if active["b"] {
-		t.Error("b (abandoned branch) should not be in active set")
-	}
-}
-
-func TestResolveActiveBranch_CycleProtection(t *testing.T) {
-	t.Parallel()
-	data := []byte(`{"type":"message","id":"a","parentId":"b"}
-{"type":"message","id":"b","parentId":"a"}
-`)
-	active := resolveActiveBranch(data)
-	if !active["a"] || !active["b"] {
-		t.Errorf("active = %v, want both a and b (cycle still terminates)", active)
-	}
-}
+// Note: pijsonl.ResolveActiveBranch unit tests live in the pijsonl package
+// itself; the in-tree tests here verify the agent surface (CalculateTokenUsage,
+// ExtractModifiedFilesFromOffset, ExtractPrompts) honours active-branch
+// filtering end-to-end.
 
 // --- ReadSession / WriteSession ---
 

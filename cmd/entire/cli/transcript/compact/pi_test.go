@@ -95,6 +95,31 @@ func TestCompact_Pi_FlatTranscriptNoTreeFiltering(t *testing.T) {
 	assertJSONLines(t, result, expected)
 }
 
+// TestCompact_Pi_StartLineDoesNotLeakAbandonedBranches is a regression test
+// for a bug found in review: an earlier version of compactPi truncated the
+// content via SkipLines BEFORE resolving the active branch. When StartLine
+// skipped past fork-point entries, ResolveActiveBranch ran on a disconnected
+// tree, returned nil, and the loop fell back to "all entries are active" —
+// letting abandoned-branch tool calls leak into the compact transcript.
+func TestCompact_Pi_StartLineDoesNotLeakAbandonedBranches(t *testing.T) {
+	t.Parallel()
+	// Same shape as piTestBranchingJSONL, but bump StartLine past the
+	// session header + model_change + m1 (fork point) — so that, on the
+	// truncated buffer, ResolveActiveBranch cannot anchor to a root.
+	opts := MetadataFields{Agent: "pi", CLIVersion: "0.5.1", StartLine: 3}
+	result, err := Compact(redact.AlreadyRedacted([]byte(piTestBranchingJSONL)), opts)
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	got := string(result)
+	if strings.Contains(got, "old.txt") || strings.Contains(got, "Created old.txt") {
+		t.Errorf("abandoned-branch leak: compact contains old.txt entries:\n%s", got)
+	}
+	if !strings.Contains(got, "new.txt") {
+		t.Errorf("active-branch dropped: compact missing new.txt entries:\n%s", got)
+	}
+}
+
 func TestCompact_Pi_StartLine(t *testing.T) {
 	t.Parallel()
 	// Skip header + model_change + first user → start scanning from m2.

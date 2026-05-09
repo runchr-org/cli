@@ -131,3 +131,43 @@ func TestAreHooksInstalled_RejectsForeignFile(t *testing.T) {
 		t.Error("should not claim a non-Entire file")
 	}
 }
+
+func TestInstallHooks_RefusesForeignFileWithoutForce(t *testing.T) {
+	// User has their own extension at the same path. Without --force we must
+	// not clobber it. With --force we replace it.
+	dir := t.TempDir()
+	t.Chdir(dir)
+	path := filepath.Join(dir, ".pi", "extensions", "entire", "index.ts")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userContent := []byte("// user's own extension\nconsole.log('mine');\n")
+	if err := os.WriteFile(path, userContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without force: should refuse, leave file untouched.
+	_, err := (&PiAgent{}).InstallHooks(context.Background(), false, false)
+	if err == nil {
+		t.Fatal("expected error when foreign file exists and force=false")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(userContent) {
+		t.Errorf("foreign file was modified: %q", got)
+	}
+
+	// With force: should overwrite.
+	if _, err := (&PiAgent{}).InstallHooks(context.Background(), false, true); err != nil {
+		t.Fatalf("force install failed: %v", err)
+	}
+	got, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), entireMarker) {
+		t.Error("force install should write Entire-owned file")
+	}
+}

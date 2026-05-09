@@ -15,12 +15,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
@@ -118,13 +120,24 @@ const piSessionSubdir = "pi"
 // hook event; on agent_end we copy the file into
 // <repo>/.entire/tmp/pi/<id>.json so condensation can find it
 // deterministically and survive Pi sessions being deleted by the user.
+//
+// When repoPath is empty we resolve the worktree root (so callers running
+// from a subdirectory still get the repo-local staging path) and only fall
+// back to os.Getwd() if no git repo is reachable.
 func (a *PiAgent) GetSessionDir(repoPath string) (string, error) {
 	if repoPath == "" {
-		var err error
-		//nolint:forbidigo // CLI-driven callers pass empty when cwd is meaningful
-		repoPath, err = os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("resolve cwd for pi session dir: %w", err)
+		root, err := paths.WorktreeRoot(context.Background())
+		if err == nil {
+			repoPath = root
+		} else {
+			logging.Debug(context.Background(), "pi: GetSessionDir falling back to cwd",
+				slog.String("err", err.Error()))
+			//nolint:forbidigo // last-resort fallback when no git repo (tests outside repos)
+			wd, wdErr := os.Getwd()
+			if wdErr != nil {
+				return "", fmt.Errorf("resolve repo root or cwd for pi session dir: %w", wdErr)
+			}
+			repoPath = wd
 		}
 	}
 	return filepath.Join(repoPath, paths.EntireTmpDir, piSessionSubdir), nil

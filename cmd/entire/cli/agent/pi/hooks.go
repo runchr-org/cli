@@ -62,7 +62,10 @@ func renderExtension(localDev bool) string {
 // InstallHooks writes the Entire pi extension to .pi/extensions/entire/index.ts.
 // Returns 1 if the extension was written, 0 if already up-to-date (idempotent).
 // If the file exists but content differs (e.g., localDev vs production), it is
-// rewritten.
+// rewritten as long as it is recognisable as Entire-owned (contains the
+// marker). A foreign file at the same path is left untouched unless force is
+// true — this protects user-authored extensions that happen to live at
+// .pi/extensions/entire/index.ts.
 func (a *PiAgent) InstallHooks(ctx context.Context, localDev bool, force bool) (int, error) {
 	path, err := extensionPath(ctx)
 	if err != nil {
@@ -72,10 +75,12 @@ func (a *PiAgent) InstallHooks(ctx context.Context, localDev bool, force bool) (
 
 	if !force {
 		//nolint:gosec // path constructed from validated repo root
-		if existing, readErr := os.ReadFile(path); readErr == nil {
-			if string(existing) == content {
-				return 0, nil
-			}
+		existing, readErr := os.ReadFile(path)
+		switch {
+		case readErr == nil && string(existing) == content:
+			return 0, nil // already up-to-date
+		case readErr == nil && !strings.Contains(string(existing), entireMarker):
+			return 0, fmt.Errorf("refusing to overwrite foreign file at %s; remove it or pass --force", path)
 		}
 	}
 
