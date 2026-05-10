@@ -136,6 +136,8 @@ func runTrailWatch(cmd *cobra.Command, number int, jsonOutput, showPings, once b
 		}
 
 		switch closeReason {
+		case streamCloseTerminal:
+			return err
 		case streamCloseDeleted, streamCloseDone:
 			return nil
 		case streamCloseReconnect:
@@ -175,7 +177,28 @@ const (
 	streamCloseDeleted                            // server `event: deleted`
 	streamCloseError                              // server `event: error`
 	streamCloseDone                               // local --once / EOF after replay
+	streamCloseTerminal                           // non-recoverable HTTP status (401/403/404/410)
 )
+
+// terminalHTTPStatuses are HTTP response codes for which retrying the SSE
+// stream cannot succeed: auth failures (401/403) and resource-not-found-style
+// errors (404/410). 429 is intentionally *not* terminal — it's a transient
+// rate-limit signal that should back off and retry.
+var terminalHTTPStatuses = [...]int{
+	http.StatusUnauthorized, // 401
+	http.StatusForbidden,    // 403
+	http.StatusNotFound,     // 404
+	http.StatusGone,         // 410
+}
+
+func isTerminalHTTPError(err error) bool {
+	for _, code := range terminalHTTPStatuses {
+		if api.IsHTTPErrorStatus(err, code) {
+			return true
+		}
+	}
+	return false
+}
 
 // streamOnce opens a single SSE connection, prints events until it closes for
 // any reason, and returns the close reason plus the last `id:` observed (so
@@ -209,10 +232,10 @@ func streamOnce(
 	defer resp.Body.Close()
 
 	if err := checkTrailResponse(resp); err != nil {
-		// 401/403/429/etc. — surface and don't auto-reconnect on auth errors.
-		if api.IsHTTPErrorStatus(err, http.StatusUnauthorized) ||
-			api.IsHTTPErrorStatus(err, http.StatusForbidden) {
-			return streamCloseDone, "", err
+		// Terminal: surface the error and don't reconnect. 429 deliberately
+		// falls through to streamCloseTransport so the caller backs off.
+		if isTerminalHTTPError(err) {
+			return streamCloseTerminal, "", err
 		}
 		return streamCloseTransport, "", err
 	}

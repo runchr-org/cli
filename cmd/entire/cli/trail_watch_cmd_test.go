@@ -128,6 +128,65 @@ func TestStreamOnce_ReconnectEvent(t *testing.T) {
 	}
 }
 
+func TestStreamOnce_TerminalHTTPStatusesDoNotReconnect(t *testing.T) {
+	cases := []struct {
+		name string
+		code int
+	}{
+		{"unauthorized", http.StatusUnauthorized},
+		{"forbidden", http.StatusForbidden},
+		{"not_found", http.StatusNotFound},
+		{"gone", http.StatusGone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.code)
+				_, _ = fmt.Fprintf(w, "{\"error\":\"%s\"}", http.StatusText(tc.code))
+			}))
+			defer srv.Close()
+
+			t.Setenv(api.BaseURLEnvVar, srv.URL)
+			client := api.NewClient("tok")
+
+			var stdout, stderr bytes.Buffer
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			reason, _, err := streamOnce(ctx, client, "/stream", "", false, false, false, false, &stdout, &stderr)
+			if reason != streamCloseTerminal {
+				t.Errorf("reason = %d, want streamCloseTerminal for %d", reason, tc.code)
+			}
+			if err == nil {
+				t.Errorf("want non-nil error for HTTP %d", tc.code)
+			}
+		})
+	}
+}
+
+func TestStreamOnce_TooManyRequestsIsRecoverable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = fmt.Fprint(w, `{"error":"rate limited"}`)
+	}))
+	defer srv.Close()
+
+	t.Setenv(api.BaseURLEnvVar, srv.URL)
+	client := api.NewClient("tok")
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	reason, _, err := streamOnce(ctx, client, "/stream", "", false, false, false, false, &stdout, &stderr)
+	if reason != streamCloseTransport {
+		t.Errorf("reason = %d, want streamCloseTransport (429 should be retryable)", reason)
+	}
+	if err == nil {
+		t.Errorf("want non-nil error so caller can log the backoff reason")
+	}
+}
+
 func TestStreamOnce_SendsLastEventIDHeader(t *testing.T) {
 	frames := []string{
 		"event: deleted\ndata: {}\n\n",
