@@ -33,3 +33,7 @@ jobs:
         uses: github/codeql-action/analyze@68bde559dea0fdcac2102bfdf6230c5f70eb485e # v4.35.4
         with:
           category: /language:actions
+          # Fork PRs receive a read-only GITHUB_TOKEN, so SARIF upload to the
+          # code-scanning API would fail. Analyze still runs and surfaces
+          # findings in the job log; same-repo PRs upload as normal.
+          upload: ${{ github.event.pull_request.head.repo.full_name == github.repository && 'always' || 'never' }}
