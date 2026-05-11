@@ -560,8 +560,8 @@ func (s *V2GitStore) RotateCurrentGenerationIfNeeded(ctx context.Context, maxChe
 	}
 
 	// The commit objects above are not reachable from the v2 refs yet. Record
-	// the pending publication before moving refs so pre-push can recover the
-	// intended rotation if the process stops after either ref update below.
+	// the pending publication before moving refs. Pre-push only publishes it if
+	// local /full/current descends from the reset root below.
 	if err := s.AppendPendingFullGenerationPublication(ctx, publication); err != nil {
 		return "", false, fmt.Errorf("rotation: failed to record pending full rotation: %w", err)
 	}
