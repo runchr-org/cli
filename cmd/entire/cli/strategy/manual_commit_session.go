@@ -134,45 +134,59 @@ func countWarnableStaleEndedSessions(repo *git.Repository, sessions []*SessionSt
 
 // findSessionsForWorktree finds all sessions for the given worktree path.
 //
-// When invoked from a linked worktree (where the current worktree differs from
-// the main worktree resolved via git --git-common-dir), sessions registered
-// against the main worktree are also returned. Agent-managed worktrees — like
-// Claude Code's .claude/worktrees/<branch> feature — spawn a sub-process that
-// inherits a session whose UserPromptSubmit fired in the main worktree; the
-// hook handler must still be able to find that session when prepare-commit-msg
-// / post-commit / etc. run from inside the linked worktree at commit time.
+// When invoked from a linked worktree and no session is registered against
+// that worktree, the lookup falls back to sessions registered against the
+// main worktree. Agent-managed worktrees — like Claude Code's
+// .claude/worktrees/<branch> feature — spawn a sub-process that inherits a
+// session whose UserPromptSubmit fired in the main worktree; the hook handler
+// must still be able to find that session when prepare-commit-msg /
+// post-commit / etc. run from inside the linked worktree at commit time.
 //
-// Sessions registered against unrelated linked worktrees (e.g. a sibling
-// worktree) are never returned: the widening is one-directional (linked →
-// main), so commits in worktree A don't pick up sessions from worktree B.
-// From the main worktree, behavior is unchanged: only sessions whose
-// WorktreePath equals the main path are returned.
+// The fallback is one-directional and only kicks in when the linked worktree
+// has no session of its own. This preserves three properties:
+//
+//  1. Linked-worktree sessions are never crowded out by main: if you ran
+//     `git worktree add ../wt && cd ../wt && agent`, your commits in `wt`
+//     link to the wt session, not also to some unrelated main session.
+//  2. Sibling linked worktrees never bleed into each other: a commit in
+//     worktree A never picks up a session registered against worktree B.
+//  3. Main-worktree lookups are unchanged: commits on main never adopt a
+//     session registered against a linked worktree.
 func (s *ManualCommitStrategy) findSessionsForWorktree(ctx context.Context, worktreePath string) ([]*SessionState, error) {
 	allStates, err := s.listAllSessionStates(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// Resolve the main worktree path to decide whether to widen the match.
-	// Failure to resolve degrades gracefully to exact match — i.e. the prior
-	// behavior — so this fallback can't make any caller worse off.
+	var localMatches []*SessionState
+	for _, state := range allStates {
+		if state.WorktreePath == worktreePath {
+			localMatches = append(localMatches, state)
+		}
+	}
+	if len(localMatches) > 0 {
+		return localMatches, nil
+	}
+
+	// No local match. Fall back to main-worktree sessions only when we're
+	// actually in a different (linked) worktree. Failure to resolve the main
+	// path degrades gracefully to strict-equal — the caller is no worse off
+	// than before this fallback existed.
 	mainPath := ""
 	if p, mainErr := paths.MainWorktreeRoot(ctx); mainErr == nil {
 		mainPath = p
 	}
-	widenToMain := mainPath != "" && mainPath != worktreePath
+	if mainPath == "" || mainPath == worktreePath {
+		return nil, nil
+	}
 
-	var matching []*SessionState
+	var mainMatches []*SessionState
 	for _, state := range allStates {
-		if state.WorktreePath == worktreePath {
-			matching = append(matching, state)
-			continue
-		}
-		if widenToMain && state.WorktreePath == mainPath {
-			matching = append(matching, state)
+		if state.WorktreePath == mainPath {
+			mainMatches = append(mainMatches, state)
 		}
 	}
-	return matching, nil
+	return mainMatches, nil
 }
 
 type rewritePair struct {
