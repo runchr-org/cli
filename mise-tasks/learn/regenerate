@@ -8,19 +8,25 @@
 # "real" tour from a fresh checkout — without it, `entire learn` ships
 # the markdown that was last committed.
 #
-# Atomic write: the regen output goes to a temp file first and only
-# replaces embedded/learn.md after validation succeeds. The previous shell-
-# redirect form truncated the destination *before* the agent finished,
-# so a transient agent failure left the repo with an empty stub.
-# Validation also catches the "agent returned a partial response that
-# happens to have one ## header" failure mode the CI grep alone can't.
+# Atomic write: the regen output goes to a temp file *in the same
+# directory as the target* first and only replaces embedded/learn.md
+# after validation succeeds. Same-directory rename is a single
+# inode swap, so an interrupted run can't leave a half-written
+# learn.md behind. The earlier mktemp-in-/tmp form degraded to
+# copy+unlink across filesystems and lost that guarantee.
+#
+# Validation catches the "agent returned a partial response that
+# happens to have one ## header" failure mode the previous CI grep
+# alone couldn't.
 #
 # Requires `claude` (or another TextGenerator-capable agent) on PATH and
 # the corresponding auth (typically ANTHROPIC_API_KEY) in the environment.
 
 set -e
 
-tmp=$(mktemp)
+target=cmd/entire/cli/learn/embedded/learn.md
+target_dir=$(dirname "$target")
+tmp=$(mktemp "$target_dir/learn.XXXXXX.md")
 trap 'rm -f "$tmp"' EXIT
 
 go run ./cmd/entire learn --regenerate > "$tmp"
@@ -38,4 +44,4 @@ if ! grep -q 'https://docs.entire.io/cli' "$tmp"; then
   exit 1
 fi
 
-mv "$tmp" cmd/entire/cli/learn/embedded/learn.md
+mv "$tmp" "$target"
