@@ -134,7 +134,7 @@ func regenerateFromAgent(ctx context.Context, root *cobra.Command, opts Options,
 	}
 	rendered, err := choice.Generator.GenerateText(ctx, prompt, opts.SummarizeModel)
 	if err != nil {
-		return nil, fmt.Errorf("generate tour with %s: %w", choice.DisplayName, err)
+		return nil, fmt.Errorf("regenerate embedded learn with %s: %w", choice.DisplayName, err)
 	}
 	return &Result{
 		Markdown:    stripControlSequences(rendered),

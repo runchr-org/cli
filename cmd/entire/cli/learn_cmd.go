@@ -67,7 +67,25 @@ Examples:
 	return cmd
 }
 
+// regenerateRequiresRedirectedStdout is the message shown when a user
+// runs `entire learn --regenerate` interactively. The flag's contract is
+// "raw markdown to stdout" — landing that in a TTY is a usability
+// pitfall (raw markdown scrolls past after a cleared spinner with no
+// way to recapture). Force the user toward the supported invocations
+// so the output ends up where it's useful.
+const regenerateRequiresRedirectedStdout = `entire learn --regenerate writes raw markdown to stdout and is meant to be piped or redirected.
+
+Run via:
+  mise run learn:regenerate
+or:
+  entire learn --regenerate > path/to/file.md`
+
 func executeLearn(ctx context.Context, w io.Writer, root *cobra.Command, regenerateFlag bool) error {
+	if regenerateFlag && interactive.IsTerminalWriter(w) {
+		fmt.Fprintln(w, regenerateRequiresRedirectedStdout)
+		return NewSilentError(errors.New("learn --regenerate requires redirected stdout"))
+	}
+
 	loadedSettings, settingsErr := LoadEntireSettings(ctx)
 	// settings.Load returns a non-nil EntireSettings with default values
 	// even when no settings.json exists, so isSetUp can't be inferred from
@@ -89,24 +107,12 @@ func executeLearn(ctx context.Context, w io.Writer, root *cobra.Command, regener
 		Regenerate:          regenerateFlag,
 	}
 
+	// usedTUI gates the trailing "(rendered by X)" attribution line.
+	// The interactive code path is always a fast embedded-file read
+	// (regenerate-in-TTY was refused above), so no spinner is needed.
 	usedTUI := interactive.IsTerminalWriter(w) && !IsAccessibleMode()
 
-	generate := func(ctx context.Context) (*learn.Result, error) {
-		return runLearnGenerate(ctx, root, opts)
-	}
-
-	var (
-		result   *learn.Result
-		generErr error
-	)
-	if usedTUI && regenerateFlag {
-		result, generErr = runLearnTUI(ctx, w, "Regenerating embedded learn markdown", "This can take a moment.", generate)
-		if errors.Is(generErr, errLearnCancelled) {
-			return nil
-		}
-	} else {
-		result, generErr = generate(ctx)
-	}
+	result, generErr := runLearnGenerate(ctx, root, opts)
 	if generErr != nil {
 		return translateLearnError(w, generErr)
 	}

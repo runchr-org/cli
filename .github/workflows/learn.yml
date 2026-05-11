@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - cmd/entire/cli/learn/embedded/learn.md
+      # embedded.go owns the //go:embed directive — a PR that points it
+      # at a different filename or wraps the embed must re-trigger
+      # validation even if learn.md itself wasn't touched.
+      - cmd/entire/cli/learn/embedded.go
       - .github/workflows/learn.yml
 
 permissions:
