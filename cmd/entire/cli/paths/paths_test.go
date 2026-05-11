@@ -201,7 +201,12 @@ func TestNormalizeMSYSPath(t *testing.T) {
 	}
 }
 
-func TestIsEntireRelPath(t *testing.T) {
+// TestAbsPath_EntirePrefixDetection locks down the input shapes that AbsPath
+// must route through MainWorktreeRoot rather than WorktreeRoot. Look-alikes
+// (".entirefile") and parent-escapes (".entire/../etc/passwd") must NOT match —
+// they would otherwise be silently rebased onto the main repo even though
+// they target a different location.
+func TestAbsPath_EntirePrefixDetection(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
@@ -222,8 +227,8 @@ func TestIsEntireRelPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := isEntireRelPath(tt.in); got != tt.want {
-				t.Errorf("isEntireRelPath(%q) = %v, want %v", tt.in, got, tt.want)
+			if got := IsSubpath(EntireDir, tt.in); got != tt.want {
+				t.Errorf("IsSubpath(%q, %q) = %v, want %v", EntireDir, tt.in, got, tt.want)
 			}
 		})
 	}

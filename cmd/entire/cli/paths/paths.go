@@ -204,7 +204,7 @@ func AbsPath(ctx context.Context, relPath string) (string, error) {
 		return relPath, nil
 	}
 
-	if isEntireRelPath(relPath) {
+	if IsSubpath(EntireDir, relPath) {
 		root, err := MainWorktreeRoot(ctx)
 		if err != nil {
 			return "", err
@@ -218,14 +218,6 @@ func AbsPath(ctx context.Context, relPath string) (string, error) {
 	}
 
 	return filepath.Join(root, relPath), nil
-}
-
-// isEntireRelPath reports whether a relative path refers to the .entire
-// directory or anything under it. Used by AbsPath to anchor .entire/* state
-// at the main worktree root.
-func isEntireRelPath(relPath string) bool {
-	clean := filepath.ToSlash(filepath.Clean(relPath))
-	return clean == EntireDir || strings.HasPrefix(clean, EntireDir+"/")
 }
 
 // IsInfrastructurePath returns true if the path is part of CLI infrastructure
