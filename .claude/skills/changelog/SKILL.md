@@ -16,7 +16,7 @@ The user provides:
 - **Version number** -- e.g., `0.5.3`
 - **Additional PRs** -- optionally, PRs not yet merged that should be included
 
-## Step 0: Regenerate the embedded `entire learn` tour
+## Step 0: Regenerate the embedded `entire learn` markdown
 
 Before bumping the changelog, refresh the markdown that ships inside the
 binary so `entire learn` reflects the live command surface.
@@ -38,7 +38,7 @@ After it runs:
   committed file is the source of truth — re-running regenerate later
   will overwrite hand edits unless you commit them first.
 - Commit the refreshed `learn.md` in the same PR as the CHANGELOG bump so
-  the embedded tour and the release notes ship together.
+  the embedded markdown and the release notes ship together.
 
 Requires `claude` (or another TextGenerator-capable agent) on PATH and the
 corresponding auth (typically `ANTHROPIC_API_KEY`) in the environment.

@@ -2,11 +2,13 @@ package learn
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/spf13/cobra"
 )
 
@@ -18,13 +20,16 @@ import (
 // call would (a) waste work and (b) route the request through StageSetup,
 // which produces the 4-line stub the regen validator rejects.
 //
-// We assert via spies on the two Options callbacks. The Generate call
-// itself is expected to fail (no agent on PATH in the test environment,
-// or the cancelled context aborts before any network), and we don't
-// assert on the error — only on the spies — so the test stays
-// hermetic regardless of which agents happen to be installed.
+// Hermeticity: t.Setenv("PATH", "") so that
+// external.DiscoverAndRegisterAlways doesn't register an
+// entire-agent-* plugin from the host PATH into the package-shared
+// agent registry, and so the built-in agents' CLI-availability checks
+// all return false. ResolveTextGenerator then returns
+// ErrNoTextGenerator deterministically regardless of test machine.
+// Not parallel: t.Setenv is incompatible with t.Parallel.
 func TestGenerate_RegenerateBypassesResolveState(t *testing.T) {
-	t.Parallel()
+	t.Setenv("PATH", "")
+
 	var settingsCalls, agentsCalls atomic.Int32
 	opts := Options{
 		LoadSettings: func(_ context.Context) (bool, bool, error) {
@@ -39,20 +44,10 @@ func TestGenerate_RegenerateBypassesResolveState(t *testing.T) {
 	}
 	root := &cobra.Command{Use: "entire"}
 
-	// Pre-cancel the context so that if ResolveTextGenerator does happen
-	// to find a real agent on the test machine, the GenerateText call
-	// fails fast without hitting the network.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	result, err := Generate(ctx, root, opts)
-	// We expect failure (no agent on PATH or cancelled ctx aborts the
-	// agent call); the assertions below are on the bypass behavior, not
-	// the error. Result+err are bound so errcheck and unparam don't
-	// complain about discarded returns.
-	_ = result
-	_ = err
-
+	_, err := Generate(context.Background(), root, opts)
+	if !errors.Is(err, ErrNoTextGenerator) {
+		t.Fatalf("Generate(Regenerate=true, PATH=\"\") = %v; want ErrNoTextGenerator", err)
+	}
 	if got := settingsCalls.Load(); got != 0 {
 		t.Errorf("LoadSettings called %d time(s); --regenerate must bypass settings load", got)
 	}
@@ -66,15 +61,26 @@ func TestGenerate_RegenerateBypassesResolveState(t *testing.T) {
 // routing stage. This pins the contract on both sides so a future
 // refactor that accidentally bypasses ResolveState for all paths
 // (regression) gets caught.
+//
+// Hermeticity: ResolveState's first step is paths.WorktreeRoot, which
+// walks up from CWD looking for a .git. A test run from a non-git
+// CWD (some CI sandboxes strip the worktree) would short-circuit to
+// StageNotGitRepo before LoadSettings is consulted, masking the
+// bypass we're trying to assert. Stand up an isolated tmp repo and
+// chdir into it so the test is independent of host CWD.
+// Not parallel: t.Chdir is incompatible with t.Parallel.
 func TestGenerate_DefaultPathConsultsResolveState(t *testing.T) {
-	t.Parallel()
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	t.Chdir(tmpDir)
+
 	var settingsCalls atomic.Int32
 	opts := Options{
 		LoadSettings: func(_ context.Context) (bool, bool, error) {
 			settingsCalls.Add(1)
 			// Return enabled=false so ResolveState routes to StageSetup
 			// quickly without trying to enumerate agents or open the
-			// repo.
+			// repo further.
 			return false, false, nil
 		},
 		ListInstalledAgents: func(_ context.Context) []types.AgentName {
