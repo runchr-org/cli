@@ -38,7 +38,7 @@ run = "CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o entire.exe ./cmd/enti
 description = "Cross-compile for Windows arm64"
 run = "CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -o entire-arm64.exe ./cmd/entire/"
 
-# tour:regenerate is implemented as a standalone script under
-# mise-tasks/tour/regenerate — see that file for the full atomic-write
+# learn:regenerate is implemented as a standalone script under
+# mise-tasks/learn/regenerate — see that file for the full atomic-write
 # + validation logic. The mise convention here is "long tasks live as
 # scripts so they're maintainable and testable on their own".

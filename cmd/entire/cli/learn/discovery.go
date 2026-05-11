@@ -1,8 +1,9 @@
-// Package tour powers `entire tour` — a state-aware tour of the
+// Package learn powers `entire learn` — a state-aware tour of the
 // installed CLI, served from a pre-rendered embedded markdown for the
-// default path and from a TextGenerator-capable agent for `--latest`
-// (blog feed digest) and `--regenerate` (release-time refresh).
-package tour
+// default path and from a TextGenerator-capable agent for `--regenerate`
+// (refreshes the committed embedded template; run by the changelog flow
+// before each release).
+package learn
 
 import (
 	"strings"
@@ -12,7 +13,7 @@ import (
 
 // CommandNode is one node in the discovered cobra command tree.
 //
-// The shape mirrors what `entire tour` hands to a TextGenerator: enough
+// The shape mirrors what `entire learn` hands to a TextGenerator: enough
 // detail for the model to write recipes for each capability without being
 // told to invent any specific command name.
 type CommandNode struct {

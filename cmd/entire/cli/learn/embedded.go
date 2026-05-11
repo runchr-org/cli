@@ -1,19 +1,20 @@
-package tour
+package learn
 
 import _ "embed"
 
-// embeddedTour is the pre-rendered workflow tour shipped with the
-// binary. Generated at release time by running `entire tour
-// --regenerate` (which exercises the agent-driven path) and
-// committed alongside the source.
+// embeddedLearn is the pre-rendered workflow tour shipped with the
+// binary. Refreshed during the changelog PR for each release by
+// running `mise run learn:regenerate` (which exercises the
+// agent-driven path) and committed alongside the source.
 //
 // Runtime cost of the regular tour drops from a multi-second agent
 // call to a ~50ms file read + glamour render. The tradeoff is that
-// the tour reflects the CLI surface as of the last release; adding a
-// new top-level command means re-running --regenerate before tagging.
+// the embedded markdown reflects the CLI surface as of the last
+// release; adding a new top-level command means re-running
+// learn:regenerate as part of the next changelog bump.
 //
-//go:embed embedded/tour.md
-var embeddedTour string
+//go:embed embedded/learn.md
+var embeddedLearn string
 
 // firstCaptureTail is appended to the embedded tour when the user is
 // in the first-capture stage (Entire enabled, agent installed, no
@@ -37,7 +38,7 @@ Entire isn't enabled in this repo yet. Run these to set it up:
 - ` + "`entire login`" + ` — (Optional) Sign in for cloud-side checkpoint search.
 - ` + "`entire agent add <agent-name>`" + ` — Install hooks for your agent.
 
-After enabling, re-run ` + "`entire tour`" + ` for the full workflow tour.
+After enabling, re-run ` + "`entire learn`" + ` for the full workflow tour.
 
 https://docs.entire.io/cli`
 
@@ -53,6 +54,6 @@ Entire is enabled here, but no agent hooks are installed yet.
 
 External agents (anything not built in) ship as ` + "`entire-agent-<name>`" + ` binaries on your PATH. See https://github.com/entireio/external-agents.
 
-After installing hooks, re-run ` + "`entire tour`" + ` for the full workflow tour.
+After installing hooks, re-run ` + "`entire learn`" + ` for the full workflow tour.
 
 https://docs.entire.io/cli`

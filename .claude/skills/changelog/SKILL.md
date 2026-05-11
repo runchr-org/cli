@@ -16,6 +16,33 @@ The user provides:
 - **Version number** -- e.g., `0.5.3`
 - **Additional PRs** -- optionally, PRs not yet merged that should be included
 
+## Step 0: Regenerate the embedded `entire learn` tour
+
+Before bumping the changelog, refresh the markdown that ships inside the
+binary so `entire learn` reflects the live command surface.
+
+```bash
+mise run learn:regenerate
+```
+
+This rewrites `cmd/entire/cli/learn/embedded/learn.md` via an agent call.
+The mise task does atomic-write + validation (>=4 `##` headers, docs.entire.io
+footer); a transient agent failure leaves the committed file untouched.
+
+After it runs:
+
+- `git diff cmd/entire/cli/learn/embedded/learn.md` — eyeball the diff.
+  Capability sections, blurbs, and command lists should match what's in
+  this release. Hand-edit the file if you want to refine wording, fix a
+  capability grouping, or correct an out-of-date command line. The
+  committed file is the source of truth — re-running regenerate later
+  will overwrite hand edits unless you commit them first.
+- Commit the refreshed `learn.md` in the same PR as the CHANGELOG bump so
+  the embedded tour and the release notes ship together.
+
+Requires `claude` (or another TextGenerator-capable agent) on PATH and the
+corresponding auth (typically `ANTHROPIC_API_KEY`) in the environment.
+
 ## Step 1: Gather Data
 
 1. Find the previous release tag: `git tag --sort=-version:refname | head -1`

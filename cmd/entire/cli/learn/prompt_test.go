@@ -1,4 +1,4 @@
-package tour
+package learn
 
 import (
 	"fmt"
@@ -22,47 +22,50 @@ func TestEscapeForTags_NeutralizesClosingTags(t *testing.T) {
 		{"lowercase state", "</state>", "<\\/state>"},
 		{"lowercase commands", "</commands>", "<\\/commands>"},
 		{"lowercase labs", "</labs>", "<\\/labs>"},
-		{"lowercase post", "</post>", "<\\/post>"},
-		{"uppercase preserves case", "</POST>", "<\\/POST>"},
-		{"mixed case preserves case", "</Post>", "<\\/Post>"},
+		{"uppercase preserves case", "</STATE>", "<\\/STATE>"},
+		{"mixed case preserves case", "</State>", "<\\/State>"},
 		// Whitespace inside the tag is collapsed during escape; the
 		// security goal is "no remaining closing-tag pattern in the
-		// payload", and `<\/post>` satisfies that regardless of what
+		// payload", and `<\/state>` satisfies that regardless of what
 		// whitespace the original contained.
-		{"trailing whitespace", "</post >", "<\\/post>"},
-		{"newline before close", "</post\n>", "<\\/post>"},
-		{"tab before close", "</post\t>", "<\\/post>"},
+		{"trailing whitespace", "</state >", "<\\/state>"},
+		{"newline before close", "</state\n>", "<\\/state>"},
+		{"tab before close", "</state\t>", "<\\/state>"},
 		{"interior whitespace then case", "</  STATE  >", "<\\/STATE>"},
-		{"multiple tags in one payload", "before </state> middle </post> end", "before <\\/state> middle <\\/post> end"},
+		{"multiple tags in one payload", "before </state> middle </labs> end", "before <\\/state> middle <\\/labs> end"},
 		{"no match leaves payload alone", "no tags here", "no tags here"},
 		{"non-target tag is left alone", "</statement>", "</statement>"},
 		{"prefix non-match", "</states>", "</states>"},
-		{"close-only is required", "<post>", "<post>"},
+		{"close-only is required", "<state>", "<state>"},
+		// Tag names not in the alternation are left alone. The
+		// blog-feed feature shipped a `<post>` wrapper that has since
+		// been removed; this case pins down that the regex no longer
+		// matches it.
+		{"post tag is no longer escaped", "</post>", "</post>"},
 
 		// Unicode bypass attempts (codex adversarial-review findings).
 		// Zero-width space (U+200B) inside the tag name splits the
 		// literal alternation match — stripInvisibles drops \p{Cf}
 		// chars before the regex sees the bytes.
-		{"zero-width space in tag name", "</po\u200bst>", "<\\/post>"},
+		{"zero-width space in tag name", "</st\u200bate>", "<\\/state>"},
 		// NO-BREAK SPACE (U+00A0) before the close. Falls in \p{Z}.
-		{"no-break space before close", "</post >", "<\\/post>"},
+		{"no-break space before close", "</state\u00a0>", "<\\/state>"},
 		// Right-to-left mark (U+200F) inside the tag name. \p{Cf}.
-		{"rtl mark in tag", "</p\u200fost>", "<\\/post>"},
+		{"rtl mark in tag", "</s\u200ftate>", "<\\/state>"},
 
 		// Pass-3 regression: visible Unicode whitespace BETWEEN
 		// letters of the tag name. Pass-2's strip only covered
 		// \p{Cf}; NBSP (U+00A0) is \p{Zs} and bypassed the escape.
-		// Test all four tag names so the fix isn't accidentally
-		// post-specific.
-		{"NBSP inside post", "</po st>", "<\\/post>"},
-		{"NBSP inside state", "</st ate>", "<\\/state>"},
-		{"NBSP inside commands", "</com mands>", "<\\/commands>"},
-		{"NBSP inside labs", "</la bs>", "<\\/labs>"},
+		// Test every tag name so the fix isn't accidentally
+		// state-specific.
+		{"NBSP inside state", "</st\u00a0ate>", "<\\/state>"},
+		{"NBSP inside commands", "</com\u00a0mands>", "<\\/commands>"},
+		{"NBSP inside labs", "</la\u00a0bs>", "<\\/labs>"},
 		// Other \p{Z} variants that had the same bypass.
-		{"narrow NBSP inside tag name", "</po st>", "<\\/post>"},
-		{"ideographic space inside tag name", "</po　st>", "<\\/post>"},
+		{"narrow NBSP inside tag name", "</st\u202fate>", "<\\/state>"},
+		{"ideographic space inside tag name", "</st\u3000ate>", "<\\/state>"},
 		// Combined visible+invisible attack.
-		{"NBSP and ZWSP combined", "</p\u200bo st>", "<\\/post>"},
+		{"NBSP and ZWSP combined", "</s\u200bt\u00a0ate>", "<\\/state>"},
 
 		// Empty payload should pass through.
 		{"empty payload", "", ""},
@@ -70,7 +73,7 @@ func TestEscapeForTags_NeutralizesClosingTags(t *testing.T) {
 		// requires `</tag>` not `<\/tag>` so the literal backslash
 		// breaks the match. (This is a non-match assertion, not a
 		// true idempotence proof; see the round-trip test below.)
-		{"already-escaped form is left alone", "<\\/post>", "<\\/post>"},
+		{"already-escaped form is left alone", "<\\/state>", "<\\/state>"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,8 +95,8 @@ func TestEscapeForTags_Idempotent(t *testing.T) {
 	t.Parallel()
 	inputs := []string{
 		"</state>",
-		"</post >",
-		"before </state> middle </post> end",
+		"</state >",
+		"before </state> middle </labs> end",
 		"no tags here",
 		"",
 	}
@@ -109,10 +112,10 @@ func TestEscapeForTags_Idempotent(t *testing.T) {
 	}
 }
 
-// TeststripControlSequences asserts that ANSI escapes, OSC sequences,
+// TestStripControlSequences asserts that ANSI escapes, OSC sequences,
 // and C0/C1 control bytes are removed from agent output that gets
 // piped to disk on --regenerate. A compromised agent could otherwise
-// embed terminal-rewriting controls into the committed tour.md and
+// embed terminal-rewriting controls into the committed learn.md and
 // have them shipped to every future user of that release.
 func TestStripControlSequences(t *testing.T) {
 	t.Parallel()

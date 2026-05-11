@@ -49,7 +49,7 @@ Generate a dispatch that summarizes your recent agent work — useful for standu
 Entire Labs is where experimental workflows live — try new features before they graduate to the main CLI. Run `entire labs` to see what's available.
 
 - `entire review` — Run configured review skills against the current branch
-- `entire tour` — Tour the Entire CLI
+- `entire learn` — Learn the Entire CLI
 
 ## External agents
 

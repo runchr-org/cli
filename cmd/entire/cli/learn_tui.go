@@ -12,79 +12,79 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/entireio/cli/cmd/entire/cli/tour"
+	"github.com/entireio/cli/cmd/entire/cli/learn"
 )
 
-// errTourCancelled is returned when the user presses ctrl+c / q during
+// errLearnCancelled is returned when the user presses ctrl+c / q during
 // the spinner. Surfaced as a normal cancellation, not an error.
-var errTourCancelled = errors.New("tour cancelled")
+var errLearnCancelled = errors.New("learn cancelled")
 
-// tourGenerateResult is the tea.Msg the TUI uses to deliver Generate's
+// learnGenerateResult is the tea.Msg the TUI uses to deliver Generate's
 // completion back to its Update loop.
-type tourGenerateResult struct {
-	result *tour.Result
+type learnGenerateResult struct {
+	result *learn.Result
 	err    error
 }
 
-type tourStatusModel struct {
+type learnStatusModel struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	spinner  spinner.Model
-	styles   tourStatusStyles
+	styles   learnStatusStyles
 	title    string
 	subtitle string
-	run      func(context.Context) (*tour.Result, error)
-	out      tourGenerateResult
+	run      func(context.Context) (*learn.Result, error)
+	out      learnGenerateResult
 }
 
-type tourStatusStyles struct {
+type learnStatusStyles struct {
 	title    lipgloss.Style
 	subtitle lipgloss.Style
 	footer   lipgloss.Style
 	spinner  lipgloss.Style
 }
 
-// runTourTUI runs the spinner program while Generate executes and returns
+// runLearnTUI runs the spinner program while Generate executes and returns
 // Generate's result (or the cancellation error). The caller decides what to
 // do with the markdown.
 //
 // Overridable for tests: tests assign a stub that returns a synthetic
 // result without launching a real bubbletea program.
-var runTourTUI = defaultRunTourTUI
+var runLearnTUI = defaultRunLearnTUI
 
-func defaultRunTourTUI(ctx context.Context, w io.Writer, title, subtitle string, run func(context.Context) (*tour.Result, error)) (*tour.Result, error) {
+func defaultRunLearnTUI(ctx context.Context, w io.Writer, title, subtitle string, run func(context.Context) (*learn.Result, error)) (*learn.Result, error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	model := newTourStatusModel(w, title, subtitle, run)
+	model := newLearnStatusModel(w, title, subtitle, run)
 	model.ctx = runCtx
 	model.cancel = cancel
 
 	program := tea.NewProgram(model, tea.WithOutput(w))
 	finalModel, err := program.Run()
 	if err != nil {
-		return nil, fmt.Errorf("run tour tui: %w", err)
+		return nil, fmt.Errorf("run learn tui: %w", err)
 	}
 
-	finished, ok := finalModel.(tourStatusModel)
+	finished, ok := finalModel.(learnStatusModel)
 	if !ok {
-		return nil, errors.New("unexpected tour loading state")
+		return nil, errors.New("unexpected learn loading state")
 	}
-	clearTourInlineView(w, finished.View().Content)
+	clearLearnInlineView(w, finished.View().Content)
 	if finished.out.err != nil {
 		return nil, finished.out.err
 	}
 	return finished.out.result, nil
 }
 
-func newTourStatusModel(w io.Writer, title, subtitle string, run func(context.Context) (*tour.Result, error)) tourStatusModel {
+func newLearnStatusModel(w io.Writer, title, subtitle string, run func(context.Context) (*learn.Result, error)) learnStatusModel {
 	ss := newStatusStyles(w)
-	styles := newTourStatusStyles(ss)
+	styles := newLearnStatusStyles(ss)
 	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	if ss.colorEnabled {
 		sp.Style = styles.spinner
 	}
-	return tourStatusModel{
+	return learnStatusModel{
 		spinner:  sp,
 		styles:   styles,
 		title:    title,
@@ -93,8 +93,8 @@ func newTourStatusModel(w io.Writer, title, subtitle string, run func(context.Co
 	}
 }
 
-func newTourStatusStyles(ss statusStyles) tourStatusStyles {
-	styles := tourStatusStyles{
+func newLearnStatusStyles(ss statusStyles) learnStatusStyles {
+	styles := learnStatusStyles{
 		title:    lipgloss.NewStyle().Bold(true),
 		subtitle: lipgloss.NewStyle(),
 		footer:   lipgloss.NewStyle(),
@@ -110,11 +110,11 @@ func newTourStatusStyles(ss statusStyles) tourStatusStyles {
 	return styles
 }
 
-func (m tourStatusModel) Init() tea.Cmd {
+func (m learnStatusModel) Init() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, m.runGenerate())
 }
 
-func (m tourStatusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m learnStatusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		// View doesn't depend on terminal width — the status card lives
@@ -126,7 +126,7 @@ func (m tourStatusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
-	case tourGenerateResult:
+	case learnGenerateResult:
 		m.out = msg
 		return m, tea.Quit
 	case tea.KeyPressMsg:
@@ -134,14 +134,14 @@ func (m tourStatusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cancel != nil {
 				m.cancel()
 			}
-			m.out.err = errTourCancelled
+			m.out.err = errLearnCancelled
 			return m, tea.Quit
 		}
 	}
 	return m, nil
 }
 
-func (m tourStatusModel) View() tea.View {
+func (m learnStatusModel) View() tea.View {
 	lines := []string{
 		m.styles.spinner.Render(m.spinner.View()) + " " + m.styles.title.Render(m.title),
 	}
@@ -152,14 +152,14 @@ func (m tourStatusModel) View() tea.View {
 	return tea.NewView("\n" + strings.Join(lines, "\n"))
 }
 
-func (m tourStatusModel) runGenerate() tea.Cmd {
+func (m learnStatusModel) runGenerate() tea.Cmd {
 	return func() tea.Msg {
 		result, err := m.run(m.ctx)
-		return tourGenerateResult{result: result, err: err}
+		return learnGenerateResult{result: result, err: err}
 	}
 }
 
-func clearTourInlineView(w io.Writer, view string) {
+func clearLearnInlineView(w io.Writer, view string) {
 	lineCount := strings.Count(view, "\n") + 1
 	if view == "" {
 		return

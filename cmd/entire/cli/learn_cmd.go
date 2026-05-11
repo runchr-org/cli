@@ -10,77 +10,64 @@ import (
 	"charm.land/glamour/v2/ansi"
 
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
+	"github.com/entireio/cli/cmd/entire/cli/learn"
 	"github.com/entireio/cli/cmd/entire/cli/mdrender"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
-	"github.com/entireio/cli/cmd/entire/cli/tour"
 	"github.com/spf13/cobra"
 )
 
-// runTourGenerate is overridable for tests so they can stub out the agent
+// runLearnGenerate is overridable for tests so they can stub out the agent
 // call without touching cobra plumbing.
-var (
-	runTourGenerate       = tour.Generate
-	runTourGenerateLatest = tour.GenerateLatest
-)
+var runLearnGenerate = learn.Generate
 
-const tourNotGitRepoMessage = "Entire works inside a git repository. Run 'git init' or cd into one and try again."
+const learnNotGitRepoMessage = "Entire works inside a git repository. Run 'git init' or cd into one and try again."
 
-const tourNoTextGeneratorMessage = `No TextGenerator-capable agent on PATH.
+const learnNoTextGeneratorMessage = `No TextGenerator-capable agent on PATH.
 
-The default 'entire tour' uses a pre-rendered markdown file shipped with
-the binary, but '--latest' and '--regenerate' both call out to your
-locally-installed agent. Install one of: claude, codex, gemini, cursor,
-copilot, or an external entire-agent-* plugin that declares
-text_generator support — or drop the flag to read the embedded tour.`
+The default 'entire learn' uses a pre-rendered markdown file shipped
+with the binary; '--regenerate' calls out to your locally-installed
+agent. Install one of: claude, codex, gemini, cursor, copilot, or an
+external entire-agent-* plugin that declares text_generator support
+— or drop the flag to read the embedded tour.`
 
-// newTourCmd builds the `entire tour` cobra command. Hidden from
+// newLearnCmd builds the `entire learn` cobra command. Hidden from
 // `entire help` while the feature matures — discoverable via
 // `entire labs` and runs normally for users who already know the name.
 // Mirrors the registration shape of `entire review`.
-func newTourCmd() *cobra.Command {
-	var (
-		latestFlag     bool
-		regenerateFlag bool
-	)
+func newLearnCmd() *cobra.Command {
+	var regenerateFlag bool
 
 	cmd := &cobra.Command{
-		Use: "tour",
+		Use: "learn",
 		// Hidden from `entire help` while the feature is still maturing —
-		// users who know about it can still run `entire tour` /
-		// `entire tour --help` and the command works normally.
+		// users who know about it can still run `entire learn` /
+		// `entire learn --help` and the command works normally.
 		Hidden: true,
-		Short:  "Tour the Entire CLI",
+		Short:  "Learn the Entire CLI",
 		Long: `Render a state-aware tour of the Entire CLI.
 
 The default tour reads from a pre-rendered markdown file shipped with
 the binary, so it returns instantly with no agent or network call. The
 content reflects the CLI surface as of the last release; maintainers
-re-run with --regenerate before each release to refresh it.
+re-run with --regenerate during the changelog PR to refresh it.
 
-Pass --latest to skip the tour and instead summarize the latest post
-from the entire.io blog feed — a quick "what's new in Entire" digest.
-That path requires a TextGenerator-capable agent on your PATH and a
-working network connection; output appears once the agent responds.
-
-Labs entry: tour is experimental. We are actively refining it based on
-user feedback.
+Labs entry: learn is experimental. We are actively refining it based
+on user feedback.
 
 Examples:
-  entire tour
-  entire tour --latest`,
+  entire learn`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return executeTour(cmd.Context(), cmd.OutOrStdout(), cmd.Root(), latestFlag, regenerateFlag)
+			return executeLearn(cmd.Context(), cmd.OutOrStdout(), cmd.Root(), regenerateFlag)
 		},
 	}
-	cmd.Flags().BoolVar(&latestFlag, "latest", false, "Summarize the latest entire.io blog post instead of touring the CLI")
-	cmd.Flags().BoolVar(&regenerateFlag, "regenerate", false, "Force the agent-driven path and write the result to stdout (for refreshing the embedded tour before a release)")
+	cmd.Flags().BoolVar(&regenerateFlag, "regenerate", false, "Force the agent-driven path and write the result to stdout (for refreshing the embedded tour during the changelog PR)")
 	if err := cmd.Flags().MarkHidden("regenerate"); err != nil {
 		panic(fmt.Sprintf("hide regenerate flag: %v", err))
 	}
 	return cmd
 }
 
-func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFlag, regenerateFlag bool) error {
+func executeLearn(ctx context.Context, w io.Writer, root *cobra.Command, regenerateFlag bool) error {
 	loadedSettings, settingsErr := LoadEntireSettings(ctx)
 	// settings.Load returns a non-nil EntireSettings with default values
 	// even when no settings.json exists, so isSetUp can't be inferred from
@@ -93,60 +80,52 @@ func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFl
 		configuredModel = loadedSettings.SummaryGeneration.Model
 	}
 
-	opts := tour.Options{
-		LoadSettings:        cachedTourSettingsLoader(loadedSettings, isSetUp, settingsErr),
+	opts := learn.Options{
+		LoadSettings:        cachedLearnSettingsLoader(loadedSettings, isSetUp, settingsErr),
 		ListInstalledAgents: GetAgentsWithHooksInstalled,
 		ConfiguredProvider:  configuredProvider,
 		SummarizeModel:      configuredModel,
-		Labs:                labsRegistryForTour(),
+		Labs:                labsRegistryForLearn(),
 		Regenerate:          regenerateFlag,
 	}
 
 	usedTUI := interactive.IsTerminalWriter(w) && !IsAccessibleMode()
-	needsAgent := latestFlag || regenerateFlag
 
-	generate := func(ctx context.Context) (*tour.Result, error) {
-		if latestFlag {
-			return runTourGenerateLatest(ctx, opts)
-		}
-		return runTourGenerate(ctx, root, opts)
+	generate := func(ctx context.Context) (*learn.Result, error) {
+		return runLearnGenerate(ctx, root, opts)
 	}
 
 	var (
-		result   *tour.Result
+		result   *learn.Result
 		generErr error
 	)
-	if usedTUI && needsAgent {
-		title, subtitle := "Regenerating tour", "This can take a moment."
-		if latestFlag {
-			title = "Fetching the latest post"
-		}
-		result, generErr = runTourTUI(ctx, w, title, subtitle, generate)
-		if errors.Is(generErr, errTourCancelled) {
+	if usedTUI && regenerateFlag {
+		result, generErr = runLearnTUI(ctx, w, "Regenerating tour", "This can take a moment.", generate)
+		if errors.Is(generErr, errLearnCancelled) {
 			return nil
 		}
 	} else {
 		result, generErr = generate(ctx)
 	}
 	if generErr != nil {
-		return translateTourError(w, generErr)
+		return translateLearnError(w, generErr)
 	}
 
 	// --regenerate dumps the raw agent output verbatim so it can be
-	// piped into embedded/tour.md. Skip glamour and the attribution
+	// piped into embedded/learn.md. Skip glamour and the attribution
 	// footer so the captured file stays clean markdown.
 	if regenerateFlag {
 		fmt.Fprintln(w, result.Markdown)
 		return nil
 	}
 
-	rendered, err := mdrender.RenderForWriterWithOverride(w, result.Markdown, tourHeaderOverride)
+	rendered, err := mdrender.RenderForWriterWithOverride(w, result.Markdown, learnHeaderOverride)
 	if err != nil {
 		// mdrender failed — fall back to raw markdown rather than
 		// surfacing a renderer panic to the user. Surface a one-line
 		// breadcrumb to stderr so the failure isn't fully silent; the
 		// user still gets readable (if uncolored) output above.
-		fmt.Fprintf(os.Stderr, "tour: render fallback (%v)\n", err)
+		fmt.Fprintf(os.Stderr, "learn: render fallback (%v)\n", err)
 		rendered = result.Markdown
 	}
 	fmt.Fprintln(w, rendered)
@@ -156,24 +135,24 @@ func executeTour(ctx context.Context, w io.Writer, root *cobra.Command, latestFl
 	return nil
 }
 
-// translateTourError converts tour.Generate errors into user-facing
+// translateLearnError converts learn.Generate errors into user-facing
 // output. ErrNotGitRepo and ErrNoTextGenerator are printed directly to
 // w with their multi-line message and a short SilentError is returned
 // so cobra/main don't reprint the error themselves. Anything else
 // propagates to cobra's normal error path.
-func translateTourError(w io.Writer, err error) error {
-	if errors.Is(err, tour.ErrNotGitRepo) {
-		fmt.Fprintln(w, tourNotGitRepoMessage)
+func translateLearnError(w io.Writer, err error) error {
+	if errors.Is(err, learn.ErrNotGitRepo) {
+		fmt.Fprintln(w, learnNotGitRepoMessage)
 		return NewSilentError(errors.New("not a git repository"))
 	}
-	if errors.Is(err, tour.ErrNoTextGenerator) {
-		fmt.Fprintln(w, tourNoTextGeneratorMessage)
+	if errors.Is(err, learn.ErrNoTextGenerator) {
+		fmt.Fprintln(w, learnNoTextGeneratorMessage)
 		return NewSilentError(errors.New("no TextGenerator agent on PATH"))
 	}
 	return err
 }
 
-// cachedTourSettingsLoader returns a tour.SettingsLoader that closes
+// cachedLearnSettingsLoader returns a learn.SettingsLoader that closes
 // over a single LoadEntireSettings result + the resolved isSetUp
 // flag, so ResolveState doesn't re-read settings.json (or stat the
 // settings files) a second time per invocation.
@@ -182,7 +161,7 @@ func translateTourError(w io.Writer, err error) error {
 // settings.Load returns a non-nil EntireSettings with default values
 // even when no settings.json exists. The caller resolves it via
 // settings.IsSetUpAny.
-func cachedTourSettingsLoader(s *EntireSettings, isSetUp bool, loadErr error) tour.SettingsLoader {
+func cachedLearnSettingsLoader(s *EntireSettings, isSetUp bool, loadErr error) learn.SettingsLoader {
 	return func(_ context.Context) (bool, bool, error) {
 		if loadErr != nil {
 			return false, false, loadErr
@@ -191,14 +170,14 @@ func cachedTourSettingsLoader(s *EntireSettings, isSetUp bool, loadErr error) to
 	}
 }
 
-// labsRegistryForTour projects the cli's experimentalCommands list onto
-// the tour-package shape. Done at the cli boundary so the tour package
+// labsRegistryForLearn projects the cli's experimentalCommands list onto
+// the learn-package shape. Done at the cli boundary so the learn package
 // doesn't need to import labs internals (which would create a cycle —
-// labs.go itself wires in newTourCmd).
-func labsRegistryForTour() []tour.LabsCommand {
-	out := make([]tour.LabsCommand, 0, len(experimentalCommands))
+// labs.go itself wires in newLearnCmd).
+func labsRegistryForLearn() []learn.LabsCommand {
+	out := make([]learn.LabsCommand, 0, len(experimentalCommands))
 	for _, info := range experimentalCommands {
-		out = append(out, tour.LabsCommand{
+		out = append(out, learn.LabsCommand{
 			Name:       info.Name,
 			Invocation: info.Invocation,
 			Summary:    info.Summary,
@@ -207,12 +186,12 @@ func labsRegistryForTour() []tour.LabsCommand {
 	return out
 }
 
-// tourHeaderOverride paints H2 violet so section headers stand apart
+// learnHeaderOverride paints H2 violet so section headers stand apart
 // from the orange inline-code, list-item, and accent surfaces that
 // already dominate the rendered tour. The system prompt instructs the
 // agent to open every section with '## <title>', so this override is
 // what gives the section breaks their color — without it, H2 is the
 // shared cyan from mdrender's default palette.
-func tourHeaderOverride(styles *ansi.StyleConfig) {
+func learnHeaderOverride(styles *ansi.StyleConfig) {
 	styles.H2.Color = mdrender.StringPtr("#a78bfa")
 }

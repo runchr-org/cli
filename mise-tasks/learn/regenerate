@@ -1,0 +1,41 @@
+#!/bin/sh
+#MISE description="Refresh cmd/entire/cli/learn/embedded/learn.md via the agent"
+
+# Refreshes the embedded `entire learn` markdown by running the agent-driven
+# generation path against the current cobra command tree. Run as part of
+# the changelog PR before each release so the shipped binary reflects the
+# live command surface. Local devs can run it manually if they want a
+# "real" tour from a fresh checkout — without it, `entire learn` ships
+# the markdown that was last committed.
+#
+# Atomic write: the regen output goes to a temp file first and only
+# replaces embedded/learn.md after validation succeeds. The previous shell-
+# redirect form truncated the destination *before* the agent finished,
+# so a transient agent failure left the repo with an empty stub.
+# Validation also catches the "agent returned a partial response that
+# happens to have one ## header" failure mode the CI grep alone can't.
+#
+# Requires `claude` (or another TextGenerator-capable agent) on PATH and
+# the corresponding auth (typically ANTHROPIC_API_KEY) in the environment.
+
+set -e
+
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+
+go run ./cmd/entire learn --regenerate > "$tmp"
+
+header_count=$(grep -c '^## ' "$tmp" || true)
+if [ "$header_count" -lt 4 ]; then
+  echo "learn:regenerate produced only $header_count ## headers (expected >= 4); aborting" >&2
+  cat "$tmp" >&2
+  exit 1
+fi
+
+if ! grep -q 'https://docs.entire.io/cli' "$tmp"; then
+  echo "learn:regenerate missing docs.entire.io footer; aborting" >&2
+  cat "$tmp" >&2
+  exit 1
+fi
+
+mv "$tmp" cmd/entire/cli/learn/embedded/learn.md

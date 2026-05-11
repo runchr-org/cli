@@ -1,4 +1,4 @@
-package tour
+package learn
 
 import (
 	"context"
@@ -30,7 +30,7 @@ type Options struct {
 
 	// Labs is the cli's experimental-commands registry, surfaced under the
 	// rendered Labs section. Cli builds this slice from its own
-	// experimentalCommands list — passing it through keeps the tour
+	// experimentalCommands list — passing it through keeps the learn
 	// package free of cli imports while still giving the agent enough
 	// information to talk about commands like 'entire review' that are
 	// Hidden in the cobra tree.
@@ -39,7 +39,7 @@ type Options struct {
 	// Regenerate forces the agent-driven path even when the embedded
 	// tour is available. Used by the `--regenerate` maintainer flag to
 	// produce the markdown that gets committed back into
-	// embedded/tour.md before each release.
+	// embedded/learn.md during the changelog PR for each release.
 	Regenerate bool
 }
 
@@ -52,34 +52,7 @@ type Result struct {
 
 // ErrNotGitRepo is returned when Generate is called outside a git
 // repository. Callers translate it to a friendly user message.
-var ErrNotGitRepo = errors.New("entire tour: not a git repository")
-
-// GenerateLatest fetches the latest entry from the entire.io blog feed
-// and asks the configured TextGenerator to summarize it. Unlike Generate,
-// this does not require a git repo or any session history — it's a
-// pure "what's new in the CLI" call. Returns the raw markdown.
-func GenerateLatest(ctx context.Context, opts Options) (*Result, error) {
-	choice, err := ResolveTextGenerator(ctx, opts.ConfiguredProvider)
-	if err != nil {
-		return nil, err
-	}
-	post, err := FetchLatestBlogPost(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetch blog feed: %w", err)
-	}
-	prompt, err := BuildLatestPrompt(post)
-	if err != nil {
-		return nil, err
-	}
-	rendered, err := choice.Generator.GenerateText(ctx, prompt, opts.SummarizeModel)
-	if err != nil {
-		return nil, fmt.Errorf("summarize latest blog post with %s: %w", choice.DisplayName, err)
-	}
-	return &Result{
-		Markdown:    rendered,
-		DisplayName: choice.DisplayName,
-	}, nil
-}
+var ErrNotGitRepo = errors.New("entire learn: not a git repository")
 
 // Generate is the headless entry point: classify the repo, then return
 // the right tour for the user's stage. By default the workflow / first-
@@ -88,11 +61,12 @@ func GenerateLatest(ctx context.Context, opts Options) (*Result, error) {
 // the setup / agent-install stages render hand-written prose. Pass
 // Options.Regenerate=true to force the agent-driven path — used by
 // the maintainer-only `--regenerate` flag to produce the markdown
-// that gets committed back into embedded/tour.md before a release.
+// that gets committed back into embedded/learn.md during the
+// changelog PR before a release.
 func Generate(ctx context.Context, root *cobra.Command, opts Options) (*Result, error) {
 	if opts.Regenerate {
 		// --regenerate produces the canonical tour that gets committed
-		// back into embedded/tour.md and shipped to all users. The
+		// back into embedded/learn.md and shipped to all users. The
 		// embedded markdown is only ever served to first-capture /
 		// workflow stages (the setup and agent-install stages render
 		// hand-written prose constants), so the regen output should
@@ -101,7 +75,7 @@ func Generate(ctx context.Context, root *cobra.Command, opts Options) (*Result, 
 		// lets `--regenerate` succeed in CI checkouts that have no
 		// .entire/settings.json — without this, ResolveState routes to
 		// StageSetup and the agent produces a 4-line stub that the
-		// release-pipeline validation rejects.
+		// regen-pipeline validation rejects.
 		return regenerateFromAgent(ctx, root, opts, State{
 			Stage:      StageWorkflow,
 			Enabled:    true,
@@ -127,23 +101,23 @@ func Generate(ctx context.Context, root *cobra.Command, opts Options) (*Result, 
 	case StageAgentInstall:
 		return &Result{Markdown: agentInstallPromptText}, nil
 	case StageFirstCapture:
-		return &Result{Markdown: embeddedTour + firstCaptureTail}, nil
+		return &Result{Markdown: embeddedLearn + firstCaptureTail}, nil
 	case StageWorkflow:
-		return &Result{Markdown: embeddedTour}, nil
+		return &Result{Markdown: embeddedLearn}, nil
 	}
-	return nil, fmt.Errorf("unhandled tour stage %q", state.Stage)
+	return nil, fmt.Errorf("unhandled learn stage %q", state.Stage)
 }
 
 // regenerateFromAgent runs the agent-driven generation path.
-// Maintainers invoke it via `entire tour --regenerate` before each
-// release, then commit the captured markdown to embedded/tour.md.
-// Skipped on every normal user invocation so the runtime cost stays
-// at "read embedded file + glamour render".
+// Maintainers invoke it via `entire learn --regenerate` during the
+// changelog PR for each release, then commit the captured markdown to
+// embedded/learn.md. Skipped on every normal user invocation so the
+// runtime cost stays at "read embedded file + glamour render".
 //
 // Output is run through stripControlSequences before return: the
 // regen output gets piped to disk and embedded in the binary, so a
 // compromised agent could otherwise smuggle terminal escapes /
-// hyperlinks / title-rewrites into every future `entire tour` user.
+// hyperlinks / title-rewrites into every future `entire learn` user.
 func regenerateFromAgent(ctx context.Context, root *cobra.Command, opts Options, state State) (*Result, error) {
 	choice, err := ResolveTextGenerator(ctx, opts.ConfiguredProvider)
 	if err != nil {
@@ -171,8 +145,8 @@ func regenerateFromAgent(ctx context.Context, root *cobra.Command, opts Options,
 // stripControlSequences removes ANSI escape sequences, OSC sequences,
 // and C0/C1 control bytes other than common whitespace (TAB, LF, CR)
 // from a markdown string. Used on agent output that gets persisted
-// (committed back into embedded/tour.md) or written to a non-TTY
-// destination — a compromised agent or feed could otherwise inject
+// (committed back into embedded/learn.md) or written to a non-TTY
+// destination — a compromised agent could otherwise inject
 // terminal-rewriting controls that survive into pasted logs and
 // user-facing terminals.
 //
@@ -190,7 +164,7 @@ func stripControlSequences(s string) string {
 //
 // Compiled once at init. Used by stripControlSequences above.
 //
-// The C1 range is written as - because Go regex requires
+// The C1 range is written as - because Go regex requires
 // valid UTF-8 input; raw \x80-\x9f are continuation bytes alone and
 // trigger a compile-time panic.
 var controlSequencePattern = regexp.MustCompile(
