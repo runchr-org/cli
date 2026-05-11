@@ -101,6 +101,29 @@ func TestStreamOnce_JSONOutputEnvelope(t *testing.T) {
 	}
 }
 
+func TestStreamOnce_ShowPingsTrimsSSECommentWhitespace(t *testing.T) {
+	frames := []string{
+		": ping 123\n",
+	}
+	srv, _ := fakeSSEServer(t, frames)
+	defer srv.Close()
+
+	t.Setenv(api.BaseURLEnvVar, srv.URL)
+	client := api.NewClient("tok")
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, _, err := streamOnce(ctx, client, "/stream", "", false, false, true, false, &stdout, &stderr)
+	if err == nil {
+		t.Errorf("expected EOF after fixed test stream")
+	}
+	if got := stderr.String(); !strings.Contains(got, "ping: ping 123\n") {
+		t.Errorf("stderr = %q, want trimmed ping output", got)
+	}
+}
+
 func TestStreamOnce_ReconnectEvent(t *testing.T) {
 	frames := []string{
 		"event: ready\ndata: {\"commentCount\":0}\nid: r1\n\n",

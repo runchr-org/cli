@@ -30,9 +30,10 @@ const (
 	sseEventError          = "error"
 )
 
-// reconnectBackoffMin / Max bound the exponential backoff used after network
-// errors. The server's max stream duration (~50s) closes cleanly with an
-// `event: reconnect`; in that case we reconnect immediately with no backoff.
+// reconnectBackoffInitial / reconnectBackoffCap bound the exponential backoff
+// used after network errors. The server's max stream duration (~50s) closes
+// cleanly with an `event: reconnect`; in that case we reconnect immediately
+// with no backoff.
 const (
 	reconnectBackoffInitial = 500 * time.Millisecond
 	reconnectBackoffCap     = 30 * time.Second
@@ -250,7 +251,7 @@ func streamOnce(
 		eventName    string
 		dataLines    []string
 		eventID      string // id of the in-progress frame (reset on flush)
-		lastSeenID   string // most recent id from a ready/comment/comment_deleted frame
+		lastSeenID   string // most recent SSE id from any frame that includes one
 		seenReady    bool
 		remainReplay int  // --once: comment events still to drain after ready
 		onceExitNext bool // --once: exit after this flush
@@ -281,7 +282,7 @@ func streamOnce(
 					Resumed      bool `json:"resumed"`
 				}
 				if jerr := json.Unmarshal([]byte(data), &p); jerr != nil {
-					fmt.Fprintf(errW, "warn: malformed ready payload: %v\n", jerr)
+					fmt.Fprintf(errW, "Warning: malformed ready payload: %v\n", jerr)
 				}
 				if p.Resumed || p.CommentCount == 0 {
 					onceExitNext = true
@@ -323,7 +324,7 @@ func streamOnce(
 		// Comment / keepalive line.
 		if strings.HasPrefix(line, ":") {
 			if showPings {
-				fmt.Fprintln(errW, "ping:", strings.TrimPrefix(line, ":"))
+				fmt.Fprintln(errW, "ping:", strings.TrimSpace(strings.TrimPrefix(line, ":")))
 			}
 			continue
 		}
@@ -440,7 +441,7 @@ func printSSEEvent(w, errW io.Writer, eventName, data string, jsonOutput bool) {
 		if jerr := json.Unmarshal([]byte(data), &p); jerr != nil {
 			// Best-effort: server payload may be missing or malformed; we still
 			// want to surface that an error event arrived.
-			fmt.Fprintf(errW, "warn: malformed error payload: %v\n", jerr)
+			fmt.Fprintf(errW, "Warning: malformed error payload: %v\n", jerr)
 		}
 		if p.Message != "" {
 			fmt.Fprintf(errW, "✖ stream error: %s\n", p.Message)
