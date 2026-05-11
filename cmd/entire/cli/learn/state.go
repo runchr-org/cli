@@ -29,7 +29,7 @@ const (
 	StageWorkflow Stage = "workflow"
 )
 
-// State captures everything `entire tour` needs to know about the user's
+// State captures everything `entire learn` needs to know about the user's
 // repo to choose which tour to render.
 type State struct {
 	Stage           Stage    `json:"stage"`
@@ -39,12 +39,12 @@ type State struct {
 }
 
 // SettingsLoader matches the cli package's LoadEntireSettings signature.
-// Injecting it keeps the tour package free of a dependency on the cli
+// Injecting it keeps the learn package free of a dependency on the cli
 // package (which would create a cycle).
 type SettingsLoader func(ctx context.Context) (enabled bool, isSetUp bool, err error)
 
 // AgentInstallChecker matches the cli package's GetAgentsWithHooksInstalled.
-// Same rationale: avoids a cli→tour→cli import cycle.
+// Same rationale: avoids a cli→learn→cli import cycle.
 type AgentInstallChecker func(ctx context.Context) []types.AgentName
 
 // ResolveState returns the routing stage and supporting state. It does not
@@ -54,7 +54,7 @@ func ResolveState(ctx context.Context, loadSettings SettingsLoader, listAgents A
 	if _, err := paths.WorktreeRoot(ctx); err != nil {
 		// Not being in a git repo isn't an error — it's a routing
 		// signal for the caller. We return nil here intentionally so
-		// translateTourError can branch on the StageNotGitRepo stage
+		// translateLearnError can branch on the StageNotGitRepo stage
 		// rather than on a propagated paths error.
 		return State{Stage: StageNotGitRepo}, nil //nolint:nilerr // intentional: not-a-repo is a stage, not an error
 	}
@@ -151,7 +151,7 @@ type TextGeneratorChoice struct {
 // only an external TextGenerator (no built-in claude/codex/etc.) still
 // get a tour. Mirrors what `entire explain --generate` does at
 // resolveCheckpointSummaryProvider in the cli package — minus the
-// interactive picker, since `entire tour` runs non-interactively and a
+// interactive picker, since `entire learn` runs non-interactively and a
 // working tour beats a blocking prompt. Users who want to pin a
 // specific provider can set it via `entire configure
 // --summarize-provider`.

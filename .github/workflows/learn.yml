@@ -1,0 +1,40 @@
+name: Learn
+
+on:
+  pull_request:
+    paths:
+      - cmd/entire/cli/learn/embedded/learn.md
+      - .github/workflows/learn.yml
+
+permissions:
+  contents: read
+
+# Same well-formedness checks `mise run learn:regenerate` enforces, but
+# run on PRs that touch the embedded markdown so a hand edit, bad
+# merge, or truncated paste can't ship a malformed file. Cheap and
+# agent-free, complements the release-time gate in release.yml.
+#
+# No user-controlled inputs are interpolated into the run script — the
+# file path is a repo-relative constant — so the standard injection
+# guidance for workflow_run/pull_request_target doesn't apply here.
+jobs:
+  validate-embedded-learn:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Validate embedded learn markdown
+        run: |
+          learn_md=cmd/entire/cli/learn/embedded/learn.md
+          if [ ! -s "$learn_md" ]; then
+            echo "::error file=$learn_md::is missing or empty"
+            exit 1
+          fi
+          header_count=$(grep -c '^## ' "$learn_md" || true)
+          if [ "$header_count" -lt 4 ]; then
+            echo "::error file=$learn_md::has only $header_count ## headers (expected >= 4) — run 'mise run learn:regenerate' and commit the refreshed file"
+            exit 1
+          fi
+          if ! grep -q 'https://docs.entire.io/cli' "$learn_md"; then
+            echo "::error file=$learn_md::is missing the docs.entire.io footer — run 'mise run learn:regenerate' and commit the refreshed file"
+            exit 1
+          fi

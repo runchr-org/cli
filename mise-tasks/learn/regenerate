@@ -26,7 +26,12 @@ set -e
 
 target=cmd/entire/cli/learn/embedded/learn.md
 target_dir=$(dirname "$target")
-tmp=$(mktemp "$target_dir/learn.XXXXXX.md")
+# macOS mktemp requires the X's at the end of the template — a template
+# like `learn.XXXXXX.md` produces a literal `.md` filename on macOS
+# rather than substituting the placeholder, breaking the atomic rename.
+# Use a hidden `.learn-XXXXXX` template (no extension), then rename
+# within the same directory so the swap stays atomic on both platforms.
+tmp=$(mktemp "$target_dir/.learn-XXXXXX")
 trap 'rm -f "$tmp"' EXIT
 
 go run ./cmd/entire learn --regenerate > "$tmp"

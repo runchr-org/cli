@@ -100,7 +100,7 @@ func executeLearn(ctx context.Context, w io.Writer, root *cobra.Command, regener
 		generErr error
 	)
 	if usedTUI && regenerateFlag {
-		result, generErr = runLearnTUI(ctx, w, "Regenerating tour", "This can take a moment.", generate)
+		result, generErr = runLearnTUI(ctx, w, "Regenerating embedded learn markdown", "This can take a moment.", generate)
 		if errors.Is(generErr, errLearnCancelled) {
 			return nil
 		}
