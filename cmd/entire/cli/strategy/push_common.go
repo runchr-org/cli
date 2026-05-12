@@ -225,7 +225,16 @@ type reportPushFailureArgs struct {
 // pick the dot-line suffix (`" timed out"` vs blank), log at INFO with a
 // classification label, print the warning, and surface the
 // checkpoint-remote hint when the target is a URL.
+//
+// If the outer context is done (user Ctrl-C or hook deadline arrived after
+// the first push attempt), this collapses to a silent bail: empty dot suffix,
+// no log, no warning. Matches the early bail-out in doPushBranch's
+// first-attempt path so that every cancellation point behaves the same.
 func reportPushFailure(ctx context.Context, a reportPushFailureArgs) {
+	if ctx.Err() != nil {
+		a.stop("")
+		return
+	}
 	suffix := ""
 	if errors.Is(a.err, errPushTimedOut) || errors.Is(a.err, errFetchTimedOut) {
 		suffix = " timed out"

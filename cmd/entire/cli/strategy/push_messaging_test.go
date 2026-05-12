@@ -117,6 +117,40 @@ func TestDoPushBranch_LogsAttemptsAtInfo(t *testing.T) {
 	assert.Contains(t, logText, `"branch":"`+paths.MetadataBranchName+`"`, "log must include branch")
 }
 
+// reportPushFailure is the single chokepoint for the sync- and retry-stage
+// failure tails of doPushBranch. If the outer context is done by the time
+// it runs (Ctrl-C / hook deadline that arrived after the first push attempt
+// completed), it must collapse to a silent bail — empty dot suffix, no log,
+// no warning, no hint. Without this, late cancellation can still produce
+// misleading "Warning: couldn't sync …" output.
+func TestReportPushFailure_BailsOnOuterContextCancel(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var suffixes []string
+	stop := func(s string) { suffixes = append(suffixes, s) }
+
+	old := pushStderr
+	var buf strings.Builder
+	pushStderr = &buf
+	t.Cleanup(func() { pushStderr = old })
+
+	reportPushFailure(ctx, reportPushFailureArgs{
+		stop:    stop,
+		err:     errors.New("simulated sync failure"),
+		logMsg:  "push sync failed",
+		warnMsg: "[entire] Warning: couldn't sync foo: …\n",
+		branch:  "entire/checkpoints/v1",
+		target:  "origin",
+		start:   time.Now(),
+	})
+
+	assert.Equal(t, []string{""}, suffixes, "stop must be called with empty suffix to clear the dot line")
+	assert.Empty(t, buf.String(), "no warning should be emitted after outer cancel")
+}
+
 // Pins the errPushTimedOut sentinel so future refactors of doPushBranch's
 // cascade logic can keep relying on errors.Is(err, errPushTimedOut).
 //
