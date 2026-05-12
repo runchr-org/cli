@@ -345,6 +345,12 @@ func DeleteOrphanedCheckpoints(ctx context.Context, checkpointIDs []string) (del
 	return checkpointIDs, []string{}, nil
 }
 
+type cleanupGenerationState struct {
+	candidate  archivedV2GenerationCandidate
+	commitHash plumbing.Hash
+	gen        checkpoint.GenerationMetadata
+}
+
 // ListEligibleV2Generations returns archived checkpoints v2 /full/* generations
 // eligible for deletion based on the configured retention window, along with
 // warnings for malformed generations that were skipped.
@@ -431,12 +437,6 @@ func ListEligibleV2Generations(ctx context.Context, s *settings.EntireSettings) 
 	}
 
 	return cleanupItems, warnings, nil
-}
-
-type cleanupGenerationState struct {
-	candidate  archivedV2GenerationCandidate
-	commitHash plumbing.Hash
-	gen        checkpoint.GenerationMetadata
 }
 
 func generationMetadataHasAnyTimestamp(gen checkpoint.GenerationMetadata) bool {
