@@ -172,7 +172,6 @@ func printCheckpointsV2MigrationHint(ctx context.Context) {
 			return
 		}
 		fmt.Fprintln(os.Stderr, "[entire] Note: .entire/settings.json sets checkpoints_version: 2. Run 'entire migrate --checkpoints v2' to migrate existing checkpoints to v2.")
-		fmt.Fprintln(os.Stderr, "[entire] Use 'entire migrate --checkpoints v2 --force' to rewrite all checkpoints in v2.")
 	})
 }
 
