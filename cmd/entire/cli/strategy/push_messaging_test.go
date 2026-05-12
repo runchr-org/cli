@@ -123,6 +123,9 @@ func TestDoPushBranch_LogsAttemptsAtInfo(t *testing.T) {
 // completed), it must collapse to a silent bail — empty dot suffix, no log,
 // no warning, no hint. Without this, late cancellation can still produce
 // misleading "Warning: couldn't sync …" output.
+//
+// Safe under t.Parallel because reportPushFailureArgs.out lets us inject a
+// per-test writer instead of mutating package-global pushStderr.
 func TestReportPushFailure_BailsOnOuterContextCancel(t *testing.T) {
 	t.Parallel()
 
@@ -130,15 +133,11 @@ func TestReportPushFailure_BailsOnOuterContextCancel(t *testing.T) {
 	cancel()
 
 	var suffixes []string
-	stop := func(s string) { suffixes = append(suffixes, s) }
-
-	old := pushStderr
 	var buf strings.Builder
-	pushStderr = &buf
-	t.Cleanup(func() { pushStderr = old })
 
 	reportPushFailure(ctx, reportPushFailureArgs{
-		stop:    stop,
+		out:     &buf,
+		stop:    func(s string) { suffixes = append(suffixes, s) },
 		err:     errors.New("simulated sync failure"),
 		logMsg:  "push sync failed",
 		warnMsg: "[entire] Warning: couldn't sync foo: …\n",

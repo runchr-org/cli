@@ -171,6 +171,7 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 
 	if syncErr := fetchAndRebaseSessionsCommon(ctx, target, branchName); syncErr != nil {
 		reportPushFailure(ctx, reportPushFailureArgs{
+			out:     pushStderr,
 			stop:    stop,
 			err:     syncErr,
 			logMsg:  "push sync failed",
@@ -190,6 +191,7 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 	retryResult, retryErr := tryPushSessionsCommon(ctx, target, branchName)
 	if retryErr != nil {
 		reportPushFailure(ctx, reportPushFailureArgs{
+			out:     pushStderr,
 			stop:    stop,
 			err:     retryErr,
 			logMsg:  "push retry failed",
@@ -210,8 +212,11 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 }
 
 // reportPushFailureArgs groups the inputs to reportPushFailure to keep the
-// recoverable-failure paths in doPushBranch readable.
+// recoverable-failure paths in doPushBranch readable. out is taken as a
+// parameter (rather than reaching into the package-global pushStderr) so
+// tests can capture without racing on shared state.
 type reportPushFailureArgs struct {
+	out     io.Writer
 	stop    func(string)
 	err     error
 	logMsg  string
@@ -245,7 +250,7 @@ func reportPushFailure(ctx context.Context, a reportPushFailureArgs) {
 		slog.Duration("elapsed", time.Since(a.start)),
 		slog.String("class", classifyForLog(a.err)),
 	)
-	fmt.Fprint(pushStderr, a.warnMsg)
+	fmt.Fprint(a.out, a.warnMsg)
 	printCheckpointRemoteHint(a.target)
 }
 
