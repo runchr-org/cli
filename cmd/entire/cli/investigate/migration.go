@@ -89,7 +89,12 @@ func loadProjectInvestigateSettings(ctx context.Context) (*projectInvestigateSet
 
 	raw := map[string]json.RawMessage{}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, false, fmt.Errorf("parse project settings: %w", err)
+		// Malformed project settings: skip migration silently. The user
+		// will see the actual parse error from settings.Load downstream
+		// (with proper guidance to fix the file), and blocking the
+		// migration prompt on bad JSON would make `entire investigate`
+		// unusable in the very situation it exists to help recover from.
+		return nil, false, nil //nolint:nilerr // intentional: fail-open on malformed settings
 	}
 
 	body, ok := raw["investigate"]

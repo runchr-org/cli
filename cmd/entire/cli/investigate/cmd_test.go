@@ -3,6 +3,7 @@ package investigate_test
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/require"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/spawn"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
@@ -573,4 +575,34 @@ func equalStringSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestNewCommand_RunsMigrationBeforeDispatch(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	testutil.InitRepo(t, tmp)
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmp, ".entire/settings.json"),
+		[]byte(`{"investigate":{"agents":["claude-code"]}}`), 0o644))
+
+	var promptCalled bool
+	deps := investigate.Deps{
+		GetAgentsWithHooksInstalled: func(_ context.Context) []types.AgentName { return nil },
+		NewSilentError:              func(err error) error { return err },
+		PromptYN: func(_ context.Context, _ string, _ bool) (bool, error) {
+			promptCalled = true
+			return false, nil // decline so the command continues without changes
+		},
+	}
+
+	cmd := investigate.NewCommand(deps)
+	cmd.SetArgs([]string{"--findings"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	// Execute may fail downstream of the migration prompt; the contract
+	// here is only that the prompt fires before flag dispatch.
+	_ = cmd.ExecuteContext(context.Background()) //nolint:errcheck // see comment above
+	require.True(t, promptCalled, "migration prompt must fire before flag dispatch")
 }

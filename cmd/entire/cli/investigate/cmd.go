@@ -66,6 +66,10 @@ type Deps struct {
 	// LoopRun, when non-nil, replaces RunInvestigateLoop. Tests inject a
 	// stub to capture LoopInput and return a canned LoopResult.
 	LoopRun func(ctx context.Context, in LoopInput, ldeps LoopDeps) (LoopResult, error)
+
+	// PromptYN is the interactive y/N prompt used by the settings migration
+	// and the HEAD-soft-warn. Nil means "use the real huh-backed prompt".
+	PromptYN func(ctx context.Context, question string, def bool) (bool, error)
 }
 
 // runFlags collects the flag values the run path inspects. Captured into a
@@ -126,6 +130,25 @@ Subcommands:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			if err := validateFlags(args, flags); err != nil {
+				return err
+			}
+			prompt := deps.PromptYN
+			// When tests inject a PromptYN stub, treat it as a usable prompt
+			// regardless of TTY detection (cmd output may be io.Discard).
+			// In production, prompt is nil → use realPromptYN and gate on
+			// TTY + interactive capability.
+			canPrompt := prompt != nil
+			if prompt == nil {
+				prompt = realPromptYN
+				canPrompt = interactive.IsTerminalWriter(cmd.OutOrStdout()) && interactive.CanPromptInteractively()
+			}
+			if err := maybePromptInvestigateSettingsMigration(
+				ctx,
+				cmd.OutOrStdout(),
+				cmd.ErrOrStderr(),
+				canPrompt,
+				prompt,
+			); err != nil {
 				return err
 			}
 			return runInvestigate(ctx, cmd, args, flags, deps)
