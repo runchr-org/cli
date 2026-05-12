@@ -364,7 +364,7 @@ func ListEligibleV2Generations(ctx context.Context, s *settings.EntireSettings) 
 	cutoff := time.Now().AddDate(0, 0, -s.GetFullTranscriptGenerationRetentionDays())
 	cleanupItems := make([]CleanupItem, 0, len(candidates))
 	generations := make([]cleanupGenerationState, 0, len(candidates))
-	fallbackRefs := make([]plumbing.ReferenceName, 0, len(candidates))
+	metadataRefs := make([]plumbing.ReferenceName, 0, len(candidates))
 
 	for _, candidate := range candidates {
 		commitHash, treeHash, refErr := store.GetRefState(candidate.RefName)
@@ -379,16 +379,7 @@ func ListEligibleV2Generations(ctx context.Context, s *settings.EntireSettings) 
 			continue
 		}
 		if !foundCheckpointTimes {
-			var genErr error
-			gen, genErr = store.ReadGeneration(treeHash)
-			if genErr != nil {
-				warnings = append(warnings, fmt.Sprintf("generation %s: failed to read generation.json: %v", candidate.Name, genErr))
-				continue
-			}
-		}
-
-		if !generationMetadataHasAnyTimestamp(gen) {
-			fallbackRefs = append(fallbackRefs, candidate.RefName)
+			metadataRefs = append(metadataRefs, candidate.RefName)
 		}
 		generations = append(generations, cleanupGenerationState{
 			candidate:  candidate,
@@ -397,16 +388,16 @@ func ListEligibleV2Generations(ctx context.Context, s *settings.EntireSettings) 
 		})
 	}
 
-	fallbackGenerations := readGenerationsViaGit(ctx, fallbackRefs)
+	generationMetadata := readGenerationMetadataFiles(ctx, metadataRefs)
 	for _, generation := range generations {
 		gen := generation.gen
-		if fallbackGen, ok := fallbackGenerations[generation.candidate.RefName]; ok {
-			if fallbackGen.err != nil {
-				warnings = append(warnings, fmt.Sprintf("generation %s: failed to read generation.json: %v", generation.candidate.Name, fallbackGen.err))
+		if metadata, ok := generationMetadata[generation.candidate.RefName]; ok {
+			if metadata.err != nil {
+				warnings = append(warnings, fmt.Sprintf("generation %s: failed to read generation.json: %v", generation.candidate.Name, metadata.err))
 				continue
 			}
-			if generationMetadataHasAnyTimestamp(fallbackGen.gen) {
-				gen = fallbackGen.gen
+			if generationMetadataHasAnyTimestamp(metadata.gen) {
+				gen = metadata.gen
 			}
 		}
 
@@ -457,9 +448,7 @@ type generationGitReadResult struct {
 	err error
 }
 
-// readGenerationsViaGit reads generation.json via Git. Used as a fallback when
-// go-git cannot resolve blobs from partial-clone (--filter=blob:none) fetches.
-func readGenerationsViaGit(ctx context.Context, refNames []plumbing.ReferenceName) map[plumbing.ReferenceName]generationGitReadResult {
+func readGenerationMetadataFiles(ctx context.Context, refNames []plumbing.ReferenceName) map[plumbing.ReferenceName]generationGitReadResult {
 	results := make(map[plumbing.ReferenceName]generationGitReadResult, len(refNames))
 	if len(refNames) == 0 {
 		return results
