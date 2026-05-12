@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/signal"
 	"strings"
 
 	"charm.land/huh/v2"
@@ -279,14 +278,6 @@ func runCleanAll(ctx context.Context, cmd *cobra.Command, force, dryRun bool) er
 		s = &settings.EntireSettings{}
 	}
 
-	// Scoped escape hatch for the v2 enumeration path. The fast path is
-	// near-instantaneous, but a generation whose generation.json is missing
-	// falls back to a go-git tree walk that doesn't honor context
-	// cancellation, so a single Ctrl-C can leave the user stuck. A second
-	// Ctrl-C forces exit. Scoped to clean --all only.
-	stopEscape := installForceExitOnSecondSignal(ctx)
-	defer stopEscape()
-
 	v2Ctx, cancelV2 := context.WithCancel(ctx)
 	defer cancelV2()
 
@@ -333,31 +324,6 @@ func runCleanAll(ctx context.Context, cmd *cobra.Command, force, dryRun bool) er
 	}
 
 	return runCleanAllWithItems(ctx, cmd, force, dryRun, items, tempFiles)
-}
-
-// installForceExitOnSecondSignal arms a goroutine that exits the process with
-// code 130 if the user presses Ctrl-C twice while this scope is active. The
-// first signal continues to be handled by the top-level cancel() in main.go.
-// Buffer size 2 so a fast second press isn't dropped by signal.Notify.
-// Returns a stop function that the caller MUST defer.
-func installForceExitOnSecondSignal(ctx context.Context) func() {
-	sigCh := make(chan os.Signal, 2)
-	signal.Notify(sigCh, os.Interrupt)
-	stopCtx, stop := context.WithCancel(ctx)
-	go func() {
-		for range 2 {
-			select {
-			case <-sigCh:
-			case <-stopCtx.Done():
-				return
-			}
-		}
-		os.Exit(130)
-	}()
-	return func() {
-		signal.Stop(sigCh)
-		stop()
-	}
 }
 
 // printSection prints a titled list of items if the slice is non-empty.

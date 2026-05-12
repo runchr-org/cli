@@ -378,13 +378,17 @@ func ListEligibleV2Generations(ctx context.Context, s *settings.EntireSettings) 
 		// at archive time and repaired by generation_repair.go) is the
 		// authoritative timestamp source in practice. The tree walk remains as
 		// a fallback for older generations whose generation.json is missing or
-		// incomplete.
+		// incomplete; use the ctx-aware variant so Ctrl+C aborts the walk
+		// promptly.
 		gen, genErr := store.ReadGeneration(treeHash)
 		if genErr != nil || gen.OldestCheckpointAt.IsZero() || gen.NewestCheckpointAt.IsZero() {
 			var foundCheckpointTimes bool
 			var timestampErr error
-			gen, foundCheckpointTimes, timestampErr = store.ComputeGenerationTimestampsFromTrees(treeHash, nil)
+			gen, foundCheckpointTimes, timestampErr = store.ComputeGenerationTimestampsFromTreesCtx(ctx, treeHash, nil)
 			if timestampErr != nil {
+				if errors.Is(timestampErr, context.Canceled) || errors.Is(timestampErr, context.DeadlineExceeded) {
+					return nil, warnings, timestampErr //nolint:wrapcheck // propagate context cancellation unwrapped
+				}
 				warnings = append(warnings, fmt.Sprintf("generation %s: failed to compute raw transcript timestamps: %v", candidate.Name, timestampErr))
 				continue
 			}

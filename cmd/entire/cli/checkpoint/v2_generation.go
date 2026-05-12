@@ -171,6 +171,15 @@ func (s *V2GitStore) ComputeGenerationCheckpointTimestamps(rootTreeHash plumbing
 // produce a timestamp; callers decide their own fallback (e.g. read existing
 // generation.json, recompute from in-memory data, or surface an error).
 func (s *V2GitStore) ComputeGenerationTimestampsFromTrees(rootTreeHash plumbing.Hash, mainTree *object.Tree) (GenerationMetadata, bool, error) {
+	return s.ComputeGenerationTimestampsFromTreesCtx(context.Background(), rootTreeHash, mainTree)
+}
+
+// ComputeGenerationTimestampsFromTreesCtx is the cancellable variant of
+// ComputeGenerationTimestampsFromTrees. The underlying tree walk honors ctx
+// between checkpoints so long enumerations (e.g. `entire clean --all` across
+// many archived generations with missing generation.json files) abort
+// promptly on Ctrl+C.
+func (s *V2GitStore) ComputeGenerationTimestampsFromTreesCtx(ctx context.Context, rootTreeHash plumbing.Hash, mainTree *object.Tree) (GenerationMetadata, bool, error) {
 	if rootTreeHash == plumbing.ZeroHash {
 		return GenerationMetadata{}, false, nil
 	}
@@ -183,7 +192,7 @@ func (s *V2GitStore) ComputeGenerationTimestampsFromTrees(rootTreeHash plumbing.
 	var gen GenerationMetadata
 	found := false
 	missingCheckpointTimestamp := false
-	err = WalkCheckpointShards(s.repo, rootTree, func(cpID id.CheckpointID, cpTreeHash plumbing.Hash) error {
+	err = WalkCheckpointShardsCtx(ctx, s.repo, rootTree, func(cpID id.CheckpointID, cpTreeHash plumbing.Hash) error {
 		if mainTree != nil {
 			if cpGen, ok := s.checkpointTimestampRangeFromMain(mainTree, cpID); ok {
 				mergeGenerationRange(&gen, &found, cpGen)

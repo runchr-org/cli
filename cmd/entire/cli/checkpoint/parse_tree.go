@@ -351,7 +351,17 @@ func readTreeEntriesViaCLI(ctx context.Context, hash plumbing.Hash) ([]object.Tr
 // at both levels (e.g., generation.json at the root). The callback receives the parsed
 // checkpoint ID and the tree hash of the checkpoint subtree.
 func WalkCheckpointShards(repo *git.Repository, tree *object.Tree, fn func(cpID id.CheckpointID, cpTreeHash plumbing.Hash) error) error {
+	return WalkCheckpointShardsCtx(context.Background(), repo, tree, fn)
+}
+
+// WalkCheckpointShardsCtx is the cancellable variant of WalkCheckpointShards.
+// It checks ctx between buckets and between checkpoints so long enumerations
+// (e.g. cleanup of many archived generations) abort promptly on Ctrl+C.
+func WalkCheckpointShardsCtx(ctx context.Context, repo *git.Repository, tree *object.Tree, fn func(cpID id.CheckpointID, cpTreeHash plumbing.Hash) error) error {
 	for _, bucketEntry := range tree.Entries {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // propagate context cancellation unwrapped
+		}
 		if bucketEntry.Mode != filemode.Dir {
 			continue
 		}
@@ -365,6 +375,9 @@ func WalkCheckpointShards(repo *git.Repository, tree *object.Tree, fn func(cpID 
 		}
 
 		for _, cpEntry := range bucketTree.Entries {
+			if err := ctx.Err(); err != nil {
+				return err //nolint:wrapcheck // propagate context cancellation unwrapped
+			}
 			if cpEntry.Mode != filemode.Dir {
 				continue
 			}
