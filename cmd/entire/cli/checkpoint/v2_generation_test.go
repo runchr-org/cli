@@ -378,6 +378,48 @@ func TestNextGenerationNumber_WithExisting(t *testing.T) {
 	assert.Equal(t, 3, next)
 }
 
+func TestParseRemoteGenerationRefs_WellFormed(t *testing.T) {
+	t.Parallel()
+	output := []byte(
+		"abc123def456abc123def456abc123def456abcd\trefs/entire/checkpoints/v2/full/0000000000001\n" +
+			"1234567890abcdef1234567890abcdef12345678\trefs/entire/checkpoints/v2/full/0000000000037\n" +
+			"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\trefs/entire/checkpoints/v2/full/0000000000175\n",
+	)
+
+	got := ParseRemoteGenerationRefs(output)
+
+	assert.Equal(t, map[string]string{
+		"0000000000001": "abc123def456abc123def456abc123def456abcd",
+		"0000000000037": "1234567890abcdef1234567890abcdef12345678",
+		"0000000000175": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+	}, got)
+}
+
+func TestParseRemoteGenerationRefs_SkipsCurrentAndMalformed(t *testing.T) {
+	t.Parallel()
+	output := []byte(
+		"\n" + // blank line
+			"abc123def456abc123def456abc123def456abcd\trefs/entire/checkpoints/v2/full/current\n" +
+			"abc123def456abc123def456abc123def456abcd\trefs/entire/checkpoints/v2/full/not-a-number\n" +
+			"abc123def456abc123def456abc123def456abcd\trefs/entire/checkpoints/v2/full/000000000001\n" + // 12 digits, not 13
+			"oneFieldOnly\n" +
+			"abc123def456abc123def456abc123def456abcd\trefs/entire/checkpoints/v2/full/0000000000042\n",
+	)
+
+	got := ParseRemoteGenerationRefs(output)
+
+	assert.Equal(t, map[string]string{
+		"0000000000042": "abc123def456abc123def456abc123def456abcd",
+	}, got)
+}
+
+func TestParseRemoteGenerationRefs_Empty(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, ParseRemoteGenerationRefs(nil))
+	assert.Empty(t, ParseRemoteGenerationRefs([]byte("")))
+	assert.Empty(t, ParseRemoteGenerationRefs([]byte("\n\n\n")))
+}
+
 // populateFullCurrent writes n checkpoints to /full/current via WriteCommitted.
 // offset shifts the generated checkpoint IDs to avoid collisions across calls.
 func populateFullCurrent(t *testing.T, store *V2GitStore, n, offset int) []id.CheckpointID {

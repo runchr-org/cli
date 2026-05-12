@@ -505,24 +505,7 @@ func listRemoteArchivedV2GenerationRefs(ctx context.Context, target string) (map
 	if err != nil {
 		return nil, fmt.Errorf("ls remote v2 generations: %w", err)
 	}
-
-	refs := make(map[string]string)
-	for line := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
-		if line == "" {
-			continue
-		}
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
-			continue
-		}
-		refName := parts[1]
-		suffix := strings.TrimPrefix(refName, paths.V2FullRefPrefix)
-		if suffix == "current" || !checkpoint.GenerationRefPattern.MatchString(suffix) {
-			continue
-		}
-		refs[suffix] = parts[0]
-	}
-	return refs, nil
+	return checkpoint.ParseRemoteGenerationRefs(output), nil
 }
 
 func fetchArchivedV2Generation(ctx context.Context, fetchTarget, name string) (plumbing.ReferenceName, error) {

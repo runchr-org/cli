@@ -416,6 +416,30 @@ func ArchivedGenerationRefName(number int) plumbing.ReferenceName {
 // GenerationRefPattern matches exactly 13 digits (the archived generation ref suffix format).
 var GenerationRefPattern = regexp.MustCompile(`^\d{13}$`)
 
+// ParseRemoteGenerationRefs parses `git ls-remote` output for v2 full-generation
+// refs and returns a map from the 13-digit generation suffix to the ref OID.
+// Skips the "current" pseudo-generation and any names that do not match
+// GenerationRefPattern. Blank or malformed lines are ignored.
+func ParseRemoteGenerationRefs(output []byte) map[string]string {
+	refs := make(map[string]string)
+	for line := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		refName := parts[1]
+		suffix := strings.TrimPrefix(refName, paths.V2FullRefPrefix)
+		if suffix == "current" || !GenerationRefPattern.MatchString(suffix) {
+			continue
+		}
+		refs[suffix] = parts[0]
+	}
+	return refs
+}
+
 // listArchivedGenerations returns the names of all archived generation refs
 // (everything under V2FullRefPrefix matching the expected numeric format), sorted ascending.
 func (s *V2GitStore) ListArchivedGenerations() ([]string, error) {
@@ -447,23 +471,31 @@ func (s *V2GitStore) ListArchivedGenerations() ([]string, error) {
 
 // NextGenerationNumber returns the next sequential generation number for archiving.
 // Scans existing archived refs and returns max+1. Returns 1 if no archives exist.
+//
+// This is local-only: rotation happens during commit-time condensation, while
+// remote-aware renumbering happens at push time in
+// renumberPendingArchivesAgainstRemote (strategy/push_v2.go) so the team
+// converges onto a single sequence without slowing down commits.
 func (s *V2GitStore) NextGenerationNumber() (int, error) {
 	archived, err := s.ListArchivedGenerations()
 	if err != nil {
 		return 0, err
 	}
+	return maxGenerationNumber(archived) + 1, nil
+}
 
+func maxGenerationNumber(archived []string) int {
 	var maxNum int64
 	for _, name := range archived {
 		n, parseErr := strconv.ParseInt(name, 10, 64)
 		if parseErr != nil {
-			continue // skip unparseable entries
+			continue
 		}
 		if n > maxNum {
 			maxNum = n
 		}
 	}
-	return int(maxNum) + 1, nil
+	return int(maxNum)
 }
 
 // RotateCurrentGenerationIfNeeded archives /full/current when it has reached
