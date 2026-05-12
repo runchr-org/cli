@@ -51,8 +51,8 @@ func ConfirmFirstRunSetup(ctx context.Context, out io.Writer) bool {
 	fmt.Fprintln(out, "No investigate config found — let's set one up first.")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "You'll pick which agents take turns during an investigation, and the")
-	fmt.Fprintln(out, "max-turns / quorum the loop should use. The selection is saved to")
-	fmt.Fprintln(out, ".entire/settings.json; edit later with `entire investigate --edit`.")
+	fmt.Fprintln(out, "max-turns / quorum the loop should use. The selection is saved to local")
+	fmt.Fprintln(out, "preferences (.entire/settings.local.json, not committed); edit later with `entire investigate --edit`.")
 	fmt.Fprintln(out, "After setup, the investigation will run with your selection.")
 	fmt.Fprintln(out)
 
