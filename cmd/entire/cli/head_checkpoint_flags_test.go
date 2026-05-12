@@ -128,3 +128,15 @@ func TestHeadHasInvestigateCheckpoint_OnlyInvestigation(t *testing.T) {
 	require.True(t, hasInvestigation)
 	require.Contains(t, info, cpID.String())
 }
+
+// TestHeadHasInvestigateCheckpoint_WrapperPreservesContract pins the
+// symmetric invariant: when HasReview is true but HasInvestigation is
+// false, the investigate wrapper must NOT piggyback on the review flag.
+func TestHeadHasInvestigateCheckpoint_WrapperPreservesContract(t *testing.T) {
+	repo := setupHeadFlagsRepo(t)
+	writeHeadCheckpointWithFlags(t, repo, true, false)
+
+	hasInvestigation, info := headHasInvestigateCheckpoint(context.Background())
+	require.False(t, hasInvestigation, "wrapper must not piggyback on HasReview")
+	require.Empty(t, info, "info must be empty when the wrapper returns false")
+}
