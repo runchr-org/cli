@@ -403,6 +403,7 @@ func runSingleAgentPath(
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 
+	runCfg.EnrichSummary = reviewSummaryTokenEnricher(worktreeRoot, headSHA)
 	canPrompt := interactive.CanPromptInteractively()
 	sinks := composeSingleAgentSinks(singleAgentSinkInputs{
 		out:       out,
@@ -587,7 +588,14 @@ func runMultiAgentPath(
 		defer tuiSink.Wait()
 	}
 
-	summary, waitErr := RunMulti(runCtx, reviewers, reviewtypes.RunConfig{}, sinks)
+	// Multi-agent only wires EnrichAgentRun. The per-agent enricher emits a
+	// synthetic Tokens event as each agent finishes, which the dispatch loop
+	// overwrites onto st.tokens (run_multi.go:168). That value flows into
+	// agentRuns[i].Tokens in the final summary, so a summary-level pass would
+	// redo the same store.List + token hydration once per run.
+	summary, waitErr := RunMulti(runCtx, reviewers, reviewtypes.RunConfig{
+		EnrichAgentRun: reviewAgentRunTokenEnricher(worktreeRoot, headSHA),
+	}, sinks)
 	writePostReviewManifest(ctx, out, worktreeRoot, headSHA, summary, aggregateOutput)
 	if waitErr != nil && runCtx.Err() == nil && ctx.Err() == nil {
 		return fmt.Errorf("review run: %w", waitErr)
@@ -714,6 +722,28 @@ func warnManifestNotWritten(out io.Writer, reason string) {
 	fmt.Fprintf(out, "  Reason: %s\n", reason)
 	fmt.Fprintln(out, "  `entire review --findings` and `entire review --fix` will not see this run.")
 	fmt.Fprintln(out, "  Re-run with `ENTIRE_LOG_LEVEL=debug` for diagnostic detail.")
+}
+
+func reviewSummaryTokenEnricher(worktreeRoot, headSHA string) func(context.Context, reviewtypes.RunSummary) reviewtypes.RunSummary {
+	return func(ctx context.Context, summary reviewtypes.RunSummary) reviewtypes.RunSummary {
+		enriched, err := hydrateReviewSummaryTokensFromCurrentState(ctx, worktreeRoot, headSHA, summary, agent.GetByAgentType)
+		if err != nil {
+			logging.Debug(ctx, "review token hydration skipped", slog.String("error", err.Error()))
+			return summary
+		}
+		return enriched
+	}
+}
+
+func reviewAgentRunTokenEnricher(worktreeRoot, headSHA string) func(context.Context, reviewtypes.AgentRun) reviewtypes.AgentRun {
+	return func(ctx context.Context, run reviewtypes.AgentRun) reviewtypes.AgentRun {
+		enriched, err := hydrateReviewAgentRunTokensFromCurrentState(ctx, worktreeRoot, headSHA, run, agent.GetByAgentType)
+		if err != nil {
+			logging.Debug(ctx, "review agent token hydration skipped", slog.String("error", err.Error()))
+			return run
+		}
+		return enriched
+	}
 }
 
 func composeSingleAgentSinks(in singleAgentSinkInputs) []reviewtypes.Sink {
