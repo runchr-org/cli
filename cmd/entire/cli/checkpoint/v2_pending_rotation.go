@@ -66,6 +66,35 @@ func (s *V2GitStore) ReadPendingFullGenerationPublications(ctx context.Context) 
 	return state.Publications, nil
 }
 
+// UpdatePendingFullGenerationArchiveRefs atomically rewrites the archive ref
+// name on each matching pending publication. The map keys are the existing
+// ArchiveRefName values and the values are the new ones. Entries whose names
+// are not in the map are left untouched. The whole operation runs under the
+// pending publications lock so callers cannot observe a half-renamed state.
+func (s *V2GitStore) UpdatePendingFullGenerationArchiveRefs(ctx context.Context, renames map[string]string) error {
+	if len(renames) == 0 {
+		return nil
+	}
+	return s.withPendingFullGenerationPublicationLock(ctx, func() error {
+		state, err := s.readPendingFullGenerationPublicationState(ctx)
+		if err != nil {
+			return err
+		}
+		changed := false
+		for i := range state.Publications {
+			if newName, ok := renames[state.Publications[i].ArchiveRefName]; ok {
+				state.Publications[i].ArchiveRefName = newName
+				changed = true
+			}
+		}
+		if !changed {
+			return nil
+		}
+		state.Version = pendingV2FullGenerationPublicationVersion
+		return s.writePendingFullGenerationPublicationState(ctx, state)
+	})
+}
+
 func (s *V2GitStore) RemovePendingFullGenerationPublications(ctx context.Context, publications []PendingV2FullGenerationPublication) error {
 	if len(publications) == 0 {
 		return nil

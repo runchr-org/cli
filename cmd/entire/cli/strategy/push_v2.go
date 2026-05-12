@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,10 +60,25 @@ func tryPushV2Refs(ctx context.Context, target string, refs []plumbing.Reference
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
+	start := time.Now()
+	refNames := shortRefNames(refs)
+	logging.Debug(ctx, "push-v2: tryPushV2Refs start",
+		slog.Int("ref_count", len(refs)),
+		slog.String("refs", strings.Join(refNames, ",")),
+	)
+
 	result, err := remote.PushWithOptions(ctx, remote.PushOptions{
 		Remote:   target,
 		RefSpecs: refSpecsForRefs(refs),
 	})
+
+	logging.Debug(ctx, "push-v2: tryPushV2Refs done",
+		slog.Duration("duration", time.Since(start)),
+		slog.Int("ref_count", len(refs)),
+		slog.Int("output_bytes", len(result.Output)),
+		slog.Bool("error", err != nil),
+	)
+
 	return parsePushRefResults(ctx, result.Output, refs, err)
 }
 
@@ -81,17 +97,35 @@ func pushV2RefsWithRecovery(ctx context.Context, target string, refs []plumbing.
 		}
 
 		shortRef := shortRefName(result.refName)
+		fmt.Fprintf(os.Stderr, "[entire] Recovering %s: non-fast-forward, fetching remote...\n", shortRef)
+		recoverStart := time.Now()
+		logging.Debug(ctx, "push-v2: recovery start",
+			slog.String("ref", shortRef),
+		)
 		if err := fetchAndMergeRef(ctx, target, result.refName); err != nil {
+			logging.Debug(ctx, "push-v2: recovery failed",
+				slog.String("ref", shortRef),
+				slog.Duration("duration", time.Since(recoverStart)),
+				slog.String("error", err.Error()),
+			)
 			resultsByRef[result.refName] = v2RefPushResult{
 				refName: result.refName,
 				err:     fmt.Errorf("couldn't sync %s: %w", shortRef, err),
 			}
 			continue
 		}
+		logging.Debug(ctx, "push-v2: recovery done",
+			slog.String("ref", shortRef),
+			slog.Duration("duration", time.Since(recoverStart)),
+		)
+		fmt.Fprintf(os.Stderr, "[entire] Recovered %s in %s, retrying push...\n", shortRef, time.Since(recoverStart).Round(time.Millisecond))
 		retryRefs = append(retryRefs, result.refName)
 	}
 
 	if len(retryRefs) > 0 {
+		logging.Debug(ctx, "push-v2: retry push after recovery",
+			slog.Int("ref_count", len(retryRefs)),
+		)
 		for _, result := range tryPushV2Refs(ctx, target, retryRefs) {
 			if result.err != nil {
 				result.err = fmt.Errorf("failed to push %s after sync: %w", shortRefName(result.refName), result.err)
@@ -114,6 +148,148 @@ func pushV2RefsWithRecovery(ctx context.Context, target string, refs []plumbing.
 	return results
 }
 
+// renumberPendingArchivesAgainstRemote reconciles the local pending archive
+// publications with the target remote's view of refs/entire/checkpoints/v2/full/*.
+//
+// Every developer rotates with local-only numbering at commit time
+// (NextGenerationNumber in v2_generation.go), so two machines can pick the
+// same suffix or different suffixes from each other and the remote. At push
+// time we ls-remote once and renumber any pending archive whose suffix is at
+// or below the remote's max — keeping the team converged onto a single,
+// monotonically increasing sequence. Archives that match the remote OID are
+// left untouched so the existing push path can treat them as up-to-date.
+//
+// Failures (ls-remote, ref creation, state update) degrade to a no-op: the
+// publish path runs against the original publications. The non-fast-forward
+// path in pushV2RefsWithRecovery remains the eventual safety net.
+func renumberPendingArchivesAgainstRemote(
+	ctx context.Context,
+	repo *git.Repository,
+	store *checkpoint.V2GitStore,
+	target string,
+	publications []checkpoint.PendingV2FullGenerationPublication,
+) ([]checkpoint.PendingV2FullGenerationPublication, error) {
+	if len(publications) == 0 {
+		return publications, nil
+	}
+
+	lsCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	output, err := remote.LsRemote(lsCtx, target, paths.V2FullRefPrefix+"*")
+	if err != nil {
+		logging.Debug(ctx, "push-v2: renumber ls-remote failed, skipping",
+			slog.String("target", target),
+			slog.String("error", err.Error()),
+		)
+		return publications, nil
+	}
+
+	remoteRefs := checkpoint.ParseRemoteGenerationRefs(output)
+	if len(remoteRefs) == 0 {
+		return publications, nil
+	}
+
+	remoteMax := 0
+	for suffix := range remoteRefs {
+		n, parseErr := strconv.Atoi(suffix)
+		if parseErr != nil {
+			continue
+		}
+		if n > remoteMax {
+			remoteMax = n
+		}
+	}
+	if remoteMax == 0 {
+		return publications, nil
+	}
+
+	used := make(map[int]struct{}, len(remoteRefs))
+	for suffix := range remoteRefs {
+		if n, parseErr := strconv.Atoi(suffix); parseErr == nil {
+			used[n] = struct{}{}
+		}
+	}
+	localArchives, listErr := store.ListArchivedGenerations()
+	if listErr != nil {
+		logging.Debug(ctx, "push-v2: renumber list local archives failed, skipping",
+			slog.String("error", listErr.Error()),
+		)
+		return publications, nil
+	}
+	for _, suffix := range localArchives {
+		if n, parseErr := strconv.Atoi(suffix); parseErr == nil {
+			used[n] = struct{}{}
+		}
+	}
+
+	nextFree := remoteMax + 1
+	advance := func() int {
+		for {
+			if _, taken := used[nextFree]; !taken {
+				return nextFree
+			}
+			nextFree++
+		}
+	}
+
+	renames := make(map[string]string)
+	updated := make([]checkpoint.PendingV2FullGenerationPublication, len(publications))
+	copy(updated, publications)
+	for i := range updated {
+		oldRefName := updated[i].ArchiveRefName
+		suffix, ok := strings.CutPrefix(oldRefName, paths.V2FullRefPrefix)
+		if !ok || !checkpoint.GenerationRefPattern.MatchString(suffix) {
+			continue
+		}
+		n, parseErr := strconv.Atoi(suffix)
+		if parseErr != nil {
+			continue
+		}
+		if remoteOID, exists := remoteRefs[suffix]; exists && remoteOID == updated[i].ArchiveCommitHash {
+			continue
+		}
+		if n > remoteMax {
+			continue
+		}
+
+		nextN := advance()
+		newRefName := checkpoint.ArchivedGenerationRefName(nextN)
+		commitHash := plumbing.NewHash(updated[i].ArchiveCommitHash)
+		if err := repo.Storer.SetReference(plumbing.NewHashReference(newRefName, commitHash)); err != nil {
+			logging.Debug(ctx, "push-v2: renumber create new ref failed, skipping renumber",
+				slog.String("new_ref", string(newRefName)),
+				slog.String("error", err.Error()),
+			)
+			return publications, nil
+		}
+		renames[oldRefName] = string(newRefName)
+		used[nextN] = struct{}{}
+		nextFree++
+		updated[i].ArchiveRefName = string(newRefName)
+	}
+
+	if len(renames) == 0 {
+		return updated, nil
+	}
+
+	if err := store.UpdatePendingFullGenerationArchiveRefs(ctx, renames); err != nil {
+		return nil, fmt.Errorf("update pending publication refs: %w", err)
+	}
+
+	for oldRef := range renames {
+		_ = repo.Storer.RemoveReference(plumbing.ReferenceName(oldRef)) //nolint:errcheck // cleanup is best-effort
+	}
+
+	fmt.Fprintf(os.Stderr, "[entire] Renumbered %d pending archive(s) past remote max %d for convergence\n", len(renames), remoteMax)
+	logging.Info(ctx, "push-v2: renumbered pending archive publications against remote",
+		slog.Int("renamed_count", len(renames)),
+		slog.Int("remote_max", remoteMax),
+	)
+
+	return updated, nil
+}
+
 func publishPendingV2FullGenerationPublications(
 	ctx context.Context,
 	repo *git.Repository,
@@ -125,6 +301,25 @@ func publishPendingV2FullGenerationPublications(
 	if len(publications) == 0 {
 		return result, nil
 	}
+
+	start := time.Now()
+	fmt.Fprintf(os.Stderr, "[entire] Publishing %d pending v2 full generation publication(s)...\n", len(publications))
+	logging.Debug(ctx, "push-v2: publishPendingV2FullGenerationPublications start",
+		slog.Int("publication_count", len(publications)),
+	)
+	defer func() {
+		logging.Debug(ctx, "push-v2: publishPendingV2FullGenerationPublications done",
+			slog.Duration("duration", time.Since(start)),
+			slog.Int("successful_refs", len(result.successfulRefs)),
+			slog.Bool("full_current_reset_handled", result.fullCurrentResetHandled),
+		)
+	}()
+
+	renumbered, renumberErr := renumberPendingArchivesAgainstRemote(ctx, repo, store, target, publications)
+	if renumberErr != nil {
+		return result, fmt.Errorf("renumber pending archives: %w", renumberErr)
+	}
+	publications = renumbered
 
 	currentRefName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
 	var localCurrentRef *plumbing.Reference
@@ -389,6 +584,8 @@ func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.Refer
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
+	shortRef := shortRefName(refName)
+
 	fetchTarget, err := remote.ResolveFetchTarget(ctx, target)
 	if err != nil {
 		return fmt.Errorf("resolve fetch target: %w", err)
@@ -399,15 +596,28 @@ func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.Refer
 	tmpRefName := plumbing.ReferenceName("refs/entire-fetch-tmp/" + tmpRefSuffix)
 	refSpec := fmt.Sprintf("+%s:%s", refName, tmpRefName)
 
+	fetchStart := time.Now()
+	fmt.Fprintf(os.Stderr, "[entire]   fetching remote %s...\n", shortRef)
+	logging.Debug(ctx, "push-v2: fetchAndMergeRef fetch start",
+		slog.String("ref", shortRef),
+	)
+
 	// Recovery flattens fetched trees recursively, so it needs a complete object
 	// graph instead of the normal blobless sync fetch.
-	if output, err := remote.Fetch(ctx, remote.FetchOptions{
+	output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
 		Remote:    fetchTarget,
 		RefSpecs:  []string{refSpec},
 		NoTags:    true,
 		NoFilter:  true,
 		ExtraArgs: []string{"--no-write-fetch-head"},
-	}); err != nil {
+	})
+	logging.Debug(ctx, "push-v2: fetchAndMergeRef fetch done",
+		slog.String("ref", shortRef),
+		slog.Duration("duration", time.Since(fetchStart)),
+		slog.Int("output_bytes", len(output)),
+		slog.Bool("error", fetchErr != nil),
+	)
+	if fetchErr != nil {
 		return fmt.Errorf("fetch failed: %s", output)
 	}
 
@@ -421,8 +631,15 @@ func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.Refer
 
 	// Check for rotation conflict on /full/current
 	if refName == plumbing.ReferenceName(paths.V2FullCurrentRefName) {
+		detectStart := time.Now()
 		remoteRotationArchives, detectErr := detectRemoteRotationArchives(ctx, target, repo)
+		logging.Debug(ctx, "push-v2: detectRemoteRotationArchives done",
+			slog.Duration("duration", time.Since(detectStart)),
+			slog.Int("missing_archive_count", len(remoteRotationArchives)),
+			slog.Bool("error", detectErr != nil),
+		)
 		if detectErr == nil && len(remoteRotationArchives) > 0 {
+			fmt.Fprintf(os.Stderr, "[entire]   remote has %d archive generation refs not present locally; entering rotation recovery\n", len(remoteRotationArchives))
 			return handleRotationConflict(ctx, target, fetchTarget, repo, refName, tmpRefName, remoteRotationArchives)
 		}
 	}
@@ -494,26 +711,16 @@ func detectRemoteRotationArchives(ctx context.Context, target string, repo *git.
 		return nil, fmt.Errorf("ls-remote failed: %w", err)
 	}
 
+	remoteRefs := checkpoint.ParseRemoteGenerationRefs(output)
 	var remoteRotationArchives []string
-	for line := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
-		if line == "" {
-			continue
+	for suffix, oid := range remoteRefs {
+		refName := paths.V2FullRefPrefix + suffix
+		if len(oid) != 40 {
+			return nil, fmt.Errorf("invalid remote archive hash %q for %s", oid, refName)
 		}
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
-			continue
-		}
-		refName := parts[1]
-		suffix := strings.TrimPrefix(refName, paths.V2FullRefPrefix)
-		if suffix == "current" || !checkpoint.GenerationRefPattern.MatchString(suffix) {
-			continue
-		}
-		if len(parts[0]) != 40 {
-			return nil, fmt.Errorf("invalid remote archive hash %q for %s", parts[0], refName)
-		}
-		remoteHash := plumbing.NewHash(parts[0])
-		localRef, err := repo.Reference(plumbing.ReferenceName(refName), true)
-		if err != nil || localRef.Hash() != remoteHash {
+		remoteHash := plumbing.NewHash(oid)
+		localRef, refErr := repo.Reference(plumbing.ReferenceName(refName), true)
+		if refErr != nil || localRef.Hash() != remoteHash {
 			remoteRotationArchives = append(remoteRotationArchives, suffix)
 		}
 	}
@@ -566,20 +773,35 @@ func fetchRelatedRemoteRotationArchive(ctx context.Context, fetchTarget string, 
 		archiveTmpRefs = append(archiveTmpRefs, archiveTmpRef)
 	}
 
+	fmt.Fprintf(os.Stderr, "[entire]   fetching %d archive refs to locate related generation (may take a while)...\n", len(archives))
+	fetchStart := time.Now()
+	logging.Debug(ctx, "push-v2: fetchRelatedRemoteRotationArchive fetch start",
+		slog.Int("archive_count", len(archives)),
+	)
+
 	// These archive commits are read immediately through go-git for tree
 	// flattening, so fetch the complete refs rather than blobless packfiles.
-	if output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
+	output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
 		Remote:    fetchTarget,
 		RefSpecs:  refSpecs,
 		NoTags:    true,
 		NoFilter:  true,
 		ExtraArgs: []string{"--no-write-fetch-head"},
-	}); fetchErr != nil {
+	})
+	fetchDuration := time.Since(fetchStart)
+	logging.Debug(ctx, "push-v2: fetchRelatedRemoteRotationArchive fetch done",
+		slog.Duration("duration", fetchDuration),
+		slog.Int("archive_count", len(archives)),
+		slog.Int("output_bytes", len(output)),
+		slog.Bool("error", fetchErr != nil),
+	)
+	if fetchErr != nil {
 		if repo, openErr := OpenRepository(ctx); openErr == nil {
 			cleanupFetchedArchiveTmpRefs(repo, archiveTmpRefs)
 		}
 		return fetchedRemoteRotationArchive{}, fmt.Errorf("fetch archived generations failed: %s", output)
 	}
+	fmt.Fprintf(os.Stderr, "[entire]   fetched %d archive refs in %s; scanning for related generation...\n", len(archives), fetchDuration.Round(time.Millisecond))
 
 	repo, err := OpenRepository(ctx)
 	if err != nil {
@@ -590,20 +812,31 @@ func fetchRelatedRemoteRotationArchive(ctx context.Context, fetchTarget string, 
 		cleanupFetchedArchiveTmpRefs(repo, tmpRefsToCleanup)
 	}()
 
+	scanStart := time.Now()
 	localCurrentAncestors, ok := currentGenerationAncestors(ctx, repo, localCurrentHash)
 	if !ok {
 		return fetchedRemoteRotationArchive{}, errors.New("failed to read local /full/current history")
 	}
-	for _, archive := range archives {
+	for idx, archive := range archives {
 		fetched, err := readFetchedRemoteRotationArchive(repo, archive)
 		if err != nil {
 			return fetchedRemoteRotationArchive{}, err
 		}
 		if archiveSharesHistoryWithCurrentGeneration(ctx, repo, localCurrentAncestors, fetched.ref.Hash()) {
+			logging.Debug(ctx, "push-v2: fetchRelatedRemoteRotationArchive matched",
+				slog.String("archive", archive),
+				slog.Int("scanned", idx+1),
+				slog.Int("total_archives", len(archives)),
+				slog.Duration("scan_duration", time.Since(scanStart)),
+			)
 			tmpRefsToCleanup = removeRef(tmpRefsToCleanup, fetched.tmpRefName)
 			return fetched, nil
 		}
 	}
+	logging.Debug(ctx, "push-v2: fetchRelatedRemoteRotationArchive no match",
+		slog.Int("total_archives", len(archives)),
+		slog.Duration("scan_duration", time.Since(scanStart)),
+	)
 	return fetchedRemoteRotationArchive{}, errors.New("no remote archive shares history with local /full/current")
 }
 
@@ -674,6 +907,16 @@ func archiveSharesHistoryWithCurrentGeneration(ctx context.Context, repo *git.Re
 // Merges local /full/current into the related remote archived generation to avoid
 // duplicating checkpoint data, then adopts remote's /full/current as local.
 func handleRotationConflict(ctx context.Context, target, fetchTarget string, repo *git.Repository, refName, tmpRefName plumbing.ReferenceName, remoteRotationArchives []string) error {
+	start := time.Now()
+	logging.Debug(ctx, "push-v2: handleRotationConflict start",
+		slog.Int("remote_archive_count", len(remoteRotationArchives)),
+	)
+	defer func() {
+		logging.Debug(ctx, "push-v2: handleRotationConflict done",
+			slog.Duration("duration", time.Since(start)),
+		)
+	}()
+
 	localRef, err := repo.Reference(refName, true)
 	if err != nil {
 		return fmt.Errorf("failed to get local ref: %w", err)
@@ -683,6 +926,7 @@ func handleRotationConflict(ctx context.Context, target, fetchTarget string, rep
 	if err != nil {
 		return fmt.Errorf("failed to find related archived generation: %w", err)
 	}
+	fmt.Fprintf(os.Stderr, "[entire]   merging local /full/current into archive %s...\n", strings.TrimPrefix(string(archive.refName), paths.V2FullRefPrefix))
 	// fetchRelatedRemoteRotationArchive fetches via git CLI, so continue with
 	// the fresh go-git handle it used to avoid stale pack indexes.
 	repo = archive.repo
@@ -745,9 +989,20 @@ func handleRotationConflict(ctx context.Context, target, fetchTarget string, rep
 		return fmt.Errorf("failed to update archive ref: %w", err)
 	}
 
+	fmt.Fprintf(os.Stderr, "[entire]   pushing merged archive %s...\n", strings.TrimPrefix(string(archive.refName), paths.V2FullRefPrefix))
+	pushStart := time.Now()
 	if pushErr := tryPushRef(ctx, target, archive.refName); pushErr != nil {
+		logging.Debug(ctx, "push-v2: handleRotationConflict push merged archive failed",
+			slog.String("archive_ref", string(archive.refName)),
+			slog.Duration("duration", time.Since(pushStart)),
+			slog.String("error", pushErr.Error()),
+		)
 		return fmt.Errorf("failed to push updated archive: %w", pushErr)
 	}
+	logging.Debug(ctx, "push-v2: handleRotationConflict push merged archive done",
+		slog.String("archive_ref", string(archive.refName)),
+		slog.Duration("duration", time.Since(pushStart)),
+	)
 
 	// Adopt remote's /full/current as local
 	remoteRef, err := repo.Reference(tmpRefName, true)
@@ -830,12 +1085,26 @@ func pushV2Refs(ctx context.Context, target string) {
 		return
 	}
 
+	overallStart := time.Now()
 	fmt.Fprintln(os.Stderr, "[entire] Syncing and pushing v2 checkpoints...")
 	pushNames := shortRefNames(refs)
+	for _, archiveRef := range pendingFullArchiveRefs(pendingPublications) {
+		pushNames = append(pushNames, shortRefName(archiveRef)+" (pending)")
+	}
 	if len(pushNames) == 0 {
 		pushNames = []string{"pending v2/full generations"}
 	}
 	fmt.Fprintf(os.Stderr, "[entire] Pushing %s...\n", strings.Join(pushNames, ", "))
+	logging.Debug(ctx, "push-v2: pushV2Refs start",
+		slog.Int("active_ref_count", len(refs)),
+		slog.Int("pending_publication_count", len(pendingPublications)),
+		slog.String("target", displayPushTarget(target)),
+	)
+	defer func() {
+		logging.Debug(ctx, "push-v2: pushV2Refs done",
+			slog.Duration("duration", time.Since(overallStart)),
+		)
+	}()
 
 	var failures []error
 	var successfulRefs []plumbing.ReferenceName

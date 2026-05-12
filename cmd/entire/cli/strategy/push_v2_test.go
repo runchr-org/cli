@@ -3,6 +3,7 @@ package strategy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1168,4 +1169,216 @@ func TestFetchAndMergeRef_RemoteRotatedMultipleTimesUsesRelatedArchive(t *testin
 		"local first-generation checkpoint must not be merged into later remote archive 2")
 	assert.True(t, refContainsV2Checkpoint(t, bareRepo, archive2Ref, remoteGen2CP),
 		"remote generation 2 checkpoint should remain in archive 2")
+}
+
+// initBareForTest creates a bare repo at the given directory.
+func initBareForTest(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", "init", "--bare", dir)
+	cmd.Env = testutil.GitIsolatedEnv()
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git init --bare failed: %s", out)
+}
+
+// pushRefFromCWD pushes a specific local ref to the bare target.
+func pushRefFromCWD(t *testing.T, target string, refName plumbing.ReferenceName) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", "push", target, string(refName)+":"+string(refName))
+	cmd.Env = testutil.GitIsolatedEnv()
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git push %s %s failed: %s", target, refName, out)
+}
+
+// Not parallel: uses t.Chdir() so renumberPendingArchivesAgainstRemote's
+// ls-remote and update-ref calls run in the right working dir.
+func TestRenumberPendingArchivesAgainstRemote_RenumbersWhenRemoteHigher(t *testing.T) {
+	ctx := context.Background()
+
+	localDir := setupRepoWithV2Ref(t)
+	repo, err := git.PlainOpen(localDir)
+	require.NoError(t, err)
+	store := checkpoint.NewV2GitStore(repo, "origin")
+	t.Chdir(localDir)
+
+	bareDir := t.TempDir()
+	initBareForTest(t, bareDir)
+
+	// Seed bare with archive 175 so remote max = 175.
+	remoteRef := checkpoint.ArchivedGenerationRefName(175)
+	_ = writeV2ArchiveRef(t, repo, remoteRef, "remote-175")
+	pushRefFromCWD(t, bareDir, remoteRef)
+	require.NoError(t, repo.Storer.RemoveReference(remoteRef))
+
+	// Local: archive 38 with a unique OID + pending publication.
+	localRef := checkpoint.ArchivedGenerationRefName(38)
+	localHash := writeV2ArchiveRef(t, repo, localRef, "local-38")
+	publication := checkpoint.PendingV2FullGenerationPublication{
+		ArchiveRefName:    string(localRef),
+		ArchiveCommitHash: localHash.String(),
+	}
+	require.NoError(t, store.AppendPendingFullGenerationPublication(ctx, publication))
+
+	got, err := renumberPendingArchivesAgainstRemote(ctx, repo, store, bareDir,
+		[]checkpoint.PendingV2FullGenerationPublication{publication})
+	require.NoError(t, err)
+
+	expectedRef := checkpoint.ArchivedGenerationRefName(176)
+	require.Len(t, got, 1)
+	assert.Equal(t, string(expectedRef), got[0].ArchiveRefName)
+	assert.Equal(t, localHash.String(), got[0].ArchiveCommitHash, "commit hash unchanged by renumber")
+
+	ref176, err := repo.Reference(expectedRef, true)
+	require.NoError(t, err, "renamed archive ref should exist locally")
+	assert.Equal(t, localHash, ref176.Hash())
+
+	_, err = repo.Reference(localRef, true)
+	require.Error(t, err, "old archive ref should be removed after renumber")
+
+	remaining, err := store.ReadPendingFullGenerationPublications(ctx)
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
+	assert.Equal(t, string(expectedRef), remaining[0].ArchiveRefName,
+		"pending state should reflect the renumbered ref")
+}
+
+// Not parallel: uses t.Chdir()
+func TestRenumberPendingArchivesAgainstRemote_KeepsWhenAlreadyAhead(t *testing.T) {
+	ctx := context.Background()
+
+	localDir := setupRepoWithV2Ref(t)
+	repo, err := git.PlainOpen(localDir)
+	require.NoError(t, err)
+	store := checkpoint.NewV2GitStore(repo, "origin")
+	t.Chdir(localDir)
+
+	bareDir := t.TempDir()
+	initBareForTest(t, bareDir)
+
+	// Seed bare with 1, 2.
+	for _, n := range []int{1, 2} {
+		ref := checkpoint.ArchivedGenerationRefName(n)
+		_ = writeV2ArchiveRef(t, repo, ref, fmt.Sprintf("remote-%d", n))
+		pushRefFromCWD(t, bareDir, ref)
+		require.NoError(t, repo.Storer.RemoveReference(ref))
+	}
+
+	// Local pending is 200 — already ahead of remote.
+	localRef := checkpoint.ArchivedGenerationRefName(200)
+	localHash := writeV2ArchiveRef(t, repo, localRef, "local-200")
+	publication := checkpoint.PendingV2FullGenerationPublication{
+		ArchiveRefName:    string(localRef),
+		ArchiveCommitHash: localHash.String(),
+	}
+	require.NoError(t, store.AppendPendingFullGenerationPublication(ctx, publication))
+
+	got, err := renumberPendingArchivesAgainstRemote(ctx, repo, store, bareDir,
+		[]checkpoint.PendingV2FullGenerationPublication{publication})
+	require.NoError(t, err)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, string(localRef), got[0].ArchiveRefName, "pending suffix > remote max stays put")
+
+	_, err = repo.Reference(localRef, true)
+	require.NoError(t, err, "local archive ref should still exist")
+}
+
+// Not parallel: uses t.Chdir()
+func TestRenumberPendingArchivesAgainstRemote_MultiplePending(t *testing.T) {
+	ctx := context.Background()
+
+	localDir := setupRepoWithV2Ref(t)
+	repo, err := git.PlainOpen(localDir)
+	require.NoError(t, err)
+	store := checkpoint.NewV2GitStore(repo, "origin")
+	t.Chdir(localDir)
+
+	bareDir := t.TempDir()
+	initBareForTest(t, bareDir)
+
+	// Bare has 175.
+	remoteRef := checkpoint.ArchivedGenerationRefName(175)
+	_ = writeV2ArchiveRef(t, repo, remoteRef, "remote-175")
+	pushRefFromCWD(t, bareDir, remoteRef)
+	require.NoError(t, repo.Storer.RemoveReference(remoteRef))
+
+	// Local has pending 38, 39, 40 — all below remote max.
+	pubs := make([]checkpoint.PendingV2FullGenerationPublication, 0, 3)
+	for _, n := range []int{38, 39, 40} {
+		ref := checkpoint.ArchivedGenerationRefName(n)
+		hash := writeV2ArchiveRef(t, repo, ref, fmt.Sprintf("local-%d", n))
+		pubs = append(pubs, checkpoint.PendingV2FullGenerationPublication{
+			ArchiveRefName:    string(ref),
+			ArchiveCommitHash: hash.String(),
+		})
+	}
+	require.NoError(t, store.AppendPendingFullGenerationPublications(ctx, pubs))
+
+	got, err := renumberPendingArchivesAgainstRemote(ctx, repo, store, bareDir, pubs)
+	require.NoError(t, err)
+
+	require.Len(t, got, 3)
+	expectedNumbers := []int{176, 177, 178}
+	for i, want := range expectedNumbers {
+		assert.Equal(t, string(checkpoint.ArchivedGenerationRefName(want)), got[i].ArchiveRefName,
+			"pending[%d] should be renumbered to %d", i, want)
+	}
+}
+
+// Not parallel: uses t.Chdir()
+func TestRenumberPendingArchivesAgainstRemote_LsRemoteFailIsNoOp(t *testing.T) {
+	ctx := context.Background()
+
+	localDir := setupRepoWithV2Ref(t)
+	repo, err := git.PlainOpen(localDir)
+	require.NoError(t, err)
+	store := checkpoint.NewV2GitStore(repo, "origin")
+	t.Chdir(localDir)
+
+	localRef := checkpoint.ArchivedGenerationRefName(38)
+	localHash := writeV2ArchiveRef(t, repo, localRef, "local-38")
+	publication := checkpoint.PendingV2FullGenerationPublication{
+		ArchiveRefName:    string(localRef),
+		ArchiveCommitHash: localHash.String(),
+	}
+	require.NoError(t, store.AppendPendingFullGenerationPublication(ctx, publication))
+
+	got, err := renumberPendingArchivesAgainstRemote(ctx, repo, store, "no-such-remote",
+		[]checkpoint.PendingV2FullGenerationPublication{publication})
+	require.NoError(t, err, "ls-remote failure should not propagate")
+	require.Len(t, got, 1)
+	assert.Equal(t, string(localRef), got[0].ArchiveRefName, "pending unchanged when ls-remote fails")
+}
+
+// Not parallel: uses t.Chdir()
+func TestRenumberPendingArchivesAgainstRemote_SameOIDKeepsPending(t *testing.T) {
+	ctx := context.Background()
+
+	localDir := setupRepoWithV2Ref(t)
+	repo, err := git.PlainOpen(localDir)
+	require.NoError(t, err)
+	store := checkpoint.NewV2GitStore(repo, "origin")
+	t.Chdir(localDir)
+
+	bareDir := t.TempDir()
+	initBareForTest(t, bareDir)
+
+	// Push archive 38 to bare; remote then has 38 with this OID.
+	localRef := checkpoint.ArchivedGenerationRefName(38)
+	localHash := writeV2ArchiveRef(t, repo, localRef, "shared-38")
+	pushRefFromCWD(t, bareDir, localRef)
+
+	publication := checkpoint.PendingV2FullGenerationPublication{
+		ArchiveRefName:    string(localRef),
+		ArchiveCommitHash: localHash.String(),
+	}
+	require.NoError(t, store.AppendPendingFullGenerationPublication(ctx, publication))
+
+	got, err := renumberPendingArchivesAgainstRemote(ctx, repo, store, bareDir,
+		[]checkpoint.PendingV2FullGenerationPublication{publication})
+	require.NoError(t, err)
+
+	// Same OID on remote = push will no-op naturally; no renumber needed.
+	require.Len(t, got, 1)
+	assert.Equal(t, string(localRef), got[0].ArchiveRefName,
+		"pending unchanged when remote already has identical archive")
 }
