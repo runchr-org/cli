@@ -268,19 +268,31 @@ func runEdit(ctx context.Context, cmd *cobra.Command, deps Deps) error {
 	return saveInvestigateConfig(ctx, cfg)
 }
 
-// saveInvestigateConfig persists cfg into .entire/settings.json while
-// preserving every other settings field. Mirrors review.SaveReviewConfig.
+// saveInvestigateConfig persists cfg into .entire/settings.local.json
+// (worktree-local, not committed). Other settings fields are preserved by
+// reading the local file first, mutating, and writing it back. The
+// committed .entire/settings.json is never touched.
 func saveInvestigateConfig(ctx context.Context, cfg *settings.InvestigateConfig) error {
-	s, err := settings.Load(ctx)
+	localPath, err := paths.AbsPath(ctx, settings.EntireSettingsLocalFile)
 	if err != nil {
-		return fmt.Errorf("load settings before save: %w", err)
+		localPath = settings.EntireSettingsLocalFile
 	}
-	if s == nil {
-		s = &settings.EntireSettings{}
+
+	local := &settings.EntireSettings{}
+	data, readErr := os.ReadFile(localPath) //nolint:gosec // path is from AbsPath
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return fmt.Errorf("read local settings: %w", readErr)
 	}
-	s.Investigate = cfg
-	if err := settings.Save(ctx, s); err != nil {
-		return fmt.Errorf("save settings: %w", err)
+	if len(data) > 0 {
+		local, err = settings.LoadFromBytes(data)
+		if err != nil {
+			return fmt.Errorf("parse local settings: %w", err)
+		}
+	}
+
+	local.Investigate = cfg
+	if err := settings.SaveLocal(ctx, local); err != nil {
+		return fmt.Errorf("save local settings: %w", err)
 	}
 	return nil
 }
