@@ -12,8 +12,10 @@ import (
 // grandchildHoldingStdoutCmd returns a shell snippet that backgrounds a sleep
 // (the grandchild) before waiting indefinitely in the parent. The grandchild
 // inherits the parent's stdout, so any pipe-reading caller blocks on it long
-// after the parent has been killed.
-const grandchildHoldingStdoutCmd = "sleep 5 & echo started; wait"
+// after the parent has been killed. The sleep is short enough that the
+// regression-pinning test costs ~3s rather than 5s on every CI run while
+// still leaving a clear gap above the 2s assertion threshold.
+const grandchildHoldingStdoutCmd = "sleep 3 & echo started; wait"
 
 // Regression: exec.CommandContext alone does not unblock CombinedOutput when
 // the killed child has grandchildren still holding the inherited stdout pipe.

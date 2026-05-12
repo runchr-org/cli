@@ -22,27 +22,37 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
-// pushStderr is the destination for user-facing push messages. Defaults to
-// os.Stderr; overridable in tests via withPushStderr.
+// pushStderr is the destination for output emitted by doPushBranch itself
+// (the dot lines, "Warning:" lines, hints). The standalone hint helpers
+// (printCheckpointRemoteHint, printSettingsCommitHint, …) deliberately keep
+// writing to os.Stderr because they pre-date this var and have their own
+// inline-redirect tests. captureStderr patches both so end-to-end tests of
+// doPushBranch still see hint output.
 var pushStderr io.Writer = os.Stderr
 
 // pushAttemptTimeout caps a single tryPushSessionsCommon invocation. Two
 // minutes is generous for a healthy network and short enough that a hung
-// helper does not hold the hook open indefinitely. Var (not const) so tests
-// can shorten it.
+// helper does not hold the hook open indefinitely.
 var pushAttemptTimeout = 2 * time.Minute
 
-// fetchAttemptTimeout is the matching cap for fetchAndRebaseSessionsCommon.
 var fetchAttemptTimeout = 2 * time.Minute
 
-// errPushTimedOut is returned by tryPushSessionsCommon when its deadline fires
-// before git push completes. Lets callers distinguish "network/server stuck"
-// from "server actively rejected"; doPushBranch uses it to suppress the
-// sync-and-retry cascade (which would also time out).
+// errPushTimedOut signals that tryPushSessionsCommon's inner deadline fired
+// before git push completed. doPushBranch uses it to suppress the
+// sync-and-retry cascade — fetch would just time out on the same condition.
 var errPushTimedOut = errors.New("push timed out")
 
-// errFetchTimedOut is the matching sentinel for fetchAndRebaseSessionsCommon.
 var errFetchTimedOut = errors.New("fetch timed out")
+
+// Log-field values for the "class" attribute on push-related INFO logs.
+// Kept as constants so log consumers and tests share one source of truth and
+// the function stays free of bare string literals.
+const (
+	pushClassTimedOut       = "timed_out"
+	pushClassProtectedRef   = "protected_ref"
+	pushClassNonFastForward = "non_fast_forward"
+	pushClassOther          = "other"
+)
 
 // pushBranchIfNeeded pushes a branch to the given target if it has unpushed changes.
 // The target can be a remote name (e.g., "origin") or a URL for direct push.
@@ -155,47 +165,39 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 		return nil
 	}
 
-	// Push failed — likely non-fast-forward. Try to fetch and rebase.
 	fmt.Fprintf(pushStderr, "[entire] Syncing %s with remote...", branchName)
 	stop = startProgressDots(pushStderr)
 	syncStart := time.Now()
 
 	if syncErr := fetchAndRebaseSessionsCommon(ctx, target, branchName); syncErr != nil {
-		suffix := ""
-		if errors.Is(syncErr, errFetchTimedOut) {
-			suffix = " timed out"
-		}
-		stop(suffix)
-		logging.Info(ctx, "push sync failed",
-			slog.String("branch", branchName),
-			slog.Duration("elapsed", time.Since(syncStart)),
-			slog.String("class", classifyForLog(syncErr)),
-		)
-		fmt.Fprintf(pushStderr, "[entire] Warning: couldn't sync %s: %v\n", branchName, syncErr)
-		printCheckpointRemoteHint(target)
-		return nil // Don't fail the main push
+		reportPushFailure(ctx, reportPushFailureArgs{
+			stop:    stop,
+			err:     syncErr,
+			logMsg:  "push sync failed",
+			warnMsg: fmt.Sprintf("[entire] Warning: couldn't sync %s: %v\n", branchName, syncErr),
+			branch:  branchName,
+			target:  target,
+			start:   syncStart,
+		})
+		return nil
 	}
 	stop(" done")
 
-	// Try pushing again after rebase.
 	fmt.Fprintf(pushStderr, "[entire] Pushing %s to %s...", branchName, displayTarget)
 	stop = startProgressDots(pushStderr)
 	retryStart := time.Now()
 
 	retryResult, retryErr := tryPushSessionsCommon(ctx, target, branchName)
 	if retryErr != nil {
-		suffix := ""
-		if errors.Is(retryErr, errPushTimedOut) {
-			suffix = " timed out"
-		}
-		stop(suffix)
-		logging.Info(ctx, "push retry failed",
-			slog.String("branch", branchName),
-			slog.Duration("elapsed", time.Since(retryStart)),
-			slog.String("class", classifyForLog(retryErr)),
-		)
-		fmt.Fprintf(pushStderr, "[entire] Warning: failed to push %s after sync: %v\n", branchName, retryErr)
-		printCheckpointRemoteHint(target)
+		reportPushFailure(ctx, reportPushFailureArgs{
+			stop:    stop,
+			err:     retryErr,
+			logMsg:  "push retry failed",
+			warnMsg: fmt.Sprintf("[entire] Warning: failed to push %s after sync: %v\n", branchName, retryErr),
+			branch:  branchName,
+			target:  target,
+			start:   retryStart,
+		})
 		return nil
 	}
 	logging.Info(ctx, "push retry completed",
@@ -207,6 +209,37 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 	return nil
 }
 
+// reportPushFailureArgs groups the inputs to reportPushFailure to keep the
+// recoverable-failure paths in doPushBranch readable.
+type reportPushFailureArgs struct {
+	stop    func(string)
+	err     error
+	logMsg  string
+	warnMsg string
+	branch  string
+	target  string
+	start   time.Time
+}
+
+// reportPushFailure handles the common tail of a failed sync or retry-push:
+// pick the dot-line suffix (`" timed out"` vs blank), log at INFO with a
+// classification label, print the warning, and surface the
+// checkpoint-remote hint when the target is a URL.
+func reportPushFailure(ctx context.Context, a reportPushFailureArgs) {
+	suffix := ""
+	if errors.Is(a.err, errPushTimedOut) || errors.Is(a.err, errFetchTimedOut) {
+		suffix = " timed out"
+	}
+	a.stop(suffix)
+	logging.Info(ctx, a.logMsg,
+		slog.String("branch", a.branch),
+		slog.Duration("elapsed", time.Since(a.start)),
+		slog.String("class", classifyForLog(a.err)),
+	)
+	fmt.Fprint(pushStderr, a.warnMsg)
+	printCheckpointRemoteHint(a.target)
+}
+
 // classifyForLog maps a push/fetch error to a short string suitable for log
 // fields. Avoids leaking the raw error (which may contain URLs or tokens
 // embedded in git's output) — only the category is logged.
@@ -215,16 +248,16 @@ func classifyForLog(err error) string {
 		return ""
 	}
 	if errors.Is(err, errPushTimedOut) || errors.Is(err, errFetchTimedOut) {
-		return "timed_out"
+		return pushClassTimedOut
 	}
 	var protectedErr *protectedRefError
 	if errors.As(err, &protectedErr) {
-		return "protected_ref"
+		return pushClassProtectedRef
 	}
 	if errors.Is(err, errNonFastForward) {
-		return "non_fast_forward"
+		return pushClassNonFastForward
 	}
-	return "other"
+	return pushClassOther
 }
 
 // printCheckpointRemoteHint prints a hint when a push to a checkpoint URL fails.
@@ -488,9 +521,8 @@ func printProtectedRefBlock(w io.Writer, ref, target string) {
 // always apply cleanly.
 // The target can be a remote name or a URL.
 func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string) error {
-	localCtx, cancel := context.WithTimeout(ctx, fetchAttemptTimeout)
+	ctx, cancel := context.WithTimeout(ctx, fetchAttemptTimeout)
 	defer cancel()
-	ctx = localCtx
 
 	fetchTarget, err := remote.ResolveFetchTarget(ctx, target)
 	if err != nil {
@@ -523,7 +555,7 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 	}); fetchErr != nil {
 		// Inner deadline fired: distinct sentinel so doPushBranch can render
 		// " timed out" instead of an empty trailing colon.
-		if errors.Is(localCtx.Err(), context.DeadlineExceeded) {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			logging.Debug(ctx, "git fetch timed out",
 				slog.String("error", fetchErr.Error()),
 				slog.Duration("after", fetchAttemptTimeout),

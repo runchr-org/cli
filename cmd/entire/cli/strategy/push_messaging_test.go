@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,31 +26,29 @@ func withShortPushTimeout(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { pushAttemptTimeout = original })
 }
 
-// (1) When the underlying git fetch reports an error, the user-visible
-// "fetch failed: …" message must include some non-empty detail. Previously,
-// when git's stdout was empty (e.g. SIGKILLed helper), the message ended
-// with a bare colon and the user had no idea what failed.
+// Regression: a colleague's terminal once showed "Warning: couldn't sync …:
+// fetch failed:" with nothing after the colon, because the wrapping discarded
+// git's underlying error whenever git produced no stdout. The wrapped error
+// must now appear in the message even when output is empty.
 //
 // Not parallel: t.Chdir() for OpenRepository.
 func TestFetchAndRebase_FetchFailure_IncludesUnderlyingError(t *testing.T) {
 	tmpDir := setupRepoWithCheckpointBranch(t)
 	t.Chdir(tmpDir)
 
-	// Point at a path that does not exist. git fetch will fail; output is
-	// typically non-empty but the test passes either way because we now
-	// always include some detail.
 	nonExistent := filepath.Join(t.TempDir(), "does-not-exist")
 	err := fetchAndRebaseSessionsCommon(context.Background(), nonExistent, paths.MetadataBranchName)
 
 	require.Error(t, err)
 	msg := err.Error()
-	require.Greater(t, len(msg), len("fetch failed: "), "error message must include detail beyond 'fetch failed: '; got %q", msg)
+	require.True(t, strings.HasPrefix(msg, "fetch failed: "), "expected fetch failed prefix, got %q", msg)
+	detail := strings.TrimPrefix(msg, "fetch failed: ")
+	require.NotEmpty(t, strings.TrimSpace(detail), "fetch failed must carry a non-empty cause; got %q", msg)
 }
 
-// (2) When tryPushSessionsCommon hits its own 2-minute deadline, doPushBranch
-// must end the dot line with " timed out" (not silently). And (4): it must
-// also skip the sync→retry cascade, since the same network condition would
-// trip the fetch timeout too.
+// On inner-push timeout, doPushBranch must end the dot line with " timed out",
+// skip the sync→retry cascade (same network condition would also trip the
+// fetch deadline), and surface the DEBUG-logging hint.
 //
 // Not parallel: t.Chdir() and stderr capture.
 func TestDoPushBranch_TimedOut_PrintsTimedOutAndSkipsSync(t *testing.T) {
@@ -70,9 +69,8 @@ func TestDoPushBranch_TimedOut_PrintsTimedOutAndSkipsSync(t *testing.T) {
 	assert.Contains(t, output, "log_level", "should hint at enabling DEBUG logging")
 }
 
-// (4b) If the OUTER context is already cancelled when doPushBranch runs (the
-// user hit Ctrl-C, or the hook deadline fired), we must bail without printing
-// a misleading sync cascade or warnings.
+// When the outer context is already cancelled (user Ctrl-C, hook deadline),
+// doPushBranch must bail without a misleading sync cascade or warning.
 //
 // Not parallel: t.Chdir() and stderr capture.
 func TestDoPushBranch_OuterContextCancelled_BailsQuietly(t *testing.T) {
@@ -91,9 +89,9 @@ func TestDoPushBranch_OuterContextCancelled_BailsQuietly(t *testing.T) {
 	assert.NotContains(t, output, "Warning:", "must not print sync/retry warnings after outer cancel")
 }
 
-// (3) Push attempts must be logged at INFO so doctor bundles capture
-// push history even when log_level=INFO (the default). Without this, a
-// bundle from a stuck push reveals nothing about what was attempted.
+// Push attempts must reach INFO so doctor bundles capture push history at the
+// default log level. Without this, a bundle from a stuck push reveals nothing
+// about what was attempted.
 //
 // Not parallel: t.Chdir() and global logger state.
 func TestDoPushBranch_LogsAttemptsAtInfo(t *testing.T) {
@@ -119,10 +117,8 @@ func TestDoPushBranch_LogsAttemptsAtInfo(t *testing.T) {
 	assert.Contains(t, logText, `"branch":"`+paths.MetadataBranchName+`"`, "log must include branch")
 }
 
-// (2/4) Companion test for the lower-level helper: tryPushSessionsCommon
-// returns errPushTimedOut when its inner deadline fires before the outer
-// context. Pinning this so future refactors of the cascade logic can rely
-// on the sentinel.
+// Pins the errPushTimedOut sentinel so future refactors of doPushBranch's
+// cascade logic can keep relying on errors.Is(err, errPushTimedOut).
 //
 // Not parallel: t.Chdir().
 func TestTryPushSessionsCommon_InnerTimeout_ReturnsErrPushTimedOut(t *testing.T) {
@@ -148,11 +144,11 @@ func TestClassifyForLog(t *testing.T) {
 		want string
 	}{
 		{"nil", nil, ""},
-		{"push timeout", errPushTimedOut, "timed_out"},
-		{"fetch timeout", errFetchTimedOut, "timed_out"},
-		{"non-fast-forward", errNonFastForward, "non_fast_forward"},
-		{"protected", &protectedRefError{output: "GH013"}, "protected_ref"},
-		{"other", errors.New("some random error"), "other"},
+		{"push timeout", errPushTimedOut, pushClassTimedOut},
+		{"fetch timeout", errFetchTimedOut, pushClassTimedOut},
+		{"non-fast-forward", errNonFastForward, pushClassNonFastForward},
+		{"protected", &protectedRefError{output: "GH013"}, pushClassProtectedRef},
+		{"other", errors.New("some random error"), pushClassOther},
 	}
 
 	for _, tc := range cases {
