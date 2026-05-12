@@ -1,18 +1,13 @@
 package strategy
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"os/exec"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -462,9 +457,8 @@ type generationGitReadResult struct {
 	err error
 }
 
-// readGenerationsViaGit reads generation.json for each ref via `git cat-file
-// --batch`. Used as a fallback when go-git cannot resolve blobs from
-// partial-clone (--filter=blob:none) fetches.
+// readGenerationsViaGit reads generation.json via Git. Used as a fallback when
+// go-git cannot resolve blobs from partial-clone (--filter=blob:none) fetches.
 func readGenerationsViaGit(ctx context.Context, refNames []plumbing.ReferenceName) map[plumbing.ReferenceName]generationGitReadResult {
 	results := make(map[plumbing.ReferenceName]generationGitReadResult, len(refNames))
 	if len(refNames) == 0 {
@@ -472,83 +466,33 @@ func readGenerationsViaGit(ctx context.Context, refNames []plumbing.ReferenceNam
 	}
 
 	specs := make([]string, 0, len(refNames))
+	specByRef := make(map[plumbing.ReferenceName]string, len(refNames))
 	for _, refName := range refNames {
-		specs = append(specs, fmt.Sprintf("%s:%s", refName, paths.GenerationFileName))
+		spec := fmt.Sprintf("%s:%s", refName, paths.GenerationFileName)
+		specs = append(specs, spec)
+		specByRef[refName] = spec
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "cat-file", "--batch")
-	cmd.Stdin = strings.NewReader(strings.Join(specs, "\n") + "\n")
-	output, err := cmd.Output()
-	if err != nil {
-		wrapped := fmt.Errorf("run git cat-file: %w", err)
-		for _, refName := range refNames {
-			results[refName] = generationGitReadResult{err: wrapped}
-		}
-		return results
-	}
-
-	reader := bufio.NewReader(bytes.NewReader(output))
-	for i, refName := range refNames {
-		result, parseErr := parseGenerationGitBatchEntry(reader)
-		if parseErr != nil {
-			for _, r := range refNames[i:] {
-				results[r] = generationGitReadResult{err: parseErr}
-			}
-			break
-		}
-		results[refName] = result
+	catResults := remote.CatFiles(ctx, remote.CatFilesOptions{Specs: specs})
+	for _, refName := range refNames {
+		results[refName] = generationMetadataFromCatFileResult(catResults[specByRef[refName]])
 	}
 	return results
 }
 
-// parseGenerationGitBatchEntry parses one entry from `git cat-file --batch`
-// stdout. A non-nil returned error signals a stream-level desync (abort the
-// remaining entries); a per-entry decode failure is returned inside the
-// result's err field so the stream can continue.
-func parseGenerationGitBatchEntry(reader *bufio.Reader) (generationGitReadResult, error) {
-	wrap := func(err error) error {
-		return fmt.Errorf("parse git-readable %s: %w", paths.GenerationFileName, err)
+func generationMetadataFromCatFileResult(catResult remote.CatFileResult) generationGitReadResult {
+	if catResult.Err != nil {
+		return generationGitReadResult{err: catResult.Err}
 	}
-
-	header, err := reader.ReadString('\n')
-	if err != nil {
-		return generationGitReadResult{}, wrap(err)
-	}
-	header = strings.TrimSuffix(header, "\n")
-
-	fields := strings.Fields(header)
-	if len(fields) == 2 && fields[1] == "missing" {
-		return generationGitReadResult{}, nil
-	}
-	if len(fields) != 3 {
-		return generationGitReadResult{}, wrap(fmt.Errorf("unexpected cat-file header %q", header))
-	}
-
-	size, err := strconv.ParseInt(fields[2], 10, 64)
-	if err != nil {
-		return generationGitReadResult{}, wrap(fmt.Errorf("invalid cat-file size %q: %w", fields[2], err))
-	}
-	content := make([]byte, size)
-	if _, err := io.ReadFull(reader, content); err != nil {
-		return generationGitReadResult{}, wrap(err)
-	}
-	separator, err := reader.ReadByte()
-	if err != nil {
-		return generationGitReadResult{}, wrap(err)
-	}
-	if separator != '\n' {
-		return generationGitReadResult{}, wrap(fmt.Errorf("unexpected cat-file separator %q", separator))
-	}
-
-	if fields[1] != "blob" {
-		return generationGitReadResult{}, nil
+	if catResult.Missing {
+		return generationGitReadResult{}
 	}
 
 	var gen checkpoint.GenerationMetadata
-	if err := json.Unmarshal(content, &gen); err != nil {
-		return generationGitReadResult{err: wrap(err)}, nil
+	if err := json.Unmarshal(catResult.Content, &gen); err != nil {
+		return generationGitReadResult{err: fmt.Errorf("parse git-readable %s: %w", paths.GenerationFileName, err)}
 	}
-	return generationGitReadResult{gen: gen}, nil
+	return generationGitReadResult{gen: gen}
 }
 
 type archivedV2GenerationCandidate struct {
