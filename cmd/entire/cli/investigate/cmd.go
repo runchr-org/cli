@@ -275,6 +275,15 @@ func runInvestigate(ctx context.Context, cmd *cobra.Command, args []string, f ru
 		return wrapSilent(silentErr, errors.New("not a git repository"))
 	}
 
+	// Initialize the file-backed logger so per-turn info/warn lines land in
+	// .entire/logs/entire.log instead of stderr — which, during a TUI run,
+	// would otherwise be interleaved with the dashboard frame and corrupt
+	// the display. Failure is non-fatal; the fallback inside logging.log
+	// will use slog.Default() and the user sees no worse than before.
+	if err := logging.Init(ctx, ""); err == nil {
+		defer logging.Close()
+	}
+
 	// Soft warn: HEAD already has an investigation. Skip for sub-modes
 	// (edit / findings) and for non-interactive runs.
 	if !f.edit && !f.findings && deps.HeadHasInvestigateCheckpoint != nil {
