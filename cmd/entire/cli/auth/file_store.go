@@ -1,3 +1,25 @@
+// Package auth — production file-backed token store (issue #1036).
+//
+// This file implements the ENTIRE_SECRETS_PATH headless-auth store and is
+// the one deliberate exception to the keyring-only production policy
+// enforced by store_invariants_test.go::TestProductionAuthStoreIsKeyringOnly.
+//
+// Why it exists: in headless environments (SSH, WSL, Docker, CI/CD runners
+// without an unlocked Secret Service collection) the OS keyring is
+// unreachable and `entire login` cannot persist a token. ENTIRE_SECRETS_PATH
+// lets users opt into a plaintext JSON file store at a path they control.
+//
+// Why it is safe to ship in production:
+//   - Strictly opt-in. Nothing happens unless the user sets an absolute path
+//     in ENTIRE_SECRETS_PATH; ~/ expansion is honored, relative paths are
+//     rejected.
+//   - 0600 permissions enforced on every read and write. A loose-perm file
+//     errors out with a `chmod 600` hint instead of being trusted silently.
+//   - Atomic writes via temp+rename inside the same directory, with 0700 on
+//     the parent so a partial write can't be observed.
+//   - Schema-versioned JSON. Unknown versions are rejected up front.
+//   - Separate symbol space from store_filebackend.go (which is the
+//     authfilestore-gated test-only backend) — they share no code paths.
 package auth
 
 import (

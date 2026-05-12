@@ -258,6 +258,37 @@ func TestBuildReviewPickerFields_HintSectionOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestBuildReviewPickerFields_SingleBuiltinDefaultsSelectedAndRenders(t *testing.T) {
+	t.Parallel()
+
+	var builtinPicks []string
+	fields := review.BuildReviewPickerFields(
+		"codex",
+		[]skilldiscovery.CuratedSkill{{Name: "/review", Desc: "Review current changes"}},
+		nil,
+		nil,
+		"",
+		&builtinPicks, nil, nil,
+	)
+
+	if len(fields) == 0 {
+		t.Fatal("expected picker fields")
+	}
+	got, ok := fields[0].GetValue().([]string)
+	if !ok {
+		t.Fatalf("built-in field value has type %T, want []string", fields[0].GetValue())
+	}
+	if !reflect.DeepEqual(got, []string{"/review"}) {
+		t.Fatalf("built-in defaults = %v, want [/review]", got)
+	}
+
+	field := fields[0].WithWidth(80)
+	field.Focus()
+	if got := field.View(); !strings.Contains(got, "/review") {
+		t.Fatalf("single built-in option did not render:\n%s", got)
+	}
+}
+
 // TestSaveReviewConfig_PersistsSettings verifies SaveReviewConfig writes and
 // the settings can be read back.
 func TestSaveReviewConfig_PersistsSettings(t *testing.T) {
@@ -282,6 +313,54 @@ func TestSaveReviewConfig_PersistsSettings(t *testing.T) {
 	}
 	if cfg.Skills[0] != testReviewSkill {
 		t.Errorf("first skill = %q", cfg.Skills[0])
+	}
+}
+
+func TestSaveReviewConfig_PreservesReviewFixAgent(t *testing.T) {
+	tmp := t.TempDir()
+	testutil.InitRepo(t, tmp)
+	t.Chdir(tmp)
+
+	entireDir := filepath.Join(tmp, ".entire")
+	if err := os.MkdirAll(entireDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	before := []byte(`{"enabled":true,"review_fix_agent":"` + testCodexAgent + `"}`)
+	if err := os.WriteFile(filepath.Join(entireDir, "settings.json"), before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := review.SaveReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		testAgentName: {Skills: []string{testReviewSkill}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := settings.Load(context.Background())
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if s.ReviewFixAgent != testCodexAgent {
+		t.Fatalf("ReviewFixAgent = %q, want %s", s.ReviewFixAgent, testCodexAgent)
+	}
+}
+
+func TestSaveReviewFixAgent_PersistsSettings(t *testing.T) {
+	tmp := t.TempDir()
+	testutil.InitRepo(t, tmp)
+	t.Chdir(tmp)
+
+	if err := review.SaveReviewFixAgent(context.Background(), testCodexAgent); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := settings.Load(context.Background())
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if s.ReviewFixAgent != testCodexAgent {
+		t.Fatalf("ReviewFixAgent = %q, want %s", s.ReviewFixAgent, testCodexAgent)
 	}
 }
 

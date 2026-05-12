@@ -12,18 +12,46 @@ import (
 const keyringService = "entire-cli"
 
 // Store manages CLI authentication tokens across the configured auth sources.
+// Reads resolve in priority order: the ENTIRE_AUTH_TOKEN environment variable
+// (scoped to the production API origin), a user-configured file store at
+// ENTIRE_SECRETS_PATH (the headless-environments path from issue #1036), or
+// the pluggable tokenBackend (OS keyring in production; a separate
+// file-backed backend gated behind the `authfilestore` build tag, used by
+// integration tests to avoid the OS keychain).
 type Store struct {
 	service string
+	backend tokenBackend
 }
 
-// NewStore returns a Store using the default keyring service when no file store is configured.
+// tokenBackend abstracts token persistence. Implementations must treat
+// "missing key" as a non-error: get returns ("", nil) and delete is a
+// no-op so callers don't have to plumb backend-specific sentinels.
+type tokenBackend interface {
+	save(service, key, value string) error
+	get(service, key string) (string, error)
+	delete(service, key string) error
+}
+
+// chooseBackend returns the backend used by NewStore and
+// NewStoreWithService. The default returns the keyring backend; the
+// `authfilestore` build adds an init() that may swap in a file-backed
+// backend when the test env var is set.
+var chooseBackend = func() tokenBackend { return keyringBackend{} }
+
+// NewStore returns a Store backed by the system keyring (or, in
+// `authfilestore` builds, optionally a file-backed test store). When
+// ENTIRE_SECRETS_PATH is set, reads and writes route to that file
+// instead, ahead of the backend.
 func NewStore() *Store {
-	return &Store{service: keyringService}
+	return &Store{service: keyringService, backend: chooseBackend()}
 }
 
 // NewStoreWithService returns a Store with a custom keyring service name (for testing).
+// Honors the same backend selection as NewStore so tests that opt into the
+// file-backed test store via env var see consistent behavior across both
+// constructors.
 func NewStoreWithService(service string) *Store {
-	return &Store{service: service}
+	return &Store{service: service, backend: chooseBackend()}
 }
 
 // SaveToken persists an access token for the given base URL.
@@ -42,11 +70,7 @@ func (s *Store) SaveToken(baseURL, token string) error {
 		return nil
 	}
 
-	if err := keyring.Set(s.service, baseURL, token); err != nil {
-		return fmt.Errorf("save token to keyring: %w", err)
-	}
-
-	return nil
+	return s.backend.save(s.service, baseURL, token)
 }
 
 // GetToken retrieves a stored token for the given base URL.
@@ -86,18 +110,18 @@ func (s *Store) GetTokenInfo(baseURL string) (TokenInfo, error) {
 		return TokenInfo{Value: token, Source: TokenSourceFile, Path: path}, nil
 	}
 
-	token, err := keyring.Get(s.service, baseURL)
-	if errors.Is(err, keyring.ErrNotFound) {
+	token, err := s.backend.get(s.service, baseURL)
+	if err != nil {
+		return TokenInfo{}, err
+	}
+	if token == "" {
 		return TokenInfo{}, nil
 	}
-	if err != nil {
-		return TokenInfo{}, fmt.Errorf("get token from keyring: %w", err)
-	}
-
 	return TokenInfo{Value: token, Source: TokenSourceKeyring}, nil
 }
 
 // DeleteToken removes a stored token for the given base URL.
+// Returns no error if the token does not exist.
 func (s *Store) DeleteToken(baseURL string) error {
 	if path, ok, err := configuredSecretsPath(); err != nil {
 		return err
@@ -108,19 +132,42 @@ func (s *Store) DeleteToken(baseURL string) error {
 		return nil
 	}
 
-	err := keyring.Delete(s.service, baseURL)
-	if errors.Is(err, keyring.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("delete token from keyring: %w", err)
-	}
-
-	return nil
+	return s.backend.delete(s.service, baseURL)
 }
 
 // LookupCurrentToken retrieves the token for the current base URL.
 func LookupCurrentToken() (string, error) {
 	store := NewStore()
 	return store.GetToken(api.BaseURL())
+}
+
+type keyringBackend struct{}
+
+func (keyringBackend) save(service, key, value string) error {
+	if err := keyring.Set(service, key, value); err != nil {
+		return fmt.Errorf("save token to keyring: %w", err)
+	}
+	return nil
+}
+
+func (keyringBackend) get(service, key string) (string, error) {
+	token, err := keyring.Get(service, key)
+	if errors.Is(err, keyring.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get token from keyring: %w", err)
+	}
+	return token, nil
+}
+
+func (keyringBackend) delete(service, key string) error {
+	err := keyring.Delete(service, key)
+	if errors.Is(err, keyring.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("delete token from keyring: %w", err)
+	}
+	return nil
 }

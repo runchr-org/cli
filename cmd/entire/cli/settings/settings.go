@@ -73,6 +73,10 @@ type EntireSettings struct {
 	// that agent. When empty, `entire review` triggers the first-run picker.
 	Review map[string]ReviewConfig `json:"review,omitempty"`
 
+	// ReviewFixAgent is the default agent used when applying aggregate or
+	// multi-agent review findings with `entire review --fix`.
+	ReviewFixAgent string `json:"review_fix_agent,omitempty"`
+
 	// CommitLinking controls how commits are linked to agent sessions.
 	// "always" = auto-link without prompting, "prompt" = ask on each commit.
 	// Defaults to "prompt" (preserves existing user behavior).
@@ -204,9 +208,9 @@ type ReviewConfig struct {
 	// for this agent. May be empty when Prompt carries the full request.
 	Skills []string `json:"skills,omitempty"`
 
-	// Prompt, when non-empty, is used verbatim as the review prompt
-	// instead of the skills-composed template. Lets users include
-	// context (e.g. "focus on security issues, then run /X").
+	// Prompt, when non-empty, carries saved review instructions. When
+	// Skills is non-empty it is appended after the selected skills; when
+	// Skills is empty it is the full prompt for prompt-only review configs.
 	Prompt string `json:"prompt,omitempty"`
 }
 
@@ -394,6 +398,9 @@ func mergeScalarFields(settings *EntireSettings, raw map[string]json.RawMessage)
 		return err
 	}
 	if err := mergeRawStringNonEmpty(raw, "log_level", &settings.LogLevel); err != nil {
+		return err
+	}
+	if err := mergeRawStringNonEmpty(raw, "review_fix_agent", &settings.ReviewFixAgent); err != nil {
 		return err
 	}
 	if err := mergeRawInt(raw, "summary_timeout_seconds", &settings.SummaryTimeoutSeconds); err != nil {
