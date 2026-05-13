@@ -190,6 +190,8 @@ type RedactionSettings struct {
 	// "[REDACTED_<LABEL>]" token used by PII. Failed regex compilations are
 	// logged via slog.Warn and the rule is skipped.
 	CustomRedactions map[string]string `json:"custom_redactions,omitempty"`
+
+	OpenAIPrivacyFilter *OPFSettings `json:"openai_privacy_filter,omitempty"`
 }
 
 // PIISettings configures PII detection categories.
@@ -200,6 +202,19 @@ type PIISettings struct {
 	Phone          *bool             `json:"phone,omitempty"`
 	Address        *bool             `json:"address,omitempty"`
 	CustomPatterns map[string]string `json:"custom_patterns,omitempty"`
+}
+
+// OPFSettings configures the optional OpenAI Privacy Filter detection layer.
+// All fields are optional; Enabled gates the whole layer. Categories use OPF's
+// native label names (e.g. "private_person", "secret"); missing entries default
+// to false. Command defaults to "opf" (resolved via PATH) and OnFailure
+// defaults to "warn" when unset.
+type OPFSettings struct {
+	Enabled        bool            `json:"enabled"`
+	Categories     map[string]bool `json:"categories,omitempty"`
+	Command        string          `json:"command,omitempty"`
+	TimeoutSeconds int             `json:"timeout_seconds,omitempty"`
+	OnFailure      string          `json:"on_failure,omitempty"`
 }
 
 // GetCommitLinking returns the effective commit linking mode.
@@ -792,6 +807,14 @@ func mergeRedaction(dst *RedactionSettings, data json.RawMessage) error {
 			}
 		}
 	}
+	if opfRaw, ok := raw["openai_privacy_filter"]; ok {
+		if dst.OpenAIPrivacyFilter == nil {
+			dst.OpenAIPrivacyFilter = &OPFSettings{}
+		}
+		if err := mergeOPFSettings(dst.OpenAIPrivacyFilter, opfRaw); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -840,6 +863,49 @@ func mergePIISettings(dst *PIISettings, data json.RawMessage) error {
 			for k, val := range cp {
 				dst.CustomPatterns[k] = val
 			}
+		}
+	}
+	return nil
+}
+
+// mergeOPFSettings merges OPF overrides into existing OPFSettings.
+// Only fields present in the override JSON are applied; missing fields
+// are preserved from the base settings.
+func mergeOPFSettings(dst *OPFSettings, data json.RawMessage) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parsing openai_privacy_filter: %w", err)
+	}
+	if v, ok := raw["enabled"]; ok {
+		if err := json.Unmarshal(v, &dst.Enabled); err != nil {
+			return fmt.Errorf("parsing openai_privacy_filter.enabled: %w", err)
+		}
+	}
+	if v, ok := raw["categories"]; ok {
+		var cats map[string]bool
+		if err := json.Unmarshal(v, &cats); err != nil {
+			return fmt.Errorf("parsing openai_privacy_filter.categories: %w", err)
+		}
+		if dst.Categories == nil {
+			dst.Categories = make(map[string]bool, len(cats))
+		}
+		for k, b := range cats {
+			dst.Categories[k] = b
+		}
+	}
+	if v, ok := raw["command"]; ok {
+		if err := json.Unmarshal(v, &dst.Command); err != nil {
+			return fmt.Errorf("parsing openai_privacy_filter.command: %w", err)
+		}
+	}
+	if v, ok := raw["timeout_seconds"]; ok {
+		if err := json.Unmarshal(v, &dst.TimeoutSeconds); err != nil {
+			return fmt.Errorf("parsing openai_privacy_filter.timeout_seconds: %w", err)
+		}
+	}
+	if v, ok := raw["on_failure"]; ok {
+		if err := json.Unmarshal(v, &dst.OnFailure); err != nil {
+			return fmt.Errorf("parsing openai_privacy_filter.on_failure: %w", err)
 		}
 	}
 	return nil

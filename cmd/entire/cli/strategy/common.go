@@ -350,59 +350,76 @@ var initRedactionOnce sync.Once
 //
 // Must be called at each process entry point before checkpoint writes.
 func EnsureRedactionConfigured() {
-	initRedactionOnce.Do(func() {
-		ctx := context.Background()
-		s, err := settings.Load(ctx)
-		if err != nil {
-			logCtx := logging.WithComponent(ctx, "redaction")
-			logging.Warn(logCtx, "failed to load settings for redaction", slog.String("error", err.Error()))
-			return
-		}
+	initRedactionOnce.Do(loadAndApplyRedactionSettings)
+}
 
-		// PII detection (opt-in).
-		if s.Redaction != nil && s.Redaction.PII != nil && s.Redaction.PII.Enabled {
-			pii := s.Redaction.PII
-			cfg := redact.PIIConfig{
-				Enabled:        true,
-				Categories:     make(map[redact.PIICategory]bool),
-				CustomPatterns: pii.CustomPatterns,
-			}
-			cfg.Categories[redact.PIIEmail] = pii.Email == nil || *pii.Email
-			cfg.Categories[redact.PIIPhone] = pii.Phone == nil || *pii.Phone
-			cfg.Categories[redact.PIIAddress] = pii.Address != nil && *pii.Address
-			redact.ConfigurePII(cfg)
-		}
+// loadAndApplyRedactionSettings reads settings and configures all redaction
+// layers. Callable directly from tests; in production it is gated by the
+// initRedactionOnce sync.Once inside EnsureRedactionConfigured.
+func loadAndApplyRedactionSettings() {
+	ctx := context.Background()
+	s, err := settings.Load(ctx)
+	if err != nil {
+		logCtx := logging.WithComponent(ctx, "redaction")
+		logging.Warn(logCtx, "failed to load settings for redaction", slog.String("error", err.Error()))
+		return
+	}
 
-		// Custom rules: inline + packs.
-		var inline map[string]string
-		if s.Redaction != nil {
-			inline = s.Redaction.CustomRedactions
+	// PII detection (opt-in).
+	if s.Redaction != nil && s.Redaction.PII != nil && s.Redaction.PII.Enabled {
+		pii := s.Redaction.PII
+		cfg := redact.PIIConfig{
+			Enabled:        true,
+			Categories:     make(map[redact.PIICategory]bool),
+			CustomPatterns: pii.CustomPatterns,
 		}
-		packsRelPath := filepath.Join(paths.EntireDir, redact.RedactorsDirName)
-		packsDir, perr := paths.AbsPath(ctx, packsRelPath)
-		if perr != nil {
-			logCtx := logging.WithComponent(ctx, "redaction")
-			logging.Warn(logCtx, "failed to resolve redactors path", slog.String("error", perr.Error()))
-			packsDir = packsRelPath
+		cfg.Categories[redact.PIIEmail] = pii.Email == nil || *pii.Email
+		cfg.Categories[redact.PIIPhone] = pii.Phone == nil || *pii.Phone
+		cfg.Categories[redact.PIIAddress] = pii.Address != nil && *pii.Address
+		redact.ConfigurePII(cfg)
+	}
+
+	// Custom rules: inline + packs.
+	var inline map[string]string
+	if s.Redaction != nil {
+		inline = s.Redaction.CustomRedactions
+	}
+	packsRelPath := filepath.Join(paths.EntireDir, redact.RedactorsDirName)
+	packsDir, perr := paths.AbsPath(ctx, packsRelPath)
+	if perr != nil {
+		logCtx := logging.WithComponent(ctx, "redaction")
+		logging.Warn(logCtx, "failed to resolve redactors path", slog.String("error", perr.Error()))
+		packsDir = packsRelPath
+	}
+	packs, lerr := redact.LoadPacks(packsDir)
+	if lerr != nil {
+		logCtx := logging.WithComponent(ctx, "redaction")
+		logging.Warn(logCtx, "failed to load redactor packs", slog.String("error", lerr.Error()))
+		// Hooks log to .entire/logs/entire.log, where most users never
+		// look. Surface a one-line breadcrumb on stderr when we have a
+		// real terminal so the user can find the detail.
+		if interactive.IsTerminalWriter(os.Stderr) {
+			fmt.Fprintf(os.Stderr, "[entire] redactor packs failed to load (%v); see .entire/logs/entire.log or run `entire doctor`.\n", lerr)
 		}
-		packs, lerr := redact.LoadPacks(packsDir)
-		if lerr != nil {
-			logCtx := logging.WithComponent(ctx, "redaction")
-			logging.Warn(logCtx, "failed to load redactor packs", slog.String("error", lerr.Error()))
-			// Hooks log to .entire/logs/entire.log, where most users never
-			// look. Surface a one-line breadcrumb on stderr when we have a
-			// real terminal so the user can find the detail.
-			if interactive.IsTerminalWriter(os.Stderr) {
-				fmt.Fprintf(os.Stderr, "[entire] redactor packs failed to load (%v); see .entire/logs/entire.log or run `entire doctor`.\n", lerr)
-			}
-		}
-		if len(inline) > 0 || len(packs) > 0 {
-			redact.ConfigureCustomRules(redact.CustomRulesConfig{
-				Inline: inline,
-				Packs:  packs,
-			})
-		}
-	})
+	}
+	if len(inline) > 0 || len(packs) > 0 {
+		redact.ConfigureCustomRules(redact.CustomRulesConfig{
+			Inline: inline,
+			Packs:  packs,
+		})
+	}
+
+	// OpenAI Privacy Filter — opt-in eighth detection layer.
+	if s.Redaction != nil && s.Redaction.OpenAIPrivacyFilter != nil {
+		opf := s.Redaction.OpenAIPrivacyFilter
+		redact.ConfigurePrivacyFilter(redact.OPFConfig{
+			Enabled:    opf.Enabled,
+			Categories: opf.Categories,
+			Command:    opf.Command,
+			Timeout:    opf.TimeoutSeconds,
+			OnFailure:  opf.OnFailure,
+		})
+	}
 }
 
 // resolveAgentType picks the best agent type from the context and existing state.

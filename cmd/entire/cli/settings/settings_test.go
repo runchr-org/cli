@@ -977,6 +977,88 @@ func containsUnknownField(msg string) bool {
 	return strings.Contains(msg, "unknown field")
 }
 
+func TestLoadFromBytes_OpenAIPrivacyFilter(t *testing.T) {
+	t.Parallel()
+
+	data := []byte(`{
+  "redaction": {
+    "openai_privacy_filter": {
+      "enabled": true,
+      "categories": {"private_person": true, "secret": false},
+      "command": "/usr/local/bin/opf",
+      "timeout_seconds": 45,
+      "on_failure": "block"
+    }
+  }
+}`)
+
+	got, err := LoadFromBytes(data)
+	if err != nil {
+		t.Fatalf("LoadFromBytes: %v", err)
+	}
+	if got.Redaction == nil || got.Redaction.OpenAIPrivacyFilter == nil {
+		t.Fatalf("OpenAIPrivacyFilter is nil")
+	}
+	opf := got.Redaction.OpenAIPrivacyFilter
+	if !opf.Enabled {
+		t.Errorf("Enabled: want true")
+	}
+	if opf.Categories["private_person"] != true {
+		t.Errorf("Categories[private_person]: want true, got %v", opf.Categories["private_person"])
+	}
+	if opf.Categories["secret"] != false {
+		t.Errorf("Categories[secret]: want false, got %v", opf.Categories["secret"])
+	}
+	if opf.Command != "/usr/local/bin/opf" {
+		t.Errorf("Command: want /usr/local/bin/opf, got %q", opf.Command)
+	}
+	if opf.TimeoutSeconds != 45 {
+		t.Errorf("TimeoutSeconds: want 45, got %d", opf.TimeoutSeconds)
+	}
+	if opf.OnFailure != "block" {
+		t.Errorf("OnFailure: want block, got %q", opf.OnFailure)
+	}
+}
+
+// loadAndMerge is a test helper that loads base settings then merges an override
+// JSON blob via the same mergeJSON path the production loader uses.
+func loadAndMerge(t *testing.T, base, override []byte) (*EntireSettings, error) {
+	t.Helper()
+	s, err := LoadFromBytes(base)
+	if err != nil {
+		return nil, err
+	}
+	if err := mergeJSON(s, override); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func TestLoadFromBytes_OpenAIPrivacyFilter_Merge(t *testing.T) {
+	t.Parallel()
+
+	base := []byte(`{"redaction":{"openai_privacy_filter":{"enabled":true,"categories":{"private_person":true,"secret":false}}}}`)
+	override := []byte(`{"redaction":{"openai_privacy_filter":{"categories":{"secret":true},"command":"/opt/opf"}}}`)
+
+	got, err := loadAndMerge(t, base, override)
+	if err != nil {
+		t.Fatalf("loadAndMerge: %v", err)
+	}
+	opf := got.Redaction.OpenAIPrivacyFilter
+	if !opf.Enabled {
+		t.Errorf("Enabled: want preserved=true (override omitted the field), got false")
+	}
+	if !opf.Categories["private_person"] {
+		t.Errorf("Categories[private_person]: want preserved=true, got false")
+	}
+	if !opf.Categories["secret"] {
+		t.Errorf("Categories[secret]: want override=true, got false")
+	}
+	if opf.Command != "/opt/opf" {
+		t.Errorf("Command: want override /opt/opf, got %q", opf.Command)
+	}
+}
+
 func TestLoadMerged_CustomRedactionsPerKeyOverride(t *testing.T) {
 	t.Parallel()
 

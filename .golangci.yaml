@@ -122,6 +122,7 @@ linters:
         - github.com/entireio/cli/e2e/agents.Session
         - github.com/go-git/go-billy/v6.Filesystem
         - golang.org/x/crypto/ssh/agent.Agent
+        - github.com/entireio/cli/redact/opf_runtime.Runtime
     nolintlint:
       require-explanation: true
       require-specific: true
