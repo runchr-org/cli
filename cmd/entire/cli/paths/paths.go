@@ -51,6 +51,12 @@ const (
 	// V2FullCurrentRefName stores the active generation of raw transcripts.
 	V2FullCurrentRefName = "refs/entire/checkpoints/v2/full/current"
 
+	// V2FullRootRefName anchors every /full/* archived generation as a shared
+	// permanent root commit. Constructed deterministically (fixed author, time,
+	// message, empty tree) so every client independently produces the same SHA.
+	// Created lazily on first rotation; fetched from remote when available.
+	V2FullRootRefName = "refs/entire/checkpoints/v2/full/root"
+
 	// V2FullRefPrefix is the common prefix for all /full/* refs (current + archived).
 	V2FullRefPrefix = "refs/entire/checkpoints/v2/full/"
 
