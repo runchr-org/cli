@@ -316,7 +316,7 @@ func TestPushV2Refs_SkipsUnrecordedArchiveRefs(t *testing.T) {
 	require.Error(t, err, "unrecorded older archived generation should not be pushed")
 
 	assert.Contains(t, output, "[entire] Syncing and pushing v2 checkpoints...")
-	assert.Contains(t, output, "[entire] Pushing v2/main, v2/full/current...")
+	assert.Contains(t, output, "[entire] Pushing v2/main, v2/full/root, v2/full/current...")
 	assert.Contains(t, output, "[entire] All v2 checkpoints pushed")
 	assert.NotContains(t, output, "[entire] Successfully pushed", "successful refs should only be listed on partial failure")
 	assert.NotContains(t, output, "Pushing v2/main to", "per-ref progress should stay quiet")
