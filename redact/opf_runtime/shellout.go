@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -26,12 +27,16 @@ type shellOut struct {
 	CommandRunner func(ctx context.Context, name string, args ...string) *exec.Cmd
 }
 
+// opfOutput is the subset of OPF's typed JSON output we consume.
+// The `text` field on each span (and the top-level `redacted_text`)
+// is intentionally omitted — callers reconstruct redacted text from the
+// input plus Start/End offsets so the rendering style stays consistent
+// with the other seven redaction layers.
 type opfOutput struct {
 	DetectedSpans []struct {
 		Label string `json:"label"`
 		Start int    `json:"start"`
 		End   int    `json:"end"`
-		Text  string `json:"text"`
 	} `json:"detected_spans"`
 }
 
@@ -56,8 +61,14 @@ func (s *shellOut) Redact(ctx context.Context, text string, categories []string)
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		if callCtx.Err() == context.DeadlineExceeded {
+		switch {
+		case errors.Is(callCtx.Err(), context.DeadlineExceeded):
 			return nil, fmt.Errorf("opf timeout after %s: %w", timeout, callCtx.Err())
+		case errors.Is(ctx.Err(), context.Canceled):
+			// Distinguish parent-context cancellation from child timeout;
+			// the generic exit-error branch below produces a misleading
+			// "context canceled" message that hides the real cause.
+			return nil, fmt.Errorf("opf canceled: %w", ctx.Err())
 		}
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg == "" {

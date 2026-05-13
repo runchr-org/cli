@@ -104,6 +104,36 @@ func TestShellOut_CommandNotFound(t *testing.T) {
 	}
 }
 
+func TestShellOut_ParentContextCanceled(t *testing.T) {
+	t.Parallel()
+	// Parent-context cancellation must produce a clear "canceled" message,
+	// not be misreported as a generic "opf exited with error" (the bug we
+	// fixed). The child callCtx will surface context.Canceled via cascade,
+	// not context.DeadlineExceeded, so the timeout branch alone is insufficient.
+	rt := &shellOut{
+		command:        "opf",
+		timeoutSeconds: 30,
+		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			return shCmd(ctx, "sleep 5")
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	_, err := rt.Redact(ctx, "x", []string{"private_person"})
+	if err == nil {
+		t.Fatalf("want cancellation error, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err: want context.Canceled in chain, got %q", err)
+	}
+	if !strings.Contains(err.Error(), "canceled") {
+		t.Errorf("err: want 'canceled' message, got %q", err)
+	}
+}
+
 func TestShellOut_CategoriesPassed(t *testing.T) {
 	t.Parallel()
 	var (
