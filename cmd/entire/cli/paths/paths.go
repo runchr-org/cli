@@ -54,7 +54,8 @@ const (
 	// V2FullRootRefName anchors every /full/* archived generation as a shared
 	// permanent root commit. Constructed deterministically (fixed author, time,
 	// message, empty tree) so every client independently produces the same SHA.
-	// Created lazily on first rotation; fetched from remote when available.
+	// Created lazily on first checkpoint write (when /full/current is first
+	// initialized) or on rotation, whichever happens first.
 	V2FullRootRefName = "refs/entire/checkpoints/v2/full/root"
 
 	// V2FullRefPrefix is the common prefix for all /full/* refs (current + archived).

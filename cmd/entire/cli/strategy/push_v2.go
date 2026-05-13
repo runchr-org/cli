@@ -907,11 +907,11 @@ func printV2PushFailures(ctx context.Context, target string, successfulRefs []pl
 
 func v2RefsToPush(repo *git.Repository) []plumbing.ReferenceName {
 	var refs []plumbing.ReferenceName
-	// /full/root is pushed first. It is constructed deterministically so two
-	// clients pushing it concurrently send identical bytes — collisions
-	// resolve to a no-op rather than a non-fast-forward conflict. Pushing it
-	// ahead of /full/current means new clones can fetch the anchor before
-	// any descendant ref.
+	// /full/root is pushed ahead of /full/current. It is constructed
+	// deterministically so two clients pushing it concurrently send identical
+	// bytes — collisions resolve to a no-op rather than a non-fast-forward
+	// conflict. Pushing it before /full/current means clones that fetch in
+	// order see the anchor before any descendant ref.
 	for _, refName := range []plumbing.ReferenceName{
 		plumbing.ReferenceName(paths.V2MainRefName),
 		plumbing.ReferenceName(paths.V2FullRootRefName),

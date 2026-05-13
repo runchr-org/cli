@@ -309,6 +309,9 @@ func TestPushV2Refs_SkipsUnrecordedArchiveRefs(t *testing.T) {
 	_, err = bareRepo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
 	require.NoError(t, err, "/full/current ref should exist in bare repo")
 
+	_, err = bareRepo.Reference(plumbing.ReferenceName(paths.V2FullRootRefName), true)
+	require.NoError(t, err, "/full/root ref should exist in bare repo")
+
 	_, err = bareRepo.Reference(plumbing.ReferenceName(paths.V2FullRefPrefix+"0000000000002"), true)
 	require.Error(t, err, "unrecorded latest archived generation should not be pushed")
 
