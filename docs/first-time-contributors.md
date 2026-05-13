@@ -17,15 +17,6 @@ You're in the right place if any of this sounds like you:
 If you get stuck at any point, ask in [Discord](https://discord.gg/jZJs3Tue4S). First-time contributor questions are welcome.
 
 ---
-
-## What is Entire?
-
-Entire is a CLI for AI coding agents that checkpoints every session so you can rewind, audit, and review what an agent did to your repo. See the [README](../README.md) for a fuller intro and [docs/architecture/](architecture/) for how the pieces fit together.
-
-You don't need to understand the whole codebase to contribute. Most first contributions touch one file.
-
----
-
 ## Find a first issue
 
 A few good places to look:
