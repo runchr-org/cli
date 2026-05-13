@@ -689,16 +689,8 @@ func (h *postCommitActionHandler) parentCommitHash() string {
 }
 
 func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
-	logCtx := logging.WithComponent(h.ctx, "checkpoint")
-	shouldCondense := h.shouldCondenseWithOverlapCheck(state.Phase.IsActive(), state.LastInteractionTime)
-
-	logging.Debug(logCtx, "post-commit: HandleCondense decision",
-		slog.String("session_id", state.SessionID),
-		slog.String("phase", string(state.Phase)),
-		slog.Bool("has_new", h.hasNew),
-		slog.Bool("should_condense", shouldCondense),
-		slog.String("shadow_branch", h.shadowBranchName),
-	)
+	shouldCondense, reason := h.shouldCondenseWithOverlapCheck(state.Phase.IsActive(), state.LastInteractionTime)
+	h.logAttachDecision(state, "HandleCondense", shouldCondense, reason, 0)
 
 	if shouldCondense {
 		h.condensed = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
@@ -709,6 +701,7 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 			parentCommitHash: h.parentCommitHash(),
 			headCommitHash:   h.newHead,
 			allAgentFiles:    h.allAgentFiles,
+			attachReason:     reason,
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
@@ -717,17 +710,19 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 }
 
 func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.State) error {
-	logCtx := logging.WithComponent(h.ctx, "checkpoint")
-	shouldCondense := len(state.FilesTouched) > 0 && h.shouldCondenseWithOverlapCheck(state.Phase.IsActive(), state.LastInteractionTime)
-
-	logging.Debug(logCtx, "post-commit: HandleCondenseIfFilesTouched decision",
-		slog.String("session_id", state.SessionID),
-		slog.String("phase", string(state.Phase)),
-		slog.Bool("has_new", h.hasNew),
-		slog.Int("files_touched", len(state.FilesTouched)),
-		slog.Bool("should_condense", shouldCondense),
-		slog.String("shadow_branch", h.shadowBranchName),
+	// HandleCondenseIfFilesTouched gates on files_touched > 0 before consulting
+	// the overlap check; reflect that gate in the attach_reason so the log
+	// distinguishes "no files at all" from "no overlap evidence".
+	var (
+		shouldCondense bool
+		reason         session.AttachReason
 	)
+	if len(state.FilesTouched) > 0 {
+		shouldCondense, reason = h.shouldCondenseWithOverlapCheck(state.Phase.IsActive(), state.LastInteractionTime)
+	} else {
+		reason = session.AttachSkipNoTrackedFiles
+	}
+	h.logAttachDecision(state, "HandleCondenseIfFilesTouched", shouldCondense, reason, len(state.FilesTouched))
 
 	if shouldCondense {
 		h.condensed = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
@@ -738,6 +733,7 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 			parentCommitHash: h.parentCommitHash(),
 			headCommitHash:   h.newHead,
 			allAgentFiles:    h.allAgentFiles,
+			attachReason:     reason,
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
@@ -745,14 +741,38 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 	return nil
 }
 
-// shouldCondenseWithOverlapCheck returns true if the session should be condensed
-// into this commit. Active sessions with recent interaction condense unless they
-// have no tracked files and another session claims the committed files (read-only
-// gate). Stale ACTIVE and IDLE/ENDED sessions require file overlap evidence
-// between tracked files and committed files.
-func (h *postCommitActionHandler) shouldCondenseWithOverlapCheck(isActive bool, lastInteraction *time.Time) bool {
+// logAttachDecision emits the single consistent log line for "should this
+// session be attached to the current checkpoint?". One greppable shape
+// (component=checkpoint, msg="post-commit: attach decision") with the
+// trigger (Handle* method that ran), attach_reason, and attached fields,
+// so multi-session checkpoints can be traced from one log query.
+func (h *postCommitActionHandler) logAttachDecision(state *session.State, trigger string, attached bool, reason session.AttachReason, filesTouched int) {
+	logCtx := logging.WithComponent(h.ctx, "checkpoint")
+	logging.Debug(logCtx, "post-commit: attach decision",
+		slog.String("session_id", state.SessionID),
+		slog.String("phase", string(state.Phase)),
+		slog.String("trigger", trigger),
+		slog.Bool("attached", attached),
+		slog.String("attach_reason", string(reason)),
+		slog.Bool("has_new", h.hasNew),
+		slog.Int("files_touched", filesTouched),
+		slog.String("shadow_branch", h.shadowBranchName),
+	)
+}
+
+// shouldCondenseWithOverlapCheck returns whether the session should be
+// condensed into this commit, along with the AttachReason that named the
+// decision. Active sessions with recent interaction condense unless they
+// have no tracked files and another session claims the committed files
+// (read-only gate). Stale ACTIVE and IDLE/ENDED sessions require file
+// overlap evidence between tracked files and committed files.
+//
+// Attach reasons (true): active_recent_interaction, file_overlap.
+// Skip reasons (false): skip_no_new_content, skip_read_only_active,
+// skip_no_tracked_files, skip_no_committed_overlap, skip_content_mismatch.
+func (h *postCommitActionHandler) shouldCondenseWithOverlapCheck(isActive bool, lastInteraction *time.Time) (bool, session.AttachReason) {
 	if !h.hasNew {
-		return false
+		return false, session.AttachSkipNoNewContent
 	}
 	// ACTIVE sessions with recent interaction: skip the overlap check.
 	// PrepareCommitMsg already validated this commit is session-related
@@ -771,15 +791,12 @@ func (h *postCommitActionHandler) shouldCondenseWithOverlapCheck(isActive bool, 
 	// session has no recent interaction and falls through to the overlap check.
 	if isActive && isRecentInteraction(lastInteraction) {
 		if h.sessionsWithCommittedFiles > 0 && len(h.filesTouchedBefore) == 0 {
-			logging.Debug(h.ctx, "post-commit: skipping read-only ACTIVE session (no tracked files, other sessions claim committed files)",
-				slog.Int("sessions_with_committed_files", h.sessionsWithCommittedFiles),
-			)
-			return false
+			return false, session.AttachSkipReadOnlyActive
 		}
-		return true
+		return true, session.AttachReasonActiveRecentInteraction
 	}
 	if len(h.filesTouchedBefore) == 0 {
-		return false // No files tracked = no overlap evidence
+		return false, session.AttachSkipNoTrackedFiles
 	}
 	// Only check files that were actually changed in this commit.
 	// Without this, files that exist in the tree but weren't changed
@@ -793,14 +810,17 @@ func (h *postCommitActionHandler) shouldCondenseWithOverlapCheck(isActive bool, 
 		}
 	}
 	if len(committedTouchedFiles) == 0 {
-		return false
+		return false, session.AttachSkipNoCommittedOverlap
 	}
-	return filesOverlapWithContent(h.ctx, h.repo, h.shadowBranchName, h.commit, committedTouchedFiles, overlapOpts{
+	if filesOverlapWithContent(h.ctx, h.repo, h.shadowBranchName, h.commit, committedTouchedFiles, overlapOpts{
 		headTree:      h.headTree,
 		shadowTree:    h.shadowTree,
 		parentTree:    h.parentTree,
 		hasParentTree: true,
-	})
+	}) {
+		return true, session.AttachReasonFileOverlap
+	}
+	return false, session.AttachSkipContentMismatch
 }
 
 const (
@@ -1395,12 +1415,17 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 	state.LastCheckpointID = checkpointID
 	state.LastCheckpointCommitHash = newHead
 
+	var attachReason session.AttachReason
+	if len(opts) > 0 {
+		attachReason = opts[0].attachReason
+	}
 	logging.Info(logCtx, "session condensed",
 		slog.String("strategy", "manual-commit"),
 		slog.String("session_id", state.SessionID),
 		slog.String("checkpoint_id", result.CheckpointID.String()),
 		slog.Int("checkpoints_condensed", result.CheckpointsCount),
 		slog.Int("transcript_lines", result.TotalTranscriptLines),
+		slog.String("attach_reason", string(attachReason)),
 	)
 
 	return true
