@@ -140,6 +140,9 @@ func TestDoPushBranch_LogsAttemptsAtInfo(t *testing.T) {
 	assert.Contains(t, logText, "push attempt start", "log must record push start")
 	assert.Contains(t, logText, "push attempt completed", "log must record push completion")
 	assert.Contains(t, logText, `"branch":"`+paths.MetadataBranchName+`"`, "log must include branch")
+	// Doctor bundles need the target on completion entries too, not just on
+	// the start record, so a stuck or retried push can be correlated.
+	assert.Contains(t, logText, `"target":"`+bareDir+`"`, "completion log must include target")
 }
 
 // reportPushFailure is the single chokepoint for the sync- and retry-stage

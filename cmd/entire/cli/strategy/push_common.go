@@ -123,6 +123,7 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 	if err == nil {
 		logging.Info(ctx, "push attempt completed",
 			slog.String("branch", branchName),
+			slog.String("target", displayTarget),
 			slog.Duration("elapsed", time.Since(pushStart)),
 			slog.Bool("up_to_date", result.upToDate),
 		)
@@ -132,6 +133,7 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 
 	logging.Info(ctx, "push attempt failed",
 		slog.String("branch", branchName),
+		slog.String("target", displayTarget),
 		slog.Duration("elapsed", time.Since(pushStart)),
 		slog.String("class", classifyForLog(err)),
 	)
@@ -204,6 +206,7 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 	}
 	logging.Info(ctx, "push retry completed",
 		slog.String("branch", branchName),
+		slog.String("target", displayTarget),
 		slog.Duration("elapsed", time.Since(retryStart)),
 		slog.Bool("up_to_date", retryResult.upToDate),
 	)
@@ -247,6 +250,7 @@ func reportPushFailure(ctx context.Context, a reportPushFailureArgs) {
 	a.stop(suffix)
 	logging.Info(ctx, a.logMsg,
 		slog.String("branch", a.branch),
+		slog.String("target", displayPushTarget(a.target)),
 		slog.Duration("elapsed", time.Since(a.start)),
 		slog.String("class", classifyForLog(a.err)),
 	)
