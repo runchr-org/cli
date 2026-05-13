@@ -2,9 +2,11 @@ package redact
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/entireio/cli/redact/opf_runtime"
 )
@@ -152,11 +154,15 @@ func detectOPF(ctx context.Context, cfg *OPFConfig, s string) []taggedRegion {
 		return nil
 	}
 
+	progress := newProgressWriter(opfStderr, isTTYWriter(opfStderr), accessibleMode())
+	progress.Start("scanning transcript")
+	start := time.Now()
 	spans, err := cfg.runtime.Redact(ctx, s, cats)
 	if err != nil {
 		handleOPFFailure(ctx, cfg, err)
 		return nil
 	}
+	progress.Finish(time.Since(start))
 
 	out := make([]taggedRegion, 0, len(spans))
 	for _, sp := range spans {
@@ -175,11 +181,11 @@ func detectOPF(ctx context.Context, cfg *OPFConfig, s string) []taggedRegion {
 }
 
 // handleOPFFailure dispatches an OPF runtime error to the configured handler.
-// Always logs via slog.Warn. In "block" mode, callers must propagate; in
-// "warn" mode (default), detectOPF simply returns nil. The split allows the
-// caller (e.g. JSONLBytesWithPrivacyFilter) to decide whether to surface the
-// block as a returned error to its own caller. Task 7 will wire stderr-side
-// messaging on top of this.
+// Always logs via slog.WarnContext and prints a user-facing message to
+// opfStderr via formatOPFFailure. In "block" mode, callers must propagate the
+// returned-nil regions back up as a hard error; in "warn" mode (default),
+// detectOPF simply returns nil and the existing seven layers complete the
+// redaction without OPF.
 func handleOPFFailure(ctx context.Context, cfg *OPFConfig, err error) {
 	slog.WarnContext(ctx, "OpenAI Privacy Filter call failed",
 		componentAttr,
@@ -187,4 +193,7 @@ func handleOPFFailure(ctx context.Context, cfg *OPFConfig, err error) {
 		slog.String("on_failure", cfg.OnFailure),
 		slog.String("error", err.Error()),
 	)
+	if opfStderr != nil {
+		fmt.Fprintln(opfStderr, formatOPFFailure(err, cfg.Command))
+	}
 }

@@ -35,6 +35,9 @@ func TestProgressMessage_NonTTY(t *testing.T) {
 	if !strings.Contains(got, "[entire] redaction: openai privacy filter scanning transcript") {
 		t.Errorf("missing non-tty start: %q", got)
 	}
+	if !strings.Contains(got, "[entire] redaction: openai privacy filter completed in 1.8s") {
+		t.Errorf("missing non-tty completed line: %q", got)
+	}
 }
 
 func TestProgressMessage_Accessible(t *testing.T) {
@@ -71,6 +74,27 @@ func TestFailureMessage_Timeout(t *testing.T) {
 	}
 }
 
+func TestHandleOPFFailure_WritesFormattedMessageToStderr(t *testing.T) {
+	// Cannot t.Parallel — mutates opfStderr global.
+	var buf bytes.Buffer
+	origStderr := opfStderr
+	opfStderr = &buf
+	t.Cleanup(func() { opfStderr = origStderr })
+
+	handleOPFFailure(context.Background(), &OPFConfig{
+		Command:   "opf",
+		OnFailure: "warn",
+	}, errOPFNotFound)
+
+	got := buf.String()
+	if !strings.Contains(got, "'opf' not found on PATH") {
+		t.Errorf("stderr message missing not-found phrase: %q", got)
+	}
+	if !strings.Contains(got, "Falling back to default redaction layers.") {
+		t.Errorf("stderr message missing fallback receipt: %q", got)
+	}
+}
+
 func TestDetectOPF_EmitsProgressOnSuccess(t *testing.T) {
 	resetOPFConfig()
 	t.Cleanup(resetOPFConfig)
@@ -92,7 +116,10 @@ func TestDetectOPF_EmitsProgressOnSuccess(t *testing.T) {
 	if !strings.Contains(got, "scanning transcript") {
 		t.Errorf("missing start message: %q", got)
 	}
-	if !strings.Contains(got, "done") {
-		t.Errorf("missing done message: %q", got)
+	// Use "completed" rather than "done" — opfStderr in tests is *bytes.Buffer,
+	// not *os.File, so isTTYWriter returns false and we exit via the non-TTY
+	// branch which says "completed in N.Ns". TTY-mode wording uses "done (N.Ns)".
+	if !strings.Contains(got, "completed in") {
+		t.Errorf("missing completed message: %q", got)
 	}
 }

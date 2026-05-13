@@ -3,6 +3,7 @@ package redact
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/entireio/cli/redact/opf_runtime"
@@ -149,6 +150,13 @@ func TestDetectOPF_FiltersDisabledCategories(t *testing.T) {
 func TestDetectOPF_FailureWithWarn_ReturnsNil(t *testing.T) {
 	resetOPFConfig()
 	t.Cleanup(resetOPFConfig)
+
+	// Suppress the user-facing stderr message handleOPFFailure prints —
+	// otherwise it pollutes `go test -v` output. Format-specific assertions
+	// live in TestHandleOPFFailure_WritesFormattedMessageToStderr.
+	origStderr := opfStderr
+	opfStderr = io.Discard
+	t.Cleanup(func() { opfStderr = origStderr })
 
 	fake := &fakeRuntime{err: errors.New("boom")}
 	ConfigurePrivacyFilterWithRuntime(OPFConfig{

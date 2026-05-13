@@ -37,7 +37,7 @@ func (p *progressWriter) Finish(elapsed time.Duration) {
 	secs := elapsed.Seconds()
 	switch {
 	case p.accessible || !p.tty:
-		fmt.Fprintf(p.w, "[entire] redaction: openai privacy filter done in %.1fs\n", secs)
+		fmt.Fprintf(p.w, "[entire] redaction: openai privacy filter completed in %.1fs\n", secs)
 	default:
 		fmt.Fprintf(p.w, "✓ OpenAI Privacy Filter: done (%.1fs)\n", secs)
 	}
