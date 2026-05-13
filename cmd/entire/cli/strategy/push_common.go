@@ -535,10 +535,10 @@ func printProtectedRefBlock(w io.Writer, ref, target string) {
 // always apply cleanly.
 // The target can be a remote name or a URL.
 func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string) error {
-	ctx, cancel := context.WithTimeout(ctx, fetchAttemptTimeout)
+	localCtx, cancel := context.WithTimeout(ctx, fetchAttemptTimeout)
 	defer cancel()
 
-	fetchTarget, err := remote.ResolveFetchTarget(ctx, target)
+	fetchTarget, err := remote.ResolveFetchTarget(localCtx, target)
 	if err != nil {
 		return fmt.Errorf("resolve fetch target: %w", err)
 	}
@@ -562,14 +562,17 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 	// Use --filter=blob:none for a partial fetch that downloads only commits
 	// and trees, skipping blobs. The merge only needs the tree structure to
 	// combine entries; blobs are already local or fetched on demand.
-	if output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
+	if output, fetchErr := remote.Fetch(localCtx, remote.FetchOptions{
 		Remote:   fetchTarget,
 		RefSpecs: []string{refSpec},
 		NoTags:   true,
 	}); fetchErr != nil {
-		// Inner deadline fired: distinct sentinel so doPushBranch can render
-		// " timed out" instead of an empty trailing colon.
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		// Inner deadline fired (but outer is still alive): distinct sentinel
+		// so doPushBranch can render " timed out" instead of an empty trailing
+		// colon. When the outer context fired, let the wrapped error propagate
+		// so the caller sees the real cancellation cause instead of an inner-
+		// timeout mislabel.
+		if errors.Is(localCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 			logging.Debug(ctx, "git fetch timed out",
 				slog.String("error", fetchErr.Error()),
 				slog.Duration("after", fetchAttemptTimeout),
@@ -586,7 +589,7 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 		return fmt.Errorf("fetch failed: %s", msg)
 	}
 
-	repo, err := OpenRepository(ctx)
+	repo, err := OpenRepository(localCtx)
 	if err != nil {
 		return fmt.Errorf("failed to open git repository: %w", err)
 	}
@@ -597,7 +600,7 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 	// this cherry-picks local commits onto remote tip, updating the local ref.
 	// If reconciliation fails, abort — proceeding to rebase on disconnected
 	// branches would silently combine unrelated histories.
-	if reconcileErr := ReconcileDisconnectedMetadataBranch(ctx, repo, fetchedRefName, pushStderr); reconcileErr != nil {
+	if reconcileErr := ReconcileDisconnectedMetadataBranch(localCtx, repo, fetchedRefName, pushStderr); reconcileErr != nil {
 		return fmt.Errorf("metadata reconciliation failed: %w", reconcileErr)
 	}
 
@@ -623,7 +626,7 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 	if err != nil {
 		return fmt.Errorf("failed to get repo path: %w", err)
 	}
-	mergeBase, err := getMergeBase(ctx, repoPath, localRef.Hash().String(), remoteRef.Hash().String())
+	mergeBase, err := getMergeBase(localCtx, repoPath, localRef.Hash().String(), remoteRef.Hash().String())
 	if err != nil {
 		return fmt.Errorf("failed to find merge base: %w", err)
 	}
@@ -644,7 +647,7 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 	// them onto the remote tip. This preserves local-only commits even when the
 	// local metadata branch already contains old merge commits, while avoiding
 	// replaying shared ancestors older than the true merge-base.
-	localCommits, err := collectCommitsSince(ctx, repo, repoPath, localRef.Hash(), remoteRef.Hash())
+	localCommits, err := collectCommitsSince(localCtx, repo, repoPath, localRef.Hash(), remoteRef.Hash())
 	if err != nil {
 		return fmt.Errorf("failed to collect local commits: %w", err)
 	}
@@ -661,7 +664,7 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 		return nil
 	}
 
-	newTip, err := cherryPickOnto(ctx, repo, remoteRef.Hash(), localCommits)
+	newTip, err := cherryPickOnto(localCtx, repo, remoteRef.Hash(), localCommits)
 	if err != nil {
 		return fmt.Errorf("failed to rebase local commits onto remote: %w", err)
 	}

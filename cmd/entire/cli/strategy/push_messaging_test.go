@@ -46,6 +46,28 @@ func TestFetchAndRebase_FetchFailure_IncludesUnderlyingError(t *testing.T) {
 	require.NotEmpty(t, strings.TrimSpace(detail), "fetch failed must carry a non-empty cause; got %q", msg)
 }
 
+// Regression: when the outer context already fired its deadline (e.g. a
+// hook-level timeout shorter than fetchAttemptTimeout), the inner localCtx
+// also reports DeadlineExceeded because it derives from outer. A naive check
+// against the inner ctx alone would misreport this as errFetchTimedOut and
+// swallow the real outer cancellation cause. The fix gates the sentinel on
+// the outer ctx still being alive.
+//
+// Not parallel: t.Chdir() for OpenRepository.
+func TestFetchAndRebase_OuterDeadlineFired_DoesNotReturnFetchTimedOut(t *testing.T) {
+	tmpDir := setupRepoWithCheckpointBranch(t)
+	t.Chdir(tmpDir)
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+	defer cancel()
+
+	nonExistent := filepath.Join(t.TempDir(), "does-not-exist")
+	err := fetchAndRebaseSessionsCommon(ctx, nonExistent, paths.MetadataBranchName)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, errFetchTimedOut,
+		"outer-context deadline must not be misreported as inner fetch timeout; got %v", err)
+}
+
 // On inner-push timeout, doPushBranch must end the dot line with " timed out",
 // skip the sync→retry cascade (same network condition would also trip the
 // fetch deadline), and surface the DEBUG-logging hint.
