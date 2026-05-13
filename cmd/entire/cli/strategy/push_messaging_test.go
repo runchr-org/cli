@@ -79,7 +79,10 @@ func TestDoPushBranch_TimedOut_PrintsTimedOutAndSkipsSync(t *testing.T) {
 
 	// Force every push attempt to time out immediately. KillOnCancel +
 	// WaitDelay ensures the call returns within milliseconds.
-	withShortPushTimeout(t, 1*time.Millisecond)
+	// Zero timeout makes localCtx fire DeadlineExceeded synchronously, so the
+	// remote.Push call sees an already-cancelled context and we exercise the
+	// errPushTimedOut path without racing the network or local push.
+	withShortPushTimeout(t, 0)
 
 	restore := captureStderr(t)
 	err := doPushBranch(context.Background(), bareDir, paths.MetadataBranchName)
@@ -180,7 +183,10 @@ func TestTryPushSessionsCommon_InnerTimeout_ReturnsErrPushTimedOut(t *testing.T)
 	workDir, bareDir := setupBareRemoteWithCheckpointBranch(t)
 	t.Chdir(workDir)
 
-	withShortPushTimeout(t, 1*time.Millisecond)
+	// Zero timeout makes localCtx fire DeadlineExceeded synchronously, so the
+	// remote.Push call sees an already-cancelled context and we exercise the
+	// errPushTimedOut path without racing the network or local push.
+	withShortPushTimeout(t, 0)
 
 	_, err := tryPushSessionsCommon(context.Background(), bareDir, paths.MetadataBranchName)
 	require.Error(t, err)
