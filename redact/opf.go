@@ -23,6 +23,14 @@ type OPFConfig struct {
 	Command    string
 	Timeout    int    // seconds; 0 means use default of 30
 	OnFailure  string // "warn" (default) or "block"
+	// TODO(opf-block-mode): "block" is parsed and stored but NOT yet enforced
+	// end-to-end. handleOPFFailure currently always falls through to warn
+	// behavior; wiring "block" requires returning a hard error from
+	// JSONLBytesWithPrivacyFilter / JSONLContentWithPrivacyFilter (the other
+	// two entry points return non-error types so they can't block). Teams
+	// that need strict enforcement today should leave on_failure unset
+	// (defaults to "warn") and monitor `.entire/logs/entire.log` for the
+	// "OpenAI Privacy Filter call failed" slog warnings.
 
 	// runtime is package-private and constructed by ConfigurePrivacyFilter
 	// from Command + Timeout. Tests use ConfigurePrivacyFilterWithRuntime to
@@ -182,10 +190,15 @@ func detectOPF(ctx context.Context, cfg *OPFConfig, s string) []taggedRegion {
 
 // handleOPFFailure dispatches an OPF runtime error to the configured handler.
 // Always logs via slog.WarnContext and prints a user-facing message to
-// opfStderr via formatOPFFailure. In "block" mode, callers must propagate the
-// returned-nil regions back up as a hard error; in "warn" mode (default),
-// detectOPF simply returns nil and the existing seven layers complete the
-// redaction without OPF.
+// opfStderr via formatOPFFailure.
+//
+// TODO(opf-block-mode): cfg.OnFailure == "block" is currently ignored —
+// this function always falls through to warn behavior (log + stderr +
+// return). Wiring "block" requires plumbing an error return through
+// JSONLBytesWithPrivacyFilter and JSONLContentWithPrivacyFilter (the
+// other two entry points return non-error types and can't surface a
+// block). Until that wiring exists, the on_failure setting is documented
+// in the schema but not enforced.
 func handleOPFFailure(ctx context.Context, cfg *OPFConfig, err error) {
 	slog.WarnContext(ctx, "OpenAI Privacy Filter call failed",
 		componentAttr,

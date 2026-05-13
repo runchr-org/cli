@@ -3,6 +3,9 @@ package redact
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io/fs"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -71,6 +74,46 @@ func TestFailureMessage_Timeout(t *testing.T) {
 	got := formatOPFFailure(opfErrTimeout(45), "opf")
 	if !strings.Contains(got, "exceeded 45s timeout") {
 		t.Errorf("missing timeout phrasing: %q", got)
+	}
+}
+
+// TestFailureMessage_RealNotFoundErr exercises the production error path:
+// shellout.go does not wrap with the synthetic errOPFNotFound sentinel —
+// real exec failures surface exec.ErrNotFound or os.ErrNotExist instead.
+// formatOPFFailure must recognize those too, otherwise the actionable
+// "install opf" guidance never reaches users.
+func TestFailureMessage_RealNotFoundErr(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"exec.ErrNotFound", &exec.Error{Name: "opf", Err: exec.ErrNotFound}},
+		{"os.PathError-ENOENT", &fs.PathError{Op: "fork/exec", Path: "/nonexistent/opf", Err: fs.ErrNotExist}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := formatOPFFailure(tc.err, "opf")
+			if !strings.Contains(got, "not found on PATH") {
+				t.Errorf("real not-found error not classified: %q", got)
+			}
+			if !strings.Contains(got, "pip install opf") {
+				t.Errorf("install instruction missing for real not-found error: %q", got)
+			}
+		})
+	}
+}
+
+// TestFailureMessage_RealTimeoutErr exercises the production timeout path:
+// shellout.go wraps context.DeadlineExceeded with %w, not the synthetic
+// opfTimeoutError type. formatOPFFailure must catch the wrapped form.
+func TestFailureMessage_RealTimeoutErr(t *testing.T) {
+	t.Parallel()
+	wrapped := fmt.Errorf("opf timeout after 30s: %w", context.DeadlineExceeded)
+	got := formatOPFFailure(wrapped, "opf")
+	if !strings.Contains(got, "Consider raising") {
+		t.Errorf("real timeout not classified: %q", got)
 	}
 }
 

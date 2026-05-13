@@ -1,10 +1,12 @@
 package redact
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -58,11 +60,15 @@ func (e opfTimeoutError) Error() string {
 // formatOPFFailure builds a user-facing failure message for an OPF runtime
 // error. The message is routed through stderr by handleOPFFailure; it always
 // ends with the fallback receipt so users know redaction continued without OPF.
+//
+// Matching covers both the synthetic sentinels used in unit tests and the
+// real errors that the shell-out runtime produces in production
+// (exec.ErrNotFound, os.ErrNotExist, context.DeadlineExceeded).
 func formatOPFFailure(err error, command string) string {
 	var b strings.Builder
 	b.WriteString("× OpenAI Privacy Filter: ")
 	switch {
-	case errors.Is(err, errOPFNotFound):
+	case isOPFNotFoundErr(err):
 		fmt.Fprintf(&b, "'%s' not found on PATH. Install with 'pip install opf' (see https://github.com/openai/privacy-filter) or set 'redaction.openai_privacy_filter.command' in .entire/settings.json. ", command)
 	case isOPFTimeoutErr(err):
 		fmt.Fprintf(&b, "%s. Consider raising 'redaction.openai_privacy_filter.timeout_seconds' or disabling the filter. ", err.Error())
@@ -73,9 +79,33 @@ func formatOPFFailure(err error, command string) string {
 	return b.String()
 }
 
+// isOPFNotFoundErr reports whether err signals that the configured OPF
+// binary couldn't be located on PATH or at its absolute path. Matches:
+//   - errOPFNotFound (synthetic sentinel used in unit tests)
+//   - exec.ErrNotFound (produced by exec.LookPath when a bare name isn't on PATH)
+//   - os.ErrNotExist (produced when an absolute path doesn't resolve to a file)
+func isOPFNotFoundErr(err error) bool {
+	if errors.Is(err, errOPFNotFound) {
+		return true
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return true
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	return false
+}
+
+// isOPFTimeoutErr reports whether err signals the OPF call exceeded its
+// timeout. Matches both opfTimeoutError (synthetic sentinel) and a wrapped
+// context.DeadlineExceeded (produced by shellout.go on real timeouts).
 func isOPFTimeoutErr(err error) bool {
 	var t opfTimeoutError
-	return errors.As(err, &t)
+	if errors.As(err, &t) {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 // isTTYWriter reports whether w is a file descriptor connected to a terminal.
