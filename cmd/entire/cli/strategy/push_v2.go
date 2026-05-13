@@ -898,7 +898,14 @@ func printV2PartialPushResult(w io.Writer, successfulRefs []plumbing.ReferenceNa
 
 func printV2PushFailures(ctx context.Context, target string, successfulRefs []plumbing.ReferenceName, failures []error, pushedContent bool) {
 	printV2PartialPushResult(os.Stderr, successfulRefs, failures)
-	printCheckpointRemoteHint(target)
+	// Skip the "remote could not be reached" hint when some refs already
+	// pushed — that's proof the remote is reachable, and the remaining
+	// failures are per-ref (e.g. /full/current's archive history doesn't
+	// match remote), not connectivity. Without this guard the hint
+	// contradicts the "Successfully pushed …" line printed just above.
+	if len(successfulRefs) == 0 {
+		printCheckpointRemoteHint(target)
+	}
 	if pushedContent {
 		printSettingsCommitHint(ctx, target)
 	}

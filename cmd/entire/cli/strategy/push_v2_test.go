@@ -808,6 +808,53 @@ func TestPrintV2PartialPushResult(t *testing.T) {
 	assert.NotContains(t, output.String(), "[entire] All v2 checkpoints pushed")
 }
 
+// Regression: when v2/main pushes successfully but v2/full/current fails for
+// a per-ref logical reason (e.g. "no remote archive shares history"), the
+// summary used to print "checkpoint remote ... could not be reached" right
+// after "Successfully pushed v2/main", contradicting itself. The connectivity
+// hint must be suppressed whenever any ref pushed successfully.
+//
+// Not parallel: printCheckpointRemoteHint writes to os.Stderr directly.
+func TestPrintV2PushFailures_SkipsUnreachableHintWhenAnyRefPushed(t *testing.T) {
+	urlTarget := "https://example.com/checkpoints.git"
+
+	restore := captureStderr(t)
+	printV2PushFailures(
+		context.Background(),
+		urlTarget,
+		[]plumbing.ReferenceName{plumbing.ReferenceName(paths.V2MainRefName)},
+		[]error{errors.New("couldn't sync v2/full/current: failed to find related archived generation: no remote archive shares history with local /full/current")},
+		true,
+	)
+	output := restore()
+
+	assert.Contains(t, output, "Successfully pushed v2/main")
+	assert.Contains(t, output, "no remote archive shares history")
+	assert.NotContains(t, output, "could not be reached",
+		"successful pushes prove reachability — the unreachable hint must be suppressed")
+}
+
+// When zero refs pushed, the connectivity hint is still the most useful
+// guidance and must remain. Pinned so the previous fix doesn't over-suppress.
+//
+// Not parallel: printCheckpointRemoteHint writes to os.Stderr directly.
+func TestPrintV2PushFailures_PrintsUnreachableHintWhenNoRefsPushed(t *testing.T) {
+	urlTarget := "https://example.com/checkpoints.git"
+
+	restore := captureStderr(t)
+	printV2PushFailures(
+		context.Background(),
+		urlTarget,
+		nil,
+		[]error{errors.New("failed to push v2/main: dial tcp: lookup example.com: no such host")},
+		false,
+	)
+	output := restore()
+
+	assert.Contains(t, output, "could not be reached",
+		"with no successful refs the connectivity hint is still useful")
+}
+
 func TestParsePushRefResults_MultiRefPorcelain(t *testing.T) {
 	t.Parallel()
 
