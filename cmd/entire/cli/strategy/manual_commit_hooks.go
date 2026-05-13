@@ -690,7 +690,7 @@ func (h *postCommitActionHandler) parentCommitHash() string {
 
 func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 	shouldCondense, reason := h.shouldCondenseWithOverlapCheck(state)
-	h.logAttachDecision(state, "HandleCondense", shouldCondense, reason, 0)
+	h.logAttachDecision(state, "HandleCondense", shouldCondense, reason, len(state.FilesTouched))
 
 	if shouldCondense {
 		h.condensed = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
@@ -1237,7 +1237,11 @@ func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 			)
 		}
 	}
-	transitionCtx.HasFilesTouched = len(state.FilesTouched) > 0
+	// Manually attached sessions are routed through the condense action even
+	// without tracked files: the user's `entire attach` import is the signal
+	// we honor in place of file overlap. shouldCondenseWithOverlapCheck then
+	// short-circuits to AttachReasonManual once it sees AttachedManually.
+	transitionCtx.HasFilesTouched = len(state.FilesTouched) > 0 || state.AttachedManually
 
 	// Save FilesTouched BEFORE TransitionAndLog — the handler's condensation
 	// clears it, but we need the original list for carry-forward computation.
