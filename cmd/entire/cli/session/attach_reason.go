@@ -22,6 +22,12 @@ const (
 	// match the shadow branch (heuristic match).
 	AttachReasonFileOverlap AttachReason = "file_overlap"
 
+	// AttachReasonManual: session was imported via `entire attach` (or
+	// `entire review attach`) and is therefore associated with the worktree
+	// by explicit user intent. Bypasses the file-overlap and read-only-active
+	// heuristics; only the "has new content" gate still applies.
+	AttachReasonManual AttachReason = "manual_attach"
+
 	// AttachSkipNoNewContent: no new transcript or files since the last
 	// condensation. Log-only.
 	AttachSkipNoNewContent AttachReason = "skip_no_new_content"
@@ -52,7 +58,7 @@ const (
 // exhaustive linter will flag forgotten additions.
 func (r AttachReason) IsAttach() bool {
 	switch r {
-	case AttachReasonActiveRecentInteraction, AttachReasonFileOverlap:
+	case AttachReasonActiveRecentInteraction, AttachReasonFileOverlap, AttachReasonManual:
 		return true
 	case AttachSkipNoNewContent,
 		AttachSkipReadOnlyActive,

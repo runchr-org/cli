@@ -689,7 +689,7 @@ func (h *postCommitActionHandler) parentCommitHash() string {
 }
 
 func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
-	shouldCondense, reason := h.shouldCondenseWithOverlapCheck(state.Phase.IsActive(), state.LastInteractionTime)
+	shouldCondense, reason := h.shouldCondenseWithOverlapCheck(state.Phase.IsActive(), state.LastInteractionTime, state.AttachedManually)
 	h.logAttachDecision(state, "HandleCondense", shouldCondense, reason, 0)
 
 	if shouldCondense {
@@ -710,16 +710,20 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 }
 
 func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.State) error {
-	// HandleCondenseIfFilesTouched gates on files_touched > 0 before consulting
-	// the overlap check; reflect that gate in the attach_reason so the log
-	// distinguishes "no files at all" from "no overlap evidence".
+	// HandleCondenseIfFilesTouched normally gates on files_touched > 0 before
+	// consulting the overlap check; reflect that gate in the attach_reason so
+	// the log distinguishes "no files at all" from "no overlap evidence".
+	// Manually-attached sessions skip the gate — review attach in particular
+	// may legitimately have no files touched, and the user's import is the
+	// explicit signal we honor in place of file evidence.
 	var (
 		shouldCondense bool
 		reason         session.AttachReason
 	)
-	if len(state.FilesTouched) > 0 {
-		shouldCondense, reason = h.shouldCondenseWithOverlapCheck(state.Phase.IsActive(), state.LastInteractionTime)
-	} else {
+	switch {
+	case state.AttachedManually || len(state.FilesTouched) > 0:
+		shouldCondense, reason = h.shouldCondenseWithOverlapCheck(state.Phase.IsActive(), state.LastInteractionTime, state.AttachedManually)
+	default:
 		reason = session.AttachSkipNoTrackedFiles
 	}
 	h.logAttachDecision(state, "HandleCondenseIfFilesTouched", shouldCondense, reason, len(state.FilesTouched))
@@ -765,14 +769,20 @@ func (h *postCommitActionHandler) logAttachDecision(state *session.State, trigge
 // decision. Active sessions with recent interaction condense unless they
 // have no tracked files and another session claims the committed files
 // (read-only gate). Stale ACTIVE and IDLE/ENDED sessions require file
-// overlap evidence between tracked files and committed files.
+// overlap evidence between tracked files and committed files. Manually
+// attached sessions (imported via `entire attach` / `entire review attach`)
+// bypass the heuristic branches entirely — they reflect explicit user
+// intent, which we trust over file-content heuristics.
 //
-// Attach reasons (true): active_recent_interaction, file_overlap.
+// Attach reasons (true): active_recent_interaction, file_overlap, manual_attach.
 // Skip reasons (false): skip_no_new_content, skip_read_only_active,
 // skip_no_tracked_files, skip_no_committed_overlap, skip_content_mismatch.
-func (h *postCommitActionHandler) shouldCondenseWithOverlapCheck(isActive bool, lastInteraction *time.Time) (bool, session.AttachReason) {
+func (h *postCommitActionHandler) shouldCondenseWithOverlapCheck(isActive bool, lastInteraction *time.Time, attachedManually bool) (bool, session.AttachReason) {
 	if !h.hasNew {
 		return false, session.AttachSkipNoNewContent
+	}
+	if attachedManually {
+		return true, session.AttachReasonManual
 	}
 	// ACTIVE sessions with recent interaction: skip the overlap check.
 	// PrepareCommitMsg already validated this commit is session-related
