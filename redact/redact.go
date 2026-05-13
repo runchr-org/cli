@@ -29,7 +29,8 @@ var credentialedURIPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]{1,31}://
 // optional `_word`/`-word` segments + `password`/`passwd`/`pwd`). Used to
 // compose both the env-var assignment regex and the JSON-key regex so the
 // vendor list stays in one place.
-const dbPasswordKeyShape = `(?:db|database|pg|postgres|postgresql|mysql|mariadb|redis|mongo|mongodb|sqlserver|mssql|jdbc)(?:[_-]+[a-z0-9]+)*[_-]*(?:password|passwd|pwd)` //nolint:gosec // regex literal, not a credential
+const dbPasswordKeyShape = `(?:db|database|pg|postgres|postgresql|mysql|mariadb|redis|mongo|mongodb|sqlserver|mssql|jdbc)(?:[_-]+[a-z0-9]+)*[_-]*(?:password|passwd|pwd)`                                        //nolint:gosec // regex literal, not a credential
+const secretValueKeyShape = `(?:[a-z0-9]+[_-]+)*(?:api[_-]*key|auth[_-]*token|access[_-]*token|refresh[_-]*token|client[_-]*secret|consumer[_-]*secret|secret[_-]*key|private[_-]*key|ssh[_-]*key|secret|token)` //nolint:gosec // regex literal, not a credential
 
 var (
 	jdbcPattern          = regexp.MustCompile(`(?i)\bjdbc:[^\s"'<>` + "`" + `]+`)
@@ -39,7 +40,11 @@ var (
 	// credentialValuePattern requires the prefix to start at a non-alphanumeric
 	// boundary, so APP_DB_PASSWORD matches via the leading `_` but mydbpassword
 	// does not.
-	credentialValuePattern = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])(` + dbPasswordKeyShape + `)\s*=\s*("[^"]*"|'[^']*'|[^\s,;&]+)`)
+	credentialValuePattern  = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])(` + dbPasswordKeyShape + `)\s*=\s*("[^"]*"|'[^']*'|[^\s,;&]+)`)
+	secretValuePattern      = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])(` + secretValueKeyShape + `)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;&]+)`)
+	shellStdinSecretPattern = regexp.MustCompile(
+		`(?is)\bprintf\s+(?:(?:%[A-Za-z]|'%-?[0-9.]*[A-Za-z](?:\\n)?'|"%-?[0-9.]*[A-Za-z](?:\\n)?")\s+)?("[^"\r\n]{1,512}"|'[^'\r\n]{1,512}'|[^\s|&;]{1,512})\s*\|\s*[^&;\r\n]{0,300}\bsecrets?\s+(?:put|set|add|create)\s+` + secretValueKeyShape + `\b`,
+	)
 
 	keywordHostPattern      = regexp.MustCompile(`(?i)(?:^|\s)host=`)
 	keywordUserPattern      = regexp.MustCompile(`(?i)(?:^|\s)user=`)
@@ -49,6 +54,7 @@ var (
 	// credentialJSONKeyRegex operates on output of normalizeCredentialJSONKey
 	// (already lowercased, `-`/` `/`.` → `_`), so the `(?i)` flag is unnecessary.
 	credentialJSONKeyRegex  = regexp.MustCompile(`^` + dbPasswordKeyShape + `$`)
+	secretJSONKeyRegex      = regexp.MustCompile(`^(?:[a-z0-9]+_+)*(?:api_*key|auth_*token|access_*token|refresh_*token|client_*secret|consumer_*secret|secret_*key|private_*key|ssh_*key|secret|token)$`)
 	genericPasswordKeyRegex = regexp.MustCompile(`(?i)^(?:password|passwd|pwd)$`)
 )
 
@@ -160,8 +166,9 @@ var connectionStringRules = []connectionStringRule{
 // 3. Credentialed URIs: URLs containing userinfo passwords
 // 4. Database connection strings: JDBC, keyword DSNs, and semicolon strings
 // 5. User-defined custom rules: configured via ConfigureCustomRules
-// 6. Bounded credential key/value pairs: DB_PASSWORD=...
-// 7. PII detection: email, phone, address patterns (only when configured via ConfigurePII)
+// 6. Shell stdin literals piped into secret-management commands
+// 7. Bounded credential key/value pairs: DB_PASSWORD=..., GITHUB_CLIENT_SECRET=...
+// 8. PII detection: email, phone, address patterns (only when configured via ConfigurePII)
 // A string is redacted if ANY method flags it.
 func String(s string) string {
 	var regions []taggedRegion
@@ -184,6 +191,10 @@ func String(s string) string {
 					continue
 				}
 			}
+		}
+
+		if isNonSecretIdentifierAssignment(s[start:end]) {
+			continue
 		}
 
 		if shannonEntropy(s[start:end]) > entropyThreshold {
@@ -221,10 +232,13 @@ func String(s string) string {
 	// 5. User-defined custom rules (secrets — only runs when configured).
 	regions = append(regions, detectCustomRules(getCustomRulesConfig(), s)...)
 
-	// 6. Bounded credential key/value detection (secrets — always on).
+	// 6. Shell stdin literals piped into secret-management commands.
+	regions = append(regions, detectShellStdinSecrets(s)...)
+
+	// 7. Bounded credential key/value detection (secrets — always on).
 	regions = append(regions, detectCredentialValues(s)...)
 
-	// 7. PII detection (opt-in — only runs when configured).
+	// 8. PII detection (opt-in — only runs when configured).
 	regions = append(regions, detectPII(getPIIConfig(), s)...)
 
 	if len(regions) == 0 {
@@ -343,15 +357,35 @@ func hasSemicolonConnectionPassword(candidate string) bool {
 		hasNonPlaceholderPasswordAssignment(candidate)
 }
 
-func detectCredentialValues(s string) []taggedRegion {
+func detectShellStdinSecrets(s string) []taggedRegion {
 	var regions []taggedRegion
-	for _, loc := range credentialValuePattern.FindAllStringSubmatchIndex(s, -1) {
-		if len(loc) < 6 || loc[4] < 0 || loc[5] < 0 {
+	for _, loc := range shellStdinSecretPattern.FindAllStringSubmatchIndex(s, -1) {
+		if len(loc) < 4 || loc[2] < 0 || loc[3] < 0 {
 			continue
 		}
-		start, end := unquoteRange(s, loc[4], loc[5])
+		start, end := unquoteRange(s, loc[2], loc[3])
 		if hasNonPlaceholderPasswordValue(s[start:end]) {
 			regions = append(regions, taggedRegion{region: region{start, end}})
+		}
+	}
+	return regions
+}
+
+func detectCredentialValues(s string) []taggedRegion {
+	patterns := []*regexp.Regexp{
+		credentialValuePattern,
+		secretValuePattern,
+	}
+	var regions []taggedRegion
+	for _, pattern := range patterns {
+		for _, loc := range pattern.FindAllStringSubmatchIndex(s, -1) {
+			if len(loc) < 6 || loc[4] < 0 || loc[5] < 0 {
+				continue
+			}
+			start, end := unquoteRange(s, loc[4], loc[5])
+			if hasNonPlaceholderPasswordValue(s[start:end]) {
+				regions = append(regions, taggedRegion{region: region{start, end}})
+			}
 		}
 	}
 	return regions
@@ -396,10 +430,29 @@ func isPlaceholderSecretValue(value string) bool {
 	if strings.HasPrefix(normalized, "${") && strings.HasSuffix(normalized, "}") {
 		return true
 	}
+	if isShellVariableReference(trimmed) {
+		return true
+	}
 	if _, ok := placeholderSecretValues[normalized]; ok {
 		return true
 	}
 	return isRepeatedCharPlaceholder(normalized)
+}
+
+func isShellVariableReference(s string) bool {
+	if len(s) < 2 || s[0] != '$' {
+		return false
+	}
+	if s[1] != '_' && (s[1] < 'A' || s[1] > 'Z') && (s[1] < 'a' || s[1] > 'z') {
+		return false
+	}
+	for i := 2; i < len(s); i++ {
+		c := s[i]
+		if c != '_' && (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // bracketedPlaceholderInteriorRE matches the inside of a "<…>" placeholder
@@ -442,10 +495,42 @@ func isRepeatedCharPlaceholder(s string) bool {
 
 func isCredentialJSONSecretKey(key string, credentialContext bool) bool {
 	normalized := normalizeCredentialJSONKey(key)
-	if credentialJSONKeyRegex.MatchString(normalized) {
+	if isSensitiveNormalizedJSONValueKey(normalized) {
 		return true
 	}
 	return credentialContext && genericPasswordKeyRegex.MatchString(normalized)
+}
+
+func isNonSecretIdentifierAssignment(candidate string) bool {
+	key, value, ok := strings.Cut(candidate, "=")
+	if !ok || key == "" || value == "" {
+		return false
+	}
+	normalized := normalizeCredentialJSONKey(key)
+	if isSensitiveNormalizedJSONValueKey(normalized) || genericPasswordKeyRegex.MatchString(normalized) {
+		return false
+	}
+	if isHighEntropySecretCandidate(value) {
+		return false
+	}
+	return normalized == "id" ||
+		normalized == "account" ||
+		strings.HasSuffix(normalized, "_id") ||
+		strings.HasSuffix(normalized, "_account")
+}
+
+func isHighEntropySecretCandidate(value string) bool {
+	for _, loc := range secretPattern.FindAllStringIndex(value, -1) {
+		if shannonEntropy(value[loc[0]:loc[1]]) > entropyThreshold {
+			return true
+		}
+	}
+	return false
+}
+
+func isSensitiveNormalizedJSONValueKey(normalized string) bool {
+	return credentialJSONKeyRegex.MatchString(normalized) ||
+		secretJSONKeyRegex.MatchString(normalized)
 }
 
 func isCredentialJSONObject(obj map[string]any) bool {
