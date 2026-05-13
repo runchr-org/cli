@@ -134,7 +134,12 @@ func TestShellOut_ParentContextCanceled(t *testing.T) {
 	}
 }
 
-func TestShellOut_CategoriesPassed(t *testing.T) {
+// TestShellOut_CategoriesNotPassedToOPF locks in the design that opf is
+// invoked without category filtering — opf has no CLI flag for it, so all
+// categories are returned and detectOPF filters post-call. Regression
+// guard against re-introducing a bogus --labels flag (or equivalent) that
+// the real opf binary would reject.
+func TestShellOut_CategoriesNotPassedToOPF(t *testing.T) {
 	t.Parallel()
 	var (
 		mu      sync.Mutex
@@ -157,7 +162,13 @@ func TestShellOut_CategoriesPassed(t *testing.T) {
 	mu.Lock()
 	joined := strings.Join(gotArgs, " ")
 	mu.Unlock()
-	if !strings.Contains(joined, "private_person") || !strings.Contains(joined, "secret") {
-		t.Errorf("categories not passed to opf: %v", gotArgs)
+	if strings.Contains(joined, "private_person") || strings.Contains(joined, "secret") {
+		t.Errorf("categories should NOT be passed to opf (opf has no category flag): %v", gotArgs)
+	}
+	// Verify the production flags we DO pass are present.
+	for _, want := range []string{"--device", "cpu", "--output-mode", "typed", "--format", "json", "--no-print-color-coded-text"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing required arg %q in opf invocation: %v", want, gotArgs)
+		}
 	}
 }

@@ -48,10 +48,19 @@ func (s *shellOut) Redact(ctx context.Context, text string, categories []string)
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// opf has no per-call category filter on the CLI — it returns every
+	// category it can detect. detectOPF filters spans to cfg.Categories
+	// post-call (and the `if len(categories) == 0` guard above skips the
+	// invocation entirely when nothing is enabled). The categories slice
+	// is retained on the Runtime signature for future implementations
+	// (daemon mode, fine-tuned models) that may accept category hints.
+	// --no-print-color-coded-text suppresses the human-oriented summary +
+	// color preview that surround the JSON otherwise.
 	args := []string{
 		"--device", "cpu",
 		"--output-mode", "typed",
-		"--labels", strings.Join(categories, ","),
+		"--format", "json",
+		"--no-print-color-coded-text",
 	}
 
 	cmd := s.CommandRunner(callCtx, s.command, args...)
@@ -70,11 +79,15 @@ func (s *shellOut) Redact(ctx context.Context, text string, categories []string)
 			// "context canceled" message that hides the real cause.
 			return nil, fmt.Errorf("opf canceled: %w", ctx.Err())
 		}
+		// Wrap with %w so the caller can errors.Is(err, exec.ErrNotFound /
+		// os.ErrNotExist / etc.) — formatOPFFailure relies on that chain to
+		// produce the actionable "Install with 'pip install opf'" message.
+		// %s would discard the underlying error type.
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg == "" {
-			errMsg = err.Error()
+			return nil, fmt.Errorf("opf exited with error: %w", err)
 		}
-		return nil, fmt.Errorf("opf exited with error: %s", errMsg)
+		return nil, fmt.Errorf("opf exited with error: %s: %w", errMsg, err)
 	}
 
 	var parsed opfOutput
