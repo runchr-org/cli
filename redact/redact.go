@@ -2,6 +2,7 @@ package redact
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -154,16 +155,10 @@ var connectionStringRules = []connectionStringRule{
 	{pattern: semicolonConnPattern, hasSecret: hasSemicolonConnectionPassword},
 }
 
-// String replaces secrets and PII in s using layered detection:
-// 1. Entropy-based: high-entropy alphanumeric sequences (threshold 4.5)
-// 2. Pattern-based: betterleaks regex rules (260+ known secret formats)
-// 3. Credentialed URIs: URLs containing userinfo passwords
-// 4. Database connection strings: JDBC, keyword DSNs, and semicolon strings
-// 5. User-defined custom rules: configured via ConfigureCustomRules
-// 6. Bounded credential key/value pairs: DB_PASSWORD=...
-// 7. PII detection: email, phone, address patterns (only when configured via ConfigurePII)
-// A string is redacted if ANY method flags it.
-func String(s string) string {
+// detectAllLayers runs the always-on and opt-in detection layers (1–7) and
+// returns the pre-merge taggedRegion slice for s. It does NOT run OPF — that
+// is handled exclusively by the *WithPrivacyFilter entry points.
+func detectAllLayers(s string) []taggedRegion {
 	var regions []taggedRegion
 
 	// 1. Entropy-based detection (secrets — always on).
@@ -227,6 +222,18 @@ func String(s string) string {
 	// 7. PII detection (opt-in — only runs when configured).
 	regions = append(regions, detectPII(getPIIConfig(), s)...)
 
+	return regions
+}
+
+// applyRegions merges overlapping regions and substitutes replacement tokens
+// over s. Returns s unchanged when regions is empty.
+//
+// When two regions overlap, the merge keeps the first region's label and
+// extends the span to the larger end. Sort order is (start asc, end desc,
+// label asc), so the larger-span / lexically-earlier label wins — this is
+// what lets bare-REDACTED ("") collide gracefully with labeled regions like
+// "PERSON" without producing stacked or interleaved tokens.
+func applyRegions(s string, regions []taggedRegion) string {
 	if len(regions) == 0 {
 		return s
 	}
@@ -263,6 +270,19 @@ func String(s string) string {
 	}
 	b.WriteString(s[prev:])
 	return b.String()
+}
+
+// String replaces secrets and PII in s using layered detection:
+// 1. Entropy-based: high-entropy alphanumeric sequences (threshold 4.5)
+// 2. Pattern-based: betterleaks regex rules (260+ known secret formats)
+// 3. Credentialed URIs: URLs containing userinfo passwords
+// 4. Database connection strings: JDBC, keyword DSNs, and semicolon strings
+// 5. User-defined custom rules: configured via ConfigureCustomRules
+// 6. Bounded credential key/value pairs: DB_PASSWORD=...
+// 7. PII detection: email, phone, address patterns (only when configured via ConfigurePII)
+// A string is redacted if ANY method flags it.
+func String(s string) string {
+	return applyRegions(s, detectAllLayers(s))
 }
 
 func detectConnectionStrings(s string) []taggedRegion {
@@ -498,16 +518,17 @@ func JSONLBytes(b []byte) (RedactedBytes, error) {
 	return RedactedBytes{data: []byte(redacted)}, nil
 }
 
-// JSONLContent parses each line as JSON to determine which string values
-// need redaction, then performs targeted replacements on the raw JSON bytes.
-// Lines with no secrets are returned unchanged, preserving original formatting.
-//
-// For multi-line JSON content (e.g., pretty-printed single JSON objects like
-// OpenCode export), the function first attempts to parse the entire content as
-// a single JSON value. This ensures field-aware redaction (which skips ID fields)
-// is used instead of falling back to entropy-based detection on raw text lines,
-// which would corrupt high-entropy identifiers.
-func JSONLContent(content string) (string, error) {
+// stringRedactor is a function that redacts secrets in a string.
+// Used to parameterize JSONL processing so callers can swap in OPF-augmented
+// redaction without duplicating the walker logic.
+type stringRedactor func(s string) string
+
+// jsonlContentImpl is the parameterized implementation of JSONLContent. It
+// delegates per-string redaction to the provided redact function, which may
+// be String (plain) or StringWithPrivacyFilter (augmented). All structural
+// logic — single-value detection, line-by-line walking, JSON replacements —
+// lives here so both entry points stay in sync.
+func jsonlContentImpl(content string, redact stringRedactor) (string, error) {
 	// Try parsing the entire content as a single JSON value first.
 	// Uses a streaming decoder to avoid copying the full content into []byte.
 	// After decoding, attempts a second Decode to confirm EOF — if it succeeds,
@@ -518,7 +539,7 @@ func JSONLContent(content string) (string, error) {
 		var parsed any
 		if err := dec.Decode(&parsed); err == nil && isSingleJSONValue(dec) {
 			// Content is a single JSON value (object/array) — redact field-aware.
-			result, err := applyJSONReplacements(content, collectJSONLReplacements(parsed))
+			result, err := applyJSONReplacements(content, collectJSONLReplacements(parsed, redact))
 			if err != nil {
 				return "", err
 			}
@@ -540,16 +561,29 @@ func JSONLContent(content string) (string, error) {
 		}
 		var parsed any
 		if err := json.Unmarshal([]byte(lineTrimmed), &parsed); err != nil {
-			b.WriteString(String(line))
+			b.WriteString(redact(line))
 			continue
 		}
-		result, err := applyJSONReplacements(line, collectJSONLReplacements(parsed))
+		result, err := applyJSONReplacements(line, collectJSONLReplacements(parsed, redact))
 		if err != nil {
 			return "", err
 		}
 		b.WriteString(result)
 	}
 	return b.String(), nil
+}
+
+// JSONLContent parses each line as JSON to determine which string values
+// need redaction, then performs targeted replacements on the raw JSON bytes.
+// Lines with no secrets are returned unchanged, preserving original formatting.
+//
+// For multi-line JSON content (e.g., pretty-printed single JSON objects like
+// OpenCode export), the function first attempts to parse the entire content as
+// a single JSON value. This ensures field-aware redaction (which skips ID fields)
+// is used instead of falling back to entropy-based detection on raw text lines,
+// which would corrupt high-entropy identifiers.
+func JSONLContent(content string) (string, error) {
+	return jsonlContentImpl(content, String)
 }
 
 // applyJSONReplacements applies collected (original, redacted) string pairs
@@ -639,8 +673,9 @@ func isSingleJSONValue(dec *json.Decoder) bool {
 }
 
 // collectJSONLReplacements walks a parsed JSON value and collects unique string
-// replacements for values that need redaction.
-func collectJSONLReplacements(v any) []jsonReplacement {
+// replacements for values that need redaction. The redact parameter controls
+// which detection layers are applied to each leaf string value.
+func collectJSONLReplacements(v any, redact stringRedactor) []jsonReplacement {
 	seen := make(map[string]bool)
 	var repls []jsonReplacement
 	var walk func(key string, credentialContext bool, v any)
@@ -662,7 +697,7 @@ func collectJSONLReplacements(v any) []jsonReplacement {
 				walk("", credentialContext, child)
 			}
 		case string:
-			redacted := String(val)
+			redacted := redact(val)
 			if redacted == val && isCredentialJSONSecretKey(key, credentialContext) && hasNonPlaceholderPasswordValue(val) {
 				redacted = RedactedPlaceholder
 			}
@@ -734,4 +769,47 @@ func jsonEncodeString(s string) (string, error) {
 		return "", fmt.Errorf("json encode string: %w", err)
 	}
 	return strings.TrimSuffix(buf.String(), "\n"), nil
+}
+
+// StringWithPrivacyFilter is the augmented variant of String that also runs
+// the OpenAI Privacy Filter layer (when configured). Use only at
+// condensation + export boundaries; per-turn writes must use String.
+func StringWithPrivacyFilter(ctx context.Context, s string) string {
+	regions := detectAllLayers(s)
+	regions = append(regions, detectOPF(ctx, getOPFConfig(), s)...)
+	return applyRegions(s, regions)
+}
+
+// JSONLContentWithPrivacyFilter is the augmented variant of JSONLContent.
+// Per-string redaction inside the JSON walker invokes StringWithPrivacyFilter
+// so OPF runs on the same leaf values as the other layers.
+func JSONLContentWithPrivacyFilter(ctx context.Context, content string) (string, error) {
+	return jsonlContentImpl(content, func(v string) string {
+		return StringWithPrivacyFilter(ctx, v)
+	})
+}
+
+// JSONLBytesWithPrivacyFilter is the augmented variant of JSONLBytes.
+func JSONLBytesWithPrivacyFilter(ctx context.Context, b []byte) (RedactedBytes, error) {
+	s := string(b)
+	redacted, err := JSONLContentWithPrivacyFilter(ctx, s)
+	if err != nil {
+		return RedactedBytes{}, err
+	}
+	if redacted == s {
+		return RedactedBytes{data: b}, nil
+	}
+	return RedactedBytes{data: []byte(redacted)}, nil
+}
+
+// BytesWithPrivacyFilter is the augmented variant of Bytes. Used by
+// callsites in cli/doctor_bundle.go and cli/checkpoint/committed.go that
+// operate on raw bytes outside of JSONL framing.
+func BytesWithPrivacyFilter(ctx context.Context, b []byte) []byte {
+	s := string(b)
+	redacted := StringWithPrivacyFilter(ctx, s)
+	if redacted == s {
+		return b
+	}
+	return []byte(redacted)
 }

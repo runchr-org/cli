@@ -1,6 +1,9 @@
 package redact
 
 import (
+	"context"
+	"log/slog"
+	"sort"
 	"sync"
 
 	"github.com/entireio/cli/redact/opf_runtime"
@@ -90,4 +93,98 @@ func ResetOPFConfigForTest() {
 	opfConfigMu.Lock()
 	defer opfConfigMu.Unlock()
 	opfConfig = nil
+}
+
+// opfLabelMap maps OPF native labels to our taggedRegion.label values.
+// Empty mapped value renders as the bare "REDACTED" token; non-empty
+// values render as "[REDACTED_<LABEL>]" via the existing replacementToken
+// helper in redact.go.
+var opfLabelMap = map[string]string{
+	"private_person":  "PERSON",
+	"private_email":   "EMAIL",
+	"private_phone":   "PHONE",
+	"private_address": "ADDRESS",
+	"private_url":     "URL",
+	"private_date":    "DATE",
+	"account_number":  "ACCOUNT_NUMBER",
+	"secret":          "", // -> bare REDACTED
+}
+
+func mapOPFLabel(opfLabel string) string {
+	mapped, ok := opfLabelMap[opfLabel]
+	if !ok {
+		return "" // unknown labels collapse to bare REDACTED rather than panicking
+	}
+	return mapped
+}
+
+// enabledCategories returns the subset of opfLabelMap keys that the user
+// has explicitly set to true in cfg.Categories.
+func enabledCategories(cfg *OPFConfig) []string {
+	if cfg == nil {
+		return nil
+	}
+	out := make([]string, 0, len(cfg.Categories))
+	for label, enabled := range cfg.Categories {
+		if !enabled {
+			continue
+		}
+		if _, known := opfLabelMap[label]; !known {
+			continue
+		}
+		out = append(out, label)
+	}
+	sort.Strings(out) // deterministic order for tests + logs
+	return out
+}
+
+// detectOPF runs the OPF runtime and returns tagged regions for any spans
+// whose category is enabled in cfg. Returns nil if cfg is nil, disabled,
+// has no enabled categories, the runtime is unset, or the runtime returns
+// an error. Errors are routed to the configured failure handler before
+// returning nil.
+func detectOPF(ctx context.Context, cfg *OPFConfig, s string) []taggedRegion {
+	if cfg == nil || !cfg.Enabled || cfg.runtime == nil || s == "" {
+		return nil
+	}
+	cats := enabledCategories(cfg)
+	if len(cats) == 0 {
+		return nil
+	}
+
+	spans, err := cfg.runtime.Redact(ctx, s, cats)
+	if err != nil {
+		handleOPFFailure(ctx, cfg, err)
+		return nil
+	}
+
+	out := make([]taggedRegion, 0, len(spans))
+	for _, sp := range spans {
+		if !cfg.Categories[sp.Label] {
+			continue // belt-and-suspenders: runtime returned a category we didn't ask for
+		}
+		if sp.Start < 0 || sp.End > len(s) || sp.Start >= sp.End {
+			continue // ignore malformed spans rather than crashing
+		}
+		out = append(out, taggedRegion{
+			region: region{sp.Start, sp.End},
+			label:  mapOPFLabel(sp.Label),
+		})
+	}
+	return out
+}
+
+// handleOPFFailure dispatches an OPF runtime error to the configured handler.
+// Always logs via slog.Warn. In "block" mode, callers must propagate; in
+// "warn" mode (default), detectOPF simply returns nil. The split allows the
+// caller (e.g. JSONLBytesWithPrivacyFilter) to decide whether to surface the
+// block as a returned error to its own caller. Task 7 will wire stderr-side
+// messaging on top of this.
+func handleOPFFailure(ctx context.Context, cfg *OPFConfig, err error) {
+	slog.WarnContext(ctx, "OpenAI Privacy Filter call failed",
+		componentAttr,
+		slog.String("command", cfg.Command),
+		slog.String("on_failure", cfg.OnFailure),
+		slog.String("error", err.Error()),
+	)
 }

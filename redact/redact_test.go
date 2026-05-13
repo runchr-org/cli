@@ -2,10 +2,13 @@ package redact
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/entireio/cli/redact/opf_runtime"
 )
 
 // highEntropySecret is a string with Shannon entropy > 4.5 that will trigger redaction.
@@ -200,7 +203,7 @@ func TestCollectJSONLReplacements_Succeeds(t *testing.T) {
 	obj := map[string]any{
 		"content": "token=" + highEntropySecret,
 	}
-	repls := collectJSONLReplacements(obj)
+	repls := collectJSONLReplacements(obj, String)
 	// expect one replacement for high-entropy secret
 	want := []jsonReplacement{{key: "content", original: "token=" + highEntropySecret, redacted: "REDACTED"}}
 	if !slices.Equal(repls, want) {
@@ -265,7 +268,7 @@ func TestShouldSkipJSONLField_RedactionBehavior(t *testing.T) {
 		"session_id": highEntropySecret,
 		"content":    highEntropySecret,
 	}
-	repls := collectJSONLReplacements(obj)
+	repls := collectJSONLReplacements(obj, String)
 	// Only "content" should produce a replacement; "session_id" should be skipped.
 	if len(repls) != 1 {
 		t.Fatalf("expected 1 replacement, got %d", len(repls))
@@ -913,7 +916,7 @@ func TestShouldSkipJSONLObject_RedactionBehavior(t *testing.T) {
 		"type": "image",
 		"data": highEntropySecret,
 	}
-	repls := collectJSONLReplacements(obj)
+	repls := collectJSONLReplacements(obj, String)
 
 	// expect no replacements, it's an image which is skipped.
 	var wantRepls []jsonReplacement
@@ -926,7 +929,7 @@ func TestShouldSkipJSONLObject_RedactionBehavior(t *testing.T) {
 		"type":    "text",
 		"content": highEntropySecret,
 	}
-	repls2 := collectJSONLReplacements(obj2)
+	repls2 := collectJSONLReplacements(obj2, String)
 	wantRepls2 := []jsonReplacement{{key: "content", original: highEntropySecret, redacted: "REDACTED"}}
 	if !slices.Equal(repls2, wantRepls2) {
 		t.Errorf("got %q, want %q", repls2, wantRepls2)
@@ -1286,5 +1289,91 @@ func TestJSONLContent_CrossContextValueCollision(t *testing.T) {
 	}
 	if strings.Count(result, `"password":"REDACTED"`) != 2 {
 		t.Errorf("expected both password fields redacted, got: %s", result)
+	}
+}
+
+// NOTE: The four tests below mutate the package-level opfConfig global.
+// They are SERIAL — no t.Parallel calls. Cleanup uses resetOPFConfig()
+// (defined in opf_test.go) to avoid leaking state. This matches the
+// pattern established in opf_test.go, pii_test.go, and custom_test.go.
+
+func TestStringWithPrivacyFilter_AugmentsExistingLayers(t *testing.T) {
+	resetOPFConfig()
+	t.Cleanup(resetOPFConfig)
+
+	fake := &fakeRuntime{spans: []opf_runtime.Span{{Start: 0, End: 5, Label: "private_person"}}}
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"private_person": true},
+	}, fake)
+
+	plain := String("Alice is here.")
+	if plain != "Alice is here." {
+		t.Errorf("plain String: want input unchanged, got %q", plain)
+	}
+	withOPF := StringWithPrivacyFilter(context.Background(), "Alice is here.")
+	if withOPF != "[REDACTED_PERSON] is here." {
+		t.Errorf("StringWithPrivacyFilter: got %q, want %q", withOPF, "[REDACTED_PERSON] is here.")
+	}
+}
+
+func TestStringWithPrivacyFilter_RegionsMergeWithEntropy(t *testing.T) {
+	resetOPFConfig()
+	t.Cleanup(resetOPFConfig)
+
+	// highEntropySecret is a package-level fixture defined in this file.
+	// It has Shannon entropy > 4.5 and is flagged by the entropy detector.
+	hit := highEntropySecret
+	fake := &fakeRuntime{spans: []opf_runtime.Span{
+		{Start: 0, End: len(hit), Label: "secret"},
+	}}
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"secret": true},
+	}, fake)
+
+	got := StringWithPrivacyFilter(context.Background(), hit)
+	if got != "REDACTED" {
+		t.Errorf("merge: got %q, want single REDACTED token (no stacked replacement)", got)
+	}
+}
+
+func TestJSONLBytesWithPrivacyFilter_AppliesToStringValues(t *testing.T) {
+	resetOPFConfig()
+	t.Cleanup(resetOPFConfig)
+
+	fake := &fakeRuntime{spans: []opf_runtime.Span{{Start: 6, End: 11, Label: "private_person"}}}
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"private_person": true},
+	}, fake)
+
+	input := []byte(`{"message":"hello Alice today"}` + "\n")
+	got, err := JSONLBytesWithPrivacyFilter(context.Background(), input)
+	if err != nil {
+		t.Fatalf("JSONLBytesWithPrivacyFilter: %v", err)
+	}
+	want := `{"message":"hello [REDACTED_PERSON] today"}` + "\n"
+	if string(got.Bytes()) != want {
+		t.Errorf("got %q, want %q", string(got.Bytes()), want)
+	}
+}
+
+func TestPlainEntryPointsNeverInvokeOPF(t *testing.T) {
+	resetOPFConfig()
+	t.Cleanup(resetOPFConfig)
+
+	fake := &fakeRuntime{spans: []opf_runtime.Span{{Start: 0, End: 5, Label: "private_person"}}}
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"private_person": true},
+	}, fake)
+
+	_ = String("Alice is here.")
+	if _, err := JSONLBytes([]byte(`{"x":"Alice"}` + "\n")); err != nil {
+		t.Fatalf("JSONLBytes: %v", err)
+	}
+	if fake.calls != 0 {
+		t.Errorf("plain entry points invoked OPF %d times, want 0", fake.calls)
 	}
 }
