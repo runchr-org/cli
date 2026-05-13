@@ -74,16 +74,19 @@ func getOPFConfig() *OPFConfig {
 	return opfConfig
 }
 
-// GetOPFConfig returns the current configuration, or nil if never configured.
-// This is the exported equivalent of getOPFConfig, used by tests in other
-// packages that need to inspect the global state.
-func GetOPFConfig() *OPFConfig {
+// GetOPFConfigForTest returns the current configuration, or nil if never
+// configured. The "ForTest" suffix signals test-only intent — callers should
+// be limited to test files in other packages (the same-package tests use the
+// private getOPFConfig). _test.go files cannot satisfy this need because Go
+// excludes them from the package's cross-package import surface.
+func GetOPFConfigForTest() *OPFConfig {
 	return getOPFConfig()
 }
 
-// ResetOPFConfig nils the package-level global so tests can return to
-// "never configured" state. Only call from test cleanup functions.
-func ResetOPFConfig() {
+// ResetOPFConfigForTest nils the package-level global so tests in other
+// packages can return to "never configured" state. The "ForTest" suffix
+// signals test-only intent; do not call from production code paths.
+func ResetOPFConfigForTest() {
 	opfConfigMu.Lock()
 	defer opfConfigMu.Unlock()
 	opfConfig = nil

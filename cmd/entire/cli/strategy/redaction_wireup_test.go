@@ -18,7 +18,7 @@ import (
 // Cannot t.Parallel() — this test mutates package globals in the redact
 // package and uses t.Chdir, which Go's test framework rejects in parallel.
 func TestLoadAndApplyRedactionSettings_WiresOPF(t *testing.T) {
-	t.Cleanup(redact.ResetOPFConfig)
+	t.Cleanup(redact.ResetOPFConfigForTest)
 
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -35,7 +35,7 @@ func TestLoadAndApplyRedactionSettings_WiresOPF(t *testing.T) {
 
 	loadAndApplyRedactionSettings()
 
-	cfg := redact.GetOPFConfig()
+	cfg := redact.GetOPFConfigForTest()
 	if cfg == nil || !cfg.Enabled {
 		t.Fatalf("OPF was not configured")
 	}

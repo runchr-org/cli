@@ -345,8 +345,9 @@ var (
 var initRedactionOnce sync.Once
 
 // EnsureRedactionConfigured loads redaction settings and configures the
-// redact package: PII detection (opt-in), inline custom_redactions, and rule
-// packs auto-discovered from .entire/redactors/.
+// redact package: PII detection (opt-in), inline custom_redactions, rule
+// packs auto-discovered from .entire/redactors/, and the OpenAI Privacy
+// Filter detection layer (opt-in).
 //
 // Must be called at each process entry point before checkpoint writes.
 func EnsureRedactionConfigured() {
