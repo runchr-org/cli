@@ -302,9 +302,9 @@ func TestBuildExternalCompactTranscript_RedactsTranscript(t *testing.T) { //noli
 
 	var redactCalled bool
 	originalRedact := redactSessionJSONLBytes
-	redactSessionJSONLBytes = func(data []byte) (redact.RedactedBytes, error) {
+	redactSessionJSONLBytes = func(ctx context.Context, data []byte) (redact.RedactedBytes, error) {
 		redactCalled = true
-		return originalRedact(data)
+		return originalRedact(ctx, data)
 	}
 	t.Cleanup(func() { redactSessionJSONLBytes = originalRedact })
 

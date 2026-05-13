@@ -1,12 +1,15 @@
 package redact
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/entireio/cli/redact/opf_runtime"
 )
 
 var benchmarkOpenSSHPrivateKey = makeFakeOpenSSHPrivateKey(`b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
@@ -111,4 +114,44 @@ func roleForBenchmarkLine(i int) string {
 		return "user"
 	}
 	return "assistant"
+}
+
+// BenchmarkRedactJSONLBytesWithPrivacyFilter measures adapter overhead with OPF
+// logically enabled but instantly-returning — the cost of the layer's region
+// merging without real inference cost.
+//
+// To compare against a base ref:
+//
+//	BENCH_PKG=./redact BENCH_PATTERN='BenchmarkRedactJSONLBytesWithPrivacyFilter' BASE_REF=main mise run bench:compare
+func BenchmarkRedactJSONLBytesWithPrivacyFilter(b *testing.B) {
+	resetOPFConfig()
+	b.Cleanup(resetOPFConfig)
+
+	fake := &fakeRuntime{spans: []opf_runtime.Span{
+		{Start: 0, End: 5, Label: "private_person"},
+	}}
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"private_person": true},
+	}, fake)
+
+	cases := []struct {
+		name string
+		data []byte
+	}{
+		{"Fixture/ClaudeFull2", readBenchmarkFixture(b, "../cmd/entire/cli/transcript/compact/testdata/claude_full2.jsonl")},
+		{"Synthetic/CheckpointLog", generateBenchmarkJSONL(b, 2500)},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(tc.data)))
+			for b.Loop() {
+				_, err := JSONLBytesWithPrivacyFilter(context.Background(), tc.data)
+				if err != nil {
+					b.Fatalf("redact: %v", err)
+				}
+			}
+		})
+	}
 }

@@ -103,13 +103,13 @@ func writeDoctorBundle(ctx context.Context, repoRoot, outPath string, raw bool) 
 	}()
 
 	logsDir := filepath.Join(repoRoot, logging.LogsDir)
-	if err := addDirToZip(zw, logsDir, "logs", raw); err != nil {
+	if err := addDirToZip(ctx, zw, logsDir, "logs", raw); err != nil {
 		return err
 	}
 
 	for _, name := range []string{"settings.json", "settings.local.json"} {
 		src := filepath.Join(repoRoot, ".entire", name)
-		if err := addFileToZip(zw, src, path.Join("settings", name), raw); err != nil {
+		if err := addFileToZip(ctx, zw, src, path.Join("settings", name), raw); err != nil {
 			return err
 		}
 	}
@@ -124,7 +124,7 @@ func writeDoctorBundle(ctx context.Context, repoRoot, outPath string, raw bool) 
 		return err
 	}
 
-	if err := addStringToZip(zw, "version.txt", versionInfoString(), raw); err != nil {
+	if err := addStringToZip(ctx, zw, "version.txt", versionInfoString(), raw); err != nil {
 		return err
 	}
 
@@ -149,7 +149,7 @@ func versionInfoString() string {
 	return sb.String()
 }
 
-func addDirToZip(zw *zip.Writer, srcDir, archivePrefix string, raw bool) error {
+func addDirToZip(ctx context.Context, zw *zip.Writer, srcDir, archivePrefix string, raw bool) error {
 	info, err := os.Stat(srcDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -171,7 +171,7 @@ func addDirToZip(zw *zip.Writer, srcDir, archivePrefix string, raw bool) error {
 		if err != nil {
 			return fmt.Errorf("rel: %w", err)
 		}
-		return addFileToZip(zw, path, zipEntryName(archivePrefix, rel), raw)
+		return addFileToZip(ctx, zw, path, zipEntryName(archivePrefix, rel), raw)
 	})
 	if walkErr != nil {
 		return fmt.Errorf("walk %s: %w", srcDir, walkErr)
@@ -190,7 +190,7 @@ func zipEntryName(parts ...string) string {
 	return path.Join(cleanParts...)
 }
 
-func addFileToZip(zw *zip.Writer, src, archivePath string, raw bool) error {
+func addFileToZip(ctx context.Context, zw *zip.Writer, src, archivePath string, raw bool) error {
 	f, err := os.Open(src) //nolint:gosec // path comes from repo-internal walk
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -217,14 +217,14 @@ func addFileToZip(zw *zip.Writer, src, archivePath string, raw bool) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", src, err)
 	}
-	redacted := redactBundleEntry(entryName, contents)
+	redacted := redactBundleEntry(ctx, entryName, contents)
 	if _, err := w.Write(redacted); err != nil {
 		return fmt.Errorf("zip write %s: %w", entryName, err)
 	}
 	return nil
 }
 
-func addStringToZip(zw *zip.Writer, archivePath, contents string, raw bool) error {
+func addStringToZip(ctx context.Context, zw *zip.Writer, archivePath, contents string, raw bool) error {
 	entryName := zipEntryName(archivePath)
 	w, err := zw.Create(entryName)
 	if err != nil {
@@ -232,7 +232,7 @@ func addStringToZip(zw *zip.Writer, archivePath, contents string, raw bool) erro
 	}
 	body := contents
 	if !raw {
-		body = string(redactBundleEntry(entryName, []byte(contents)))
+		body = string(redactBundleEntry(ctx, entryName, []byte(contents)))
 	}
 	if _, err := io.WriteString(w, body); err != nil {
 		return fmt.Errorf("zip write %s: %w", entryName, err)
@@ -248,20 +248,20 @@ func addCommandOutput(ctx context.Context, zw *zip.Writer, archivePath, dir stri
 		out = append(out, []byte(fmt.Sprintf("\n[error: %v]\n", err))...)
 	}
 	// addStringToZip applies redaction when raw=false; pass through verbatim otherwise.
-	return addStringToZip(zw, archivePath, string(out), raw)
+	return addStringToZip(ctx, zw, archivePath, string(out), raw)
 }
 
 // redactBundleEntry chooses a redaction strategy per file shape. JSON / JSONL
 // entries get the field-aware redactor (preserves structure, skips ID fields);
 // everything else uses the byte-level scrubber.
-func redactBundleEntry(entryName string, contents []byte) []byte {
+func redactBundleEntry(ctx context.Context, entryName string, contents []byte) []byte {
 	ext := strings.ToLower(path.Ext(entryName))
 	if ext == ".json" || ext == ".jsonl" {
-		out, err := redact.JSONLContent(string(contents))
+		out, err := redact.JSONLContentWithPrivacyFilter(ctx, string(contents))
 		if err == nil {
 			return []byte(out)
 		}
 		// Fall through to plain redaction if the JSON redactor refuses (malformed input, etc.)
 	}
-	return redact.Bytes(contents)
+	return redact.BytesWithPrivacyFilter(ctx, contents)
 }

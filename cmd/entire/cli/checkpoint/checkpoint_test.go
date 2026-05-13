@@ -81,7 +81,7 @@ func TestCopyMetadataDir_SkipsSymlinks(t *testing.T) {
 	store := NewGitStore(repo)
 	entries := make(map[string]object.TreeEntry)
 
-	err = store.copyMetadataDir(metadataDir, "checkpoint/", entries)
+	err = store.copyMetadataDir(context.Background(), metadataDir, "checkpoint/", entries)
 	if err != nil {
 		t.Fatalf("copyMetadataDir failed: %v", err)
 	}
@@ -3406,7 +3406,7 @@ func TestCopyMetadataDir_RedactsSecrets(t *testing.T) {
 	store := NewGitStore(repo)
 	entries := make(map[string]object.TreeEntry)
 
-	if err := store.copyMetadataDir(metadataDir, "cp/", entries); err != nil {
+	if err := store.copyMetadataDir(context.Background(), metadataDir, "cp/", entries); err != nil {
 		t.Fatalf("copyMetadataDir() error = %v", err)
 	}
 
@@ -3644,7 +3644,7 @@ func TestWriteCommitted_ModelFieldAlwaysPresent(t *testing.T) {
 
 func TestRedactSummary_Nil(t *testing.T) {
 	t.Parallel()
-	result := redactSummary(nil)
+	result := redactSummary(context.Background(), nil)
 	if result != nil {
 		t.Error("redactSummary(nil) should return nil")
 	}
@@ -3680,7 +3680,7 @@ func TestRedactSummary_WithSecrets(t *testing.T) {
 		},
 	}
 
-	result := redactSummary(summary)
+	result := redactSummary(context.Background(), summary)
 
 	// Verify secrets are removed from all text fields
 	if strings.Contains(result.Intent, highEntropySecret) {
@@ -3753,7 +3753,7 @@ func TestRedactSummary_NoSecrets(t *testing.T) {
 		},
 	}
 
-	result := redactSummary(summary)
+	result := redactSummary(context.Background(), summary)
 
 	if result.Intent != "Fix a bug" {
 		t.Errorf("Intent should be unchanged, got %q", result.Intent)
@@ -3770,12 +3770,12 @@ func TestRedactStringSlice_NilAndEmpty(t *testing.T) {
 	t.Parallel()
 
 	// nil input should return nil (not empty slice)
-	if result := redactStringSlice(nil); result != nil {
+	if result := redactStringSlice(context.Background(), nil); result != nil {
 		t.Errorf("redactStringSlice(nil) should return nil, got %v", result)
 	}
 
 	// empty slice should return empty slice (not nil)
-	result := redactStringSlice([]string{})
+	result := redactStringSlice(context.Background(), []string{})
 	if result == nil {
 		t.Error("redactStringSlice([]string{}) should return empty slice, not nil")
 	}
@@ -3788,12 +3788,12 @@ func TestRedactCodeLearnings_NilAndEmpty(t *testing.T) {
 	t.Parallel()
 
 	// nil input should return nil
-	if result := redactCodeLearnings(nil); result != nil {
+	if result := redactCodeLearnings(context.Background(), nil); result != nil {
 		t.Errorf("redactCodeLearnings(nil) should return nil, got %v", result)
 	}
 
 	// empty slice should return empty slice
-	result := redactCodeLearnings([]CodeLearning{})
+	result := redactCodeLearnings(context.Background(), []CodeLearning{})
 	if result == nil {
 		t.Error("redactCodeLearnings([]CodeLearning{}) should return empty slice, not nil")
 	}
@@ -4072,7 +4072,7 @@ func TestAddDirectoryToEntries_PathTraversal(t *testing.T) {
 	}
 
 	entries := make(map[string]object.TreeEntry)
-	err = addDirectoryToEntriesWithAbsPath(repo, metadataDir, ".entire/metadata/session", entries)
+	err = addDirectoryToEntriesWithAbsPath(context.Background(), repo, metadataDir, ".entire/metadata/session", entries)
 	if err != nil {
 		t.Fatalf("addDirectoryToEntriesWithAbsPath failed: %v", err)
 	}
@@ -4118,7 +4118,7 @@ func TestAddDirectoryToEntries_SkipsSymlinks(t *testing.T) {
 	}
 
 	entries := make(map[string]object.TreeEntry)
-	err = addDirectoryToEntriesWithAbsPath(repo, metadataDir, "checkpoint/", entries)
+	err = addDirectoryToEntriesWithAbsPath(context.Background(), repo, metadataDir, "checkpoint/", entries)
 	if err != nil {
 		t.Fatalf("addDirectoryToEntriesWithAbsPath failed: %v", err)
 	}
@@ -4173,7 +4173,7 @@ func TestAddDirectoryToEntries_SkipsSymlinkedDirectories(t *testing.T) {
 	}
 
 	entries := make(map[string]object.TreeEntry)
-	err = addDirectoryToEntriesWithAbsPath(repo, metadataDir, "checkpoint/", entries)
+	err = addDirectoryToEntriesWithAbsPath(context.Background(), repo, metadataDir, "checkpoint/", entries)
 	if err != nil {
 		t.Fatalf("addDirectoryToEntriesWithAbsPath failed: %v", err)
 	}

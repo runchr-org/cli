@@ -195,14 +195,14 @@ func (s *GitStore) writeTaskCheckpointEntries(ctx context.Context, opts WriteCom
 	taskPath := basePath + "tasks/" + opts.ToolUseID + "/"
 
 	if opts.IsIncremental {
-		return s.writeIncrementalTaskCheckpoint(opts, taskPath, entries)
+		return s.writeIncrementalTaskCheckpoint(ctx, opts, taskPath, entries)
 	}
 	return s.writeFinalTaskCheckpoint(ctx, opts, taskPath, entries)
 }
 
 // writeIncrementalTaskCheckpoint writes an incremental checkpoint file during task execution.
-func (s *GitStore) writeIncrementalTaskCheckpoint(opts WriteCommittedOptions, taskPath string, entries map[string]object.TreeEntry) (string, error) {
-	incData, err := redact.JSONLBytes(opts.IncrementalData)
+func (s *GitStore) writeIncrementalTaskCheckpoint(ctx context.Context, opts WriteCommittedOptions, taskPath string, entries map[string]object.TreeEntry) (string, error) {
+	incData, err := redact.JSONLBytesWithPrivacyFilter(ctx, opts.IncrementalData)
 	if err != nil {
 		return "", fmt.Errorf("failed to redact incremental checkpoint: %w", err)
 	}
@@ -261,13 +261,13 @@ func (s *GitStore) writeFinalTaskCheckpoint(ctx context.Context, opts WriteCommi
 		if readErr == nil {
 			// Try JSONL-aware redaction first; fall back to plain string redaction
 			// if the content is not valid JSONL (avoids silently dropping the transcript).
-			redacted, jsonlErr := redact.JSONLBytes(agentContent)
+			redacted, jsonlErr := redact.JSONLBytesWithPrivacyFilter(ctx, agentContent)
 			if jsonlErr != nil {
 				logging.Warn(ctx, "subagent transcript is not valid JSONL, falling back to plain redaction",
 					slog.String("path", opts.SubagentTranscriptPath),
 					slog.String("error", jsonlErr.Error()),
 				)
-				agentContent = redact.Bytes(agentContent)
+				agentContent = redact.BytesWithPrivacyFilter(ctx, agentContent)
 			} else {
 				agentContent = redacted.Bytes()
 			}
@@ -354,7 +354,7 @@ func (s *GitStore) writeStandardCheckpointEntries(ctx context.Context, opts Writ
 
 	// Copy additional metadata files from directory if specified (to session subdirectory)
 	if opts.MetadataDir != "" {
-		if err := s.copyMetadataDir(opts.MetadataDir, sessionPath, entries); err != nil {
+		if err := s.copyMetadataDir(ctx, opts.MetadataDir, sessionPath, entries); err != nil {
 			return fmt.Errorf("failed to copy metadata directory: %w", err)
 		}
 	}
@@ -419,7 +419,7 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 
 	// Write prompts
 	if len(opts.Prompts) > 0 {
-		promptContent := redact.String(JoinPrompts(opts.Prompts))
+		promptContent := redact.StringWithPrivacyFilter(ctx, JoinPrompts(opts.Prompts))
 		blobHash, err := CreateBlobFromContent(s.repo, []byte(promptContent))
 		if err != nil {
 			return filePaths, err
@@ -453,7 +453,7 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 		SessionMetrics:              opts.SessionMetrics,
 		InitialAttribution:          opts.InitialAttribution,
 		PromptAttributions:          opts.PromptAttributionsJSON,
-		Summary:                     redactSummary(opts.Summary),
+		Summary:                     redactSummary(ctx, opts.Summary),
 		CLIVersion:                  versioninfo.Version,
 		Kind:                        opts.Kind,
 		ReviewSkills:                opts.ReviewSkills,
@@ -726,7 +726,7 @@ func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptio
 			rawData = nil
 		}
 		if len(rawData) > 0 {
-			redacted, redactErr := redact.JSONLBytes(rawData)
+			redacted, redactErr := redact.JSONLBytesWithPrivacyFilter(ctx, rawData)
 			if redactErr != nil {
 				return false, fmt.Errorf("failed to redact transcript from file: %w", redactErr)
 			}
@@ -832,37 +832,37 @@ func mergeFilesTouched(existing, additional []string) []string {
 // Structural fields (Path, Line, EndLine) are preserved.
 // NOTE: When adding new text fields to Summary, LearningsSummary, or CodeLearning,
 // update this function to include them in redaction.
-func redactSummary(s *Summary) *Summary {
+func redactSummary(ctx context.Context, s *Summary) *Summary {
 	if s == nil {
 		return nil
 	}
 	return &Summary{
-		Intent:    redact.String(s.Intent),
-		Outcome:   redact.String(s.Outcome),
-		Friction:  redactStringSlice(s.Friction),
-		OpenItems: redactStringSlice(s.OpenItems),
+		Intent:    redact.StringWithPrivacyFilter(ctx, s.Intent),
+		Outcome:   redact.StringWithPrivacyFilter(ctx, s.Outcome),
+		Friction:  redactStringSlice(ctx, s.Friction),
+		OpenItems: redactStringSlice(ctx, s.OpenItems),
 		Learnings: LearningsSummary{
-			Repo:     redactStringSlice(s.Learnings.Repo),
-			Workflow: redactStringSlice(s.Learnings.Workflow),
-			Code:     redactCodeLearnings(s.Learnings.Code),
+			Repo:     redactStringSlice(ctx, s.Learnings.Repo),
+			Workflow: redactStringSlice(ctx, s.Learnings.Workflow),
+			Code:     redactCodeLearnings(ctx, s.Learnings.Code),
 		},
 	}
 }
 
-// redactStringSlice applies redact.String to each element.
-func redactStringSlice(ss []string) []string {
+// redactStringSlice applies redact.StringWithPrivacyFilter to each element.
+func redactStringSlice(ctx context.Context, ss []string) []string {
 	if ss == nil {
 		return nil
 	}
 	out := make([]string, len(ss))
 	for i, s := range ss {
-		out[i] = redact.String(s)
+		out[i] = redact.StringWithPrivacyFilter(ctx, s)
 	}
 	return out
 }
 
 // redactCodeLearnings redacts only the Finding field, preserving Path/Line/EndLine.
-func redactCodeLearnings(cls []CodeLearning) []CodeLearning {
+func redactCodeLearnings(ctx context.Context, cls []CodeLearning) []CodeLearning {
 	if cls == nil {
 		return nil
 	}
@@ -872,7 +872,7 @@ func redactCodeLearnings(cls []CodeLearning) []CodeLearning {
 			Path:    cl.Path,
 			Line:    cl.Line,
 			EndLine: cl.EndLine,
-			Finding: redact.String(cl.Finding),
+			Finding: redact.StringWithPrivacyFilter(ctx, cl.Finding),
 		}
 	}
 	return out
@@ -1282,7 +1282,7 @@ func (s *GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoint
 	}
 
 	// Update the summary
-	existingMetadata.Summary = redactSummary(summary)
+	existingMetadata.Summary = redactSummary(ctx, summary)
 
 	// Write updated session metadata
 	metadataJSON, err := jsonutil.MarshalIndentWithNewline(existingMetadata, "", "  ")
@@ -1402,7 +1402,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 
 	// Replace prompts (apply redaction as safety net)
 	if len(opts.Prompts) > 0 {
-		promptContent := redact.String(JoinPrompts(opts.Prompts))
+		promptContent := redact.StringWithPrivacyFilter(ctx, JoinPrompts(opts.Prompts))
 		blobHash, err := CreateBlobFromContent(s.repo, []byte(promptContent))
 		if err != nil {
 			return fmt.Errorf("failed to create prompt blob: %w", err)
@@ -1682,7 +1682,7 @@ func CreateBlobFromContent(repo *git.Repository, content []byte) (plumbing.Hash,
 
 // copyMetadataDir copies all files from a directory to the checkpoint path.
 // Used to include additional metadata files like task checkpoints, subagent transcripts, etc.
-func (s *GitStore) copyMetadataDir(metadataDir, basePath string, entries map[string]object.TreeEntry) error {
+func (s *GitStore) copyMetadataDir(ctx context.Context, metadataDir, basePath string, entries map[string]object.TreeEntry) error {
 	err := filepath.Walk(metadataDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -1722,7 +1722,7 @@ func (s *GitStore) copyMetadataDir(metadataDir, basePath string, entries map[str
 		}
 
 		// Create blob from file with secrets redaction
-		blobHash, mode, err := createRedactedBlobFromFile(s.repo, path, relPath)
+		blobHash, mode, err := createRedactedBlobFromFile(ctx, s.repo, path, relPath)
 		if err != nil {
 			return fmt.Errorf("failed to create blob for %s: %w", path, err)
 		}
@@ -1745,7 +1745,7 @@ func (s *GitStore) copyMetadataDir(metadataDir, basePath string, entries map[str
 
 // createRedactedBlobFromFile reads a file, applies secrets redaction, and creates a git blob.
 // JSONL files get JSONL-aware redaction; all other files get plain string redaction.
-func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string) (plumbing.Hash, filemode.FileMode, error) {
+func createRedactedBlobFromFile(ctx context.Context, repo *git.Repository, filePath, treePath string) (plumbing.Hash, filemode.FileMode, error) {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return plumbing.ZeroHash, 0, fmt.Errorf("failed to stat file: %w", err)
@@ -1773,14 +1773,14 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string)
 	}
 
 	if strings.HasSuffix(treePath, ".jsonl") {
-		redacted, jsonlErr := redact.JSONLBytes(content)
+		redacted, jsonlErr := redact.JSONLBytesWithPrivacyFilter(ctx, content)
 		if jsonlErr != nil {
-			content = redact.Bytes(content)
+			content = redact.BytesWithPrivacyFilter(ctx, content)
 		} else {
 			content = redacted.Bytes()
 		}
 	} else {
-		content = redact.Bytes(content)
+		content = redact.BytesWithPrivacyFilter(ctx, content)
 	}
 
 	hash, err := CreateBlobFromContent(repo, content)

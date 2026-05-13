@@ -1148,7 +1148,7 @@ func maybeCompactExternalTranscriptForSummary(ctx context.Context, scopedTranscr
 		return scopedTranscript
 	}
 
-	redacted, err := redact.JSONLBytes(compacted.Transcript)
+	redacted, err := redact.JSONLBytesWithPrivacyFilter(ctx, compacted.Transcript)
 	if err != nil {
 		logging.Debug(ctx, "external summary compaction redaction failed",
 			slog.String("agent", string(agentType)),

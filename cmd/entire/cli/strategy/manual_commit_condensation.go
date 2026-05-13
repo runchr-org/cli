@@ -111,7 +111,7 @@ type condenseOpts struct {
 	allAgentFiles    map[string]struct{} // Union of all sessions' FilesTouched for cross-session exclusion (nil = single-session)
 }
 
-var redactSessionJSONLBytes = redact.JSONLBytes
+var redactSessionJSONLBytes = redact.JSONLBytesWithPrivacyFilter
 
 // CondenseSession condenses a session's shadow branch to permanent storage.
 // checkpointID is the 12-hex-char value from the Entire-Checkpoint trailer.
@@ -376,7 +376,7 @@ func redactSessionTranscript(ctx context.Context, transcript []byte) (redact.Red
 		return redact.RedactedBytes{}, time.Since(start), nil
 	}
 
-	redacted, err := redactSessionJSONLBytes(transcript)
+	redacted, err := redactSessionJSONLBytes(ctx, transcript)
 	if err != nil {
 		span.RecordError(err)
 		return redact.RedactedBytes{}, time.Since(start), fmt.Errorf("failed to redact transcript secrets: %w", err)
@@ -505,7 +505,7 @@ func compactAndRedactExternalTranscript(ctx context.Context, ag agent.Agent, sta
 		return nil, true
 	}
 
-	redacted, err := redactSessionJSONLBytes(compacted.Transcript)
+	redacted, err := redactSessionJSONLBytes(ctx, compacted.Transcript)
 	if err != nil {
 		logging.Warn(ctx, "failed to redact external compact transcript, dropping",
 			slog.String("session_id", state.SessionID),

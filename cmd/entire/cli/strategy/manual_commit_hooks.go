@@ -2746,7 +2746,7 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 	// so there is no retry path — preserving partial metadata is better than
 	// losing everything. Persisting an unredacted transcript would be worse.
 	_, redactSpan := perf.Start(logCtx, "redact_transcript")
-	redactedTranscript, redactErr := redact.JSONLBytes(fullTranscript)
+	redactedTranscript, redactErr := redact.JSONLBytesWithPrivacyFilter(logCtx, fullTranscript)
 	redactSpan.End()
 	if redactErr != nil {
 		logging.Warn(logCtx, "finalize: transcript redaction failed, dropping transcript",
@@ -2756,7 +2756,7 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		redactedTranscript = redact.RedactedBytes{}
 	}
 	for i, p := range prompts {
-		prompts[i] = redact.String(p)
+		prompts[i] = redact.StringWithPrivacyFilter(logCtx, p)
 	}
 
 	store := checkpoint.NewGitStore(repo)

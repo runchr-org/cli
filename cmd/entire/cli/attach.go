@@ -265,7 +265,7 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	tokenUsage := agent.CalculateTokenUsage(logCtx, ag, transcriptData, 0, "")
 
 	_, redactSpan := perf.Start(ctx, "redact_transcript")
-	redactedTranscript, redactErr := redact.JSONLBytes(storedTranscript)
+	redactedTranscript, redactErr := redact.JSONLBytesWithPrivacyFilter(ctx, storedTranscript)
 	redactSpan.End()
 	if redactErr != nil {
 		return fmt.Errorf("failed to redact transcript: %w", redactErr)

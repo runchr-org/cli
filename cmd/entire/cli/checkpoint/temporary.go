@@ -368,7 +368,12 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 	var changes []TreeChange
 
 	if opts.IsIncremental {
-		// Incremental checkpoint: only add the checkpoint file
+		// Incremental checkpoint: only add the checkpoint file.
+		// Per-turn shadow-branch writes intentionally use the plain
+		// redact.JSONLBytes (and redact.Bytes below) — the OpenAI Privacy
+		// Filter only runs at the condensation boundary in committed.go
+		// where bytes are about to leave the local machine. See the data-flow
+		// section in docs/superpowers/specs/2026-05-12-openai-privacy-filter-addon-design.md.
 		var incData json.RawMessage
 		if opts.IncrementalData != nil {
 			redacted, redactErr := redact.JSONLBytes(opts.IncrementalData)
@@ -833,7 +838,7 @@ func (s *GitStore) buildTreeWithChanges(
 		if relErr != nil {
 			logInvalidGitTreePath(ctx, "add metadata directory", metadataDir, relErr)
 		} else {
-			metaChanges, metaErr := addDirectoryToChanges(s.repo, metadataDirAbs, metadataRel)
+			metaChanges, metaErr := addDirectoryToChanges(ctx, s.repo, metadataDirAbs, metadataRel)
 			if metaErr != nil {
 				return plumbing.ZeroHash, fmt.Errorf("failed to add metadata directory: %w", metaErr)
 			}
@@ -936,7 +941,7 @@ func createBlobFromFile(repo *git.Repository, filePath string) (plumbing.Hash, f
 }
 
 // addDirectoryToEntriesWithAbsPath recursively adds all files in a directory to the entries map.
-func addDirectoryToEntriesWithAbsPath(repo *git.Repository, dirPathAbs, dirPathRel string, entries map[string]object.TreeEntry) error {
+func addDirectoryToEntriesWithAbsPath(ctx context.Context, repo *git.Repository, dirPathAbs, dirPathRel string, entries map[string]object.TreeEntry) error {
 	err := filepath.Walk(dirPathAbs, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -979,7 +984,7 @@ func addDirectoryToEntriesWithAbsPath(repo *git.Repository, dirPathAbs, dirPathR
 
 		// Use redacted blob creation for metadata files (transcripts, prompts, etc.)
 		// to ensure PII and secrets are redacted before writing to git.
-		blobHash, mode, err := createRedactedBlobFromFile(repo, path, treePath)
+		blobHash, mode, err := createRedactedBlobFromFile(ctx, repo, path, treePath)
 		if err != nil {
 			return fmt.Errorf("failed to create blob for %s: %w", path, err)
 		}
@@ -1005,7 +1010,7 @@ type treeNode struct {
 // addDirectoryToChanges walks a filesystem directory and returns TreeChange entries
 // for each file, suitable for use with ApplyTreeChanges.
 // dirPathAbs is the absolute filesystem path; dirPathRel is the git tree-relative path.
-func addDirectoryToChanges(repo *git.Repository, dirPathAbs, dirPathRel string) ([]TreeChange, error) {
+func addDirectoryToChanges(ctx context.Context, repo *git.Repository, dirPathAbs, dirPathRel string) ([]TreeChange, error) {
 	var changes []TreeChange
 	err := filepath.Walk(dirPathAbs, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -1038,7 +1043,7 @@ func addDirectoryToChanges(repo *git.Repository, dirPathAbs, dirPathRel string) 
 
 		treePath := filepath.ToSlash(filepath.Join(dirPathRel, relWithinDir))
 
-		blobHash, mode, blobErr := createRedactedBlobFromFile(repo, path, treePath)
+		blobHash, mode, blobErr := createRedactedBlobFromFile(ctx, repo, path, treePath)
 		if blobErr != nil {
 			return fmt.Errorf("failed to create blob for %s: %w", path, blobErr)
 		}

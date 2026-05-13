@@ -169,7 +169,7 @@ func (s *V2GitStore) buildFreshMainBatchGroupTree(ctx context.Context, cpID id.C
 
 	for sessionIndex, opts := range groupOpts {
 		sessionPath := fmt.Sprintf("%s%d/", basePath, sessionIndex)
-		filePaths, err := s.writeMainSessionToSubdirectory(opts, sessionPath, entries)
+		filePaths, err := s.writeMainSessionToSubdirectory(ctx, opts, sessionPath, entries)
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
@@ -283,7 +283,7 @@ func (s *V2GitStore) buildMainBatchGroupTree(ctx context.Context, rootTreeHash p
 		}
 
 		sessionPath := fmt.Sprintf("%s%d/", basePath, sessionIndex)
-		filePaths, err := s.writeMainSessionToSubdirectory(opts, sessionPath, entries)
+		filePaths, err := s.writeMainSessionToSubdirectory(ctx, opts, sessionPath, entries)
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
@@ -609,7 +609,7 @@ func (s *V2GitStore) updateCommittedMain(ctx context.Context, opts UpdateCommitt
 	sessionPath := fmt.Sprintf("%s%d/", basePath, sessionIndex)
 
 	if len(opts.Prompts) > 0 {
-		promptContent := redact.String(JoinPrompts(opts.Prompts))
+		promptContent := redact.StringWithPrivacyFilter(ctx, JoinPrompts(opts.Prompts))
 		blobHash, err := CreateBlobFromContent(s.repo, []byte(promptContent))
 		if err != nil {
 			return 0, fmt.Errorf("failed to create prompt blob: %w", err)
@@ -865,7 +865,7 @@ func (s *V2GitStore) writeMainCheckpointEntries(ctx context.Context, opts WriteC
 
 	// Write session files (metadata and prompts — no transcript or content hash)
 	sessionPath := fmt.Sprintf("%s%d/", basePath, sessionIndex)
-	sessionFilePaths, err := s.writeMainSessionToSubdirectory(opts, sessionPath, entries)
+	sessionFilePaths, err := s.writeMainSessionToSubdirectory(ctx, opts, sessionPath, entries)
 	if err != nil {
 		return 0, err
 	}
@@ -891,7 +891,7 @@ func (s *V2GitStore) writeMainCheckpointEntries(ctx context.Context, opts WriteC
 // and compact transcript to a session subdirectory (0/, 1/, 2/, … indexed by
 // session order within the checkpoint). The raw transcript (raw_transcript) and its
 // content hash (raw_transcript_hash.txt) go to /full/current, not here.
-func (s *V2GitStore) writeMainSessionToSubdirectory(opts WriteCommittedOptions, sessionPath string, entries map[string]object.TreeEntry) (SessionFilePaths, error) {
+func (s *V2GitStore) writeMainSessionToSubdirectory(ctx context.Context, opts WriteCommittedOptions, sessionPath string, entries map[string]object.TreeEntry) (SessionFilePaths, error) {
 	filePaths := SessionFilePaths{}
 
 	// Clear existing entries at this session path
@@ -903,7 +903,7 @@ func (s *V2GitStore) writeMainSessionToSubdirectory(opts WriteCommittedOptions, 
 
 	// Write prompts
 	if len(opts.Prompts) > 0 {
-		promptContent := redact.String(JoinPrompts(opts.Prompts))
+		promptContent := redact.StringWithPrivacyFilter(ctx, JoinPrompts(opts.Prompts))
 		blobHash, err := CreateBlobFromContent(s.repo, []byte(promptContent))
 		if err != nil {
 			return filePaths, err
@@ -955,7 +955,7 @@ func (s *V2GitStore) writeMainSessionToSubdirectory(opts WriteCommittedOptions, 
 		SessionMetrics:              opts.SessionMetrics,
 		InitialAttribution:          opts.InitialAttribution,
 		PromptAttributions:          opts.PromptAttributionsJSON,
-		Summary:                     redactSummary(opts.Summary),
+		Summary:                     redactSummary(ctx, opts.Summary),
 		CLIVersion:                  versioninfo.Version,
 		Kind:                        opts.Kind,
 		ReviewSkills:                opts.ReviewSkills,
@@ -1015,7 +1015,7 @@ func (s *V2GitStore) writeCommittedFullTranscript(ctx context.Context, opts Writ
 			rawData = nil
 		}
 		if len(rawData) > 0 {
-			redacted, redactErr := redact.JSONLBytes(rawData)
+			redacted, redactErr := redact.JSONLBytesWithPrivacyFilter(ctx, rawData)
 			if redactErr != nil {
 				return fmt.Errorf("failed to redact transcript from file: %w", redactErr)
 			}
@@ -1215,7 +1215,7 @@ func (s *V2GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoi
 	if err != nil {
 		return fmt.Errorf("failed to read session metadata: %w", err)
 	}
-	metadata.Summary = redactSummary(summary)
+	metadata.Summary = redactSummary(ctx, summary)
 
 	metadataJSON, err := jsonutil.MarshalIndentWithNewline(metadata, "", "  ")
 	if err != nil {
