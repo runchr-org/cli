@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -87,12 +88,24 @@ func (s *V2GitStore) wrapWithFetcher(ctx context.Context, tree *object.Tree) *Fe
 	return NewFetchingTree(ctx, tree, s.repo.Storer, s.blobFetcher)
 }
 
-// ensureRef ensures that a custom ref exists, creating an orphan commit
-// with an empty tree if it does not.
+// ensureRef ensures that a custom ref exists, creating an initial commit
+// with an empty tree if it does not. For /full/current, the initial commit
+// is parented on /full/root so generation refs share a common ancestor in
+// the commit graph. /main keeps an orphan initial commit (different ref
+// namespace, no shared ancestry expected).
 func (s *V2GitStore) ensureRef(ctx context.Context, refName plumbing.ReferenceName) error {
 	_, err := s.repo.Reference(refName, true)
 	if err == nil {
 		return nil // Already exists
+	}
+
+	parentHash := plumbing.ZeroHash
+	if refName == plumbing.ReferenceName(paths.V2FullCurrentRefName) {
+		rootHash, rootErr := s.ensureV2FullRoot(ctx)
+		if rootErr != nil {
+			return fmt.Errorf("ensure /full/root before creating /full/current: %w", rootErr)
+		}
+		parentHash = rootHash
 	}
 
 	emptyTreeHash, err := BuildTreeFromEntries(ctx, s.repo, make(map[string]object.TreeEntry))
@@ -101,7 +114,7 @@ func (s *V2GitStore) ensureRef(ctx context.Context, refName plumbing.ReferenceNa
 	}
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
-	commitHash, err := CreateCommit(ctx, s.repo, emptyTreeHash, plumbing.ZeroHash, "Initialize v2 ref", authorName, authorEmail)
+	commitHash, err := CreateCommit(ctx, s.repo, emptyTreeHash, parentHash, "Initialize v2 ref", authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("failed to create initial commit: %w", err)
 	}

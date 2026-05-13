@@ -529,13 +529,21 @@ func (s *V2GitStore) RotateCurrentGenerationIfNeeded(ctx context.Context, maxChe
 		return "", false, fmt.Errorf("rotation: failed to create archive commit: %w", err)
 	}
 
-	// Create fresh orphan /full/current (empty tree, no generation.json).
+	// Build a fresh /full/current empty tree, parented on /full/root so the
+	// new generation shares ancestry with every other /full/* ref. /full/root
+	// is constructed deterministically — different machines produce the same
+	// SHA, so this does not introduce a new source of cross-client divergence.
 	emptyTreeHash, err := BuildTreeFromEntries(ctx, s.repo, make(map[string]object.TreeEntry))
 	if err != nil {
 		return "", false, fmt.Errorf("rotation: failed to build empty tree: %w", err)
 	}
 
-	orphanCommitHash, err := CreateCommit(ctx, s.repo, emptyTreeHash, plumbing.ZeroHash, "Start generation", authorName, authorEmail)
+	rootHash, err := s.ensureV2FullRoot(ctx)
+	if err != nil {
+		return "", false, fmt.Errorf("rotation: failed to ensure /full/root: %w", err)
+	}
+
+	orphanCommitHash, err := CreateCommit(ctx, s.repo, emptyTreeHash, rootHash, "Start generation", authorName, authorEmail)
 	if err != nil {
 		return "", false, fmt.Errorf("rotation: failed to create orphan commit: %w", err)
 	}

@@ -355,6 +355,25 @@ func TestListArchivedGenerations_ExcludesCurrent(t *testing.T) {
 	assert.Equal(t, []string{"0000000000001"}, archived)
 }
 
+// /full/root is a shared anchor commit, not an archived generation. Cleanup
+// must never see it as a deletable candidate — its deletion would break
+// reachability of every generation parented on it.
+func TestListArchivedGenerations_ExcludesRoot(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+
+	_, err := store.ensureV2FullRoot(context.Background())
+	require.NoError(t, err)
+
+	createArchivedRef(t, repo, 1)
+
+	archived, err := store.ListArchivedGenerations()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"0000000000001"}, archived,
+		"/full/root must be excluded from archive listing")
+}
+
 func TestNextGenerationNumber_NoArchives(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
@@ -440,8 +459,12 @@ func TestRotateGeneration_ArchivesCurrentAndCreatesNewOrphan(t *testing.T) {
 	freshCommit, err := repo.CommitObject(fullRef.Hash())
 	require.NoError(t, err)
 
-	// Fresh commit should be an orphan (no parents)
-	assert.Empty(t, freshCommit.ParentHashes, "fresh /full/current should be an orphan commit")
+	// Fresh commit should be parented on /full/root so generation refs share a
+	// common ancestor in the commit graph. /full/root must exist locally.
+	rootRef, err := repo.Reference(plumbing.ReferenceName(paths.V2FullRootRefName), true)
+	require.NoError(t, err)
+	require.Equal(t, []plumbing.Hash{rootRef.Hash()}, freshCommit.ParentHashes,
+		"fresh /full/current should be parented on /full/root")
 
 	// Fresh tree should be empty (no generation.json, no shard directories)
 	freshTree, err := freshCommit.Tree()
