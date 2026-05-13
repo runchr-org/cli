@@ -31,7 +31,7 @@ func TestExecCommandContext_HangsOnGrandchildHoldingPipe(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", grandchildHoldingStdoutCmd)
+	cmd := exec.CommandContext(ctx, "sh", "-c", grandchildHoldingStdoutCmd)
 
 	start := time.Now()
 	// We expect CombinedOutput to return with an error (killed by ctx) — the
@@ -55,7 +55,7 @@ func TestKillOnCancel_TerminatesGrandchildHoldingPipe(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", grandchildHoldingStdoutCmd)
+	cmd := exec.CommandContext(ctx, "sh", "-c", grandchildHoldingStdoutCmd)
 	KillOnCancel(cmd, 500*time.Millisecond)
 
 	start := time.Now()
