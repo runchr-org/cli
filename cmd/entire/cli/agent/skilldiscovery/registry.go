@@ -59,8 +59,16 @@ var installHints = map[string][]InstallHint{
 	},
 	"codex": {
 		{
-			Message:     "Install `codex-review-pack` via `codex plugins add <url>`",
-			ProvidesAny: []string{"/codex:adversarial-review"},
+			// Placeholder name until a canonical codex review plugin is pinned
+			// (matches the existing pattern for claude-code / gemini entries
+			// — see comment at the top of installHints). ProvidesAny must use
+			// codex's actual invocation syntax: `@plugin-name` for installed
+			// plugins, `$skill-name` for bundled skills. Slash-commands like
+			// `/review` are reserved for codex built-ins and don't extend to
+			// plugins (claude's `/<plugin>:<command>` form is the misconception
+			// this entry was previously embodying).
+			Message:     "Install `codex-review-pack` via `codex plugin marketplace add <url>`",
+			ProvidesAny: []string{"@codex-review-pack"},
 		},
 	},
 	"gemini": {

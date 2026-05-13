@@ -100,7 +100,7 @@ func TestCodexReviewer_ArgvShape(t *testing.T) {
 	}
 }
 
-func TestCodexReviewer_BuiltinReviewExpandsToScopedExecPrompt(t *testing.T) {
+func TestCodexReviewer_BuiltinReviewPassesThroughInScopedExecPrompt(t *testing.T) {
 	t.Parallel()
 	cfg := reviewtypes.RunConfig{
 		Skills:            []string{"/review"},
@@ -121,18 +121,24 @@ func TestCodexReviewer_BuiltinReviewExpandsToScopedExecPrompt(t *testing.T) {
 	}
 
 	prompt := readCodexCmdStdin(t, cmd)
-	if strings.Contains(prompt, "/review") {
-		t.Fatalf("builtin review prompt should not include raw /review:\n%s", prompt)
+	// /review now passes through to codex verbatim — codex's runtime
+	// auto-loads any installed code-reviewer skill (~/.codex/skills/...)
+	// when it sees the slash token in prompt text.
+	if !strings.Contains(prompt, "/review") {
+		t.Fatalf("composed prompt must contain literal /review token:\n%s", prompt)
+	}
+	// The legacy 28-word paraphrase MUST NOT appear — pinning that regression.
+	if strings.Contains(prompt, "Review the current branch changes and report actionable findings.") {
+		t.Fatalf("composed prompt must not contain the legacy paraphrase:\n%s", prompt)
 	}
 	for _, wantText := range []string{
-		"Review the current branch changes and report actionable findings.",
 		"Focus on auth regressions.",
 		"Scope: review the commits unique to this branch vs main, plus any uncommitted changes in the working tree. Ignore code outside this scope.",
 		"Commits in scope (newest first):",
 		"abc123 summary",
 	} {
 		if !strings.Contains(prompt, wantText) {
-			t.Fatalf("builtin review prompt missing %q:\n%s", wantText, prompt)
+			t.Fatalf("composed prompt missing %q:\n%s", wantText, prompt)
 		}
 	}
 }

@@ -10,7 +10,7 @@ Codex (OpenAI's CLI coding agent) supports lifecycle hooks via `hooks.json` conf
 |-------|--------|-------|
 | Binary present | PASS | `codex` found on PATH |
 | Help available | PASS | `codex --help` shows full subcommand list |
-| Version info | PASS | `codex-cli 0.116.0` |
+| Version info | PASS | `codex-cli 0.130.0` |
 | Hook keywords | PASS | Hook system via `hooks.json` config files |
 | Session keywords | PASS | `resume`, `fork` subcommands; session stored as threads in SQLite + JSONL rollout files |
 | Config directory | PASS | `~/.codex/` (overridable via `CODEX_HOME`) |
@@ -19,7 +19,7 @@ Codex (OpenAI's CLI coding agent) supports lifecycle hooks via `hooks.json` conf
 ## Binary
 
 - Name: `codex`
-- Version: `codex-cli 0.116.0`
+- Version: `codex-cli 0.130.0`
 - Install: `npm install -g @openai/codex` or build from source
 
 ## Hook Mechanism
@@ -190,6 +190,29 @@ The `systemMessage` field can be used to display messages to the user via the ag
 - Full-auto mode: `codex exec --full-auto "<prompt>"` (workspace-write sandbox + auto-approve)
 - JSONL output: `codex exec --json "<prompt>"` (events to stdout)
 - Relevant env vars: `CODEX_HOME` (config dir override), `OPENAI_API_KEY` (API auth)
+
+## Plugin / Skill Invocation
+
+Codex's invocation syntax differs from Claude Code's `/<plugin>:<command>`
+form. Three prefixes are used:
+
+| Prefix | Meaning | Example |
+|--------|---------|---------|
+| `/`    | Codex built-in slash-command (reserved; not extensible by user plugins) | `/review`, `/plugins` (non-exhaustive — see `codex-rs/tui/src/slash_command.rs` for the full set) |
+| `@`    | User-installed plugin | `@codex-review-pack` |
+| `$`    | Bundled skill within a plugin | `$thorough-review` |
+
+Plugin install surface: `codex plugin marketplace add <url>`, then `codex
+plugin marketplace upgrade` / `remove`. (Earlier docs may reference `codex
+plugins add` — that subcommand does not exist.)
+
+Skill discovery for codex is currently stubbed in
+`cmd/entire/cli/agent/codex/discovery.go`. When implemented, discovered
+skills must be returned with their actual codex invocation prefix
+(`@plugin-name` or `$skill-name`), never claude's `/<plugin>:<command>`
+form. See the curated install hints in
+`cmd/entire/cli/agent/skilldiscovery/registry.go` for the existing
+per-agent registry pattern.
 
 ## Gaps & Limitations
 

@@ -22,6 +22,29 @@ import (
 // Prompt is piped via stdin (the trailing "-" tells codex to read from stdin).
 // Stdout is newline-delimited JSON envelopes (one event per line); no chrome
 // filter needed — each line is parsed directly into an Event.
+//
+// The composed prompt (skills + always-prompt + per-run prompt + scope clause
+// + checkpoint context) is passed verbatim. The `/review` skill name appears
+// as a literal slash-token at the top of the prompt — codex recognises
+// `/review` as one of its built-in slash-commands (see AGENT.md "Plugin /
+// Skill Invocation") and routes through its native review workflow, which
+// in turn references the user's installed code-reviewer skill if one
+// exists (e.g. `~/.codex/skills/code-reviewer/SKILL.md`).
+//
+// We deliberately do NOT paraphrase `/review` into 28 words of generic
+// instruction the way an older version did — that paraphrase obscured the
+// slash-command signal and was a contributor to the wall-clock gap with
+// claude.
+//
+// Note on the rejected alternative: codex's `codex exec review` subcommand
+// would invoke the native review workflow more directly, but it rejects
+// `[PROMPT]` whenever a scope flag (`--base` / `--uncommitted` / `--commit`)
+// is set, and codex hooks don't fire during non-interactive `codex exec`,
+// so there is no available channel to layer entire's user customization
+// (always-prompt, per-run prompt, scope clause, checkpoint context) onto a
+// native-subcommand run. Generic `codex exec` accepting full stdin is the
+// best mechanism today; if codex adds a `--system-prompt-file` (or fires
+// hooks during exec), this can be revisited.
 func NewReviewer() *reviewtypes.ReviewerTemplate {
 	return &reviewtypes.ReviewerTemplate{
 		AgentName: "codex",
@@ -33,35 +56,15 @@ func NewReviewer() *reviewtypes.ReviewerTemplate {
 // buildCodexReviewCmd builds the exec.Cmd for a codex review run.
 // Exposed at package level for test inspection of argv, stdin, and env.
 func buildCodexReviewCmd(ctx context.Context, cfg reviewtypes.RunConfig) *exec.Cmd {
-	promptCfg := cfg
-	promptCfg.Skills = expandCodexBuiltinReview(cfg.Skills)
 	args := []string{codexExecCommand, "--skip-git-repo-check", "--json", "-"}
-	prompt := review.ComposeReviewPrompt(promptCfg)
+	prompt := review.ComposeReviewPrompt(cfg)
 	cmd := exec.CommandContext(ctx, "codex", args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = review.AppendReviewEnv(os.Environ(), "codex", cfg, prompt)
 	return cmd
 }
 
-// Codex's native `exec review --base <branch>` rejects an additional prompt,
-// so expand `/review` into text and run normal `codex exec -`. That preserves
-// Entire's scoped base clause, per-run instructions, and checkpoint context.
-const codexBuiltinReviewPrompt = "Review the current branch changes and report actionable findings. " +
-	"Prioritize correctness, regressions, security, and missing test coverage. Do not make code changes."
-
 const codexExecCommand = "exec"
-
-func expandCodexBuiltinReview(skills []string) []string {
-	out := make([]string, 0, len(skills))
-	for _, skill := range skills {
-		if skill == "/review" {
-			out = append(out, codexBuiltinReviewPrompt)
-			continue
-		}
-		out = append(out, skill)
-	}
-	return out
-}
 
 // parseCodexOutput converts codex's `exec --json` stdout into a stream of
 // Events. Each stdout line is one JSON envelope (top-level "type" field).
