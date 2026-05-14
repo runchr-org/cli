@@ -22,8 +22,11 @@ type Runtime interface {
 	Close() error
 }
 
-// Span is a redaction region returned by OPF, with character-offset
-// boundaries against the input text.
+// Span is a redaction region returned by OPF, with byte-offset boundaries
+// against the input text. Half-open interval: text[Start:End] is the redacted
+// substring. OPF itself reports character (rune) offsets via its JSON output;
+// the shellout adapter translates those to byte offsets before returning Spans
+// so that callers can slice []byte input directly without re-walking runes.
 type Span struct {
 	Start int
 	End   int

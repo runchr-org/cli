@@ -1281,3 +1281,55 @@ func TestReviewConfig_IsZero(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadFromBytes_RejectsBadOnFailure pins down that on_failure typos are
+// caught on the non-merge load path too. Previously the enum check lived only
+// inside mergeOPFSettings, so a file decoded via LoadFromBytes (used by
+// `git show` history walking and similar) silently accepted bad values and
+// the runtime defaulted to "warn" without warning. After C1, the validator
+// runs on every load path.
+func TestLoadFromBytes_RejectsBadOnFailure(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{"empty", "", false},
+		{"warn", "warn", false},
+		{"block", "block", false},
+		{"typo_bock", "bock", true},
+		{"uppercase", "WARN", true},
+		{"unknown", "fail-loud", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			body := `{"redaction":{"openai_privacy_filter":{"on_failure":"` + tc.value + `"}}}`
+			_, err := LoadFromBytes([]byte(body))
+			if tc.wantErr && err == nil {
+				t.Errorf("LoadFromBytes(%q): want error, got nil", tc.value)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("LoadFromBytes(%q): want nil, got %v", tc.value, err)
+			}
+		})
+	}
+}
+
+// TestLoadFromFile_RejectsBadOnFailure verifies the file-load path also
+// rejects on_failure typos. This is the path Load() uses for the base
+// settings.json read.
+func TestLoadFromFile_RejectsBadOnFailure(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	settingsFile := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(settingsFile, []byte(`{"redaction":{"openai_privacy_filter":{"on_failure":"bock"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFromFile(settingsFile); err == nil {
+		t.Error("LoadFromFile with on_failure=\"bock\": want error, got nil")
+	}
+}

@@ -2755,8 +2755,16 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		)
 		redactedTranscript = redact.RedactedBytes{}
 	}
-	for i, p := range prompts {
-		prompts[i] = redact.StringWithPrivacyFilter(logCtx, p)
+
+	// Pre-redact the joined prompts ONCE here so the downstream loop over
+	// turn checkpoints can reuse the result. Without this each
+	// store.UpdateCommitted invocation (and any v2 dual-write) would re-run
+	// the full 8-layer redaction pipeline — including the OpenAI Privacy
+	// Filter shell-out — over the same joined-prompt string, scaling linearly
+	// with checkpoint count. Pre-computing collapses that to a single call.
+	var redactedJoinedPromptContent string
+	if len(prompts) > 0 {
+		redactedJoinedPromptContent = redact.StringWithPrivacyFilter(logCtx, checkpoint.JoinPrompts(prompts))
 	}
 
 	store := checkpoint.NewGitStore(repo)
@@ -2810,12 +2818,13 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		}
 
 		updateOpts := checkpoint.UpdateCommittedOptions{
-			CheckpointID:     cpID,
-			SessionID:        state.SessionID,
-			Transcript:       redactedTranscript,
-			Prompts:          prompts,
-			Agent:            state.AgentType,
-			PrecomputedBlobs: precomputed,
+			CheckpointID:           cpID,
+			SessionID:              state.SessionID,
+			Transcript:             redactedTranscript,
+			Prompts:                prompts,
+			PromptsRedactedContent: redactedJoinedPromptContent,
+			Agent:                  state.AgentType,
+			PrecomputedBlobs:       precomputed,
 		}
 
 		// Generate compact transcript for v2 /main

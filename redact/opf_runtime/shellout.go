@@ -149,7 +149,13 @@ func (s *shellOut) RedactBatch(ctx context.Context, inputs []string, categories 
 	// Single concatenated input → opf emits one JSON object.
 	var parsed opfOutput
 	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
-		return nil, fmt.Errorf("opf output not parseable as JSON: %w (stdout: %q)", err, stdout.String())
+		// Intentionally do NOT embed stdout.String() in the error — when OPF
+		// fails to produce valid JSON its stdout may include echoed input
+		// fragments (transcript content), which we must not surface to logs
+		// or the user-facing TTY. The byte count plus the parser's own
+		// error (which includes the syntax-error offset) is enough to
+		// distinguish "OPF binary returned non-JSON" from real bugs.
+		return nil, fmt.Errorf("opf output not parseable as JSON (%d bytes): %w", stdout.Len(), err)
 	}
 
 	// OPF returns character offsets (Python str slicing), not byte
@@ -181,22 +187,17 @@ func (s *shellOut) RedactBatch(ctx context.Context, inputs []string, categories 
 }
 
 // charToByteOffset converts a 0-based character (rune) offset into a byte
-// offset within s. Returns -1 if charOff is past the end of s. For
-// charOff == 0 this returns 0; for charOff equal to the number of runes
-// in s, this returns len(s) (the end-of-string position).
+// offset within s. Returns -1 for negative offsets or offsets past the end of
+// s. For charOff == 0 returns 0; for charOff equal to the rune count of s,
+// returns len(s) (the end-of-string position used as an exclusive end bound).
 func charToByteOffset(s string, charOff int) int {
 	if charOff < 0 {
 		return -1
 	}
-	if charOff == 0 {
-		return 0
-	}
 	byteOff := 0
-	for i := range charOff {
+	for range charOff {
 		if byteOff >= len(s) {
-			if i == charOff-1 && byteOff == len(s) {
-				return byteOff
-			}
+			// charOff requested more runes than s contains.
 			return -1
 		}
 		_, size := utf8.DecodeRuneInString(s[byteOff:])

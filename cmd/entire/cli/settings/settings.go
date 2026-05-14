@@ -463,6 +463,11 @@ func LoadFromBytes(data []byte) (*EntireSettings, error) {
 	if err := dec.Decode(s); err != nil {
 		return nil, fmt.Errorf("parsing settings: %w", err)
 	}
+	if s.Redaction != nil {
+		if err := validateOPFSettings(s.Redaction.OpenAIPrivacyFilter); err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
 }
 
@@ -495,6 +500,12 @@ func loadFromFile(filePath string) (*EntireSettings, error) {
 	// SummaryGeneration is NOT validated here — individual files may
 	// legitimately contain only a model (provider comes from another file).
 	// Validation happens after merge in Load().
+
+	if settings.Redaction != nil {
+		if err := validateOPFSettings(settings.Redaction.OpenAIPrivacyFilter); err != nil {
+			return nil, err
+		}
+	}
 
 	return settings, nil
 }
@@ -868,6 +879,25 @@ func mergePIISettings(dst *PIISettings, data json.RawMessage) error {
 	return nil
 }
 
+// validateOPFSettings checks invariants on an OPFSettings value. Called from
+// both file-load and merge paths so settings rejected by one path are also
+// rejected by the other (preventing typos in on_failure from silently
+// degrading to warn behavior). The allowed on_failure values are closed:
+// empty (defaults to warn), "warn", or "block". Note that "block" is
+// accepted at parse time but not yet enforced end-to-end — see
+// TODO(opf-block-mode) in redact/opf.go.
+func validateOPFSettings(opf *OPFSettings) error {
+	if opf == nil {
+		return nil
+	}
+	switch opf.OnFailure {
+	case "", "warn", "block":
+	default:
+		return fmt.Errorf("openai_privacy_filter.on_failure must be \"warn\" or \"block\", got %q", opf.OnFailure)
+	}
+	return nil
+}
+
 // mergeOPFSettings merges OPF overrides into existing OPFSettings.
 // Only fields present in the override JSON are applied; missing fields
 // are preserved from the base settings.
@@ -907,21 +937,8 @@ func mergeOPFSettings(dst *OPFSettings, data json.RawMessage) error {
 		if err := json.Unmarshal(v, &dst.OnFailure); err != nil {
 			return fmt.Errorf("parsing openai_privacy_filter.on_failure: %w", err)
 		}
-		// Reject typos at parse time so users discover misconfiguration
-		// immediately instead of silently getting warn behavior. The
-		// allowed set is closed: empty (defaults to warn), "warn", or
-		// "block". Note that "block" is currently accepted at parse time
-		// but not yet enforced end-to-end — see TODO(opf-block-mode)
-		// in redact/opf.go. Users who configure "block" today still get
-		// warn behavior, but at least typos like "bock" no longer
-		// silently degrade.
-		switch dst.OnFailure {
-		case "", "warn", "block":
-		default:
-			return fmt.Errorf("openai_privacy_filter.on_failure must be \"warn\" or \"block\", got %q", dst.OnFailure)
-		}
 	}
-	return nil
+	return validateOPFSettings(dst)
 }
 
 // IsSetUp returns true if Entire has been set up in the current repository.

@@ -223,6 +223,15 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		summary = generateSummary(ctx, redactedTranscript, sessionData.FilesTouched, state)
 	}
 
+	// Pre-redact joined prompts once so the v1 and v2 writers (and any
+	// subsequent UpdateCommitted on this checkpoint within the same finalize)
+	// reuse the result instead of each running the OpenAI Privacy Filter
+	// shell-out over identical input.
+	var redactedJoinedPromptContent string
+	if len(sessionData.Prompts) > 0 {
+		redactedJoinedPromptContent = redact.StringWithPrivacyFilter(ctx, cpkg.JoinPrompts(sessionData.Prompts))
+	}
+
 	// Build write options (shared by v1 and v2)
 	writeOpts := cpkg.WriteCommittedOptions{
 		CheckpointID:                checkpointID,
@@ -231,6 +240,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		Branch:                      branchName,
 		Transcript:                  redactedTranscript,
 		Prompts:                     sessionData.Prompts,
+		PromptsRedactedContent:      redactedJoinedPromptContent,
 		FilesTouched:                sessionData.FilesTouched,
 		CheckpointsCount:            state.StepCount,
 		EphemeralBranch:             shadowBranchName,

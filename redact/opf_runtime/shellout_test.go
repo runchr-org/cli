@@ -330,3 +330,65 @@ func TestShellOut_CategoriesNotPassedToOPF(t *testing.T) {
 		}
 	}
 }
+
+// TestCharToByteOffset_OffByOneAtEnd pins down the end-of-string guard so a
+// regression that returns len(s) for charOff == runeCount+1 (one-past-end of
+// a rune-counted string) re-introduces a slicing panic in callers.
+func TestCharToByteOffset_OffByOneAtEnd(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		s       string
+		charOff int
+		want    int
+	}{
+		// ASCII: 5 runes, 5 bytes.
+		{"ascii_start", "hello", 0, 0},
+		{"ascii_mid", "hello", 3, 3},
+		{"ascii_end_runecount", "hello", 5, 5}, // valid exclusive end
+		{"ascii_past_end", "hello", 6, -1},     // one past the end → -1
+		{"ascii_way_past", "hello", 100, -1},   // far past the end → -1
+		{"ascii_negative", "hello", -1, -1},    // negative → -1
+		// UTF-8 with multi-byte runes: 3 runes, 9 bytes (3 × 3-byte box-drawing chars).
+		{"utf8_start", "───", 0, 0},
+		{"utf8_after_first", "───", 1, 3},
+		{"utf8_after_second", "───", 2, 6},
+		{"utf8_end_runecount", "───", 3, 9},
+		{"utf8_past_end", "───", 4, -1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := charToByteOffset(tc.s, tc.charOff)
+			if got != tc.want {
+				t.Errorf("charToByteOffset(%q, %d) = %d, want %d", tc.s, tc.charOff, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestShellOut_ParseError_DoesNotLeakStdout verifies that when OPF emits
+// non-JSON output (whose body may contain echoed input fragments) the
+// returned error does NOT embed stdout verbatim. Embedding stdout would leak
+// transcript content to .entire/logs/entire.log and the user-facing TTY.
+func TestShellOut_ParseError_DoesNotLeakStdout(t *testing.T) {
+	t.Parallel()
+	const secret = "Alice met Bob at 555-867-5309"
+	rt := &shellOut{
+		command:        "opf",
+		timeoutSeconds: 5,
+		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			// Emit non-JSON output that contains the input text we want to
+			// keep out of error messages. The shellout shouldn't surface this
+			// in the error chain.
+			return shCmd(ctx, "printf '%s' 'not json: "+secret+"'")
+		},
+	}
+	_, err := rt.Redact(context.Background(), secret, []string{"private_person"})
+	if err == nil {
+		t.Fatal("Redact: want parse error, got nil")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("error message leaks transcript content: %v", err)
+	}
+}

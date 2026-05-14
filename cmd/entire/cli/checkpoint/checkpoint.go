@@ -225,6 +225,14 @@ type WriteCommittedOptions struct {
 	// Prompts contains user prompts from the session
 	Prompts []string
 
+	// PromptsRedactedContent, if non-empty, is the pre-redacted joined-prompts
+	// blob content (output of JoinPrompts(Prompts) after running the full
+	// 8-layer redaction). When set, the writer skips its safety-net redaction
+	// and uses this content directly. Used by finalizeAllTurnCheckpoints to
+	// avoid running OpenAI Privacy Filter once per checkpoint over identical
+	// joined-prompt strings within the same finalize batch.
+	PromptsRedactedContent string
+
 	// FilesTouched are files modified during the session
 	FilesTouched []string
 
@@ -355,6 +363,12 @@ type UpdateCommittedOptions struct {
 
 	// Prompts contains all user prompts (replaces existing)
 	Prompts []string
+
+	// PromptsRedactedContent, if non-empty, is the pre-redacted joined-prompts
+	// blob content. When set, the writer skips its safety-net redaction and
+	// uses this content directly. See WriteCommittedOptions.PromptsRedactedContent
+	// for rationale.
+	PromptsRedactedContent string
 
 	// Agent identifies the agent type (needed for transcript chunking)
 	Agent types.AgentType
