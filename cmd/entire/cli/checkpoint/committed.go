@@ -1826,6 +1826,15 @@ func GetGitAuthorFromRepo(repo *git.Repository) (name, email string) {
 	return name, email
 }
 
+// CreateMigrationCommit creates a commit on behalf of Entire's migration or
+// repair tooling. Author and committer are the real git user (so commit
+// signing keeps working); the standard migration trailer block is appended to
+// subject to carry the tool-produced provenance signal.
+func CreateMigrationCommit(ctx context.Context, repo *git.Repository, treeHash, parentHash plumbing.Hash, subject string) (plumbing.Hash, error) {
+	authorName, authorEmail := GetGitAuthorFromRepo(repo)
+	return CreateCommit(ctx, repo, treeHash, parentHash, trailers.FormatMigration(subject), authorName, authorEmail)
+}
+
 // CreateCommit creates a git commit object with the given tree, parent, message, and author.
 // If parentHash is ZeroHash, the commit is created without a parent (orphan commit).
 func CreateCommit(ctx context.Context, repo *git.Repository, treeHash, parentHash plumbing.Hash, message, authorName, authorEmail string) (plumbing.Hash, error) {

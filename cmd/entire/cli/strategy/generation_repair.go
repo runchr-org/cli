@@ -8,7 +8,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 )
@@ -128,10 +127,8 @@ func repairOneV2GenerationMetadata(
 		return false, nil
 	}
 
-	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(repo)
-	newCommitHash, commitErr := checkpoint.CreateCommit(ctx, repo, newTreeHash, oldCommitHash,
-		trailers.FormatMigration(fmt.Sprintf("Repair generation metadata: %s", candidate.Name)),
-		authorName, authorEmail)
+	newCommitHash, commitErr := checkpoint.CreateMigrationCommit(ctx, repo, newTreeHash, oldCommitHash,
+		fmt.Sprintf("Repair generation metadata: %s", candidate.Name))
 	if commitErr != nil {
 		return false, fmt.Errorf("failed to create repair commit: %w", commitErr)
 	}
