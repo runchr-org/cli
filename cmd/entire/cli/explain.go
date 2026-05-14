@@ -237,6 +237,16 @@ type checkpointDetail struct {
 	Files []string
 }
 
+// explainPreRun configures the redact package before `entire explain` reads
+// transcripts. Without this, getOPFConfig() returns nil and the
+// *WithPrivacyFilter functions silently fall back to the always-on
+// regex/entropy layers only. Extracted to a package-level function so it
+// doesn't push newExplainCmd's already-borderline maintainability score
+// past the linter threshold.
+func explainPreRun(_ *cobra.Command, _ []string) {
+	strategy.EnsureRedactionConfigured()
+}
+
 func newExplainCmd() *cobra.Command {
 	var sessionFlag string
 	var commitFlag string
@@ -312,6 +322,7 @@ Note: --session filters the list view; the positional arg, --commit, and --check
 			}
 			return nil
 		},
+		PreRun: explainPreRun,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Check if Entire is disabled
 			if checkDisabledGuard(cmd.Context(), cmd.OutOrStdout()) {

@@ -907,6 +907,19 @@ func mergeOPFSettings(dst *OPFSettings, data json.RawMessage) error {
 		if err := json.Unmarshal(v, &dst.OnFailure); err != nil {
 			return fmt.Errorf("parsing openai_privacy_filter.on_failure: %w", err)
 		}
+		// Reject typos at parse time so users discover misconfiguration
+		// immediately instead of silently getting warn behavior. The
+		// allowed set is closed: empty (defaults to warn), "warn", or
+		// "block". Note that "block" is currently accepted at parse time
+		// but not yet enforced end-to-end — see TODO(opf-block-mode)
+		// in redact/opf.go. Users who configure "block" today still get
+		// warn behavior, but at least typos like "bock" no longer
+		// silently degrade.
+		switch dst.OnFailure {
+		case "", "warn", "block":
+		default:
+			return fmt.Errorf("openai_privacy_filter.on_failure must be \"warn\" or \"block\", got %q", dst.OnFailure)
+		}
 	}
 	return nil
 }

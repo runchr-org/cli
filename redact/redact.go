@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/url"
 	"regexp"
@@ -840,7 +841,22 @@ func JSONLContentWithPrivacyFilter(ctx context.Context, content string) (string,
 			return jsonlContentImpl(content, String)
 		}
 		progress.Finish(time.Since(start))
+		// Defensive: the Runtime contract says RedactBatch returns
+		// len(inputs) slices, but a future daemon-mode implementation
+		// could violate that. Don't panic — assign what we got, treat
+		// missing trailing inputs as "no spans returned." Log via slog
+		// so a real violation is visible in .entire/logs/entire.log.
+		if len(batched) < len(inputs) {
+			slog.Warn("OPF runtime returned fewer span slices than inputs",
+				componentAttr,
+				slog.Int("inputs", len(inputs)),
+				slog.Int("returned", len(batched)),
+			)
+		}
 		for i, in := range inputs {
+			if i >= len(batched) {
+				break
+			}
 			spansByInput[in] = batched[i]
 		}
 	}

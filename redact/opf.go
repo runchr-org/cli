@@ -60,8 +60,24 @@ func ConfigurePrivacyFilter(cfg OPFConfig) {
 	}
 	cfgCopy.runtime = opf_runtime.NewShellOut(cfgCopy.Command, cfgCopy.Timeout)
 	opfConfigMu.Lock()
-	defer opfConfigMu.Unlock()
 	opfConfig = &cfgCopy
+	opfConfigMu.Unlock()
+
+	// Surface the block-mode gap loudly when configured. The setting is
+	// accepted (and parsed) but not yet enforced — see
+	// TODO(opf-block-mode) in handleOPFFailure. Without this signal, a
+	// user who set on_failure: "block" expecting commits to abort on OPF
+	// failure would silently get warn behavior. The message goes to slog
+	// AND opfStderr so it survives the post-commit hook's stderr redirect.
+	if cfgCopy.Enabled && cfgCopy.OnFailure == "block" {
+		slog.Warn("OpenAI Privacy Filter: on_failure=\"block\" is configured but not yet enforced; falling back to warn behavior",
+			componentAttr,
+			slog.String("command", cfgCopy.Command),
+		)
+		if opfStderr != nil {
+			fmt.Fprintln(opfStderr, "× OpenAI Privacy Filter: on_failure=\"block\" is documented but not yet enforced in this build; commits will continue with warn behavior on OPF failure.")
+		}
+	}
 }
 
 // ConfigurePrivacyFilterWithRuntime is the test-only variant that takes an

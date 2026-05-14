@@ -84,6 +84,14 @@ attach a review without a declared skills list.
 
 Works with any registered agent, including external agents enabled via
 external_agents in settings. Run 'entire agent list' to see the full list.`,
+		PreRun: func(_ *cobra.Command, _ []string) {
+			// Configure the redact package up front so the transcript
+			// read below actually runs the PII / custom rule / OPF
+			// layers. Without this, getOPFConfig() returns nil and
+			// JSONLBytesWithPrivacyFilter silently falls back to the
+			// always-on regex/entropy layers only.
+			strategy.EnsureRedactionConfigured()
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 {
 				return cmd.Help()

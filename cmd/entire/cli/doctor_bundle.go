@@ -16,6 +16,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/redact"
 	"github.com/spf13/cobra"
@@ -46,6 +47,13 @@ Redaction:
 
 By default the archive is written to a path inside the OS temp directory and
 that path is printed to stdout. Use --out to choose a specific path.`,
+		PreRun: func(_ *cobra.Command, _ []string) {
+			// Configure redact package up front so the bundle's content
+			// redaction actually runs the PII / custom rule / OPF
+			// layers. The doctor command's own PreRun runs only for the
+			// top-level "fix" path, not for "doctor bundle" subcommand.
+			strategy.EnsureRedactionConfigured()
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			repoRoot, err := paths.WorktreeRoot(ctx)

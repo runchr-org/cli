@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -1425,6 +1427,16 @@ func TestJSONLBytesWithPrivacyFilter_BatchesOPFCalls(t *testing.T) {
 		}
 	}
 
+	// Has-space gate (perf): no non-prose leaf should reach OPF. Without
+	// this assertion, removing the gate from JSONLContentWithPrivacyFilter's
+	// pass-1 collector would silently regress to multi-minute commits
+	// (every JSON key, path, ID, type tag would hit opf).
+	for _, in := range fake.lastInputs {
+		if !strings.ContainsRune(in, ' ') {
+			t.Errorf("has-space gate failed: non-prose input %q sent to OPF batch", in)
+		}
+	}
+
 	// Verify both leaves got redacted correctly.
 	out := string(got.Bytes())
 	if !strings.Contains(out, "Hello [REDACTED_PERSON] today") {
@@ -1434,3 +1446,101 @@ func TestJSONLBytesWithPrivacyFilter_BatchesOPFCalls(t *testing.T) {
 		t.Errorf("Bob not redacted: %q", out)
 	}
 }
+
+// TestJSONLBytesWithPrivacyFilter_FallsBackOnBatchError verifies the
+// documented degraded-mode contract: when RedactBatch errors,
+// JSONLContentWithPrivacyFilter logs the failure and continues with the
+// regex/entropy layers (the same output as plain JSONLContent). The user
+// still gets a valid commit; OPF spans are simply missing.
+func TestJSONLBytesWithPrivacyFilter_FallsBackOnBatchError(t *testing.T) {
+	resetOPFConfig()
+	t.Cleanup(resetOPFConfig)
+
+	// Suppress the user-facing stderr message during the test.
+	origStderr := opfStderr
+	opfStderr = io.Discard
+	t.Cleanup(func() { opfStderr = origStderr })
+
+	fake := &fakeBatchRuntime{err: errors.New("opf process crashed")}
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"private_person": true},
+		OnFailure:  "warn",
+	}, fake)
+
+	// Embed a high-entropy secret so we can verify the regex/entropy
+	// layers ran despite the OPF failure.
+	input := []byte(`{"message":"Hello Alice today key=` + highEntropySecret + `"}` + "\n")
+
+	got, err := JSONLBytesWithPrivacyFilter(context.Background(), input)
+	if err != nil {
+		t.Fatalf("JSONLBytesWithPrivacyFilter: %v (want nil — failures should be soft)", err)
+	}
+
+	out := string(got.Bytes())
+	// Layers 1-7 must still have run: the high-entropy secret should be REDACTED.
+	if strings.Contains(out, highEntropySecret) {
+		t.Errorf("regex/entropy layers did NOT run on fallback path: secret survived: %q", out)
+	}
+	if !strings.Contains(out, "REDACTED") {
+		t.Errorf("expected REDACTED in fallback output: %q", out)
+	}
+	// OPF span should NOT be applied (the runtime errored).
+	if strings.Contains(out, "[REDACTED_PERSON]") {
+		t.Errorf("OPF span applied despite RedactBatch error: %q", out)
+	}
+	// The runtime SHOULD have been invoked exactly once (proving we
+	// attempted OPF before falling back).
+	if fake.batchCalls != 1 {
+		t.Errorf("batchCalls: want 1 (attempted OPF before fallback), got %d", fake.batchCalls)
+	}
+}
+
+// TestJSONLBytesWithPrivacyFilter_GracefulOnShortBatch verifies the
+// consumer in JSONLContentWithPrivacyFilter is defensive against a
+// runtime that returns fewer span slices than inputs. The shellout
+// implementation pre-allocates len(inputs) slices, but a future
+// daemon-mode runtime could violate that contract. We must not panic.
+func TestJSONLBytesWithPrivacyFilter_GracefulOnShortBatch(t *testing.T) {
+	resetOPFConfig()
+	t.Cleanup(resetOPFConfig)
+
+	fake := &shortReturnBatchRuntime{}
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"private_person": true},
+	}, fake)
+
+	input := []byte(`{"message":"Hello Alice today"}` + "\n" +
+		`{"message":"goodbye Bob tonight"}` + "\n" +
+		`{"message":"the lead is Charlie Brown"}` + "\n")
+
+	// Must not panic. Output is unimportant — the contract is just
+	// "consumer doesn't crash on a misbehaving runtime."
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("panicked on short batch return: %v", r)
+		}
+	}()
+	_, err := JSONLBytesWithPrivacyFilter(context.Background(), input)
+	if err != nil {
+		t.Logf("err returned (acceptable): %v", err)
+	}
+}
+
+// shortReturnBatchRuntime returns fewer span slices than inputs — used to
+// verify the consumer doesn't panic on a misbehaving runtime.
+type shortReturnBatchRuntime struct{}
+
+func (s *shortReturnBatchRuntime) Redact(_ context.Context, _ string, _ []string) ([]opf_runtime.Span, error) {
+	return nil, nil
+}
+
+func (s *shortReturnBatchRuntime) RedactBatch(_ context.Context, _ []string, _ []string) ([][]opf_runtime.Span, error) {
+	// Always return a single empty slice regardless of how many inputs
+	// were sent. Production runtimes always return len(inputs) slices;
+	// this fake violates that contract on purpose.
+	return [][]opf_runtime.Span{nil}, nil
+}
+
+func (s *shortReturnBatchRuntime) Close() error { return nil }
