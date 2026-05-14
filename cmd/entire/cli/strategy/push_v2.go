@@ -566,15 +566,24 @@ func fetchRelatedRemoteRotationArchive(ctx context.Context, fetchTarget string, 
 		archiveTmpRefs = append(archiveTmpRefs, archiveTmpRef)
 	}
 
-	// These archive commits are read immediately through go-git for tree
-	// flattening, so fetch the complete refs rather than blobless packfiles.
-	if output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
-		Remote:    fetchTarget,
-		RefSpecs:  refSpecs,
-		NoTags:    true,
-		NoFilter:  true,
-		ExtraArgs: []string{"--no-write-fetch-head"},
-	}); fetchErr != nil {
+	// Probe with --filter=blob:none; only the matched archive's blobs are topped
+	// up after we pick it. Fall back to an unfiltered fetch on any first-fetch
+	// error (e.g. server without uploadpack.allowFilter).
+	fetch := func(extra ...string) ([]byte, error) {
+		args := append([]string{"--no-write-fetch-head"}, extra...)
+		return remote.Fetch(ctx, remote.FetchOptions{
+			Remote:    fetchTarget,
+			RefSpecs:  refSpecs,
+			NoTags:    true,
+			NoFilter:  true,
+			ExtraArgs: args,
+		})
+	}
+	output, fetchErr := fetch("--filter=blob:none")
+	if fetchErr != nil {
+		output, fetchErr = fetch()
+	}
+	if fetchErr != nil {
 		if repo, openErr := OpenRepository(ctx); openErr == nil {
 			cleanupFetchedArchiveTmpRefs(repo, archiveTmpRefs)
 		}
@@ -594,17 +603,83 @@ func fetchRelatedRemoteRotationArchive(ctx context.Context, fetchTarget string, 
 	if !ok {
 		return fetchedRemoteRotationArchive{}, errors.New("failed to read local /full/current history")
 	}
+
+	// Wall-clock bound on the ancestry walk: on repos whose archives are fully
+	// disjoint from local /full/current we'd otherwise burn seconds per push
+	// concluding nothing matches. A future /full/root anchor will replace this
+	// with a constant-time lookup.
+	walkStart := time.Now()
+	walked := 0
 	for _, archive := range archives {
+		if time.Since(walkStart) > rotationAncestryWalkBudget {
+			break
+		}
+		walked++
 		fetched, err := readFetchedRemoteRotationArchive(repo, archive)
 		if err != nil {
 			return fetchedRemoteRotationArchive{}, err
 		}
 		if archiveSharesHistoryWithCurrentGeneration(ctx, repo, localCurrentAncestors, fetched.ref.Hash()) {
+			if err := topUpMatchedArchiveBlobs(ctx, fetchTarget, repo, fetched.tree); err != nil {
+				return fetchedRemoteRotationArchive{}, err
+			}
 			tmpRefsToCleanup = removeRef(tmpRefsToCleanup, fetched.tmpRefName)
 			return fetched, nil
 		}
 	}
-	return fetchedRemoteRotationArchive{}, errors.New("no remote archive shares history with local /full/current")
+	err = errors.New("no remote archive shares history with local /full/current")
+	if walked < len(archives) {
+		err = fmt.Errorf("%w (walk budget exhausted after %d/%d archives)", err, walked, len(archives))
+	}
+	return fetchedRemoteRotationArchive{}, err
+}
+
+// rotationAncestryWalkBudget caps wall-clock for the per-archive ancestry
+// walk. Exposed as a var so tests can lower it.
+var rotationAncestryWalkBudget = 1 * time.Second //nolint:gochecknoglobals // test override
+
+// topUpMatchedArchiveBlobs ensures every blob in the matched archive's tree
+// is in the local pack directory. Downstream reads (updateGenerationTimestamps,
+// the push that follows) go through go-git's BlobObject, which scans only the
+// local pack directory and does not follow file-transport alternates — so we
+// must pull missing blobs explicitly via `git fetch-pack` rather than rely on
+// FetchingTree's cat-file second-opinion.
+func topUpMatchedArchiveBlobs(ctx context.Context, fetchTarget string, repo *git.Repository, archiveTree *object.Tree) error {
+	seen := make(map[plumbing.Hash]struct{})
+	var missing []string
+	var walk func(t *object.Tree) error
+	walk = func(t *object.Tree) error {
+		for _, entry := range t.Entries {
+			if entry.Mode == filemode.Dir {
+				sub, err := repo.TreeObject(entry.Hash)
+				if err != nil {
+					return fmt.Errorf("read subtree %s: %w", entry.Name, err)
+				}
+				if err := walk(sub); err != nil {
+					return err
+				}
+				continue
+			}
+			if _, ok := seen[entry.Hash]; ok {
+				continue
+			}
+			seen[entry.Hash] = struct{}{}
+			if repo.Storer.HasEncodedObject(entry.Hash) != nil {
+				missing = append(missing, entry.Hash.String())
+			}
+		}
+		return nil
+	}
+	if err := walk(archiveTree); err != nil {
+		return err
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	if err := remote.FetchBlobs(ctx, fetchTarget, missing); err != nil {
+		return fmt.Errorf("fetch matched archive blobs: %w", err)
+	}
+	return nil
 }
 
 func archiveTmpRefName(archive string) plumbing.ReferenceName {

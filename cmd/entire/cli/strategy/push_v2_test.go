@@ -1169,3 +1169,121 @@ func TestFetchAndMergeRef_RemoteRotatedMultipleTimesUsesRelatedArchive(t *testin
 	assert.True(t, refContainsV2Checkpoint(t, bareRepo, archive2Ref, remoteGen2CP),
 		"remote generation 2 checkpoint should remain in archive 2")
 }
+
+// TestFetchAndMergeRef_RotationConflict_BloblessProbeAvoidsUnmatchedBlobs
+// verifies that rotation recovery probes archive refs with --filter=blob:none
+// and only tops up blobs for the archive it matches. Multiple unrelated
+// archives must not have their blobs fetched.
+// Not parallel: uses t.Chdir()
+func TestFetchAndMergeRef_RotationConflict_BloblessProbeAvoidsUnmatchedBlobs(t *testing.T) {
+	ctx := context.Background()
+	fullCurrentRef := plumbing.ReferenceName(paths.V2FullCurrentRefName)
+	archive1Ref := plumbing.ReferenceName(paths.V2FullRefPrefix + "0000000000001")
+	archive2Ref := plumbing.ReferenceName(paths.V2FullRefPrefix + "0000000000002")
+	sharedCP := id.MustCheckpointID("aabbccddeeff")
+	remoteGen1CP := id.MustCheckpointID("112233445566")
+	remoteGen2CP := id.MustCheckpointID("223344556677")
+	localOnlyCP := id.MustCheckpointID("ffeeddccbbaa")
+
+	bareDir := t.TempDir()
+	initCmd := exec.CommandContext(ctx, "git", "init", "--bare")
+	initCmd.Dir = bareDir
+	initCmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, initCmd.Run())
+	enableFilteredFetchServingForTest(t, bareDir)
+	bareURL := "file://" + bareDir
+
+	localDir := t.TempDir()
+	testutil.InitRepo(t, localDir)
+	testutil.WriteFile(t, localDir, "f.txt", "init")
+	testutil.GitAdd(t, localDir, "f.txt")
+	testutil.GitCommit(t, localDir, "init")
+	localRepo, err := git.PlainOpen(localDir)
+	require.NoError(t, err)
+	writeV2Checkpoint(t, localRepo, sharedCP, "shared-session")
+
+	pushCurrent := exec.CommandContext(ctx, "git", "push", bareDir,
+		string(fullCurrentRef)+":"+string(fullCurrentRef))
+	pushCurrent.Dir = localDir
+	require.NoError(t, pushCurrent.Run())
+
+	remoteDir := t.TempDir()
+	testutil.InitRepo(t, remoteDir)
+	testutil.WriteFile(t, remoteDir, "f.txt", "init")
+	testutil.GitAdd(t, remoteDir, "f.txt")
+	testutil.GitCommit(t, remoteDir, "init")
+	fetchCurrent := exec.CommandContext(ctx, "git", "fetch", bareDir,
+		"+"+string(fullCurrentRef)+":"+string(fullCurrentRef))
+	fetchCurrent.Dir = remoteDir
+	require.NoError(t, fetchCurrent.Run())
+
+	remoteRepo, err := git.PlainOpen(remoteDir)
+	require.NoError(t, err)
+	writeV2Checkpoint(t, remoteRepo, remoteGen1CP, "remote-gen-1")
+	rotateV2CurrentForTest(t, remoteRepo, archive1Ref)
+	writeV2Checkpoint(t, remoteRepo, remoteGen2CP, "remote-gen-2")
+	rotateV2CurrentForTest(t, remoteRepo, archive2Ref)
+
+	pushRotated := exec.CommandContext(ctx, "git", "push", "--force", bareDir,
+		string(fullCurrentRef)+":"+string(fullCurrentRef),
+		string(archive1Ref)+":"+string(archive1Ref),
+		string(archive2Ref)+":"+string(archive2Ref))
+	pushRotated.Dir = remoteDir
+	out, pushErr := pushRotated.CombinedOutput()
+	require.NoError(t, pushErr, "push rotated state failed: %s", out)
+
+	// Capture representative blob hashes from each archive on the bare. The
+	// matched archive (archive1) gets its generation.json topped up; the
+	// unmatched archive (archive2) should never have its remote-gen-2 shard
+	// blobs pulled to local.
+	bareRepo, err := git.PlainOpen(bareDir)
+	require.NoError(t, err)
+	matchedBlobHash := blobAtTopLevel(t, bareRepo, archive1Ref, paths.GenerationFileName)
+	unmatchedBlobHash := firstBlobInV2CheckpointShard(t, bareRepo, archive2Ref, remoteGen2CP)
+
+	writeV2Checkpoint(t, localRepo, localOnlyCP, "local-session")
+
+	t.Chdir(localDir)
+	err = fetchAndMergeRef(ctx, bareURL, fullCurrentRef)
+	require.NoError(t, err)
+
+	localRepo, err = git.PlainOpen(localDir)
+	require.NoError(t, err)
+
+	assert.NoError(t, localRepo.Storer.HasEncodedObject(matchedBlobHash),
+		"matched archive generation.json must be locally available after top-up")
+	assert.Error(t, localRepo.Storer.HasEncodedObject(unmatchedBlobHash),
+		"unmatched archive shard blob must NOT be locally available; blobless probe over-fetched")
+}
+
+func blobAtTopLevel(t *testing.T, repo *git.Repository, refName plumbing.ReferenceName, filename string) plumbing.Hash {
+	t.Helper()
+	ref, err := repo.Reference(refName, true)
+	require.NoError(t, err)
+	commit, err := repo.CommitObject(ref.Hash())
+	require.NoError(t, err)
+	tree, err := commit.Tree()
+	require.NoError(t, err)
+	entry, err := tree.FindEntry(filename)
+	require.NoError(t, err)
+	return entry.Hash
+}
+
+func firstBlobInV2CheckpointShard(t *testing.T, repo *git.Repository, refName plumbing.ReferenceName, cpID id.CheckpointID) plumbing.Hash {
+	t.Helper()
+	ref, err := repo.Reference(refName, true)
+	require.NoError(t, err)
+	commit, err := repo.CommitObject(ref.Hash())
+	require.NoError(t, err)
+	tree, err := commit.Tree()
+	require.NoError(t, err)
+	shard, err := tree.Tree(cpID.Path())
+	require.NoError(t, err)
+	entries := make(map[string]object.TreeEntry)
+	require.NoError(t, checkpoint.FlattenTree(repo, shard, "", entries))
+	require.NotEmpty(t, entries, "expected at least one blob in shard %s", cpID.Path())
+	for _, entry := range entries {
+		return entry.Hash
+	}
+	return plumbing.ZeroHash
+}
