@@ -5,10 +5,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/entireio/cli/auth/sts"
-	"github.com/entireio/cli/auth/tokenmanager"
-	"github.com/entireio/cli/auth/tokens"
-	"github.com/entireio/cli/auth/tokenstore"
+	"github.com/entireio/auth-go/sts"
+	"github.com/entireio/auth-go/tokenmanager"
+	"github.com/entireio/auth-go/tokens"
+	"github.com/entireio/auth-go/tokenstore"
 )
 
 // memStoreForExchange mirrors the tokenmanager test helper but local

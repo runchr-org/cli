@@ -12,7 +12,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/entireio/cli/auth/tokens"
+	"github.com/entireio/auth-go/tokens"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/spf13/cobra"

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/entireio/cli/auth/deviceflow"
-	"github.com/entireio/cli/auth/tokens"
+	"github.com/entireio/auth-go/deviceflow"
+	"github.com/entireio/auth-go/tokens"
 	"github.com/entireio/cli/cmd/entire/cli/api"
 )
 

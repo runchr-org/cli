@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/entireio/cli/auth/tokens"
-	"github.com/entireio/cli/auth/tokenstore"
+	"github.com/entireio/auth-go/tokens"
+	"github.com/entireio/auth-go/tokenstore"
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/zalando/go-keyring"
 )

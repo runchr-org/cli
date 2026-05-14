@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"sync"
 
-	"github.com/entireio/cli/auth/tokenmanager"
+	"github.com/entireio/auth-go/tokenmanager"
 	"github.com/entireio/cli/cmd/entire/cli/api"
 )
 

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/entireio/cli/auth/deviceflow"
+	"github.com/entireio/auth-go/deviceflow"
 )
 
 // TestOAuthErrorParts_KnownSentinels covers the five RFC 8628 §3.5
