@@ -1826,23 +1826,6 @@ func GetGitAuthorFromRepo(repo *git.Repository) (name, email string) {
 	return name, email
 }
 
-// MigrationCoAuthorTrailer marks a commit as produced by Entire's migration or
-// repair tooling. The author/committer remain the real git user (so commit
-// signing keeps working); this trailer carries the provenance signal.
-const MigrationCoAuthorTrailer = "Co-Authored-By: Entire Migration <migration@entire.io>"
-
-// MigrationProvenanceTrailer is a greppable boolean flag that distinguishes
-// tool-produced commits from user work without parsing the co-author email.
-const MigrationProvenanceTrailer = "Entire-Migration: true"
-
-// MigrationCommitMessage wraps subject with the standard migration trailers.
-// All migrate.go and generation_repair.go commit sites use this so the
-// provenance signal stays consistent across every tool-produced commit.
-func MigrationCommitMessage(subject string) string {
-	subject = strings.TrimRight(subject, "\n")
-	return fmt.Sprintf("%s\n\n%s\n%s\n", subject, MigrationCoAuthorTrailer, MigrationProvenanceTrailer)
-}
-
 // CreateCommit creates a git commit object with the given tree, parent, message, and author.
 // If parentHash is ZeroHash, the commit is created without a parent (orphan commit).
 func CreateCommit(ctx context.Context, repo *git.Repository, treeHash, parentHash plumbing.Hash, message, authorName, authorEmail string) (plumbing.Hash, error) {

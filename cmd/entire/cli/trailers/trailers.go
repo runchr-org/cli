@@ -48,6 +48,17 @@ const (
 	// AgentTrailerKey identifies the agent that created a checkpoint.
 	// Format: human-readable agent name e.g. "Claude Code", "Cursor"
 	AgentTrailerKey = "Entire-Agent"
+
+	// MigrationTrailerKey marks a commit as produced by Entire's migration or
+	// repair tooling. The author/committer stay the real git user so commit
+	// signing keeps working; this trailer carries the provenance signal as a
+	// greppable boolean.
+	MigrationTrailerKey = "Entire-Migration"
+
+	// MigrationCoAuthor is the identity used in the Co-Authored-By trailer on
+	// migration/repair commits. GitHub renders it as a co-author chip, making
+	// the tool-produced nature visible without affecting signing attribution.
+	MigrationCoAuthor = "Entire Migration <migration@entire.io>"
 )
 
 // Pre-compiled regexes for trailer parsing.
@@ -244,6 +255,13 @@ func FormatShadowTaskCommit(message, taskMetadataDir, sessionID string) string {
 	fmt.Fprintf(&sb, "%s: %s\n", SessionTrailerKey, sessionID)
 	fmt.Fprintf(&sb, "%s: %s\n", StrategyTrailerKey, "manual-commit")
 	return sb.String()
+}
+
+// FormatMigration creates a commit message with the standard migration
+// trailer block: a Co-Authored-By line crediting the migration identity and
+// the Entire-Migration provenance flag.
+func FormatMigration(message string) string {
+	return fmt.Sprintf("%s\n\nCo-Authored-By: %s\n%s: true\n", message, MigrationCoAuthor, MigrationTrailerKey)
 }
 
 // FormatCheckpoint creates a commit message with a checkpoint trailer.

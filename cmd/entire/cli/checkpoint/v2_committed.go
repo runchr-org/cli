@@ -17,6 +17,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/redact"
@@ -129,10 +130,9 @@ func (s *V2GitStore) WriteCommittedMainBatch(ctx context.Context, batch []WriteC
 	}
 
 	// One commit, one ref update for the entire batch. WriteCommittedMainBatch
-	// is migration-only (see callers); the message carries the standard
-	// migration trailers so provenance is consistent across every migration
-	// commit, including this batched /main write.
-	commitMsg := MigrationCommitMessage(fmt.Sprintf("Migrate batch: %d checkpoint(s), %d session(s)", len(groupOrder), len(batch)))
+	// is migration-only (see callers), so the message carries the standard
+	// migration trailer block alongside every other tool-produced commit.
+	commitMsg := trailers.FormatMigration(fmt.Sprintf("Migrate batch: %d checkpoint(s), %d session(s)", len(groupOrder), len(batch)))
 	last := batch[len(batch)-1]
 	authorName, authorEmail := last.AuthorName, last.AuthorEmail
 	if authorName == "" || authorEmail == "" {

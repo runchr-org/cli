@@ -24,6 +24,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
+	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/transcript/compact"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/perf"
@@ -881,7 +882,7 @@ func writeMigratedFinalFullCurrent(ctx context.Context, repo *git.Repository, v2
 
 	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(repo)
 	commitHash, err := checkpoint.CreateCommit(ctx, repo, treeHash, parentHash,
-		checkpoint.MigrationCommitMessage("Write migrated partial generation"),
+		trailers.FormatMigration("Write migrated partial generation"),
 		authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("create migrated full/current commit: %w", err)
@@ -976,7 +977,7 @@ func writeMigratedFullGeneration(ctx context.Context, repo *git.Repository, v2St
 
 	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(repo)
 	commitHash, err := checkpoint.CreateCommit(ctx, repo, treeHash, plumbing.ZeroHash,
-		checkpoint.MigrationCommitMessage(fmt.Sprintf("Archive migrated generation: %s", refName)),
+		trailers.FormatMigration(fmt.Sprintf("Archive migrated generation: %s", refName)),
 		authorName, authorEmail)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("create migrated generation commit: %w", err)
@@ -1146,7 +1147,7 @@ func ensureEmptyV2FullCurrent(ctx context.Context, repo *git.Repository) error {
 
 	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(repo)
 	commitHash, err := checkpoint.CreateCommit(ctx, repo, emptyTreeHash, plumbing.ZeroHash,
-		checkpoint.MigrationCommitMessage("Start generation"),
+		trailers.FormatMigration("Start generation"),
 		authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("create empty v2 full/current commit: %w", err)
@@ -1231,7 +1232,7 @@ func pruneV2CheckpointRef(ctx context.Context, repo *git.Repository, v2Store *ch
 
 	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(repo)
 	commitHash, err := checkpoint.CreateCommit(ctx, repo, newRoot, parentHash,
-		checkpoint.MigrationCommitMessage(fmt.Sprintf("Reset checkpoint before force migration: %s", cpID)),
+		trailers.FormatMigration(fmt.Sprintf("Reset checkpoint before force migration: %s", cpID)),
 		authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("failed to create v2 prune commit for %s: %w", refName, err)
@@ -1288,7 +1289,7 @@ func pruneV2ArchivedCheckpointRef(ctx context.Context, repo *git.Repository, v2S
 
 	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(repo)
 	commitHash, err := checkpoint.CreateCommit(ctx, repo, newRoot, parentHash,
-		checkpoint.MigrationCommitMessage(fmt.Sprintf("Reset checkpoint before force migration: %s", cpID)),
+		trailers.FormatMigration(fmt.Sprintf("Reset checkpoint before force migration: %s", cpID)),
 		authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("failed to create v2 prune commit for %s: %w", refName, err)
