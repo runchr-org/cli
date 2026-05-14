@@ -207,6 +207,61 @@ func TestShellOut_RedactBatch_DropsSpansCrossingBoundary(t *testing.T) {
 	}
 }
 
+// TestShellOut_RedactBatch_MultiByteUTF8Offsets verifies that character
+// offsets from opf are correctly translated to byte offsets for slicing.
+// opf returns 0-based rune offsets (Python str semantics); our redactor
+// uses byte offsets. For ASCII the two agree, but for multi-byte UTF-8
+// (e.g. '─' which is 3 bytes) they diverge — using the rune offset as a
+// byte offset would slice mid-character and produce garbled '�'s.
+//
+// Input: "Alice Smith ─ Bob Jones"
+//   - "Alice Smith" at runes [0, 11] = bytes [0, 11]
+//   - "Bob Jones"   at runes [14, 23] = bytes [16, 25] (the ─ is +2 bytes)
+//
+// We simulate opf returning rune offsets and assert that the partitioned
+// output uses BYTE offsets so applyRegions slices cleanly.
+func TestShellOut_RedactBatch_MultiByteUTF8Offsets(t *testing.T) {
+	t.Parallel()
+	rt := &shellOut{
+		command:        "opf",
+		timeoutSeconds: 5,
+		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			// Rune offsets: [0,11] and [14,23] in "Alice Smith ─ Bob Jones".
+			out := `{"detected_spans":[{"label":"private_person","start":0,"end":11},{"label":"private_person","start":14,"end":23}]}`
+			return shCmd(ctx, "printf '%s' "+shellQuote(out))
+		},
+	}
+	input := "Alice Smith ─ Bob Jones"
+	batches, err := rt.RedactBatch(context.Background(), []string{input}, []string{"private_person"})
+	if err != nil {
+		t.Fatalf("RedactBatch: %v", err)
+	}
+	if len(batches) != 1 || len(batches[0]) != 2 {
+		t.Fatalf("want 1 batch with 2 spans, got %v", batches)
+	}
+	// Span 1 should be byte [0,11] for "Alice Smith".
+	if batches[0][0].Start != 0 || batches[0][0].End != 11 {
+		t.Errorf("span 0: want byte [0,11] for Alice Smith, got [%d,%d]",
+			batches[0][0].Start, batches[0][0].End)
+	}
+	// Span 2 should be byte [16,25] for "Bob Jones" — not the rune [14,23]
+	// that opf reports. The 3-byte '─' plus the surrounding spaces push
+	// the byte offset 2 positions ahead of the rune offset.
+	if batches[0][1].Start != 16 || batches[0][1].End != 25 {
+		t.Errorf("span 1: want byte [16,25] for Bob Jones (rune [14,23] + 2 bytes from ─), got [%d,%d]",
+			batches[0][1].Start, batches[0][1].End)
+	}
+	// Sanity check: slicing the input by these byte offsets should
+	// produce the expected text — proving the offsets are valid for
+	// byte-based string slicing.
+	if got := input[batches[0][0].Start:batches[0][0].End]; got != "Alice Smith" {
+		t.Errorf("slice by span 0: got %q, want %q", got, "Alice Smith")
+	}
+	if got := input[batches[0][1].Start:batches[0][1].End]; got != "Bob Jones" {
+		t.Errorf("slice by span 1: got %q, want %q", got, "Bob Jones")
+	}
+}
+
 // TestShellOut_RedactBatch_EmbeddedNewlinesFlattened verifies that
 // inputs with internal newlines are sent flattened (newlines → spaces)
 // so opf doesn't split them across multiple outputs. Byte offsets stay

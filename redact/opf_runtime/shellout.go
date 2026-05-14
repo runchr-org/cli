@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // shellOut runs the user-installed `opf` binary per call. Cold-start every
@@ -143,21 +144,57 @@ func (s *shellOut) RedactBatch(ctx context.Context, inputs []string, categories 
 		return nil, fmt.Errorf("opf output not parseable as JSON: %w (stdout: %q)", err, stdout.String())
 	}
 
-	// Partition spans back to per-input slices using `starts`.
+	// OPF returns character offsets (Python str slicing), not byte
+	// offsets. For ASCII-only text the two agree; for multi-byte UTF-8
+	// (e.g. box-drawing characters in Claude Code's `★ Insight ─────`
+	// formatting) they diverge by N bytes per multi-byte char ahead of
+	// the span. We must translate char→byte before partitioning, since
+	// `starts` is byte-indexed (built from buf.Len()) and applyRegions
+	// in the redact package also slices by byte.
 	out := make([][]Span, len(inputs))
 	for _, p := range parsed.DetectedSpans {
-		idx := partitionIndex(starts, p.Start, p.End, batchSeparator)
+		byteStart := charToByteOffset(batched, p.Start)
+		byteEnd := charToByteOffset(batched, p.End)
+		if byteStart < 0 || byteEnd < 0 {
+			continue // offset out of range — drop
+		}
+		idx := partitionIndex(starts, byteStart, byteEnd, batchSeparator)
 		if idx < 0 {
 			continue // span crosses a separator boundary — drop it
 		}
 		base := starts[idx]
 		out[idx] = append(out[idx], Span{
-			Start: p.Start - base,
-			End:   p.End - base,
+			Start: byteStart - base,
+			End:   byteEnd - base,
 			Label: p.Label,
 		})
 	}
 	return out, nil
+}
+
+// charToByteOffset converts a 0-based character (rune) offset into a byte
+// offset within s. Returns -1 if charOff is past the end of s. For
+// charOff == 0 this returns 0; for charOff equal to the number of runes
+// in s, this returns len(s) (the end-of-string position).
+func charToByteOffset(s string, charOff int) int {
+	if charOff < 0 {
+		return -1
+	}
+	if charOff == 0 {
+		return 0
+	}
+	byteOff := 0
+	for i := range charOff {
+		if byteOff >= len(s) {
+			if i == charOff-1 && byteOff == len(s) {
+				return byteOff
+			}
+			return -1
+		}
+		_, size := utf8.DecodeRuneInString(s[byteOff:])
+		byteOff += size
+	}
+	return byteOff
 }
 
 // partitionIndex returns the input index that contains the [spanStart, spanEnd)

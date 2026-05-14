@@ -127,6 +127,24 @@ func isTTYWriter(w io.Writer) bool {
 // to import cmd/entire/cli/interactive.
 func accessibleMode() bool { return os.Getenv("ACCESSIBLE") != "" }
 
-// opfStderr is the destination for user-facing OPF failure and progress
-// messages. Production code uses os.Stderr; tests override this to capture output.
-var opfStderr io.Writer = os.Stderr
+// opfStderr is the destination for user-facing OPF progress and failure
+// messages. Tests override this directly to capture output.
+//
+// Production picks /dev/tty when available so messages survive
+// stderr-redirecting parents — specifically the post-commit git hook
+// Entire installs, which runs `entire hooks git post-commit 2>/dev/null`
+// to suppress noise from unrelated logging. Writing to /dev/tty bypasses
+// that redirect and reaches the user's controlling terminal, which is the
+// right home for "this is happening" UX.
+//
+// Falls back to os.Stderr when /dev/tty isn't available (CI, daemons,
+// non-Unix). Failures still go through slog to .entire/logs/entire.log
+// regardless, so silent fallback never loses diagnostic info.
+var opfStderr = defaultProgressDestination()
+
+func defaultProgressDestination() io.Writer {
+	if f, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0); err == nil {
+		return f
+	}
+	return os.Stderr
+}
