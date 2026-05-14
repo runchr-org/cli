@@ -383,9 +383,7 @@ var (
 )
 
 const (
-	migrateRemoteName  = "origin"
-	migrateAuthorName  = "Entire Migration"
-	migrateAuthorEmail = "migration@entire.dev"
+	migrateRemoteName = "origin"
 )
 
 var migrateMaxCheckpointsPerGeneration = checkpoint.DefaultMaxCheckpointsPerGeneration
@@ -881,9 +879,10 @@ func writeMigratedFinalFullCurrent(ctx context.Context, repo *git.Repository, v2
 		return fmt.Errorf("build migrated full/current tree: %w", err)
 	}
 
+	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(repo)
 	commitHash, err := checkpoint.CreateCommit(ctx, repo, treeHash, parentHash,
-		"Write migrated partial generation\n",
-		migrateAuthorName, migrateAuthorEmail)
+		checkpoint.MigrationCommitMessage("Write migrated partial generation"),
+		authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("create migrated full/current commit: %w", err)
 	}
@@ -975,9 +974,10 @@ func writeMigratedFullGeneration(ctx context.Context, repo *git.Repository, v2St
 		return plumbing.ZeroHash, fmt.Errorf("add generation metadata: %w", err)
 	}
 
+	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(repo)
 	commitHash, err := checkpoint.CreateCommit(ctx, repo, treeHash, plumbing.ZeroHash,
-		fmt.Sprintf("Archive migrated generation: %s\n", refName),
-		migrateAuthorName, migrateAuthorEmail)
+		checkpoint.MigrationCommitMessage(fmt.Sprintf("Archive migrated generation: %s", refName)),
+		authorName, authorEmail)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("create migrated generation commit: %w", err)
 	}
@@ -1144,9 +1144,10 @@ func ensureEmptyV2FullCurrent(ctx context.Context, repo *git.Repository) error {
 		return fmt.Errorf("build empty v2 full/current tree: %w", err)
 	}
 
+	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(repo)
 	commitHash, err := checkpoint.CreateCommit(ctx, repo, emptyTreeHash, plumbing.ZeroHash,
-		"Start generation\n",
-		migrateAuthorName, migrateAuthorEmail)
+		checkpoint.MigrationCommitMessage("Start generation"),
+		authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("create empty v2 full/current commit: %w", err)
 	}
@@ -1228,9 +1229,10 @@ func pruneV2CheckpointRef(ctx context.Context, repo *git.Repository, v2Store *ch
 		return nil
 	}
 
+	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(repo)
 	commitHash, err := checkpoint.CreateCommit(ctx, repo, newRoot, parentHash,
-		fmt.Sprintf("Reset checkpoint before force migration: %s\n", cpID),
-		migrateAuthorName, migrateAuthorEmail)
+		checkpoint.MigrationCommitMessage(fmt.Sprintf("Reset checkpoint before force migration: %s", cpID)),
+		authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("failed to create v2 prune commit for %s: %w", refName, err)
 	}
@@ -1284,9 +1286,10 @@ func pruneV2ArchivedCheckpointRef(ctx context.Context, repo *git.Repository, v2S
 		return fmt.Errorf("failed to recompute generation metadata for %s: %w", refName, err)
 	}
 
+	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(repo)
 	commitHash, err := checkpoint.CreateCommit(ctx, repo, newRoot, parentHash,
-		fmt.Sprintf("Reset checkpoint before force migration: %s\n", cpID),
-		migrateAuthorName, migrateAuthorEmail)
+		checkpoint.MigrationCommitMessage(fmt.Sprintf("Reset checkpoint before force migration: %s", cpID)),
+		authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("failed to create v2 prune commit for %s: %w", refName, err)
 	}
@@ -1391,8 +1394,10 @@ func buildMigrateWriteOpts(content *checkpoint.SessionContent, info checkpoint.C
 		TranscriptIdentifierAtStart: m.TranscriptIdentifierAtStart,
 		IsTask:                      m.IsTask,
 		ToolUseID:                   m.ToolUseID,
-		AuthorName:                  migrateAuthorName,
-		AuthorEmail:                 migrateAuthorEmail,
+		// AuthorName/AuthorEmail intentionally left zero: WriteCommittedMainBatch
+		// falls back to GetGitAuthorFromRepo so the commit is signable by the
+		// migrating user. Provenance is carried by the migration trailers in the
+		// batch commit message.
 	}
 }
 

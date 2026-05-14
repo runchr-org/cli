@@ -12,11 +12,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
-const (
-	repairAuthorName  = "Entire Migration"
-	repairAuthorEmail = "migration@entire.dev"
-)
-
 // RepairV2GenerationMetadataResult describes archived v2 generation metadata
 // repair work performed by RepairV2GenerationMetadata.
 type RepairV2GenerationMetadataResult struct {
@@ -132,9 +127,10 @@ func repairOneV2GenerationMetadata(
 		return false, nil
 	}
 
+	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(repo)
 	newCommitHash, commitErr := checkpoint.CreateCommit(ctx, repo, newTreeHash, oldCommitHash,
-		fmt.Sprintf("Repair generation metadata: %s\n", candidate.Name),
-		repairAuthorName, repairAuthorEmail)
+		checkpoint.MigrationCommitMessage(fmt.Sprintf("Repair generation metadata: %s", candidate.Name)),
+		authorName, authorEmail)
 	if commitErr != nil {
 		return false, fmt.Errorf("failed to create repair commit: %w", commitErr)
 	}

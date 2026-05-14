@@ -128,8 +128,11 @@ func (s *V2GitStore) WriteCommittedMainBatch(ctx context.Context, batch []WriteC
 		}
 	}
 
-	// One commit, one ref update for the entire batch.
-	commitMsg := fmt.Sprintf("Migrate batch: %d checkpoint(s), %d session(s)\n", len(groupOrder), len(batch))
+	// One commit, one ref update for the entire batch. WriteCommittedMainBatch
+	// is migration-only (see callers); the message carries the standard
+	// migration trailers so provenance is consistent across every migration
+	// commit, including this batched /main write.
+	commitMsg := MigrationCommitMessage(fmt.Sprintf("Migrate batch: %d checkpoint(s), %d session(s)", len(groupOrder), len(batch)))
 	last := batch[len(batch)-1]
 	authorName, authorEmail := last.AuthorName, last.AuthorEmail
 	if authorName == "" || authorEmail == "" {
