@@ -1,7 +1,7 @@
 // Package types defines the per-agent abstraction interfaces for `entire review`.
 //
 // AgentReviewer is the contract every supported agent (claude-code, codex,
-// gemini-cli, future additions) implements in its own package. The orchestrator
+// gemini, future additions) implements in its own package. The orchestrator
 // in cmd/entire/cli/review/run.go consumes this interface, never importing
 // concrete agent packages — that's how new agents land as additive files
 // without touching shared code.
@@ -9,9 +9,9 @@
 // Events flow as a stream: implementations spawn the agent process, parse
 // stdout into a sequence of typed Events (Started, AssistantText, ToolCall,
 // Tokens, Finished, RunError), and surface them via Process.Events. Per-agent
-// quirks (codex's chrome stripping, gemini's stdin requirement, claude's argv
-// shape) are entirely encapsulated inside each agent's adapter — shared code
-// only sees the cleaned event stream.
+// quirks (codex's JSONL envelope shape, gemini's stdin requirement, claude's
+// argv shape) are entirely encapsulated inside each agent's adapter — shared
+// code only sees the cleaned event stream.
 //
 // Living in a subpackage (not the review root package) avoids import cycles:
 // per-agent reviewers and the orchestrator both depend on these types
@@ -23,7 +23,7 @@ import "context"
 // AgentReviewer drives a single agent's review run.
 type AgentReviewer interface {
 	// Name returns the agent's registry key (e.g., "claude-code", "codex",
-	// "gemini-cli"). Stable identifier; do not change after release without
+	// "gemini"). Stable identifier; do not change after release without
 	// updating settings migration.
 	Name() string
 
