@@ -180,6 +180,19 @@ func TestParseTaskMetadata(t *testing.T) {
 	}
 }
 
+func TestFormatMigration(t *testing.T) {
+	message := "Repair generation metadata: 0000000000007"
+
+	expected := "Repair generation metadata: 0000000000007\n\n" +
+		"Co-Authored-By: Entire Migration <migration@entire.io>\n" +
+		"Entire-Migration: true\n"
+	got := FormatMigration(message)
+
+	if got != expected {
+		t.Errorf("FormatMigration() = %q, want %q", got, expected)
+	}
+}
+
 func TestParseBaseCommit(t *testing.T) {
 	tests := []struct {
 		name      string
