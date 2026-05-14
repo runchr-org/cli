@@ -123,6 +123,14 @@ func (s *shellOut) RedactBatch(ctx context.Context, inputs []string, categories 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// WaitDelay forces cmd.Wait() to return promptly after a context
+	// cancellation/timeout even when the killed process leaves descendants
+	// holding the stdout/stderr pipes (e.g. `sh -c "sleep 5"` — killing sh
+	// doesn't reap sleep, and Wait() otherwise blocks on the inherited
+	// pipe until sleep exits on its own). Without this, timeout tests on
+	// Linux CI block for the full sleep duration even though sh died at
+	// the cancellation point.
+	cmd.WaitDelay = 500 * time.Millisecond
 
 	if err := cmd.Run(); err != nil {
 		switch {
