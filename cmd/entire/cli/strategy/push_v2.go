@@ -566,9 +566,8 @@ func fetchRelatedRemoteRotationArchive(ctx context.Context, fetchTarget string, 
 		archiveTmpRefs = append(archiveTmpRefs, archiveTmpRef)
 	}
 
-	// Probe with --filter=blob:none; only the matched archive's blobs are topped
-	// up after we pick it. Fall back to an unfiltered fetch on any first-fetch
-	// error (e.g. server without uploadpack.allowFilter).
+	// Probe with --filter=blob:none; only the matched archive's blobs are
+	// topped up. Fall back to an unfiltered fetch if the server refuses.
 	fetch := func(extra ...string) ([]byte, error) {
 		args := append([]string{"--no-write-fetch-head"}, extra...)
 		return remote.Fetch(ctx, remote.FetchOptions{
@@ -604,10 +603,8 @@ func fetchRelatedRemoteRotationArchive(ctx context.Context, fetchTarget string, 
 		return fetchedRemoteRotationArchive{}, errors.New("failed to read local /full/current history")
 	}
 
-	// Wall-clock bound on the ancestry walk: on repos whose archives are fully
-	// disjoint from local /full/current we'd otherwise burn seconds per push
-	// concluding nothing matches. A future /full/root anchor will replace this
-	// with a constant-time lookup.
+	// Bound the ancestry walk so disjoint-history repos fail fast instead of
+	// scanning every archive. A future /full/root anchor replaces this.
 	walkStart := time.Now()
 	walked := 0
 	for _, archive := range archives {
@@ -634,16 +631,13 @@ func fetchRelatedRemoteRotationArchive(ctx context.Context, fetchTarget string, 
 	return fetchedRemoteRotationArchive{}, err
 }
 
-// rotationAncestryWalkBudget caps wall-clock for the per-archive ancestry
-// walk. Exposed as a var so tests can lower it.
+// rotationAncestryWalkBudget caps the per-archive ancestry walk. var so tests can lower it.
 var rotationAncestryWalkBudget = 1 * time.Second //nolint:gochecknoglobals // test override
 
-// topUpMatchedArchiveBlobs ensures every blob in the matched archive's tree
-// is in the local pack directory. Downstream reads (updateGenerationTimestamps,
-// the push that follows) go through go-git's BlobObject, which scans only the
-// local pack directory and does not follow file-transport alternates — so we
-// must pull missing blobs explicitly via `git fetch-pack` rather than rely on
-// FetchingTree's cat-file second-opinion.
+// topUpMatchedArchiveBlobs fetches blobs referenced by the matched archive
+// that aren't in the local pack directory. Downstream reads go through go-git's
+// BlobObject, which won't follow file-transport alternates — so FetchingTree's
+// cat-file fallback isn't sufficient here.
 func topUpMatchedArchiveBlobs(ctx context.Context, fetchTarget string, repo *git.Repository, archiveTree *object.Tree) error {
 	seen := make(map[plumbing.Hash]struct{})
 	var missing []string

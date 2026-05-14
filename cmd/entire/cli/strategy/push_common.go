@@ -159,10 +159,8 @@ func printSettingsCommitHint(ctx context.Context, target string) {
 	})
 }
 
-// printCheckpointsV2MigrationHint prints a hint when checkpoints_version: 2 is
-// committed but the local repo has no v2 /main ref (migration was never run).
-// Partial migrations are not detected — drift between v1 and v2 is acceptable
-// post-migration.
+// printCheckpointsV2MigrationHint nudges users who committed checkpoints_version: 2
+// but never ran the migration. Partial migrations are not flagged.
 func printCheckpointsV2MigrationHint(ctx context.Context) {
 	checkpointsV2MigrationHintOnce.Do(func() {
 		if !isCheckpointsVersion2Committed(ctx) {

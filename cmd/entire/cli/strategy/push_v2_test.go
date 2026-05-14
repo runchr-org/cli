@@ -1170,10 +1170,6 @@ func TestFetchAndMergeRef_RemoteRotatedMultipleTimesUsesRelatedArchive(t *testin
 		"remote generation 2 checkpoint should remain in archive 2")
 }
 
-// TestFetchAndMergeRef_RotationConflict_BloblessProbeAvoidsUnmatchedBlobs
-// verifies that rotation recovery probes archive refs with --filter=blob:none
-// and only tops up blobs for the archive it matches. Multiple unrelated
-// archives must not have their blobs fetched.
 // Not parallel: uses t.Chdir()
 func TestFetchAndMergeRef_RotationConflict_BloblessProbeAvoidsUnmatchedBlobs(t *testing.T) {
 	ctx := context.Background()
@@ -1232,10 +1228,6 @@ func TestFetchAndMergeRef_RotationConflict_BloblessProbeAvoidsUnmatchedBlobs(t *
 	out, pushErr := pushRotated.CombinedOutput()
 	require.NoError(t, pushErr, "push rotated state failed: %s", out)
 
-	// Capture representative blob hashes from each archive on the bare. The
-	// matched archive (archive1) gets its generation.json topped up; the
-	// unmatched archive (archive2) should never have its remote-gen-2 shard
-	// blobs pulled to local.
 	bareRepo, err := git.PlainOpen(bareDir)
 	require.NoError(t, err)
 	matchedBlobHash := blobAtTopLevel(t, bareRepo, archive1Ref, paths.GenerationFileName)
