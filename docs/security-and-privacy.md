@@ -16,7 +16,7 @@ If your repository is **public**, this data is visible to the entire internet.
 
 ### What Entire redacts automatically
 
-Entire automatically scans transcript and metadata content before writing it to the `entire/checkpoints/v1` branch. Five always-on secret detection methods run during condensation, plus a conditional sixth pass for user-defined secret rules (see [Customizing redaction](#customizing-redaction) below) and an opt-in seventh pass for PII (see [Optional PII redaction](#optional-pii-redaction) below):
+Entire automatically scans transcript and metadata content before writing it to the `entire/checkpoints/v1` branch. Five always-on secret detection methods run during condensation, plus a conditional sixth pass for user-defined secret rules (see [Customizing redaction](#customizing-redaction) below), an opt-in seventh pass for PII (see [Optional PII redaction](#optional-pii-redaction) below), and an opt-in eighth pass that shells out to the OpenAI Privacy Filter model (see [Optional OpenAI Privacy Filter](#optional-openai-privacy-filter-opf) below):
 
 1. **Entropy scoring** — Identifies high-entropy strings (Shannon entropy > 4.5) that look like randomly generated secrets, even if they don't match a known pattern.
 2. **Pattern matching** — Uses [Betterleaks](https://github.com/betterleaks/betterleaks) built-in rules to detect known secret formats.
@@ -59,6 +59,79 @@ Teams can add their own regex patterns via `custom_patterns`. Each key is a labe
 ```
 
 If a custom pattern itself reveals sensitive structure (e.g. an internal ID format), put it in `.entire/settings.local.json` (gitignored) instead of `.entire/settings.json`.
+
+### Optional OpenAI Privacy Filter (`opf`)
+
+A separate, **opt-in** layer that shells out to the [OpenAI Privacy Filter](https://github.com/openai/privacy-filter) (`opf`) — a 1.5B-parameter token-classification model that finds names, emails, phone numbers, addresses, dates, URLs, account numbers, and secrets that pure regex can miss. Disabled by default. Runs *in addition to* the seven built-in layers, only at the condensation and export boundaries (never per-turn), so the agent loop's hot path stays on the fast pipeline.
+
+Prerequisites:
+
+```bash
+pip install opf
+```
+
+Verify `opf --help` works; the CLI defaults to resolving the binary via `$PATH`. Override with the `command` setting if you need a specific path.
+
+Enable in `.entire/settings.json`:
+
+```json
+{
+  "redaction": {
+    "openai_privacy_filter": {
+      "enabled": true,
+      "categories": {
+        "private_person": true
+      }
+    }
+  }
+}
+```
+
+Available categories (set to `true` to enable, `false` or omit to skip):
+
+| Category | Replacement token | Notes |
+|---|---|---|
+| `private_person` | `[REDACTED_PERSON]` | Person names |
+| `private_email` | `[REDACTED_EMAIL]` | Email addresses |
+| `private_phone` | `[REDACTED_PHONE]` | Phone numbers |
+| `private_address` | `[REDACTED_ADDRESS]` | Street addresses |
+| `private_url` | `[REDACTED_URL]` | URLs that may identify a person/account |
+| `private_date` | `[REDACTED_DATE]` | Dates (DOB, etc.) |
+| `account_number` | `[REDACTED_ACCOUNT_NUMBER]` | Account / card / SSN-shaped numbers |
+| `secret` | `REDACTED` | Generic credential-shaped values |
+
+Full settings reference:
+
+```json
+{
+  "redaction": {
+    "openai_privacy_filter": {
+      "enabled": true,
+      "categories": {
+        "private_person": true,
+        "private_email": true,
+        "private_phone": true,
+        "private_address": false,
+        "private_url": false,
+        "private_date": false,
+        "account_number": false,
+        "secret": false
+      },
+      "command": "opf",
+      "timeout_seconds": 30,
+      "on_failure": "warn"
+    }
+  }
+}
+```
+
+- `command` — path or PATH-resolvable name of the `opf` binary. Defaults to `opf`.
+- `timeout_seconds` — per-invocation timeout. Defaults to `30`.
+- `on_failure` — currently only `"warn"` (or omitted) is accepted. `"block"` is reserved for future fail-closed enforcement and is rejected at parse time until that wiring lands; the schema warns you loudly instead of silently downgrading.
+
+If `opf` is not on PATH, fails to start, or times out, Entire continues with the seven built-in layers and emits a one-line `× OpenAI Privacy Filter: …` notice to your terminal with the exact install command. Existing redaction is never weakened — OPF only adds to it.
+
+Cost note: each shell-out has a ~2s model cold-start. Condensation batches all eligible leaf strings into a single inference pass, so a realistic transcript adds a few seconds at commit time, not minutes.
 
 ### Recommendations
 
