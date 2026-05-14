@@ -128,7 +128,7 @@ func repairOneV2GenerationMetadata(
 	}
 
 	newCommitHash, commitErr := checkpoint.CreateMigrationCommit(ctx, repo, newTreeHash, oldCommitHash,
-		fmt.Sprintf("Repair generation metadata: %s", candidate.Name))
+		"Repair generation metadata: "+candidate.Name)
 	if commitErr != nil {
 		return false, fmt.Errorf("failed to create repair commit: %w", commitErr)
 	}
