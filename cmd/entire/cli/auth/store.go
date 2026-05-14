@@ -17,25 +17,48 @@ import (
 // without a migration path.
 const keyringService = "entire-cli"
 
-// Store manages CLI authentication tokens in the OS keyring.
+// Store manages CLI authentication tokens via a pluggable backend. The
+// production binary always resolves to the OS keyring. A file-backed
+// backend is available only in builds tagged `authfilestore` (used by
+// integration tests to avoid the OS keychain).
 //
-// Wraps tokenstore.Keyring with a backward-compatibility read path:
-// pre-shim entries stored bare access-token strings, while the shared
-// Keyring writes JSON-encoded TokenSets. GetToken transparently
-// handles both shapes; SaveToken always writes the new shape.
+// Implements tokenstore.Store so it can be passed to tokenmanager.New
+// as the persistence layer. The interface methods (SaveTokens /
+// LoadTokens / DeleteTokens) delegate to the same backend as the
+// legacy SaveToken / GetToken / DeleteToken pair, so production and
+// test paths share a single source of truth.
 type Store struct {
-	inner *tokenstore.Keyring
+	service string
+	backend tokenBackend
 }
 
-// NewStore returns a Store backed by the system keyring.
+// tokenBackend abstracts token persistence. Implementations must treat
+// "missing key" as a non-error: get returns ("", nil) and delete is a
+// no-op so callers don't have to plumb backend-specific sentinels.
+type tokenBackend interface {
+	save(service, key, value string) error
+	get(service, key string) (string, error)
+	delete(service, key string) error
+}
+
+// chooseBackend returns the backend used by NewStore and
+// NewStoreWithService. The default returns the keyring backend; the
+// `authfilestore` build adds an init() that may swap in a file-backed
+// backend when the test env var is set.
+var chooseBackend = func() tokenBackend { return keyringBackend{} }
+
+// NewStore returns a Store backed by the system keyring (or, in
+// `authfilestore` builds, optionally a file-backed test store).
 func NewStore() *Store {
-	return &Store{inner: tokenstore.NewKeyring(keyringService)}
+	return &Store{service: keyringService, backend: chooseBackend()}
 }
 
-// NewStoreWithService returns a Store with a custom keyring service
-// name (for testing).
+// NewStoreWithService returns a Store with a custom keyring service name (for testing).
+// Honors the same backend selection as NewStore so tests that opt into the
+// file-backed test store via env var see consistent behavior across both
+// constructors.
 func NewStoreWithService(service string) *Store {
-	return &Store{inner: tokenstore.NewKeyring(service)}
+	return &Store{service: service, backend: chooseBackend()}
 }
 
 // SaveToken persists an access token for the given base URL.
@@ -49,117 +72,84 @@ func (s *Store) SaveToken(baseURL, token string) error {
 	if token == "" {
 		return errors.New("refusing to save empty token")
 	}
-	return s.inner.SaveTokens(baseURL, tokens.TokenSet{AccessToken: token}) //nolint:wrapcheck // shim returns the lib error verbatim
+	return s.backend.save(s.service, baseURL, token)
 }
 
 // GetToken retrieves a stored token for the given base URL. Returns
-// an empty string (and no error) if no token is stored.
-//
-// ErrNotFound short-circuits to the empty-string return without a
-// further keyring read. ErrMalformed (a stored entry exists but can't
-// be decoded as a TokenSet) triggers a bare-string fallback to handle
-// pre-shim entries that stored the raw access token verbatim. Real
-// keyring errors (transport, permission denied) propagate.
+// an empty string (and no error) if no token is stored, or if the
+// stored value is JSON-shaped (defensive: pre-shim entries are
+// opaque token strings, never JSON; a JSON blob in the keyring is
+// corruption and must not be put on the wire as a bearer).
 //
 // Deprecated: prefer LoadTokens (the tokenstore.Store interface method)
 // for new callers — it returns the full TokenSet so refresh tokens and
 // expiry survive the round trip. GetToken is retained for the direct-
 // bearer call sites that only need the access token string.
 func (s *Store) GetToken(baseURL string) (string, error) {
-	t, err := s.inner.LoadTokens(baseURL)
-	if err == nil {
-		return t.AccessToken, nil
+	raw, err := s.backend.get(s.service, baseURL)
+	if err != nil {
+		return "", err
 	}
-	if errors.Is(err, tokenstore.ErrNotFound) {
-		return "", nil
-	}
-	if !errors.Is(err, tokenstore.ErrMalformed) {
-		return "", fmt.Errorf("load token from keyring: %w", err)
-	}
-
-	raw, kerr := keyring.Get(s.inner.Service, baseURL)
-	if errors.Is(kerr, keyring.ErrNotFound) {
-		return "", nil
-	}
-	if kerr != nil {
-		return "", fmt.Errorf("get token from keyring: %w", kerr)
-	}
-	if !looksLikeBareToken(raw) {
+	if looksJSONShaped(raw) {
 		return "", nil
 	}
 	return raw, nil
 }
 
+// looksJSONShaped reports whether the keyring value's first
+// non-whitespace byte is '{' or '['. Used to reject corrupt /
+// previous-encoding entries before they end up in an
+// Authorization: Bearer header.
+func looksJSONShaped(s string) bool {
+	trimmed := strings.TrimLeft(s, " \t\r\n")
+	if trimmed == "" {
+		return false
+	}
+	return trimmed[0] == '{' || trimmed[0] == '['
+}
+
 // DeleteToken removes a stored token for the given base URL.
+// Returns no error if the token does not exist.
 //
 // Deprecated: prefer DeleteTokens (the tokenstore.Store interface
 // method). DeleteToken is retained for direct-bearer call sites.
 func (s *Store) DeleteToken(baseURL string) error {
-	return s.inner.DeleteTokens(baseURL) //nolint:wrapcheck // shim returns the lib error verbatim
+	return s.backend.delete(s.service, baseURL)
 }
 
-// SaveTokens implements tokenstore.Store. Used by the tokenmanager.
+// SaveTokens implements tokenstore.Store. Refresh token, scope, expiry,
+// and token type are intentionally dropped — the entire device-flow
+// surface doesn't issue refresh tokens, and the legacy keyring/file
+// layout stores bare access-token strings. If refresh-token support
+// lands, this method (and the tokenBackend interface) become the
+// migration point.
 func (s *Store) SaveTokens(profile string, t tokens.TokenSet) error {
-	return s.inner.SaveTokens(profile, t) //nolint:wrapcheck // shim returns the lib error verbatim
+	access := strings.TrimSpace(t.AccessToken)
+	if access == "" {
+		return errors.New("refusing to save empty access token")
+	}
+	return s.backend.save(s.service, profile, access)
 }
 
-// LoadTokens implements tokenstore.Store, preserving the legacy bare-string
-// fallback path so users with pre-shim keyring entries don't appear logged
-// out after upgrading.
-//
-// Falls back to a bare-string read when the stored entry is malformed
-// JSON (pre-shim entries stored the raw access token verbatim). Real
-// keyring errors (transport, permission denied) propagate; only
-// ErrMalformed triggers the fallback. ErrNotFound surfaces verbatim
-// so the manager's "not logged in" branch still works.
-//
-// The fallback also guards against well-formed-but-empty entries (e.g.
-// "{}" or an unrelated CLI's blob keyed against the same service/profile):
-// those surface as ErrMalformed from the lib, but using their raw bytes
-// as a bearer token would be wrong. looksLikeBareToken filters them out,
-// converting back to ErrNotFound so the caller sees "not logged in".
+// LoadTokens implements tokenstore.Store. Reads the bare-string entry
+// and wraps it back into a TokenSet. Returns tokenstore.ErrNotFound
+// when nothing is stored under the profile (or the stored value is
+// JSON-shaped — see GetToken's note about defensive rejection of
+// non-token blobs) so callers can errors.Is against the lib sentinel.
 func (s *Store) LoadTokens(profile string) (tokens.TokenSet, error) {
-	t, err := s.inner.LoadTokens(profile)
-	if err == nil {
-		return t, nil
+	access, err := s.backend.get(s.service, profile)
+	if err != nil {
+		return tokens.TokenSet{}, err
 	}
-	if !errors.Is(err, tokenstore.ErrMalformed) {
-		return tokens.TokenSet{}, err //nolint:wrapcheck // surface ErrNotFound and real keyring errors verbatim
-	}
-
-	raw, kerr := keyring.Get(s.inner.Service, profile)
-	if errors.Is(kerr, keyring.ErrNotFound) {
+	if access == "" || looksJSONShaped(access) {
 		return tokens.TokenSet{}, tokenstore.ErrNotFound
 	}
-	if kerr != nil {
-		return tokens.TokenSet{}, fmt.Errorf("get token from keyring: %w", kerr)
-	}
-	if !looksLikeBareToken(raw) {
-		return tokens.TokenSet{}, tokenstore.ErrNotFound
-	}
-	return tokens.TokenSet{AccessToken: raw}, nil
-}
-
-// looksLikeBareToken reports whether raw is plausibly a pre-shim bare
-// access token rather than a JSON blob. Real bearer tokens are JWTs or
-// opaque ASCII strings; they don't start with the JSON object/array
-// delimiters. Trims whitespace first so a stray newline doesn't fool
-// the check.
-func looksLikeBareToken(raw string) bool {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return false
-	}
-	switch trimmed[0] {
-	case '{', '[':
-		return false
-	}
-	return true
+	return tokens.TokenSet{AccessToken: access}, nil
 }
 
 // DeleteTokens implements tokenstore.Store.
 func (s *Store) DeleteTokens(profile string) error {
-	return s.inner.DeleteTokens(profile) //nolint:wrapcheck // shim returns the lib error verbatim
+	return s.backend.delete(s.service, profile)
 }
 
 // LookupCurrentToken retrieves the token for the current auth base URL.
@@ -168,4 +158,35 @@ func (s *Store) DeleteTokens(profile string) error {
 // to BaseURL so behaviour is unchanged.
 func LookupCurrentToken() (string, error) {
 	return NewStore().GetToken(api.AuthBaseURL())
+}
+
+type keyringBackend struct{}
+
+func (keyringBackend) save(service, key, value string) error {
+	if err := keyring.Set(service, key, value); err != nil {
+		return fmt.Errorf("save token to keyring: %w", err)
+	}
+	return nil
+}
+
+func (keyringBackend) get(service, key string) (string, error) {
+	token, err := keyring.Get(service, key)
+	if errors.Is(err, keyring.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get token from keyring: %w", err)
+	}
+	return token, nil
+}
+
+func (keyringBackend) delete(service, key string) error {
+	err := keyring.Delete(service, key)
+	if errors.Is(err, keyring.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("delete token from keyring: %w", err)
+	}
+	return nil
 }

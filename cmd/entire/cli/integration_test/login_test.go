@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -204,6 +205,7 @@ func runLoginProcess(t *testing.T, apiBaseURL string) *loginProcess {
 		"ENTIRE_API_BASE_URL="+apiBaseURL,
 		"ENTIRE_AUTH_BASE_URL="+apiBaseURL,
 		"ENTIRE_AUTH_PROVIDER_VERSION=v1",
+		"ENTIRE_TEST_AUTH_STORE_FILE="+filepath.Join(env.RepoDir, ".entire-test-auth-store.json"),
 	)
 
 	stdoutPipe, err := cmd.StdoutPipe()
