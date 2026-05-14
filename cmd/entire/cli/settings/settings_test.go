@@ -987,7 +987,7 @@ func TestLoadFromBytes_OpenAIPrivacyFilter(t *testing.T) {
       "categories": {"private_person": true, "secret": false},
       "command": "/usr/local/bin/opf",
       "timeout_seconds": 45,
-      "on_failure": "block"
+      "on_failure": "warn"
     }
   }
 }`)
@@ -1015,8 +1015,8 @@ func TestLoadFromBytes_OpenAIPrivacyFilter(t *testing.T) {
 	if opf.TimeoutSeconds != 45 {
 		t.Errorf("TimeoutSeconds: want 45, got %d", opf.TimeoutSeconds)
 	}
-	if opf.OnFailure != "block" {
-		t.Errorf("OnFailure: want block, got %q", opf.OnFailure)
+	if opf.OnFailure != "warn" {
+		t.Errorf("OnFailure: want warn, got %q", opf.OnFailure)
 	}
 }
 
@@ -1298,7 +1298,12 @@ func TestLoadFromBytes_RejectsBadOnFailure(t *testing.T) {
 	}{
 		{"empty", "", false},
 		{"warn", "warn", false},
-		{"block", "block", false},
+		// "block" is reserved but rejected at parse time until the
+		// runtime enforcement wiring lands (TODO(opf-block-mode) in
+		// redact/opf.go). Accepting it silently and falling back to
+		// warn would give users the opposite of the fail-closed
+		// semantics they configured, which is worse than refusing it.
+		{"block_reserved_but_unenforced", "block", true},
 		{"typo_bock", "bock", true},
 		{"uppercase", "WARN", true},
 		{"unknown", "fail-loud", true},

@@ -882,18 +882,25 @@ func mergePIISettings(dst *PIISettings, data json.RawMessage) error {
 // validateOPFSettings checks invariants on an OPFSettings value. Called from
 // both file-load and merge paths so settings rejected by one path are also
 // rejected by the other (preventing typos in on_failure from silently
-// degrading to warn behavior). The allowed on_failure values are closed:
-// empty (defaults to warn), "warn", or "block". Note that "block" is
-// accepted at parse time but not yet enforced end-to-end — see
-// TODO(opf-block-mode) in redact/opf.go.
+// degrading to warn behavior).
+//
+// "block" is currently rejected at parse time even though it is reserved in
+// the schema. The runtime fail-closed wiring is incomplete (see
+// TODO(opf-block-mode) in redact/opf.go); silently accepting "block" and then
+// falling back to "warn" behavior would give users who explicitly opted into
+// fail-closed semantics the opposite of what they configured. Rejecting at
+// parse time fails loudly so they can choose "warn" deliberately rather than
+// thinking they have an enforcement guarantee they don't.
 func validateOPFSettings(opf *OPFSettings) error {
 	if opf == nil {
 		return nil
 	}
 	switch opf.OnFailure {
-	case "", "warn", "block":
+	case "", "warn":
+	case "block":
+		return fmt.Errorf("openai_privacy_filter.on_failure=%q is reserved but not yet enforced end-to-end; use \"warn\" (or omit) until the block-mode runtime wiring lands", opf.OnFailure)
 	default:
-		return fmt.Errorf("openai_privacy_filter.on_failure must be \"warn\" or \"block\", got %q", opf.OnFailure)
+		return fmt.Errorf("openai_privacy_filter.on_failure must be \"warn\" (got %q)", opf.OnFailure)
 	}
 	return nil
 }

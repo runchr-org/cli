@@ -23,15 +23,15 @@ type OPFConfig struct {
 	Categories map[string]bool
 	Command    string
 	Timeout    int    // seconds; 0 means use default of 30
-	OnFailure  string // "warn" (default) or "block"
-	// TODO(opf-block-mode): "block" is parsed and stored but NOT yet enforced
-	// end-to-end. handleOPFFailure currently always falls through to warn
-	// behavior; wiring "block" requires returning a hard error from
-	// JSONLBytesWithPrivacyFilter / JSONLContentWithPrivacyFilter (the other
-	// two entry points return non-error types so they can't block). Teams
-	// that need strict enforcement today should leave on_failure unset
-	// (defaults to "warn") and monitor `.entire/logs/entire.log` for the
-	// "OpenAI Privacy Filter call failed" slog warnings.
+	OnFailure  string // "warn" (default); "block" is reserved but not yet enforced — settings layer rejects it at parse time
+	// TODO(opf-block-mode): "block" is reserved in the schema but the
+	// validator in cmd/entire/cli/settings rejects it at parse time, so it
+	// can never reach this struct in production. handleOPFFailure always
+	// falls through to warn behavior. Wiring "block" requires returning a
+	// hard error from JSONLBytesWithPrivacyFilter /
+	// JSONLContentWithPrivacyFilter (the other two entry points return
+	// non-error types so they can't block) AND relaxing the settings-layer
+	// rejection above.
 
 	// runtime is package-private and constructed by ConfigurePrivacyFilter
 	// from Command + Timeout. Tests use ConfigurePrivacyFilterWithRuntime to
@@ -62,22 +62,6 @@ func ConfigurePrivacyFilter(cfg OPFConfig) {
 	opfConfigMu.Lock()
 	opfConfig = &cfgCopy
 	opfConfigMu.Unlock()
-
-	// Surface the block-mode gap loudly when configured. The setting is
-	// accepted (and parsed) but not yet enforced — see
-	// TODO(opf-block-mode) in handleOPFFailure. Without this signal, a
-	// user who set on_failure: "block" expecting commits to abort on OPF
-	// failure would silently get warn behavior. The message goes to slog
-	// AND opfStderr so it survives the post-commit hook's stderr redirect.
-	if cfgCopy.Enabled && cfgCopy.OnFailure == "block" {
-		slog.Warn("OpenAI Privacy Filter: on_failure=\"block\" is configured but not yet enforced; falling back to warn behavior",
-			componentAttr,
-			slog.String("command", cfgCopy.Command),
-		)
-		if opfStderr != nil {
-			fmt.Fprintln(opfStderr, "× OpenAI Privacy Filter: on_failure=\"block\" is documented but not yet enforced in this build; commits will continue with warn behavior on OPF failure.")
-		}
-	}
 }
 
 // ConfigurePrivacyFilterWithRuntime is the test-only variant that takes an
