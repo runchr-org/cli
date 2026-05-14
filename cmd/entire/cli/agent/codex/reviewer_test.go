@@ -100,6 +100,83 @@ func TestCodexReviewer_ArgvShape(t *testing.T) {
 	}
 }
 
+// TestCodexReviewer_ModelAndReasoningEffortOverrides pins that per-spawn
+// `Model` and `ReasoningEffort` from RunConfig translate to the expected
+// codex CLI flags (`-m <model>` and `-c model_reasoning_effort=<level>`)
+// inserted before the trailing `-` stdin marker. Empty values must not
+// emit the flags at all.
+func TestCodexReviewer_ModelAndReasoningEffortOverrides(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		cfg         reviewtypes.RunConfig
+		wantContain []string
+		wantOmit    []string
+	}{
+		{
+			name: "both empty: no overrides emitted",
+			cfg:  reviewtypes.RunConfig{Skills: []string{"/review"}},
+			wantOmit: []string{
+				"-m", "model_reasoning_effort=",
+			},
+		},
+		{
+			name: "model only",
+			cfg: reviewtypes.RunConfig{
+				Skills: []string{"/review"},
+				Model:  "gpt-5-mini",
+			},
+			wantContain: []string{"-m", "gpt-5-mini"},
+			wantOmit:    []string{"model_reasoning_effort="},
+		},
+		{
+			name: "reasoning_effort only",
+			cfg: reviewtypes.RunConfig{
+				Skills:          []string{"/review"},
+				ReasoningEffort: "low",
+			},
+			wantContain: []string{"-c", "model_reasoning_effort=low"},
+			wantOmit:    []string{"-m"},
+		},
+		{
+			name: "both: model first then reasoning",
+			cfg: reviewtypes.RunConfig{
+				Skills:          []string{"/review"},
+				Model:           "gpt-5-mini",
+				ReasoningEffort: "medium",
+			},
+			wantContain: []string{
+				"-m", "gpt-5-mini",
+				"-c", "model_reasoning_effort=medium",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cmd := buildCodexReviewCmd(context.Background(), tc.cfg)
+			argv := strings.Join(cmd.Args, " ")
+			for _, want := range tc.wantContain {
+				if !strings.Contains(argv, want) {
+					t.Errorf("argv missing %q: %s", want, argv)
+				}
+			}
+			for _, omit := range tc.wantOmit {
+				if strings.Contains(argv, omit) {
+					t.Errorf("argv must not contain %q: %s", omit, argv)
+				}
+			}
+			// Always-trailing `-` stdin marker must remain last.
+			if cmd.Args[len(cmd.Args)-1] != "-" {
+				t.Errorf("last argv must be '-' (stdin marker), got %q in %v",
+					cmd.Args[len(cmd.Args)-1], cmd.Args)
+			}
+		})
+	}
+}
+
 func TestCodexReviewer_BuiltinReviewPassesThroughInScopedExecPrompt(t *testing.T) {
 	t.Parallel()
 	cfg := reviewtypes.RunConfig{

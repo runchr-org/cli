@@ -795,6 +795,8 @@ func runConfigWithReviewConfig(base reviewtypes.RunConfig, cfg settings.ReviewCo
 
 func applyReviewConfig(runCfg *reviewtypes.RunConfig, cfg settings.ReviewConfig) {
 	runCfg.Skills = cfg.Skills
+	runCfg.Model = cfg.Model
+	runCfg.ReasoningEffort = cfg.ReasoningEffort
 	if len(cfg.Skills) == 0 {
 		runCfg.PromptOverride = cfg.Prompt
 		return

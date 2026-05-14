@@ -214,6 +214,53 @@ form. See the curated install hints in
 `cmd/entire/cli/agent/skilldiscovery/registry.go` for the existing
 per-agent registry pattern.
 
+## Review Performance
+
+Codex review wall-clock varies significantly on identical input (we
+observed a 3x spread across sequential runs with the same prompt, scope,
+and config). The dominant driver is **codex's reasoning model choosing
+how broadly to explore** per turn — not network, caching, or entire's
+wrapper.
+
+The biggest controllable lever is `model_reasoning_effort`. Approximate
+impact:
+
+| `reasoning_effort` | Behavior |
+|---|---|
+| `xhigh` | Thorough; expect 4-6 min on a small diff |
+| `medium` / `low` | Faster; 1-2 min typical, but variance remains |
+
+### Tuning per-spawn (overrides `~/.codex/config.toml`)
+
+`entire review --agent codex` honors per-agent overrides from the
+`review.codex.*` section in `.entire/settings.json` (or clone-local
+preferences at `.git/entire/preferences.json`). Both keys are optional:
+
+```json
+{
+  "review": {
+    "codex": {
+      "skills": ["/review"],
+      "reasoning_effort": "low",
+      "model": "gpt-5-mini"
+    }
+  }
+}
+```
+
+- `reasoning_effort` → `-c model_reasoning_effort=<level>` flag
+- `model` → `-m <model>` flag
+
+Empty values fall back to whatever `~/.codex/config.toml` configures, so
+the global codex config remains the default. Users who want fast codex
+reviews while keeping `xhigh` globally should set `reasoning_effort` to
+`low` or `medium` here.
+
+Codex session transcripts (JSONL rollouts at
+`~/.codex/sessions/YYYY/MM/DD/`) record every tool call codex made and
+the full token breakdown, which is the right place to start if a review
+ran much longer than usual.
+
 ## Gaps & Limitations
 
 - **Hooks require feature flag:** The `codex_hooks` feature is `default_enabled: false` (stage: UnderDevelopment). It must be enabled via `--enable codex_hooks` CLI flag, or `features.codex_hooks = true` in `config.toml`, or `-c features.codex_hooks=true`. Without this, hooks.json is ignored entirely.

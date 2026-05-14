@@ -55,8 +55,22 @@ func NewReviewer() *reviewtypes.ReviewerTemplate {
 
 // buildCodexReviewCmd builds the exec.Cmd for a codex review run.
 // Exposed at package level for test inspection of argv, stdin, and env.
+//
+// Per-spawn overrides from settings.ReviewConfig.{Model, ReasoningEffort}
+// translate to codex CLI flags `-m <model>` and `-c model_reasoning_effort=
+// <level>` respectively. Both are inserted before the trailing `-` stdin
+// marker. Empty values are skipped — codex falls back to whatever the
+// user's `~/.codex/config.toml` configures.
 func buildCodexReviewCmd(ctx context.Context, cfg reviewtypes.RunConfig) *exec.Cmd {
-	args := []string{codexExecCommand, "--skip-git-repo-check", "--json", "-"}
+	args := []string{codexExecCommand, "--skip-git-repo-check", "--json"}
+	if cfg.Model != "" {
+		args = append(args, "-m", cfg.Model)
+	}
+	if cfg.ReasoningEffort != "" {
+		args = append(args, "-c", "model_reasoning_effort="+cfg.ReasoningEffort)
+	}
+	args = append(args, "-")
+
 	prompt := review.ComposeReviewPrompt(cfg)
 	cmd := exec.CommandContext(ctx, "codex", args...)
 	cmd.Stdin = strings.NewReader(prompt)
