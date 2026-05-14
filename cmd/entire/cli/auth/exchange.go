@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sync"
 
 	"github.com/entireio/cli/auth/tokenmanager"
@@ -51,13 +52,20 @@ func defaultManager() (*tokenmanager.Manager, error) {
 	}
 	managerOnce.Do(func() {
 		provider := CurrentProvider()
+		issuer := api.AuthBaseURL()
 		m, err := tokenmanager.New(tokenmanager.Config{
-			Issuer:    api.AuthBaseURL(),
+			Issuer:    issuer,
 			ClientID:  provider.ClientID,
 			STSPath:   provider.STSPath,
 			Store:     NewStore(),
 			UserAgent: provider.ClientID,
 			Scope:     "cli",
+			// Auto-permit only loopback http:// for local development.
+			// Anything else must be https:// — STS ships the user's
+			// core token in the request body and would leak in clear
+			// otherwise. Matches the server-side JWKS acceptance
+			// pattern (isAcceptableJwksOrigin).
+			AllowInsecureHTTP: isLoopbackHTTP(issuer),
 		})
 		manager = m
 		if err != nil {
@@ -88,4 +96,18 @@ func Token(ctx context.Context, req TokenRequest) (string, error) {
 		return "", err
 	}
 	return m.Token(ctx, req) //nolint:wrapcheck // shim returns the lib error verbatim
+}
+
+// isLoopbackHTTP reports whether u is an http:// URL pointing at a
+// loopback hostname (localhost, 127.0.0.1, ::1). Used to scope the
+// "auto-permit insecure HTTP" path on the tokenmanager so production
+// misconfigurations (e.g. http://api.example.com) fail loudly while
+// loopback-only local-dev flows keep working.
+func isLoopbackHTTP(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "http" {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }

@@ -44,16 +44,23 @@ type Client struct {
 
 // NewClient constructs a Client targeting the active provider version.
 // httpClient is used directly when non-nil; otherwise http.DefaultClient.
+//
+// HTTPS is required unless the configured auth host is loopback http://
+// (localhost, 127.0.0.1, ::1) — see isLoopbackHTTP. Production
+// deployments never qualify; local dev does. There is no other opt-in
+// for plain HTTP on the device-flow surface.
 func NewClient(httpClient *http.Client) *Client {
 	p := CurrentProvider()
+	issuer := api.AuthBaseURL()
 	return &Client{inner: &deviceflow.Client{
-		HTTP:           httpClient,
-		BaseURL:        api.AuthBaseURL(),
-		ClientID:       p.ClientID,
-		Scope:          "cli",
-		UserAgent:      p.ClientID,
-		DeviceCodePath: p.DeviceCodePath,
-		TokenPath:      p.TokenPath,
+		HTTP:              httpClient,
+		BaseURL:           issuer,
+		ClientID:          p.ClientID,
+		Scope:             "cli",
+		UserAgent:         p.ClientID,
+		DeviceCodePath:    p.DeviceCodePath,
+		TokenPath:         p.TokenPath,
+		AllowInsecureHTTP: isLoopbackHTTP(issuer),
 	}}
 }
 

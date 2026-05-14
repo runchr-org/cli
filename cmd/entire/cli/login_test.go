@@ -2,11 +2,14 @@ package cli
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/auth/tokens"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 )
 
@@ -257,5 +260,100 @@ func TestWaitForApproval_ContextCancelled(t *testing.T) {
 	_, err := waitForApproval(ctx, poller, "device-1", 60, time.Millisecond, time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "context canceled") {
 		t.Fatalf("err = %v, want context canceled", err)
+	}
+}
+
+// makeTestJWT builds a well-formed JWT (alg != none) with the given
+// claims for use in login validation tests. Signature is junk —
+// validateReceivedToken doesn't verify it.
+func makeTestJWT(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"EdDSA","typ":"JWT"}`))
+	body, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return header + "." + base64.RawURLEncoding.EncodeToString(body) + ".sig"
+}
+
+func TestValidateReceivedToken_OpaqueAllowed(t *testing.T) {
+	t.Parallel()
+	// Non-JWT tokens are permitted — the AS may not issue JWTs at all.
+	if err := validateReceivedToken("opaque_token_value", "https://issuer.example", time.Now()); err != nil {
+		t.Fatalf("validateReceivedToken(opaque) = %v, want nil", err)
+	}
+}
+
+func TestValidateReceivedToken_RejectsUnsignedJWT(t *testing.T) {
+	t.Parallel()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	body := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"https://issuer.example"}`))
+	jwt := header + "." + body + ".sig"
+
+	err := validateReceivedToken(jwt, "https://issuer.example", time.Now())
+	if !errors.Is(err, tokens.ErrUnsignedJWT) {
+		t.Fatalf("validateReceivedToken(alg:none) = %v, want ErrUnsignedJWT", err)
+	}
+}
+
+func TestValidateReceivedToken_RejectsWrongIssuer(t *testing.T) {
+	t.Parallel()
+	jwt := makeTestJWT(t, map[string]any{
+		"iss": "https://attacker.example",
+		"sub": "account:x",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	err := validateReceivedToken(jwt, "https://issuer.example", time.Now())
+	if err == nil || !strings.Contains(err.Error(), "iss mismatch") {
+		t.Fatalf("validateReceivedToken(wrong iss) = %v, want iss mismatch", err)
+	}
+}
+
+func TestValidateReceivedToken_AcceptsMatchingIssuer(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	jwt := makeTestJWT(t, map[string]any{
+		"iss": "https://issuer.example",
+		"sub": "account:x",
+		"exp": now.Add(time.Hour).Unix(),
+	})
+	if err := validateReceivedToken(jwt, "https://issuer.example", now); err != nil {
+		t.Fatalf("validateReceivedToken(matching iss) = %v, want nil", err)
+	}
+}
+
+func TestValidateReceivedToken_NormalisesTrailingSlash(t *testing.T) {
+	t.Parallel()
+	jwt := makeTestJWT(t, map[string]any{
+		"iss": "https://issuer.example/",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	if err := validateReceivedToken(jwt, "https://issuer.example", time.Now()); err != nil {
+		t.Fatalf("validateReceivedToken: trailing-slash iss must normalise, got %v", err)
+	}
+}
+
+func TestValidateReceivedToken_RejectsExpiredToken(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	jwt := makeTestJWT(t, map[string]any{
+		"iss": "https://issuer.example",
+		"exp": now.Add(-time.Hour).Unix(),
+	})
+	err := validateReceivedToken(jwt, "https://issuer.example", now)
+	if err == nil || !strings.Contains(err.Error(), "already expired") {
+		t.Fatalf("validateReceivedToken(expired) = %v, want already-expired error", err)
+	}
+}
+
+func TestValidateReceivedToken_OmittedIssIsAllowed(t *testing.T) {
+	t.Parallel()
+	// Some servers omit iss; allow rather than reject — the server
+	// still does the real check on every request.
+	jwt := makeTestJWT(t, map[string]any{
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	if err := validateReceivedToken(jwt, "https://issuer.example", time.Now()); err != nil {
+		t.Fatalf("validateReceivedToken(no iss) = %v, want nil", err)
 	}
 }

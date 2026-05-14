@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/entireio/cli/auth/tokens"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/spf13/cobra"
@@ -82,6 +83,10 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 	token, err := waitForApproval(ctx, client, start.DeviceCode, start.ExpiresIn, time.Duration(start.Interval)*time.Second, defaultSlowDownBackoff)
 	if err != nil {
 		return fmt.Errorf("complete login: %w", err)
+	}
+
+	if err := validateReceivedToken(token, client.BaseURL(), time.Now()); err != nil {
+		return fmt.Errorf("reject login token: %w", err)
 	}
 
 	store := auth.NewStore()
@@ -223,4 +228,87 @@ func openBrowser(ctx context.Context, browserURL string) error {
 	}
 
 	return nil
+}
+
+// validateReceivedToken runs minimum-trust checks on the access token
+// the AS handed us before we persist it. The server is the authority
+// on signature/exp; this is defense in depth aimed at catching gross
+// misbehaviour by a compromised or misconfigured AS (e.g. handing back
+// a token from a different issuer than the one we asked, or one whose
+// claims are already-expired).
+//
+// Opaque (non-JWT) tokens are permitted — the AS may not issue JWTs at
+// all. Only when we can parse the token as a JWT do we cross-check the
+// claims. Unsigned (alg:none) JWTs are always rejected: see
+// tokens.ErrUnsignedJWT.
+func validateReceivedToken(rawToken, issuerURL string, now time.Time) error {
+	claims, err := tokens.ParseClaims(rawToken)
+	switch {
+	case errors.Is(err, tokens.ErrMalformedJWT):
+		// Opaque token — no claim-based checks available. Trust the
+		// server-side validation. (Most OAuth flows allow this; it's
+		// only a problem if our resource servers later expect JWTs.)
+		return nil
+	case errors.Is(err, tokens.ErrUnsignedJWT):
+		// alg:none is always a refusal — see tokens.ErrUnsignedJWT
+		// rationale.
+		return err //nolint:wrapcheck // sentinel surfaces verbatim for caller's errors.Is
+	case err != nil:
+		return fmt.Errorf("parse claims: %w", err)
+	}
+
+	// iss check: the token must claim to come from the issuer we sent
+	// the device-code request to. A mismatch means either the AS is
+	// misconfigured or someone's playing games.
+	if issErr := issMatches(claims.Issuer, issuerURL); issErr != nil {
+		return issErr
+	}
+
+	// exp sanity: a token that's already expired before we even store
+	// it is a smell. Don't reject if exp is unset (some servers omit).
+	if !claims.ExpiresAt.IsZero() && !now.Before(claims.ExpiresAt) {
+		return fmt.Errorf("token already expired (exp=%s, now=%s)",
+			claims.ExpiresAt.Format(time.RFC3339), now.Format(time.RFC3339))
+	}
+
+	return nil
+}
+
+// issMatches reports whether claimed equals expected after a light
+// normalisation: trim trailing slashes so "https://issuer/" and
+// "https://issuer" match. Returns nil on match.
+func issMatches(claimed, expected string) error {
+	if claimed == "" {
+		// Some servers omit iss (especially in opaque-but-jwt-shaped
+		// tokens). Allow rather than reject — the server still does
+		// the real check on every request.
+		return nil
+	}
+	normClaimed, err := normalizeIssuer(claimed)
+	if err != nil {
+		return fmt.Errorf("parse iss claim %q: %w", claimed, err)
+	}
+	normExpected, err := normalizeIssuer(expected)
+	if err != nil {
+		return fmt.Errorf("parse expected issuer %q: %w", expected, err)
+	}
+	if normClaimed != normExpected {
+		return fmt.Errorf("iss mismatch: token claims %q, expected %q", normClaimed, normExpected)
+	}
+	return nil
+}
+
+func normalizeIssuer(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err //nolint:wrapcheck // caller wraps with context
+	}
+	if u.Scheme == "" || u.Host == "" {
+		// Non-URL issuer (logical name) — return verbatim.
+		return raw, nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String(), nil
 }
