@@ -12,8 +12,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/betterleaks/betterleaks/detect"
+	"github.com/entireio/cli/redact/opf_runtime"
 )
 
 // secretPattern matches high-entropy strings that may be secrets.
@@ -781,11 +783,86 @@ func StringWithPrivacyFilter(ctx context.Context, s string) string {
 }
 
 // JSONLContentWithPrivacyFilter is the augmented variant of JSONLContent.
-// Per-string redaction inside the JSON walker invokes StringWithPrivacyFilter
-// so OPF runs on the same leaf values as the other layers.
+// OPF runs against the entire transcript in a single batched call to amortize
+// the per-call cold-start cost; without batching, a realistic transcript with
+// hundreds of leaf strings would take many minutes per commit.
+//
+// Flow:
+//  1. Walk the JSON once with an identity redactor that records every
+//     eligible leaf string (has-space heuristic, dedup'd).
+//  2. Make one RedactBatch call to opf with all eligible inputs.
+//  3. Walk again with a redactor that combines layers 1-7 with the
+//     per-leaf spans from the batch result.
+//
+// If OPF is not configured or the batch fails, the function degrades to the
+// equivalent of JSONLContent (regex layers only) without re-running any
+// per-leaf OPF call.
 func JSONLContentWithPrivacyFilter(ctx context.Context, content string) (string, error) {
+	cfg := getOPFConfig()
+
+	// Fast path: OPF off / unconfigured / no categories → identical to JSONLContent.
+	if cfg == nil || !cfg.Enabled || cfg.runtime == nil {
+		return jsonlContentImpl(content, String)
+	}
+	cats := enabledCategories(cfg)
+	if len(cats) == 0 {
+		return jsonlContentImpl(content, String)
+	}
+
+	// Pass 1: collect eligible leaf strings. The has-space heuristic
+	// matches detectOPF: strings without spaces are overwhelmingly
+	// structural (paths, IDs, type tags) and aren't worth an OPF call.
+	seen := make(map[string]struct{})
+	var inputs []string
+	if _, err := jsonlContentImpl(content, func(v string) string {
+		if strings.ContainsRune(v, ' ') {
+			if _, ok := seen[v]; !ok {
+				seen[v] = struct{}{}
+				inputs = append(inputs, v)
+			}
+		}
+		return v // identity — collection pass, no substitutions
+	}); err != nil {
+		return "", err
+	}
+
+	// Pass 2: single batched OPF call. Progress UX fires once per
+	// condensation (not per leaf string).
+	spansByInput := make(map[string][]opf_runtime.Span, len(inputs))
+	if len(inputs) > 0 {
+		progress := newProgressWriter(opfStderr, isTTYWriter(opfStderr), accessibleMode())
+		progress.Start("scanning transcript")
+		start := time.Now()
+		batched, err := cfg.runtime.RedactBatch(ctx, inputs, cats)
+		if err != nil {
+			handleOPFFailure(ctx, cfg, err)
+			// Fallback: regex layers only. Equivalent to plain JSONLContent.
+			return jsonlContentImpl(content, String)
+		}
+		progress.Finish(time.Since(start))
+		for i, in := range inputs {
+			spansByInput[in] = batched[i]
+		}
+	}
+
+	// Pass 3: combine layers 1-7 with cached OPF spans per leaf.
 	return jsonlContentImpl(content, func(v string) string {
-		return StringWithPrivacyFilter(ctx, v)
+		regions := detectAllLayers(v)
+		if spans, ok := spansByInput[v]; ok {
+			for _, sp := range spans {
+				if !cfg.Categories[sp.Label] {
+					continue // category filter (belt-and-suspenders)
+				}
+				if sp.Start < 0 || sp.End > len(v) || sp.Start >= sp.End {
+					continue // drop malformed spans rather than crashing
+				}
+				regions = append(regions, taggedRegion{
+					region: region{sp.Start, sp.End},
+					label:  mapOPFLabel(sp.Label),
+				})
+			}
+		}
+		return applyRegions(v, regions)
 	})
 }
 

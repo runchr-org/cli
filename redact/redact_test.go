@@ -1377,3 +1377,60 @@ func TestPlainEntryPointsNeverInvokeOPF(t *testing.T) {
 		t.Errorf("plain entry points invoked OPF %d times, want 0", fake.calls)
 	}
 }
+
+// TestJSONLBytesWithPrivacyFilter_BatchesOPFCalls verifies that
+// processing a transcript with many leaf strings results in exactly ONE
+// OPF invocation (batched), not one per leaf. Without batching, real
+// transcripts trigger hundreds of opf cold-starts and condensation is
+// unusable.
+func TestJSONLBytesWithPrivacyFilter_BatchesOPFCalls(t *testing.T) {
+	resetOPFConfig()
+	t.Cleanup(resetOPFConfig)
+
+	fake := &fakeBatchRuntime{
+		spansByInput: map[string][]opf_runtime.Span{
+			"Hello Alice today":   {{Start: 6, End: 11, Label: "private_person"}},
+			"goodbye Bob tonight": {{Start: 8, End: 11, Label: "private_person"}},
+		},
+	}
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"private_person": true},
+	}, fake)
+
+	// 4 lines × 1 leaf string each = 4 eligible leaves. We assert
+	// exactly ONE batch call regardless. (The third line has no space
+	// so its value is filtered out by the has-space gate; only 3
+	// strings reach OPF, but it's still one batch call.)
+	input := []byte(`{"message":"Hello Alice today"}` + "\n" +
+		`{"message":"goodbye Bob tonight"}` + "\n" +
+		`{"message":"short"}` + "\n" +
+		`{"message":"Hello Alice today"}` + "\n")
+
+	got, err := JSONLBytesWithPrivacyFilter(context.Background(), input)
+	if err != nil {
+		t.Fatalf("JSONLBytesWithPrivacyFilter: %v", err)
+	}
+
+	if fake.batchCalls != 1 {
+		t.Errorf("batch invocation count: want 1, got %d", fake.batchCalls)
+	}
+
+	// Dedup: the duplicate "Hello Alice today" should only appear once in inputs.
+	for i, in := range fake.lastInputs {
+		for j := i + 1; j < len(fake.lastInputs); j++ {
+			if in == fake.lastInputs[j] {
+				t.Errorf("duplicate input in batch at positions %d and %d: %q", i, j, in)
+			}
+		}
+	}
+
+	// Verify both leaves got redacted correctly.
+	out := string(got.Bytes())
+	if !strings.Contains(out, "Hello [REDACTED_PERSON] today") {
+		t.Errorf("Alice not redacted: %q", out)
+	}
+	if !strings.Contains(out, "goodbye [REDACTED_PERSON] tonight") {
+		t.Errorf("Bob not redacted: %q", out)
+	}
+}

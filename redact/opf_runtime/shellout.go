@@ -40,22 +40,76 @@ type opfOutput struct {
 	} `json:"detected_spans"`
 }
 
+// Redact runs OPF on a single input. Convenience wrapper around RedactBatch
+// for callers that only have one text to redact.
 func (s *shellOut) Redact(ctx context.Context, text string, categories []string) ([]Span, error) {
 	if len(categories) == 0 {
+		return nil, nil
+	}
+	batch, err := s.RedactBatch(ctx, []string{text}, categories)
+	if err != nil {
+		return nil, err
+	}
+	if len(batch) == 0 {
+		return nil, nil
+	}
+	return batch[0], nil
+}
+
+// batchSeparator joins inputs into a single opf invocation. opf treats
+// '\n' as a per-input delimiter and runs a fresh inference pass per line —
+// so a newline-joined batch processes each input as a separate forward
+// pass through the model, which is no faster than per-call shell-out.
+// Joining with a non-newline separator instead causes opf to treat the
+// concatenation as ONE input and do ONE inference pass, amortizing the
+// model load and forward-pass cost across all inputs.
+//
+// The chosen separator must:
+//  1. Not appear in real text (so it doesn't collide with real content)
+//  2. Look like whitespace to opf's tokenizer (so it doesn't confuse
+//     span boundaries)
+//
+// ASCII RECORD SEPARATOR (U+001E) satisfies both: it's a control char
+// not used in normal prose, and tokenizers generally treat control chars
+// as whitespace.
+const batchSeparator = "\x1e"
+
+// RedactBatch sends multiple inputs to opf as a single invocation, in a
+// single inference pass. The inputs are joined with batchSeparator and
+// any embedded newlines are flattened to spaces (1-byte → 1-byte, so
+// offsets stay valid). opf emits one JSON object covering the whole
+// concatenated text; we partition its spans back to per-input slices
+// based on the boundary positions we tracked.
+//
+// Why not just join with '\n' and decode N JSON objects? Empirically,
+// opf processes a newline-joined batch as N sequential inference passes
+// (one per line), each taking ~2s on CPU. For a 500-leaf transcript
+// that's 1000+ seconds — same wall-clock as per-call shell-out, only
+// with one cold-start saved. Single-pass concatenation drops the cost to
+// 1 inference pass total. Spans crossing the separator boundary are
+// dropped (rare in practice).
+func (s *shellOut) RedactBatch(ctx context.Context, inputs []string, categories []string) ([][]Span, error) {
+	if len(inputs) == 0 || len(categories) == 0 {
 		return nil, nil
 	}
 	timeout := time.Duration(s.timeoutSeconds) * time.Second
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// opf has no per-call category filter on the CLI — it returns every
-	// category it can detect. detectOPF filters spans to cfg.Categories
-	// post-call (and the `if len(categories) == 0` guard above skips the
-	// invocation entirely when nothing is enabled). The categories slice
-	// is retained on the Runtime signature for future implementations
-	// (daemon mode, fine-tuned models) that may accept category hints.
-	// --no-print-color-coded-text suppresses the human-oriented summary +
-	// color preview that surround the JSON otherwise.
+	// Build the concatenated input + record where each input begins so we
+	// can partition spans back. flatten internal newlines so a multi-line
+	// leaf doesn't confuse opf's tokenizer.
+	var buf strings.Builder
+	starts := make([]int, len(inputs))
+	for i, in := range inputs {
+		if i > 0 {
+			buf.WriteString(batchSeparator)
+		}
+		starts[i] = buf.Len()
+		buf.WriteString(strings.ReplaceAll(in, "\n", " "))
+	}
+	batched := buf.String()
+
 	args := []string{
 		"--device", "cpu",
 		"--output-mode", "typed",
@@ -64,7 +118,7 @@ func (s *shellOut) Redact(ctx context.Context, text string, categories []string)
 	}
 
 	cmd := s.CommandRunner(callCtx, s.command, args...)
-	cmd.Stdin = strings.NewReader(text)
+	cmd.Stdin = strings.NewReader(batched)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -74,15 +128,8 @@ func (s *shellOut) Redact(ctx context.Context, text string, categories []string)
 		case errors.Is(callCtx.Err(), context.DeadlineExceeded):
 			return nil, fmt.Errorf("opf timeout after %s: %w", timeout, callCtx.Err())
 		case errors.Is(ctx.Err(), context.Canceled):
-			// Distinguish parent-context cancellation from child timeout;
-			// the generic exit-error branch below produces a misleading
-			// "context canceled" message that hides the real cause.
 			return nil, fmt.Errorf("opf canceled: %w", ctx.Err())
 		}
-		// Wrap with %w so the caller can errors.Is(err, exec.ErrNotFound /
-		// os.ErrNotExist / etc.) — formatOPFFailure relies on that chain to
-		// produce the actionable "Install with 'pip install opf'" message.
-		// %s would discard the underlying error type.
 		errMsg := strings.TrimSpace(stderr.String())
 		if errMsg == "" {
 			return nil, fmt.Errorf("opf exited with error: %w", err)
@@ -90,16 +137,60 @@ func (s *shellOut) Redact(ctx context.Context, text string, categories []string)
 		return nil, fmt.Errorf("opf exited with error: %s: %w", errMsg, err)
 	}
 
+	// Single concatenated input → opf emits one JSON object.
 	var parsed opfOutput
 	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
 		return nil, fmt.Errorf("opf output not parseable as JSON: %w (stdout: %q)", err, stdout.String())
 	}
 
-	out := make([]Span, 0, len(parsed.DetectedSpans))
+	// Partition spans back to per-input slices using `starts`.
+	out := make([][]Span, len(inputs))
 	for _, p := range parsed.DetectedSpans {
-		out = append(out, Span{Start: p.Start, End: p.End, Label: p.Label})
+		idx := partitionIndex(starts, p.Start, p.End, batchSeparator)
+		if idx < 0 {
+			continue // span crosses a separator boundary — drop it
+		}
+		base := starts[idx]
+		out[idx] = append(out[idx], Span{
+			Start: p.Start - base,
+			End:   p.End - base,
+			Label: p.Label,
+		})
 	}
 	return out, nil
+}
+
+// partitionIndex returns the input index that contains the [spanStart, spanEnd)
+// region within the concatenated batch input, or -1 if the region crosses
+// a separator boundary or is outside any input.
+//
+// starts[i] is the byte offset where inputs[i] begins in the concatenation.
+// Each input ends at starts[i+1] - len(sep) (the separator follows it), or
+// at the end of the batched string for the last input.
+func partitionIndex(starts []int, spanStart, spanEnd int, sep string) int {
+	if spanStart < 0 || spanEnd <= spanStart {
+		return -1
+	}
+	for i := range starts {
+		base := starts[i]
+		var end int
+		if i+1 < len(starts) {
+			end = starts[i+1] - len(sep)
+		} else {
+			// last input: we don't track its end byte. Caller's input
+			// length isn't known here, but spanEnd <= some bound is
+			// implied by opf returning valid spans. Accept any span
+			// that starts >= base.
+			end = 1 << 31
+		}
+		if spanStart >= base && spanEnd <= end {
+			return i
+		}
+		if spanStart < base {
+			return -1 // before the first input
+		}
+	}
+	return -1
 }
 
 func (s *shellOut) Close() error { return nil }

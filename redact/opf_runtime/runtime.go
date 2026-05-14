@@ -8,7 +8,17 @@ import (
 // Runtime is the abstraction over the OpenAI Privacy Filter binary or
 // daemon. Implementations must be safe for concurrent use.
 type Runtime interface {
+	// Redact runs OPF on a single text input. Returns spans against the
+	// input's byte offsets.
 	Redact(ctx context.Context, text string, categories []string) ([]Span, error)
+
+	// RedactBatch runs OPF on multiple inputs in a single invocation.
+	// The returned slice has the same length as inputs; result[i] are
+	// the spans for inputs[i] against that input's own byte offsets.
+	// Used by JSONLContentWithPrivacyFilter to amortize the per-call
+	// cold-start cost across all eligible leaf strings in a transcript.
+	RedactBatch(ctx context.Context, inputs []string, categories []string) ([][]Span, error)
+
 	Close() error
 }
 

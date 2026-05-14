@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -153,8 +154,22 @@ func enabledCategories(cfg *OPFConfig) []string {
 // has no enabled categories, the runtime is unset, or the runtime returns
 // an error. Errors are routed to the configured failure handler before
 // returning nil.
+//
+// Performance note: OPF shell-out has ~2s cold-start per invocation, and
+// JSONLContentWithPrivacyFilter calls detectOPF for every leaf string in a
+// transcript (paths, IDs, type tags, message bodies — easily 500+ per
+// realistic transcript). To keep condensation tractable we skip strings
+// that aren't prose. The has-space heuristic eliminates ~80% of structural
+// leaf strings (paths, snake_case keys, IDs) while keeping every sentence
+// fragment that could contain a name, address, email, etc. Personal data
+// in single-token strings is left to the regex layers (email/phone shape
+// already catches those). Daemon mode (future) makes this gate
+// unnecessary by collapsing the cold-start cost.
 func detectOPF(ctx context.Context, cfg *OPFConfig, s string) []taggedRegion {
 	if cfg == nil || !cfg.Enabled || cfg.runtime == nil || s == "" {
+		return nil
+	}
+	if !strings.ContainsRune(s, ' ') {
 		return nil
 	}
 	cats := enabledCategories(cfg)

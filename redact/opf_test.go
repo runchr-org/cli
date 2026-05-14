@@ -70,6 +70,10 @@ type fakeRuntime struct {
 	spans []opf_runtime.Span
 	err   error
 	calls int
+	// batchCalls counts RedactBatch invocations independently of Redact.
+	// Used by tests that need to assert OPF is batched (one call per
+	// transcript) rather than per-leaf-string.
+	batchCalls int
 }
 
 func (f *fakeRuntime) Redact(_ context.Context, _ string, _ []string) ([]opf_runtime.Span, error) {
@@ -77,7 +81,58 @@ func (f *fakeRuntime) Redact(_ context.Context, _ string, _ []string) ([]opf_run
 	return f.spans, f.err
 }
 
+// RedactBatch returns the same canned spans for every input — sufficient
+// for behavior tests. For tests that need per-input spans, use the more
+// detailed fakeBatchRuntime below.
+func (f *fakeRuntime) RedactBatch(_ context.Context, inputs []string, _ []string) ([][]opf_runtime.Span, error) {
+	f.batchCalls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make([][]opf_runtime.Span, len(inputs))
+	for i := range inputs {
+		out[i] = f.spans
+	}
+	return out, nil
+}
+
 func (f *fakeRuntime) Close() error { return nil }
+
+// fakeBatchRuntime returns per-input spans rather than a single canned
+// slice repeated for every input. Use it for tests that need different
+// OPF responses for different leaf strings.
+type fakeBatchRuntime struct {
+	spansByInput map[string][]opf_runtime.Span
+	err          error
+	batchCalls   int
+	lastInputs   []string
+}
+
+func (f *fakeBatchRuntime) Redact(ctx context.Context, text string, cats []string) ([]opf_runtime.Span, error) {
+	batches, err := f.RedactBatch(ctx, []string{text}, cats)
+	if err != nil {
+		return nil, err
+	}
+	if len(batches) == 0 {
+		return nil, nil
+	}
+	return batches[0], nil
+}
+
+func (f *fakeBatchRuntime) RedactBatch(_ context.Context, inputs []string, _ []string) ([][]opf_runtime.Span, error) {
+	f.batchCalls++
+	f.lastInputs = append([]string(nil), inputs...)
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make([][]opf_runtime.Span, len(inputs))
+	for i, in := range inputs {
+		out[i] = f.spansByInput[in]
+	}
+	return out, nil
+}
+
+func (f *fakeBatchRuntime) Close() error { return nil }
 
 func TestDetectOPF_DisabledReturnsNil(t *testing.T) {
 	resetOPFConfig()
@@ -165,7 +220,9 @@ func TestDetectOPF_FailureWithWarn_ReturnsNil(t *testing.T) {
 		OnFailure:  "warn",
 	}, fake)
 
-	got := detectOPF(context.Background(), getOPFConfig(), "Alice")
+	// Must contain a space — detectOPF skips OPF for non-prose inputs
+	// (perf gate, see detectOPF doc).
+	got := detectOPF(context.Background(), getOPFConfig(), "Alice was here")
 	if got != nil {
 		t.Errorf("warn mode: got %v, want nil regions after failure", got)
 	}
@@ -175,13 +232,15 @@ func TestDetectOPF_DropsMalformedSpans(t *testing.T) {
 	resetOPFConfig()
 	t.Cleanup(resetOPFConfig)
 
-	const text = "Alice" // len = 5
+	// Text must contain a space — detectOPF skips OPF for non-prose
+	// inputs (perf gate, see detectOPF doc).
+	const text = "Alice here" // len = 10
 	fake := &fakeRuntime{spans: []opf_runtime.Span{
-		{Start: 0, End: 5, Label: "private_person"},   // valid — kept
-		{Start: -1, End: 3, Label: "private_person"},  // negative Start — dropped
-		{Start: 3, End: 100, Label: "private_person"}, // End past len(s) — dropped
-		{Start: 4, End: 4, Label: "private_person"},   // Start == End — dropped
-		{Start: 5, End: 3, Label: "private_person"},   // Start > End — dropped
+		{Start: 0, End: 5, Label: "private_person"},    // valid — kept
+		{Start: -1, End: 3, Label: "private_person"},   // negative Start — dropped
+		{Start: 3, End: 1000, Label: "private_person"}, // End past len(s) — dropped
+		{Start: 4, End: 4, Label: "private_person"},    // Start == End — dropped
+		{Start: 5, End: 3, Label: "private_person"},    // Start > End — dropped
 	}}
 	ConfigurePrivacyFilterWithRuntime(OPFConfig{
 		Enabled:    true,
@@ -194,5 +253,45 @@ func TestDetectOPF_DropsMalformedSpans(t *testing.T) {
 	}
 	if got[0].start != 0 || got[0].end != 5 {
 		t.Errorf("region: got [%d,%d), want [0,5)", got[0].start, got[0].end)
+	}
+}
+
+// TestDetectOPF_SkipsNonProseStrings locks in the perf gate that prevents
+// detectOPF from invoking opf on structural strings (paths, IDs, type tags,
+// snake_case keys). Without this gate, JSONLContentWithPrivacyFilter calls
+// opf for hundreds of leaf strings per transcript and condensation becomes
+// effectively unusable on realistic inputs.
+func TestDetectOPF_SkipsNonProseStrings(t *testing.T) {
+	resetOPFConfig()
+	t.Cleanup(resetOPFConfig)
+
+	fake := &fakeRuntime{spans: []opf_runtime.Span{{Start: 0, End: 5, Label: "private_person"}}}
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"private_person": true},
+	}, fake)
+
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"file path", "src/main.go"},
+		{"snake_case key", "user_prompt_submit"},
+		{"kebab-case", "tool-use-id"},
+		{"hex id", "a3b2c4d5e6f7"},
+		{"single word", "Alice"},
+		{"camelCase", "userPromptSubmit"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			callsBefore := fake.calls
+			got := detectOPF(context.Background(), getOPFConfig(), tc.in)
+			if got != nil {
+				t.Errorf("got %v regions for non-prose %q, want nil", got, tc.in)
+			}
+			if fake.calls != callsBefore {
+				t.Errorf("runtime invoked on non-prose %q (calls went from %d to %d)", tc.in, callsBefore, fake.calls)
+			}
+		})
 	}
 }
