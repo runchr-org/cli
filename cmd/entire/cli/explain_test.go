@@ -840,15 +840,12 @@ func TestExplainCmd_CommitFlagWithGenerateValidates(t *testing.T) {
 	}
 }
 
-func TestGenerateCheckpointAISummary_AddsDefaultTimeoutWithoutParentDeadline(t *testing.T) {
-	tmpTimeout := checkpointSummaryTimeout
+// Cannot use t.Parallel() — mutates package-level generateTranscriptSummary.
+func TestGenerateCheckpointAISummary_ExplicitTimeoutApplied(t *testing.T) {
 	tmpGenerator := generateTranscriptSummary
-	t.Cleanup(func() {
-		checkpointSummaryTimeout = tmpTimeout
-		generateTranscriptSummary = tmpGenerator
-	})
+	t.Cleanup(func() { generateTranscriptSummary = tmpGenerator })
 
-	checkpointSummaryTimeout = 50 * time.Millisecond
+	const explicitTimeout = 50 * time.Millisecond
 
 	var gotDeadline time.Time
 	generateTranscriptSummary = func(
@@ -861,14 +858,14 @@ func TestGenerateCheckpointAISummary_AddsDefaultTimeoutWithoutParentDeadline(t *
 	) (*checkpoint.Summary, error) {
 		deadline, ok := ctx.Deadline()
 		if !ok {
-			return nil, errors.New("expected deadline on summary context")
+			return nil, errors.New("expected deadline on summary context when timeout > 0")
 		}
 		gotDeadline = deadline
 		return &checkpoint.Summary{Intent: "intent", Outcome: "outcome"}, nil
 	}
 
 	start := time.Now()
-	summary, _, err := generateCheckpointAISummary(context.Background(), []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil, checkpointSummaryTimeout)
+	summary, err := generateCheckpointAISummary(context.Background(), []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil, explicitTimeout)
 	if err != nil {
 		t.Fatalf("generateCheckpointAISummary() error = %v", err)
 	}
@@ -879,7 +876,7 @@ func TestGenerateCheckpointAISummary_AddsDefaultTimeoutWithoutParentDeadline(t *
 		t.Fatal("expected deadline to be set")
 	}
 	if remaining := gotDeadline.Sub(start); remaining < 30*time.Millisecond || remaining > 200*time.Millisecond {
-		t.Fatalf("deadline offset = %s, want around %s", remaining, checkpointSummaryTimeout)
+		t.Fatalf("deadline offset = %s, want around %s", remaining, explicitTimeout)
 	}
 }
 
@@ -932,21 +929,16 @@ esac
 	}
 }
 
-func TestGenerateCheckpointAISummary_UsesParentDeadlineAndWrapsSentinel(t *testing.T) {
-	tmpTimeout := checkpointSummaryTimeout
+// TestGenerateCheckpointAISummary_NoTimeoutInheritsParent verifies that when
+// timeout == 0 the provider call inherits the parent context unchanged, so a
+// tight parent deadline fires and the error wraps DeadlineExceeded.
+//
+// Cannot use t.Parallel() — mutates package-level generateTranscriptSummary.
+func TestGenerateCheckpointAISummary_NoTimeoutInheritsParent(t *testing.T) {
 	tmpGenerator := generateTranscriptSummary
-	t.Cleanup(func() {
-		checkpointSummaryTimeout = tmpTimeout
-		generateTranscriptSummary = tmpGenerator
-	})
+	t.Cleanup(func() { generateTranscriptSummary = tmpGenerator })
 
-	checkpointSummaryTimeout = 30 * time.Second
-
-	parentCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	parentDeadline, _ := parentCtx.Deadline()
-
-	var gotDeadline time.Time
+	// Use a mock that blocks until ctx is done, so the parent deadline fires.
 	generateTranscriptSummary = func(
 		ctx context.Context,
 		_ redact.RedactedBytes,
@@ -955,33 +947,19 @@ func TestGenerateCheckpointAISummary_UsesParentDeadlineAndWrapsSentinel(t *testi
 		_ summarize.Generator,
 		_ agent.ProgressFn,
 	) (*checkpoint.Summary, error) {
-		gotDeadline, _ = ctx.Deadline()
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
 
-	_, appliedDeadline, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil, checkpointSummaryTimeout)
-	if err == nil {
-		t.Fatal("expected timeout error")
-	}
+	parentCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	// Chunk-5 signature: ctx, transcript, files, agentType, generator, timeout.
+	// Chunk 6 will add progress and attempt — update this test's call accordingly then.
+	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil, 0)
+	// Parent deadline (50ms) should fire, not our absence of a deadline.
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected DeadlineExceeded, got %v", err)
-	}
-	if gotDeadline.IsZero() {
-		t.Fatal("expected deadline to be captured")
-	}
-	// The applied deadline must reflect the shorter parent-ctx deadline,
-	// not the package-default checkpointSummaryTimeout. Otherwise
-	// formatCheckpointSummaryError would report the wrong timeout to users.
-	if appliedDeadline >= checkpointSummaryTimeout {
-		t.Fatalf("appliedDeadline = %s; want shorter than %s (parent had tighter deadline)",
-			appliedDeadline, checkpointSummaryTimeout)
-	}
-	if delta := gotDeadline.Sub(parentDeadline); delta < -5*time.Millisecond || delta > 5*time.Millisecond {
-		t.Fatalf("deadline delta = %s, want near 0", delta)
-	}
-	if strings.Contains(err.Error(), "30s") {
-		t.Fatalf("timeout error should not report default timeout when parent deadline fired: %v", err)
+		t.Fatalf("expected DeadlineExceeded from parent, got %v", err)
 	}
 }
 
@@ -991,15 +969,11 @@ func TestGenerateCheckpointAISummary_UsesParentDeadlineAndWrapsSentinel(t *testi
 // timeoutCtx.Err() and unconditionally wrapped with %w context.DeadlineExceeded,
 // which discarded the typed error and routed the user to the wrong
 // "safety deadline" guidance instead of the auth/rate-limit message.
+//
+// Cannot use t.Parallel() — mutates package-level generateTranscriptSummary.
 func TestGenerateCheckpointAISummary_PreservesClaudeErrorWhenCtxIsDone(t *testing.T) {
-	tmpTimeout := checkpointSummaryTimeout
 	tmpGenerator := generateTranscriptSummary
-	t.Cleanup(func() {
-		checkpointSummaryTimeout = tmpTimeout
-		generateTranscriptSummary = tmpGenerator
-	})
-
-	checkpointSummaryTimeout = 30 * time.Second
+	t.Cleanup(func() { generateTranscriptSummary = tmpGenerator })
 
 	// Cancel the parent before we even call — ctx.Err() will be non-nil.
 	parentCtx, cancel := context.WithCancel(context.Background())
@@ -1017,7 +991,7 @@ func TestGenerateCheckpointAISummary_PreservesClaudeErrorWhenCtxIsDone(t *testin
 		return nil, claudeErr
 	}
 
-	_, _, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil, checkpointSummaryTimeout)
+	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil, 0)
 	var ce *claudecode.ClaudeError
 	if !errors.As(err, &ce) {
 		t.Fatalf("errors.As did not recover *ClaudeError; got %v", err)
@@ -1027,15 +1001,16 @@ func TestGenerateCheckpointAISummary_PreservesClaudeErrorWhenCtxIsDone(t *testin
 	}
 }
 
-func TestGenerateCheckpointAISummary_ClampsLongParentDeadlineToDefaultTimeout(t *testing.T) {
-	tmpTimeout := checkpointSummaryTimeout
+// TestGenerateCheckpointAISummary_ExplicitTimeoutNarrowsLongParent verifies
+// that an explicit timeout (e.g. from --summary-timeout-seconds) takes effect
+// even when the parent context has a much longer deadline.
+//
+// Cannot use t.Parallel() — mutates package-level generateTranscriptSummary.
+func TestGenerateCheckpointAISummary_ExplicitTimeoutNarrowsLongParent(t *testing.T) {
 	tmpGenerator := generateTranscriptSummary
-	t.Cleanup(func() {
-		checkpointSummaryTimeout = tmpTimeout
-		generateTranscriptSummary = tmpGenerator
-	})
+	t.Cleanup(func() { generateTranscriptSummary = tmpGenerator })
 
-	checkpointSummaryTimeout = 50 * time.Millisecond
+	const explicitTimeout = 50 * time.Millisecond
 
 	parentCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -1051,14 +1026,14 @@ func TestGenerateCheckpointAISummary_ClampsLongParentDeadlineToDefaultTimeout(t 
 	) (*checkpoint.Summary, error) {
 		deadline, ok := ctx.Deadline()
 		if !ok {
-			return nil, errors.New("expected deadline on summary context")
+			return nil, errors.New("expected deadline on summary context when timeout > 0")
 		}
 		gotDeadline = deadline
 		return &checkpoint.Summary{Intent: "intent", Outcome: "outcome"}, nil
 	}
 
 	start := time.Now()
-	summary, _, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil, checkpointSummaryTimeout)
+	summary, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil, explicitTimeout)
 	if err != nil {
 		t.Fatalf("generateCheckpointAISummary() error = %v", err)
 	}
@@ -1069,17 +1044,14 @@ func TestGenerateCheckpointAISummary_ClampsLongParentDeadlineToDefaultTimeout(t 
 		t.Fatal("expected deadline to be set")
 	}
 	if remaining := gotDeadline.Sub(start); remaining < 30*time.Millisecond || remaining > 200*time.Millisecond {
-		t.Fatalf("deadline offset = %s, want around %s", remaining, checkpointSummaryTimeout)
+		t.Fatalf("deadline offset = %s, want around %s", remaining, explicitTimeout)
 	}
 }
 
+// Cannot use t.Parallel() — mutates package-level generateTranscriptSummary.
 func TestGenerateCheckpointAISummary_UsesCancellationSentinel(t *testing.T) {
-	tmpTimeout := checkpointSummaryTimeout
 	tmpGenerator := generateTranscriptSummary
-	t.Cleanup(func() {
-		checkpointSummaryTimeout = tmpTimeout
-		generateTranscriptSummary = tmpGenerator
-	})
+	t.Cleanup(func() { generateTranscriptSummary = tmpGenerator })
 
 	parentCtx, cancel := context.WithCancel(context.Background())
 
@@ -1096,7 +1068,7 @@ func TestGenerateCheckpointAISummary_UsesCancellationSentinel(t *testing.T) {
 		return nil, ctx.Err()
 	}
 
-	_, _, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil, checkpointSummaryTimeout)
+	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil, 0)
 	if err == nil {
 		t.Fatal("expected cancellation error")
 	}
@@ -1160,8 +1132,8 @@ func TestResolveSummaryTimeout_DefaultWhenBothUnset(t *testing.T) {
 
 	got := resolveSummaryTimeout(context.Background(), 0)
 
-	if got != checkpointSummaryTimeout {
-		t.Fatalf("resolveSummaryTimeout(flag=0, setting=0) = %s, want %s (package default)", got, checkpointSummaryTimeout)
+	if got != 0 {
+		t.Fatalf("resolveSummaryTimeout(flag=0, setting=0) = %s, want 0 (no deadline)", got)
 	}
 }
 
@@ -1173,18 +1145,27 @@ func TestResolveSummaryTimeout_NegativeSettingTreatedAsUnset(t *testing.T) {
 
 	got := resolveSummaryTimeout(context.Background(), 0)
 
-	if got != checkpointSummaryTimeout {
-		t.Fatalf("resolveSummaryTimeout(flag=0, setting=-1) = %s, want %s (package default)", got, checkpointSummaryTimeout)
+	if got != 0 {
+		t.Fatalf("resolveSummaryTimeout(flag=0, setting=-1) = %s, want 0 (no deadline)", got)
 	}
 }
 
-// Locks in 5 minutes as the package default so a casual edit doesn't silently
-// regress to the prior 30s — issue #1198 raised the default specifically
-// because 30s was too tight for large transcripts.
-func TestDefaultCheckpointSummaryTimeout_IsFiveMinutes(t *testing.T) {
-	t.Parallel()
-	if defaultCheckpointSummaryTimeout != 5*time.Minute {
-		t.Fatalf("defaultCheckpointSummaryTimeout = %s, want 5m (see issue #1198)", defaultCheckpointSummaryTimeout)
+// TestResolveSummaryTimeout_DefaultZero locks in that with no flag and no
+// settings file, --generate has no automatic deadline. The opt-in surface
+// (--summary-timeout-seconds flag and summary_timeout_seconds setting) is
+// the only way to introduce a cap. See
+// docs/superpowers/specs/2026-05-13-explain-summary-streaming-design.md.
+//
+// Cannot use t.Parallel() — t.Chdir mutates process-global state.
+func TestResolveSummaryTimeout_DefaultZero(t *testing.T) {
+	// settings.Load reads .entire/settings.json from CWD; redirect to a
+	// temp dir that has none.
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	got := resolveSummaryTimeout(context.Background(), 0)
+	if got != 0 {
+		t.Errorf("resolveSummaryTimeout(ctx, 0) = %v, want 0 (no deadline)", got)
 	}
 }
 
