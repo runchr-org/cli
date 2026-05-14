@@ -50,13 +50,13 @@ func defaultManager() (*tokenmanager.Manager, error) {
 		return managerForTest, nil
 	}
 	managerOnce.Do(func() {
-		provider := currentProvider()
+		provider := CurrentProvider()
 		m, err := tokenmanager.New(tokenmanager.Config{
 			Issuer:    api.AuthBaseURL(),
-			ClientID:  provider.clientID,
-			STSPath:   provider.stsPath,
+			ClientID:  provider.ClientID,
+			STSPath:   provider.STSPath,
 			Store:     NewStore(),
-			UserAgent: provider.clientID,
+			UserAgent: provider.ClientID,
 			Scope:     "cli",
 		})
 		manager = m

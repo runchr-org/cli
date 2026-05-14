@@ -178,6 +178,48 @@ func TestStoreLoadTokens_LegacyBareStringFallback(t *testing.T) {
 	}
 }
 
+// TestStoreLoadTokens_RejectsJSONShapedFallback guards against a
+// well-formed-but-empty JSON entry being mistakenly treated as a
+// bare-string token. The lib surfaces these as ErrMalformed; the
+// shim's bare-string fallback must filter out anything starting with
+// '{' or '[' so the user sees "not logged in" rather than getting
+// "Authorization: Bearer {}" on the wire.
+func TestStoreLoadTokens_RejectsJSONShapedFallback(t *testing.T) {
+	for _, body := range []string{`{}`, `{"foo":"bar"}`, `[]`} {
+		const profile = "https://json-shaped.example.com"
+		service := "test-json-fallback-" + body[:1]
+		if err := keyring.Set(service, profile, body); err != nil {
+			t.Fatalf("seed keyring: %v", err)
+		}
+
+		got, err := NewStoreWithService(service).LoadTokens(profile)
+		// We expect ErrNotFound — JSON-shaped malformed entries must
+		// not be routed through the bare-string fallback.
+		if err == nil {
+			t.Fatalf("LoadTokens(%q) returned %+v; want ErrNotFound", body, got)
+		}
+		if got.AccessToken != "" {
+			t.Fatalf("LoadTokens(%q) AccessToken = %q, want empty", body, got.AccessToken)
+		}
+	}
+}
+
+func TestStoreGetToken_RejectsJSONShapedFallback(t *testing.T) {
+	const service = "test-json-getoken"
+	const profile = "https://json-shaped.example.com"
+	if err := keyring.Set(service, profile, `{"unrelated":"blob"}`); err != nil {
+		t.Fatalf("seed keyring: %v", err)
+	}
+
+	got, err := NewStoreWithService(service).GetToken(profile)
+	if err != nil {
+		t.Fatalf("GetToken: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("GetToken = %q, want empty (JSON blob must not be shipped as a bearer)", got)
+	}
+}
+
 func TestLookupCurrentToken(t *testing.T) {
 	t.Setenv(api.BaseURLEnvVar, "http://localhost:8787")
 	t.Setenv(api.AuthBaseURLEnvVar, "")

@@ -45,15 +45,15 @@ type Client struct {
 // NewClient constructs a Client targeting the active provider version.
 // httpClient is used directly when non-nil; otherwise http.DefaultClient.
 func NewClient(httpClient *http.Client) *Client {
-	p := currentProvider()
+	p := CurrentProvider()
 	return &Client{inner: &deviceflow.Client{
 		HTTP:           httpClient,
 		BaseURL:        api.AuthBaseURL(),
-		ClientID:       p.clientID,
+		ClientID:       p.ClientID,
 		Scope:          "cli",
-		UserAgent:      p.clientID,
-		DeviceCodePath: p.deviceCodePath,
-		TokenPath:      p.tokenPath,
+		UserAgent:      p.ClientID,
+		DeviceCodePath: p.DeviceCodePath,
+		TokenPath:      p.TokenPath,
 	}}
 }
 

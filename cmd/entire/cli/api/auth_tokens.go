@@ -2,10 +2,9 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
-	"os"
-	"strings"
 )
 
 // Token is a single API token row returned by the auth-tokens endpoint.
@@ -25,25 +24,27 @@ type TokensResponse struct {
 	Tokens []Token `json:"tokens"`
 }
 
-// authTokensProviderVersionEnvVar must match the env var read by
-// cmd/entire/cli/auth's currentProvider(). Duplicated here rather than
-// imported because api/ is a leaf package and shouldn't take a
-// dependency on auth/ for routing.
-const authTokensProviderVersionEnvVar = "ENTIRE_AUTH_PROVIDER_VERSION" //nolint:gosec // env var name, not a credential
+// errAuthTokensPathUnset surfaces when an auth-tokens method is called
+// on a Client that wasn't given a base path. Construct via
+// NewClientWithBaseURL(...).WithAuthTokensPath(...) — the active path
+// lives in cmd/entire/cli/auth.CurrentProvider().AuthTokensPath, the
+// single source of truth for provider-version routing.
+var errAuthTokensPathUnset = errors.New("api: auth-tokens path is unset (call (*Client).WithAuthTokensPath before list/revoke)")
 
-// authTokensBasePath returns the auth-tokens endpoint family base path
-// for the active provider version. v1 (default) hits /api/v1/auth/tokens;
-// v2 hits /api/auth/tokens (no version segment).
-func authTokensBasePath() string {
-	if strings.TrimSpace(os.Getenv(authTokensProviderVersionEnvVar)) == "v2" {
-		return "/api/auth/tokens"
+func (c *Client) authTokensBasePath() (string, error) {
+	if c.authTokensPath == "" {
+		return "", errAuthTokensPathUnset
 	}
-	return "/api/v1/auth/tokens"
+	return c.authTokensPath, nil
 }
 
 // ListTokens returns the authenticated user's non-expired API tokens.
 func (c *Client) ListTokens(ctx context.Context) ([]Token, error) {
-	resp, err := c.Get(ctx, authTokensBasePath())
+	base, err := c.authTokensBasePath()
+	if err != nil {
+		return nil, fmt.Errorf("list tokens: %w", err)
+	}
+	resp, err := c.Get(ctx, base)
 	if err != nil {
 		return nil, fmt.Errorf("list tokens: %w", err)
 	}
@@ -62,7 +63,11 @@ func (c *Client) ListTokens(ctx context.Context) ([]Token, error) {
 
 // RevokeCurrentToken revokes the bearer token used to authenticate this client.
 func (c *Client) RevokeCurrentToken(ctx context.Context) error {
-	resp, err := c.Delete(ctx, authTokensBasePath()+"/current")
+	base, err := c.authTokensBasePath()
+	if err != nil {
+		return fmt.Errorf("revoke current token: %w", err)
+	}
+	resp, err := c.Delete(ctx, base+"/current")
 	if err != nil {
 		return fmt.Errorf("revoke current token: %w", err)
 	}
@@ -76,7 +81,11 @@ func (c *Client) RevokeCurrentToken(ctx context.Context) error {
 
 // RevokeToken revokes the API token with the given id.
 func (c *Client) RevokeToken(ctx context.Context, id string) error {
-	resp, err := c.Delete(ctx, authTokensBasePath()+"/"+url.PathEscape(id))
+	base, err := c.authTokensBasePath()
+	if err != nil {
+		return fmt.Errorf("revoke token %s: %w", id, err)
+	}
+	resp, err := c.Delete(ctx, base+"/"+url.PathEscape(id))
 	if err != nil {
 		return fmt.Errorf("revoke token %s: %w", id, err)
 	}

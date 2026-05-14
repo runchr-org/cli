@@ -100,7 +100,9 @@ func newAuthStatusCmd() *cobra.Command {
 }
 
 func defaultListTokens(ctx context.Context, token string) ([]api.Token, error) {
-	return api.NewClientWithBaseURL(token, api.AuthBaseURL()).ListTokens(ctx) //nolint:wrapcheck // ListTokens already wraps with action context
+	client := api.NewClientWithBaseURL(token, api.AuthBaseURL()).
+		WithAuthTokensPath(auth.CurrentProvider().AuthTokensPath)
+	return client.ListTokens(ctx) //nolint:wrapcheck // ListTokens already wraps with action context
 }
 
 func runAuthStatus(ctx context.Context, w io.Writer, store tokenStore, list authTokenLister, baseURL string) error {
@@ -426,7 +428,9 @@ func newAuthRevokeCmd() *cobra.Command {
 }
 
 func defaultRevokeTokenByID(ctx context.Context, callerToken, id string) error {
-	return api.NewClientWithBaseURL(callerToken, api.AuthBaseURL()).RevokeToken(ctx, id) //nolint:wrapcheck // RevokeToken already wraps with action context
+	client := api.NewClientWithBaseURL(callerToken, api.AuthBaseURL()).
+		WithAuthTokensPath(auth.CurrentProvider().AuthTokensPath)
+	return client.RevokeToken(ctx, id) //nolint:wrapcheck // RevokeToken already wraps with action context
 }
 
 func runAuthRevoke(

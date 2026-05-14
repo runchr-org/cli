@@ -41,7 +41,9 @@ func newLogoutCmd() *cobra.Command {
 }
 
 func defaultRevokeCurrentToken(ctx context.Context, token string) error {
-	return api.NewClientWithBaseURL(token, api.AuthBaseURL()).RevokeCurrentToken(ctx) //nolint:wrapcheck // RevokeCurrentToken already wraps with action context
+	client := api.NewClientWithBaseURL(token, api.AuthBaseURL()).
+		WithAuthTokensPath(auth.CurrentProvider().AuthTokensPath)
+	return client.RevokeCurrentToken(ctx) //nolint:wrapcheck // RevokeCurrentToken already wraps with action context
 }
 
 func runLogout(ctx context.Context, outW, errW io.Writer, store tokenStore, revoke revokeCurrentFunc, baseURL string) error {

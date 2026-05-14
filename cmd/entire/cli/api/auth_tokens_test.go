@@ -9,8 +9,23 @@ import (
 	"testing"
 )
 
+const (
+	testV1AuthTokensPath = "/api/v1/auth/tokens"
+	testV2AuthTokensPath = "/api/auth/tokens"
+)
+
+// newAuthTokensTestClient builds a Client pointed at server.URL with
+// the given auth-tokens base path. Used by all auth-tokens tests so
+// the wiring matches production: callers chain WithAuthTokensPath at
+// construction time.
+func newAuthTokensTestClient(serverURL, authTokensPath string) *Client {
+	c := NewClient("tok").WithAuthTokensPath(authTokensPath)
+	c.baseURL = serverURL
+	return c
+}
+
 func TestClient_RevokeCurrentToken_SendsDeleteWithBearer(t *testing.T) {
-	t.Setenv(authTokensProviderVersionEnvVar, "")
+	t.Parallel()
 
 	var gotMethod, gotPath, gotAuth string
 
@@ -23,8 +38,7 @@ func TestClient_RevokeCurrentToken_SendsDeleteWithBearer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewClient("tok")
-	c.baseURL = server.URL
+	c := newAuthTokensTestClient(server.URL, testV1AuthTokensPath)
 
 	if err := c.RevokeCurrentToken(context.Background()); err != nil {
 		t.Fatalf("RevokeCurrentToken() error = %v", err)
@@ -51,8 +65,7 @@ func TestClient_RevokeCurrentToken_ReturnsHTTPErrorOn401(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewClient("tok")
-	c.baseURL = server.URL
+	c := newAuthTokensTestClient(server.URL, testV1AuthTokensPath)
 
 	err := c.RevokeCurrentToken(context.Background())
 	if err == nil {
@@ -71,7 +84,7 @@ func TestClient_RevokeCurrentToken_ReturnsHTTPErrorOn401(t *testing.T) {
 }
 
 func TestClient_ListTokens_DecodesResponse(t *testing.T) {
-	t.Setenv(authTokensProviderVersionEnvVar, "")
+	t.Parallel()
 
 	var gotMethod, gotPath, gotAuth string
 
@@ -87,8 +100,7 @@ func TestClient_ListTokens_DecodesResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewClient("tok")
-	c.baseURL = server.URL
+	c := newAuthTokensTestClient(server.URL, testV1AuthTokensPath)
 
 	tokens, err := c.ListTokens(context.Background())
 	if err != nil {
@@ -129,8 +141,7 @@ func TestClient_ListTokens_ReturnsHTTPErrorOn401(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewClient("tok")
-	c.baseURL = server.URL
+	c := newAuthTokensTestClient(server.URL, testV1AuthTokensPath)
 
 	_, err := c.ListTokens(context.Background())
 	if err == nil {
@@ -142,7 +153,7 @@ func TestClient_ListTokens_ReturnsHTTPErrorOn401(t *testing.T) {
 }
 
 func TestClient_RevokeToken_SendsDeleteWithEscapedID(t *testing.T) {
-	t.Setenv(authTokensProviderVersionEnvVar, "")
+	t.Parallel()
 
 	var gotMethod, gotEscapedPath, gotDecodedPath string
 
@@ -155,8 +166,7 @@ func TestClient_RevokeToken_SendsDeleteWithEscapedID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewClient("tok")
-	c.baseURL = server.URL
+	c := newAuthTokensTestClient(server.URL, testV1AuthTokensPath)
 
 	// Use an id that needs URL escaping to verify we don't blindly concat.
 	if err := c.RevokeToken(context.Background(), "abc/def 1"); err != nil {
@@ -184,8 +194,7 @@ func TestClient_RevokeToken_ReturnsErrorBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewClient("tok")
-	c.baseURL = server.URL
+	c := newAuthTokensTestClient(server.URL, testV1AuthTokensPath)
 
 	err := c.RevokeToken(context.Background(), "missing")
 	if err == nil {
@@ -199,39 +208,12 @@ func TestClient_RevokeToken_ReturnsErrorBody(t *testing.T) {
 	}
 }
 
-// TestAuthTokensBasePath_ProviderVersionRouting locks in the path
-// switch so v2 doesn't silently regress to v1's path family. The whole
-// reason the version env var exists is to route requests at this layer.
-func TestAuthTokensBasePath_ProviderVersionRouting(t *testing.T) {
-	cases := []struct {
-		name    string
-		version string
-		want    string
-	}{
-		{"unset defaults to v1", "", "/api/v1/auth/tokens"},
-		{"v1 explicit", "v1", "/api/v1/auth/tokens"},
-		{"v2", "v2", "/api/auth/tokens"},
-		{"unrecognised defaults to v1", "v999", "/api/v1/auth/tokens"},
-		// Whitespace trimming must match auth.currentProvider() — both
-		// trim, so the api and auth packages agree on what "v2" means.
-		// If either side stops trimming, these tests diverge first.
-		{"trims whitespace then matches v2", "  v2  ", "/api/auth/tokens"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(authTokensProviderVersionEnvVar, tc.version)
-			if got := authTokensBasePath(); got != tc.want {
-				t.Fatalf("authTokensBasePath() = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-// TestClient_ListTokens_RoutesV2Path is an end-to-end check that the
-// version switch flows through the public Client API, not just the
-// internal helper.
-func TestClient_ListTokens_RoutesV2Path(t *testing.T) {
-	t.Setenv(authTokensProviderVersionEnvVar, "v2")
+// TestClient_AuthTokens_RoutesV2Path verifies that whatever path the
+// caller supplies via WithAuthTokensPath is what hits the wire. The
+// provider table itself (which path corresponds to which version) is
+// exercised by cmd/entire/cli/auth's resolveProvider tests.
+func TestClient_AuthTokens_RoutesV2Path(t *testing.T) {
+	t.Parallel()
 
 	var gotPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -241,13 +223,31 @@ func TestClient_ListTokens_RoutesV2Path(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewClient("tok")
-	c.baseURL = server.URL
+	c := newAuthTokensTestClient(server.URL, testV2AuthTokensPath)
 
 	if _, err := c.ListTokens(context.Background()); err != nil {
 		t.Fatalf("ListTokens: %v", err)
 	}
 	if gotPath != "/api/auth/tokens" {
 		t.Fatalf("path = %q, want /api/auth/tokens (v2)", gotPath)
+	}
+}
+
+// TestClient_AuthTokens_UnsetPathErrors guards against silently
+// shipping a request to "" — we want a clear error pointing at the
+// missing WithAuthTokensPath wiring.
+func TestClient_AuthTokens_UnsetPathErrors(t *testing.T) {
+	t.Parallel()
+
+	c := NewClient("tok") // no WithAuthTokensPath
+
+	if _, err := c.ListTokens(context.Background()); !errors.Is(err, errAuthTokensPathUnset) {
+		t.Errorf("ListTokens err = %v, want errAuthTokensPathUnset", err)
+	}
+	if err := c.RevokeCurrentToken(context.Background()); !errors.Is(err, errAuthTokensPathUnset) {
+		t.Errorf("RevokeCurrentToken err = %v, want errAuthTokensPathUnset", err)
+	}
+	if err := c.RevokeToken(context.Background(), "any"); !errors.Is(err, errAuthTokensPathUnset) {
+		t.Errorf("RevokeToken err = %v, want errAuthTokensPathUnset", err)
 	}
 }
