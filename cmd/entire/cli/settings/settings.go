@@ -20,6 +20,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
+	"github.com/entireio/cli/redact"
 )
 
 const (
@@ -901,6 +902,14 @@ func validateOPFSettings(opf *OPFSettings) error {
 		return fmt.Errorf("openai_privacy_filter.on_failure=%q is reserved but not yet enforced end-to-end; use \"warn\" (or omit) until the block-mode runtime wiring lands", opf.OnFailure)
 	default:
 		return fmt.Errorf("openai_privacy_filter.on_failure must be \"warn\" (got %q)", opf.OnFailure)
+	}
+	// Reject unknown category names so typos like "private_peerson" surface
+	// at parse time instead of silently producing zero detections at runtime.
+	// The canonical set lives next to the label→token mapping in redact/opf.go.
+	for name := range opf.Categories {
+		if !redact.IsKnownOPFCategory(name) {
+			return fmt.Errorf("openai_privacy_filter.categories has unknown key %q (see docs/security-and-privacy.md for the supported set)", name)
+		}
 	}
 	return nil
 }

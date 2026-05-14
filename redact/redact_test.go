@@ -1544,3 +1544,69 @@ func (s *shortReturnBatchRuntime) RedactBatch(_ context.Context, _ []string, _ [
 }
 
 func (s *shortReturnBatchRuntime) Close() error { return nil }
+
+// TestStringsWithPrivacyFilter_BatchesSingleOPFCall pins down the
+// performance contract behind the public API: N strings → exactly one
+// RedactBatch call (not N Redact calls). Callers like redactSummary in
+// the checkpoint package depend on this — a summary with several
+// Friction/OpenItems/Code entries would otherwise pay the OPF cold-start
+// once per entry, reintroducing the per-call cost JSONLContent batching
+// avoids for transcripts.
+func TestStringsWithPrivacyFilter_BatchesSingleOPFCall(t *testing.T) {
+	resetOPFConfig()
+	t.Cleanup(resetOPFConfig)
+
+	fake := &fakeRuntime{spans: []opf_runtime.Span{{Start: 0, End: 5, Label: "private_person"}}}
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"private_person": true},
+	}, fake)
+
+	inputs := []string{
+		"Alice met Bob in the lobby",
+		"Charlie sat next to Diane",
+		"Eve reviewed the proposal yesterday",
+		"Frank flagged a regression",
+		"path/with/no/spaces", // non-prose: must be filtered out before batch
+		"single_token",        // non-prose: filtered
+	}
+	out := StringsWithPrivacyFilter(context.Background(), inputs)
+	if len(out) != len(inputs) {
+		t.Fatalf("output length mismatch: want %d, got %d", len(inputs), len(out))
+	}
+	if fake.batchCalls != 1 {
+		t.Errorf("want exactly 1 RedactBatch call across %d inputs, got %d", len(inputs), fake.batchCalls)
+	}
+	if fake.calls != 0 {
+		t.Errorf("want 0 single-input Redact calls (everything should go through batch), got %d", fake.calls)
+	}
+}
+
+// TestStringsWithPrivacyFilter_FallsBackOnBatchError verifies that an OPF
+// failure on the batch path degrades gracefully to the regex-only String
+// pipeline rather than dropping inputs or returning empty strings.
+func TestStringsWithPrivacyFilter_FallsBackOnBatchError(t *testing.T) {
+	resetOPFConfig()
+	t.Cleanup(resetOPFConfig)
+
+	origStderr := opfStderr
+	opfStderr = io.Discard
+	t.Cleanup(func() { opfStderr = origStderr })
+
+	fake := &fakeRuntime{err: errors.New("simulated opf batch failure")}
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"private_person": true},
+	}, fake)
+
+	inputs := []string{"Alice met Bob", "Charlie and Diane talked"}
+	out := StringsWithPrivacyFilter(context.Background(), inputs)
+	if len(out) != len(inputs) {
+		t.Fatalf("output length mismatch: want %d, got %d", len(inputs), len(out))
+	}
+	for i, s := range out {
+		if s == "" {
+			t.Errorf("output[%d] empty after fallback; want regex-only redaction of %q", i, inputs[i])
+		}
+	}
+}

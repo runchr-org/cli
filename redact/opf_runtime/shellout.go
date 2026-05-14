@@ -139,11 +139,17 @@ func (s *shellOut) RedactBatch(ctx context.Context, inputs []string, categories 
 		case errors.Is(ctx.Err(), context.Canceled):
 			return nil, fmt.Errorf("opf canceled: %w", ctx.Err())
 		}
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg == "" {
+		// Intentionally do NOT embed stderr.String() — a misconfigured or
+		// modified OPF command could echo stdin (transcript content) to its
+		// own stderr, which would then end up in .entire/logs/entire.log and
+		// the user-facing TTY via the failure handler. The byte count is
+		// enough to tell "OPF emitted some diagnostic" from "OPF exited
+		// silently"; users can re-run with ENTIRE_LOG_LEVEL=debug to capture
+		// raw stderr from a controlled context if forensics are needed.
+		if stderr.Len() == 0 {
 			return nil, fmt.Errorf("opf exited with error: %w", err)
 		}
-		return nil, fmt.Errorf("opf exited with error: %s: %w", errMsg, err)
+		return nil, fmt.Errorf("opf exited with error (%d bytes on stderr): %w", stderr.Len(), err)
 	}
 
 	// Single concatenated input → opf emits one JSON object.

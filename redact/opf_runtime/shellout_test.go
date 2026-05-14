@@ -51,8 +51,18 @@ func TestShellOut_NonZeroExit(t *testing.T) {
 	if err == nil {
 		t.Fatalf("want error, got nil")
 	}
-	if !strings.Contains(err.Error(), "boom") {
-		t.Errorf("err: want stderr passthrough, got %q", err)
+	// stderr is intentionally NOT passed through verbatim — see the security
+	// rationale in shellout.go and TestShellOut_ExitError_DoesNotLeakStderr.
+	// The error should still indicate exit-failure and report stderr length
+	// so debugging is possible without leaking content.
+	if !strings.Contains(err.Error(), "opf exited with error") {
+		t.Errorf("err: want exit-error prefix, got %q", err)
+	}
+	if !strings.Contains(err.Error(), "bytes on stderr") {
+		t.Errorf("err: want byte-count of stderr in error, got %q", err)
+	}
+	if strings.Contains(err.Error(), "boom") {
+		t.Errorf("err: must NOT pass stderr content through verbatim, got %q", err)
 	}
 }
 
@@ -390,5 +400,31 @@ func TestShellOut_ParseError_DoesNotLeakStdout(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secret) {
 		t.Errorf("error message leaks transcript content: %v", err)
+	}
+}
+
+// TestShellOut_ExitError_DoesNotLeakStderr verifies the non-JSON exit-error
+// path also withholds raw process stderr from the returned error. A
+// misconfigured OPF binary could echo stdin (transcript content) to its own
+// stderr — embedding that verbatim in the error chain would leak it to
+// .entire/logs and the user-facing TTY via handleOPFFailure.
+func TestShellOut_ExitError_DoesNotLeakStderr(t *testing.T) {
+	t.Parallel()
+	const secret = "Alice met Bob at 555-867-5309"
+	rt := &shellOut{
+		command:        "opf",
+		timeoutSeconds: 5,
+		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			// Exit non-zero and print transcript content to stderr —
+			// simulates a buggy or hostile OPF wrapper.
+			return shCmd(ctx, "printf '%s' '"+secret+"' >&2; exit 7")
+		},
+	}
+	_, err := rt.Redact(context.Background(), secret, []string{"private_person"})
+	if err == nil {
+		t.Fatal("Redact: want exit error, got nil")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("error message leaks stderr content: %v", err)
 	}
 }

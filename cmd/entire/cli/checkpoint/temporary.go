@@ -372,8 +372,11 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 		// Per-turn shadow-branch writes intentionally use the plain
 		// redact.JSONLBytes (and redact.Bytes below) — the OpenAI Privacy
 		// Filter only runs at the condensation boundary in committed.go
-		// where bytes are about to leave the local machine. See the data-flow
-		// section in docs/superpowers/specs/2026-05-12-openai-privacy-filter-addon-design.md.
+		// where bytes are about to leave the local machine. See the
+		// "Optional OpenAI Privacy Filter" section of
+		// docs/security-and-privacy.md for the user-facing rationale and
+		// createRedactedBlobFromFileWithPrivacyFilter (committed.go) for the
+		// counterpart write path.
 		var incData json.RawMessage
 		if opts.IncrementalData != nil {
 			redacted, redactErr := redact.JSONLBytes(opts.IncrementalData)

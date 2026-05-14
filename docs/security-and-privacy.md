@@ -131,7 +131,7 @@ Full settings reference:
 
 If `opf` is not on PATH, fails to start, or times out, Entire continues with the seven built-in layers and emits a one-line `× OpenAI Privacy Filter: …` notice to your terminal with the exact install command. Existing redaction is never weakened — OPF only adds to it.
 
-Cost note: each shell-out has a ~2s model cold-start. Condensation batches all eligible leaf strings into a single inference pass, so a realistic transcript adds a few seconds at commit time, not minutes.
+Cost note: each shell-out loads the OPF model (~1.5B parameters on CPU). Condensation batches all eligible leaf strings into a single inference pass per scope (transcript + joined prompts), so a typical real-world commit adds ~25–30s of OPF inference on CPU rather than the multi-minute cost a per-leaf flow would incur. On a fresh process the very first commit pays the cold model load on top of that; subsequent shell-outs within the same commit pay only the inference time (~2s for the joined-prompt pass after the transcript pass has primed the disk cache). If OPF fails or times out, a per-process circuit breaker disables it for the remainder of the invocation so you see one warning, not one per scope.
 
 ### Recommendations
 

@@ -295,3 +295,54 @@ func TestDetectOPF_SkipsNonProseStrings(t *testing.T) {
 		})
 	}
 }
+
+// TestDetectOPF_CircuitBreakerSkipsAfterFirstFailure pins down the
+// process-scoped circuit breaker: the first detectOPF call that hits a
+// runtime error trips opfBreakerTripped, and every subsequent detectOPF
+// short-circuits before shelling out. Without this, a broken or
+// persistently-timing-out OPF install turns a single condensation into N×
+// timeout waits instead of one warning plus graceful fallback.
+func TestDetectOPF_CircuitBreakerSkipsAfterFirstFailure(t *testing.T) {
+	resetOPFConfig()
+	t.Cleanup(resetOPFConfig)
+
+	origStderr := opfStderr
+	opfStderr = io.Discard
+	t.Cleanup(func() { opfStderr = origStderr })
+
+	fake := &fakeRuntime{err: errors.New("simulated opf failure")}
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"private_person": true},
+	}, fake)
+
+	// First call should invoke the runtime and observe the failure.
+	if got := detectOPF(context.Background(), getOPFConfig(), "Alice met Bob in the lobby"); got != nil {
+		t.Fatalf("first call: want nil (failure path), got %v", got)
+	}
+	if fake.calls != 1 {
+		t.Fatalf("first call: want runtime.Redact called once, got %d", fake.calls)
+	}
+
+	// Every subsequent call MUST short-circuit before shelling out.
+	for i := range 5 {
+		if got := detectOPF(context.Background(), getOPFConfig(), "Charlie sat next to Diane at the back table"); got != nil {
+			t.Errorf("call %d after breaker trip: want nil, got %v", i+2, got)
+		}
+	}
+	if fake.calls != 1 {
+		t.Errorf("breaker did not engage: runtime.Redact was called %d times, want 1", fake.calls)
+	}
+
+	// Reconfiguring resets the breaker so a fresh setup retries.
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"private_person": true},
+	}, fake)
+	if got := detectOPF(context.Background(), getOPFConfig(), "Alice and Bob went home"); got != nil {
+		t.Fatal("after reconfigure: want nil (still failing fake), got non-nil")
+	}
+	if fake.calls != 2 {
+		t.Errorf("after reconfigure: want runtime.Redact called again, total=2; got %d", fake.calls)
+	}
+}

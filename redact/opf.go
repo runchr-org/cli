@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/entireio/cli/redact/opf_runtime"
@@ -42,6 +43,16 @@ type OPFConfig struct {
 var (
 	opfConfig   *OPFConfig
 	opfConfigMu sync.RWMutex
+	// opfBreakerTripped, once set, disables OPF for the rest of this process.
+	// The first detectOPF failure flips it via handleOPFFailure; subsequent
+	// detectOPF invocations short-circuit before shelling out. Without this,
+	// a broken OPF install (binary missing, persistently timing out, etc.)
+	// makes every redaction call pay the full timeout — turning one
+	// condensation (or `entire doctor bundle`) into N × 30s waits instead of
+	// a single warning and graceful fallback. Process-scoped so a fresh
+	// invocation re-attempts; the typical flow (post-commit hook) is a fresh
+	// process per commit, so users still get one chance per commit.
+	opfBreakerTripped atomic.Bool
 )
 
 // ConfigurePrivacyFilter sets the global OPF configuration and constructs the
@@ -62,6 +73,9 @@ func ConfigurePrivacyFilter(cfg OPFConfig) {
 	opfConfigMu.Lock()
 	opfConfig = &cfgCopy
 	opfConfigMu.Unlock()
+	// Reconfiguration resets the breaker — new command / timeout might fix
+	// whatever broke the previous one.
+	opfBreakerTripped.Store(false)
 }
 
 // ConfigurePrivacyFilterWithRuntime is the test-only variant that takes an
@@ -77,8 +91,9 @@ func ConfigurePrivacyFilterWithRuntime(cfg OPFConfig, rt opf_runtime.Runtime) {
 	}
 	cfgCopy.runtime = rt
 	opfConfigMu.Lock()
-	defer opfConfigMu.Unlock()
 	opfConfig = &cfgCopy
+	opfConfigMu.Unlock()
+	opfBreakerTripped.Store(false)
 }
 
 // getOPFConfig returns the current configuration, or nil if never configured.
@@ -102,8 +117,9 @@ func GetOPFConfigForTest() *OPFConfig {
 // signals test-only intent; do not call from production code paths.
 func ResetOPFConfigForTest() {
 	opfConfigMu.Lock()
-	defer opfConfigMu.Unlock()
 	opfConfig = nil
+	opfConfigMu.Unlock()
+	opfBreakerTripped.Store(false)
 }
 
 // opfLabelMap maps OPF native labels to our taggedRegion.label values.
@@ -119,6 +135,14 @@ var opfLabelMap = map[string]string{
 	"private_date":    "DATE",
 	"account_number":  "ACCOUNT_NUMBER",
 	"secret":          "", // -> bare REDACTED
+}
+
+// IsKnownOPFCategory reports whether name is one of the OPF native labels the
+// CLI knows how to tag and render. Exported so the settings layer can reject
+// typos at parse time instead of silently dropping them at detection time.
+func IsKnownOPFCategory(name string) bool {
+	_, ok := opfLabelMap[name]
+	return ok
 }
 
 func mapOPFLabel(opfLabel string) string {
@@ -155,19 +179,21 @@ func enabledCategories(cfg *OPFConfig) []string {
 // an error. Errors are routed to the configured failure handler before
 // returning nil.
 //
-// Performance note: OPF shell-out has ~2s cold-start per invocation, and
-// JSONLContentWithPrivacyFilter calls detectOPF for every leaf string in a
-// transcript (paths, IDs, type tags, message bodies — easily 500+ per
-// realistic transcript). To keep condensation tractable we skip strings
-// that aren't prose. The has-space heuristic eliminates ~80% of structural
-// leaf strings (paths, snake_case keys, IDs) while keeping every sentence
-// fragment that could contain a name, address, email, etc. Personal data
-// in single-token strings is left to the regex layers (email/phone shape
-// already catches those). Daemon mode (future) makes this gate
-// unnecessary by collapsing the cold-start cost.
+// Performance note: OPF shell-out has ~2s cold-start per invocation.
+// JSONLContentWithPrivacyFilter batches all eligible leaf strings into one
+// RedactBatch call, amortizing the cold-start across the transcript. The
+// has-space gate further eliminates structural leaf strings (paths, IDs,
+// snake_case keys) before they enter the batch — keeping inference input
+// small without losing prose-shaped content that could contain names,
+// emails, addresses, etc. Single-token personal-data shapes (e.g. an
+// isolated email) are left to the regex layers, which already cover them.
+// Daemon mode (future) makes the cold-start gate unnecessary entirely.
 func detectOPF(ctx context.Context, cfg *OPFConfig, s string) []taggedRegion {
 	if cfg == nil || !cfg.Enabled || cfg.runtime == nil || s == "" {
 		return nil
+	}
+	if opfBreakerTripped.Load() {
+		return nil // a prior call in this process already failed; skip silently
 	}
 	if !strings.ContainsRune(s, ' ') {
 		return nil
@@ -204,18 +230,28 @@ func detectOPF(ctx context.Context, cfg *OPFConfig, s string) []taggedRegion {
 }
 
 // handleOPFFailure dispatches an OPF runtime error to the configured handler.
-// Always logs via slog.WarnContext and prints a user-facing message to
-// opfStderr via formatOPFFailure.
+// Trips the process-scoped circuit breaker so subsequent detectOPF calls
+// short-circuit, logs via slog.WarnContext, and prints a user-facing message
+// to opfStderr via formatOPFFailure — all on the FIRST failure only.
 //
-// TODO(opf-block-mode): cfg.OnFailure == "block" is currently ignored —
-// this function always falls through to warn behavior (log + stderr +
-// return). Wiring "block" requires plumbing an error return through
-// JSONLBytesWithPrivacyFilter and JSONLContentWithPrivacyFilter (the
-// other two entry points return non-error types and can't surface a
-// block). Until that wiring exists, the on_failure setting is documented
-// in the schema but not enforced.
+// TODO(opf-block-mode): cfg.OnFailure is currently always "warn" because the
+// settings layer (validateOPFSettings) rejects "block" at parse time. When
+// the block-mode runtime wiring is implemented — plumbing a hard error
+// through JSONLBytesWithPrivacyFilter / JSONLContentWithPrivacyFilter; the
+// other two entry points return non-error types and can't surface a block —
+// the parse-time rejection in settings.validateOPFSettings should be
+// relaxed in lockstep, and this function should branch on cfg.OnFailure to
+// return a real error to the caller.
 func handleOPFFailure(ctx context.Context, cfg *OPFConfig, err error) {
-	slog.WarnContext(ctx, "OpenAI Privacy Filter call failed",
+	// CompareAndSwap so only the FIRST failure in this process emits the
+	// user-facing warning. Subsequent detectOPF calls short-circuit before
+	// shelling out (see detectOPF) and never reach this path, so the swap
+	// is mostly a guard against concurrent first-call races.
+	first := opfBreakerTripped.CompareAndSwap(false, true)
+	if !first {
+		return
+	}
+	slog.WarnContext(ctx, "OpenAI Privacy Filter call failed; disabling OPF for the rest of this process",
 		componentAttr,
 		slog.String("command", cfg.Command),
 		slog.String("on_failure", cfg.OnFailure),

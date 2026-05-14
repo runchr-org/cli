@@ -830,50 +830,70 @@ func mergeFilesTouched(existing, additional []string) []string {
 
 // redactSummary returns a copy of the summary with text fields redacted.
 // Structural fields (Path, Line, EndLine) are preserved.
-// NOTE: When adding new text fields to Summary, LearningsSummary, or CodeLearning,
-// update this function to include them in redaction.
+//
+// All prose-shaped fields are batched through a single OPF call rather than
+// shelling out per field — a summary with several Friction/OpenItems/Code
+// entries would otherwise pay the OPF cold-start once per entry, undoing
+// the batching win that JSONLContentWithPrivacyFilter gets for transcripts.
+//
+// NOTE: When adding new text fields to Summary, LearningsSummary, or
+// CodeLearning, append them to flat below AND distribute them back in the
+// same order, otherwise fields will get cross-wired.
 func redactSummary(ctx context.Context, s *Summary) *Summary {
 	if s == nil {
 		return nil
 	}
-	return &Summary{
-		Intent:    redact.StringWithPrivacyFilter(ctx, s.Intent),
-		Outcome:   redact.StringWithPrivacyFilter(ctx, s.Outcome),
-		Friction:  redactStringSlice(ctx, s.Friction),
-		OpenItems: redactStringSlice(ctx, s.OpenItems),
+	flat := make([]string, 0, 2+len(s.Friction)+len(s.OpenItems)+len(s.Learnings.Repo)+len(s.Learnings.Workflow)+len(s.Learnings.Code))
+	flat = append(flat, s.Intent, s.Outcome)
+	flat = append(flat, s.Friction...)
+	flat = append(flat, s.OpenItems...)
+	flat = append(flat, s.Learnings.Repo...)
+	flat = append(flat, s.Learnings.Workflow...)
+	for _, cl := range s.Learnings.Code {
+		flat = append(flat, cl.Finding)
+	}
+
+	redacted := redact.StringsWithPrivacyFilter(ctx, flat)
+	idx := 0
+	next := func() string {
+		v := redacted[idx]
+		idx++
+		return v
+	}
+	out := &Summary{
+		Intent:    next(),
+		Outcome:   next(),
+		Friction:  consumeStringSlice(s.Friction, next),
+		OpenItems: consumeStringSlice(s.OpenItems, next),
 		Learnings: LearningsSummary{
-			Repo:     redactStringSlice(ctx, s.Learnings.Repo),
-			Workflow: redactStringSlice(ctx, s.Learnings.Workflow),
-			Code:     redactCodeLearnings(ctx, s.Learnings.Code),
+			Repo:     consumeStringSlice(s.Learnings.Repo, next),
+			Workflow: consumeStringSlice(s.Learnings.Workflow, next),
 		},
 	}
-}
-
-// redactStringSlice applies redact.StringWithPrivacyFilter to each element.
-func redactStringSlice(ctx context.Context, ss []string) []string {
-	if ss == nil {
-		return nil
-	}
-	out := make([]string, len(ss))
-	for i, s := range ss {
-		out[i] = redact.StringWithPrivacyFilter(ctx, s)
+	// Preserve nil-vs-empty for Code so JSON encoding still distinguishes
+	// "no entries" (omit) from "empty list" — matches the nil-aware shape
+	// the consumeStringSlice helper enforces for the other slice fields.
+	if s.Learnings.Code != nil {
+		out.Learnings.Code = make([]CodeLearning, len(s.Learnings.Code))
+		for i, cl := range s.Learnings.Code {
+			out.Learnings.Code[i] = CodeLearning{
+				Path:    cl.Path,
+				Line:    cl.Line,
+				EndLine: cl.EndLine,
+				Finding: next(),
+			}
+		}
 	}
 	return out
 }
 
-// redactCodeLearnings redacts only the Finding field, preserving Path/Line/EndLine.
-func redactCodeLearnings(ctx context.Context, cls []CodeLearning) []CodeLearning {
-	if cls == nil {
+func consumeStringSlice(src []string, next func() string) []string {
+	if src == nil {
 		return nil
 	}
-	out := make([]CodeLearning, len(cls))
-	for i, cl := range cls {
-		out[i] = CodeLearning{
-			Path:    cl.Path,
-			Line:    cl.Line,
-			EndLine: cl.EndLine,
-			Finding: redact.StringWithPrivacyFilter(ctx, cl.Finding),
-		}
+	out := make([]string, len(src))
+	for i := range src {
+		out[i] = next()
 	}
 	return out
 }

@@ -1338,3 +1338,37 @@ func TestLoadFromFile_RejectsBadOnFailure(t *testing.T) {
 		t.Error("LoadFromFile with on_failure=\"bock\": want error, got nil")
 	}
 }
+
+// TestLoadFromBytes_RejectsUnknownCategory pins down that category-name typos
+// fail at parse time instead of silently producing zero detections. Without
+// this, "private_peerson" would leave OPF "enabled" but with no work to do,
+// and the user would never see feedback that their config is wrong.
+func TestLoadFromBytes_RejectsUnknownCategory(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		key     string
+		wantErr bool
+	}{
+		{"known_person", "private_person", false},
+		{"known_email", "private_email", false},
+		{"known_secret", "secret", false},
+		{"typo_peerson", "private_peerson", true},
+		{"typo_address_plural", "private_addresses", true},
+		{"unknown_category", "social_security_number", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			body := `{"redaction":{"openai_privacy_filter":{"categories":{"` + tc.key + `":true}}}}`
+			_, err := LoadFromBytes([]byte(body))
+			if tc.wantErr && err == nil {
+				t.Errorf("LoadFromBytes with category %q: want error, got nil", tc.key)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("LoadFromBytes with category %q: want nil, got %v", tc.key, err)
+			}
+		})
+	}
+}

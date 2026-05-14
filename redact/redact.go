@@ -783,6 +783,104 @@ func StringWithPrivacyFilter(ctx context.Context, s string) string {
 	return applyRegions(s, regions)
 }
 
+// StringsWithPrivacyFilter is the batched variant of StringWithPrivacyFilter
+// for callers that hold N independent strings. It runs OPF in a single
+// RedactBatch call (amortizing the ~2s cold-start) and applies the seven
+// regex layers per string. The returned slice has the same length and order
+// as inputs; an empty or nil input yields a nil/empty output.
+//
+// Callers should batch any logical group of strings that are redacted
+// together — e.g. summary fields, attribution claim text, doctor bundle
+// entries — instead of calling StringWithPrivacyFilter in a loop, which
+// shells out once per call.
+func StringsWithPrivacyFilter(ctx context.Context, inputs []string) []string {
+	if len(inputs) == 0 {
+		return nil
+	}
+	cfg := getOPFConfig()
+
+	// Fast path: OPF off / unconfigured / breaker tripped — fall through to
+	// the regex-only String pipeline. Same result as calling String per item
+	// without paying the per-call OPF cost.
+	if cfg == nil || !cfg.Enabled || cfg.runtime == nil || opfBreakerTripped.Load() {
+		return stringsRegexOnly(inputs)
+	}
+	cats := enabledCategories(cfg)
+	if len(cats) == 0 {
+		return stringsRegexOnly(inputs)
+	}
+
+	// Pass 1: collect eligible inputs (has-space, deduped) for the OPF batch.
+	// Mirrors the per-leaf gate in detectOPF.
+	seen := make(map[string]struct{}, len(inputs))
+	batch := make([]string, 0, len(inputs))
+	for _, s := range inputs {
+		if s == "" || !strings.ContainsRune(s, ' ') {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		batch = append(batch, s)
+	}
+
+	spansByInput := make(map[string][]opf_runtime.Span, len(batch))
+	if len(batch) > 0 {
+		progress := newProgressWriter(opfStderr, isTTYWriter(opfStderr), accessibleMode())
+		progress.Start("scanning transcript")
+		start := time.Now()
+		batched, err := cfg.runtime.RedactBatch(ctx, batch, cats)
+		if err != nil {
+			handleOPFFailure(ctx, cfg, err)
+			return stringsRegexOnly(inputs)
+		}
+		progress.Finish(time.Since(start))
+		if len(batched) < len(batch) {
+			slog.Warn("OPF runtime returned fewer span slices than inputs",
+				componentAttr,
+				slog.Int("inputs", len(batch)),
+				slog.Int("returned", len(batched)),
+			)
+		}
+		for i, in := range batch {
+			if i >= len(batched) {
+				break
+			}
+			spansByInput[in] = batched[i]
+		}
+	}
+
+	out := make([]string, len(inputs))
+	for i, s := range inputs {
+		regions := detectAllLayers(s)
+		if spans, ok := spansByInput[s]; ok {
+			for _, sp := range spans {
+				if !cfg.Categories[sp.Label] {
+					continue
+				}
+				if sp.Start < 0 || sp.End > len(s) || sp.Start >= sp.End {
+					continue
+				}
+				regions = append(regions, taggedRegion{
+					region: region{sp.Start, sp.End},
+					label:  mapOPFLabel(sp.Label),
+				})
+			}
+		}
+		out[i] = applyRegions(s, regions)
+	}
+	return out
+}
+
+func stringsRegexOnly(inputs []string) []string {
+	out := make([]string, len(inputs))
+	for i, s := range inputs {
+		out[i] = String(s)
+	}
+	return out
+}
+
 // JSONLContentWithPrivacyFilter is the augmented variant of JSONLContent.
 // OPF runs against the entire transcript in a single batched call to amortize
 // the per-call cold-start cost; without batching, a realistic transcript with

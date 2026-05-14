@@ -3766,39 +3766,41 @@ func TestRedactSummary_NoSecrets(t *testing.T) {
 	}
 }
 
-func TestRedactStringSlice_NilAndEmpty(t *testing.T) {
+// TestRedactSummary_PreservesNilVsEmptySliceShape pins down that
+// redactSummary mirrors the input's nil-vs-empty distinction for its
+// string slices. The previous implementation had per-slice helpers
+// (redactStringSlice / redactCodeLearnings); now redactSummary batches
+// all strings through a single OPF call but must still distinguish nil
+// (omit from JSON) from empty (encode as []).
+func TestRedactSummary_PreservesNilVsEmptySliceShape(t *testing.T) {
 	t.Parallel()
 
-	// nil input should return nil (not empty slice)
-	if result := redactStringSlice(context.Background(), nil); result != nil {
-		t.Errorf("redactStringSlice(nil) should return nil, got %v", result)
+	// Both inputs are nil — output slices should be nil too.
+	nilIn := &Summary{}
+	nilOut := redactSummary(context.Background(), nilIn)
+	if nilOut.Friction != nil {
+		t.Errorf("nil Friction in: want nil out, got %v", nilOut.Friction)
+	}
+	if nilOut.Learnings.Code != nil {
+		t.Errorf("nil Code in: want nil out, got %v", nilOut.Learnings.Code)
 	}
 
-	// empty slice should return empty slice (not nil)
-	result := redactStringSlice(context.Background(), []string{})
-	if result == nil {
-		t.Error("redactStringSlice([]string{}) should return empty slice, not nil")
+	// Empty slices in — output should be empty (len 0, not nil).
+	emptyIn := &Summary{
+		Friction:  []string{},
+		OpenItems: []string{},
+		Learnings: LearningsSummary{
+			Repo:     []string{},
+			Workflow: []string{},
+			Code:     []CodeLearning{},
+		},
 	}
-	if len(result) != 0 {
-		t.Errorf("redactStringSlice([]string{}) should return empty slice, got len %d", len(result))
+	emptyOut := redactSummary(context.Background(), emptyIn)
+	if emptyOut.Friction == nil || len(emptyOut.Friction) != 0 {
+		t.Errorf("empty Friction in: want empty (non-nil) out, got %v", emptyOut.Friction)
 	}
-}
-
-func TestRedactCodeLearnings_NilAndEmpty(t *testing.T) {
-	t.Parallel()
-
-	// nil input should return nil
-	if result := redactCodeLearnings(context.Background(), nil); result != nil {
-		t.Errorf("redactCodeLearnings(nil) should return nil, got %v", result)
-	}
-
-	// empty slice should return empty slice
-	result := redactCodeLearnings(context.Background(), []CodeLearning{})
-	if result == nil {
-		t.Error("redactCodeLearnings([]CodeLearning{}) should return empty slice, not nil")
-	}
-	if len(result) != 0 {
-		t.Errorf("expected len 0, got %d", len(result))
+	if emptyOut.Learnings.Code == nil || len(emptyOut.Learnings.Code) != 0 {
+		t.Errorf("empty Code in: want empty (non-nil) out, got %v", emptyOut.Learnings.Code)
 	}
 }
 
