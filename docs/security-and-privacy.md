@@ -128,6 +128,26 @@ Full settings reference:
 
 - `command` — path or PATH-resolvable name of the `opf` binary. Defaults to `opf`.
 - `timeout_seconds` — per-invocation timeout. Defaults to `30`.
+- `prompt_default` — `"ask"` (default), `"always"`, or `"never"`. Controls whether the pre-push hook surfaces an interactive prompt before running OPF. `ENTIRE_OPF=yes` or `ENTIRE_OPF=no` on a single `git push` invocation overrides this for that push only.
+
+The interactive prompt offers three options and reacts to **Ctrl-C** for cancellation:
+
+```
+Run OpenAI Privacy Filter on these checkpoints?
+Adds ~30s but redacts names/PII the regex layers can't catch.
+Ctrl-C to cancel the push.
+
+  ▸ Yes — run OPF this push
+    No — skip OPF, push as-is
+    Always — run OPF on every push from now on
+```
+
+- **Yes** runs OPF for this push only.
+- **No** skips OPF for this push only; the 7-layer-redacted content reaches the remote.
+- **Always** runs OPF this push AND writes `prompt_default: "always"` to `.entire/settings.local.json` so future pushes don't ask.
+- **Ctrl-C** aborts the push entirely — `git push` exits non-zero, no refs go to the remote.
+
+Non-interactive contexts (CI, scripted pipes with no TTY) skip the prompt and run OPF automatically when enabled, printing `→ OpenAI Privacy Filter: scanning checkpoints…` to stderr so the wait isn't silent. Set `ENTIRE_OPF=no` to skip OPF in those contexts without disabling the feature globally.
 
 There is no `on_failure` setting; warn-on-failure is the only mode supported today. If OPF is not on PATH, fails to start, or times out, Entire prints a one-line `× OpenAI Privacy Filter unavailable …` notice and continues with the seven built-in layers. A per-process circuit breaker disables OPF for the remainder of the invocation after the first failure, so a broken install costs one warning rather than one timeout per redaction call.
 

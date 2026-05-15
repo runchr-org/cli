@@ -1133,6 +1133,47 @@ func TestLoadFromBytes_OPFSettings_RejectsOnFailureField(t *testing.T) {
 	}
 }
 
+// TestLoadFromBytes_OPFSettings_PromptDefault covers parsing + validation
+// of the prompt_default field added for the pre-push prompt UX. Empty is
+// allowed (treated as "ask"); ask/always/never are the only valid values.
+func TestLoadFromBytes_OPFSettings_PromptDefault(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		value   string
+		wantErr bool
+		wantVal string
+	}{
+		{name: "ask", value: `"ask"`, wantVal: "ask"},
+		{name: "always", value: `"always"`, wantVal: "always"},
+		{name: "never", value: `"never"`, wantVal: "never"},
+		{name: "empty_string_allowed_as_ask", value: `""`, wantVal: ""},
+		{name: "bogus_value_rejected", value: `"sometimes"`, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			body := []byte(`{"redaction":{"openai_privacy_filter":{"prompt_default":` + tc.value + `}}}`)
+			s, err := LoadFromBytes(body)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for %q, got nil", tc.value)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if s.Redaction == nil || s.Redaction.OpenAIPrivacyFilter == nil {
+				t.Fatal("OPF settings not parsed")
+			}
+			if got := s.Redaction.OpenAIPrivacyFilter.PromptDefault; got != tc.wantVal {
+				t.Errorf("PromptDefault = %q, want %q", got, tc.wantVal)
+			}
+		})
+	}
+}
+
 // TestLoadFromBytes_OPFSettings_Merge verifies override semantics for the
 // merge path (settings.local.json on top of settings.json): present fields
 // override, omitted fields preserve, categories merge per-key.

@@ -2,7 +2,9 @@ package strategy
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"os"
 
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -10,6 +12,11 @@ import (
 	"github.com/entireio/cli/perf"
 	"github.com/entireio/cli/redact"
 )
+
+// errOPFAbortedByUser is returned when the user chose Abort (or pressed
+// Ctrl-C) at the OPF prompt. PrePush returns it verbatim; the hook
+// command propagates the non-zero exit code so git push aborts.
+var errOPFAbortedByUser = errors.New("OPF prompt aborted by user; push cancelled")
 
 // PrePush is called by the git pre-push hook before pushing to a remote.
 // It pushes the entire/checkpoints/v1 branch alongside the user's push (unless
@@ -34,35 +41,52 @@ func (s *ManualCommitStrategy) PrePush(ctx context.Context, remote string) error
 	}
 
 	if settings.CheckpointsVersion(ctx) != 2 {
-		// OPF pre-push rewrite: if OPF is configured, re-redact unpushed
-		// v1 commits with the 8-layer pipeline before pushing. Skipped
-		// entirely when OPF is off, so the common-case fast path is
-		// unchanged. The rewrite returns sentinel errors for diverged
-		// remote, oversized bootstrap, and CAS conflict — these MUST
-		// abort the user's git push, otherwise the remote would receive
-		// 7-layer content when the user enabled OPF expecting 8-layer.
-		// Return them up so the hook command exits non-zero and the
-		// hook script propagates the exit code; see hooks.go's prePushCmd.
+		// OPF pre-push rewrite: if OPF is configured, resolve the
+		// user's decision (env > settings > prompt > non-TTY auto-run),
+		// then re-redact unpushed v1 commits with the 8-layer pipeline
+		// before pushing. Skipped entirely when OPF is off, so the
+		// common-case fast path is unchanged.
 		if redact.OPFEnabled() {
-			_, opfSpan := perf.Start(ctx, "opf_pre_push_rewrite")
-			repo, repoErr := OpenRepository(ctx)
-			if repoErr != nil {
-				opfSpan.RecordError(repoErr)
-				opfSpan.End()
-				logging.Warn(ctx, "OPF pre-push: failed to open repo; aborting push",
-					slog.String("error", repoErr.Error()),
-				)
-				return repoErr
+			s, _ := settings.Load(ctx) //nolint:errcheck // Load already failed at hook init; fall back to nil
+			var opfCfg *settings.OPFSettings
+			if s != nil && s.Redaction != nil {
+				opfCfg = s.Redaction.OpenAIPrivacyFilter
 			}
-			if _, rewriteErr := RewriteUnpushedV1WithOPF(ctx, repo, ps.pushTarget()); rewriteErr != nil {
-				opfSpan.RecordError(rewriteErr)
-				opfSpan.End()
-				logging.Warn(ctx, "OPF pre-push rewrite failed; aborting push",
-					slog.String("error", rewriteErr.Error()),
+			decision, decisionErr := resolveOPFDecisionForPrePush(ctx, opfCfg, os.Stderr)
+			if decisionErr != nil {
+				logging.Warn(ctx, "OPF pre-push decision failed; aborting push",
+					slog.String("error", decisionErr.Error()),
 				)
-				return rewriteErr
+				return decisionErr
 			}
-			opfSpan.End()
+			switch decision {
+			case OPFAbort:
+				return errOPFAbortedByUser
+			case OPFSkip:
+				// User opted out for this push (or settings/env say
+				// "never"). Push 7-layer content as-is.
+				logging.Info(ctx, "OPF skipped for this push (user choice or settings)")
+			case OPFRun:
+				_, opfSpan := perf.Start(ctx, "opf_pre_push_rewrite")
+				repo, repoErr := OpenRepository(ctx)
+				if repoErr != nil {
+					opfSpan.RecordError(repoErr)
+					opfSpan.End()
+					logging.Warn(ctx, "OPF pre-push: failed to open repo; aborting push",
+						slog.String("error", repoErr.Error()),
+					)
+					return repoErr
+				}
+				if _, rewriteErr := RewriteUnpushedV1WithOPF(ctx, repo, ps.pushTarget()); rewriteErr != nil {
+					opfSpan.RecordError(rewriteErr)
+					opfSpan.End()
+					logging.Warn(ctx, "OPF pre-push rewrite failed; aborting push",
+						slog.String("error", rewriteErr.Error()),
+					)
+					return rewriteErr
+				}
+				opfSpan.End()
+			}
 		}
 
 		// Push the checkpoint branch. This is best-effort — failures here

@@ -220,7 +220,21 @@ type OPFSettings struct {
 	Categories     map[string]bool `json:"categories,omitempty"`
 	Command        string          `json:"command,omitempty"`
 	TimeoutSeconds int             `json:"timeout_seconds,omitempty"`
+
+	// PromptDefault controls whether the pre-push hook asks the user
+	// before running OPF. "" (default) and "ask" both surface the
+	// interactive prompt; "always" runs without asking; "never" skips
+	// OPF and pushes 7-layer content. ENTIRE_OPF=yes|no on the push
+	// invocation overrides this setting per-push.
+	PromptDefault string `json:"prompt_default,omitempty"`
 }
+
+// Valid PromptDefault values. Empty == OPFPromptAsk.
+const (
+	OPFPromptAsk    = "ask"
+	OPFPromptAlways = "always"
+	OPFPromptNever  = "never"
+)
 
 // GetCommitLinking returns the effective commit linking mode.
 // Returns the explicit value if set, otherwise defaults to "prompt"
@@ -846,6 +860,13 @@ func validateOPFSettings(opf *OPFSettings) error {
 			return fmt.Errorf("openai_privacy_filter.categories has unknown key %q (see docs/security-and-privacy.md for the supported set)", name)
 		}
 	}
+	switch opf.PromptDefault {
+	case "", OPFPromptAsk, OPFPromptAlways, OPFPromptNever:
+		// ok
+	default:
+		return fmt.Errorf("openai_privacy_filter.prompt_default must be one of %q, %q, %q (got %q)",
+			OPFPromptAsk, OPFPromptAlways, OPFPromptNever, opf.PromptDefault)
+	}
 	return nil
 }
 
@@ -882,6 +903,11 @@ func mergeOPFSettings(dst *OPFSettings, data json.RawMessage) error {
 	if v, ok := raw["timeout_seconds"]; ok {
 		if err := json.Unmarshal(v, &dst.TimeoutSeconds); err != nil {
 			return fmt.Errorf("parsing openai_privacy_filter.timeout_seconds: %w", err)
+		}
+	}
+	if v, ok := raw["prompt_default"]; ok {
+		if err := json.Unmarshal(v, &dst.PromptDefault); err != nil {
+			return fmt.Errorf("parsing openai_privacy_filter.prompt_default: %w", err)
 		}
 	}
 	return validateOPFSettings(dst)
