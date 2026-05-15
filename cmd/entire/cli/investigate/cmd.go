@@ -29,6 +29,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/mdrender"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -1002,10 +1003,15 @@ func writeInvestigateFooter(w io.Writer, m LocalManifest) {
 
 	body := findingsContentFor(m)
 	if body != "" {
-		fmt.Fprintln(w, "--- Findings ---")
-		fmt.Fprintln(w)
-		fmt.Fprint(w, body)
-		if !strings.HasSuffix(body, "\n") {
+		rendered, renderErr := mdrender.RenderForWriter(w, body)
+		if renderErr != nil {
+			// Fall back to raw markdown so the user still sees the
+			// content even when glamour fails (malformed style config,
+			// unexpected runtime).
+			rendered = body
+		}
+		fmt.Fprint(w, rendered)
+		if !strings.HasSuffix(rendered, "\n") {
 			fmt.Fprintln(w)
 		}
 		fmt.Fprintln(w)

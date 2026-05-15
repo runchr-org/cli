@@ -276,8 +276,10 @@ func TestNewCommand_FreshRunWritesManifest(t *testing.T) {
 	if !strings.Contains(out.String(), "entire investigate fix") {
 		t.Errorf("expected fix hint in output, got:\n%s", out.String())
 	}
-	// Footer should embed the findings body between markers.
-	if !strings.Contains(out.String(), "--- Findings ---") {
+	// Footer should embed the findings body (rendered via mdrender;
+	// out is a bytes.Buffer so mdrender falls back to raw markdown,
+	// and the scaffold's `# Investigation:` header is a stable anchor).
+	if !strings.Contains(out.String(), "Investigation:") {
 		t.Errorf("expected footer to embed findings body, got:\n%s", out.String())
 	}
 
@@ -362,7 +364,7 @@ func TestNewCommand_FreshRunPausedKeepsPerRunDir(t *testing.T) {
 
 	// Footer should still embed the findings body — for paused outcomes
 	// we read it from the on-disk file (the per-run dir is preserved).
-	if !strings.Contains(out.String(), "--- Findings ---") {
+	if !strings.Contains(out.String(), "Investigation:") {
 		t.Errorf("expected footer to embed findings body on Paused, got:\n%s", out.String())
 	}
 }

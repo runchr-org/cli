@@ -16,6 +16,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/entireio/cli/cmd/entire/cli/mdrender"
 )
 
 // ShowInput drives RunShow.
@@ -157,28 +159,32 @@ func printShowSummary(w io.Writer, m LocalManifest) {
 // manifest's embedded content (set on terminal outcomes); falls back
 // to reading the on-disk findings file (still present for paused or
 // cancelled runs). Prints a soft "no content" notice when neither is
-// available.
+// available. The body is rendered through mdrender so it gets the
+// shared CLI palette (orange H1 / cyan H2 / indigo H3 / syntax-
+// highlighted code) when w is a terminal; raw markdown passes through
+// for piped output (NO_COLOR or non-TTY) so it stays grep-friendly.
 func printShowFindings(w io.Writer, m LocalManifest) {
-	if m.FindingsContent != "" {
-		fmt.Fprintln(w, "--- Findings ---")
-		fmt.Fprintln(w)
-		fmt.Fprint(w, m.FindingsContent)
-		if !strings.HasSuffix(m.FindingsContent, "\n") {
-			fmt.Fprintln(w)
+	body := ""
+	switch {
+	case m.FindingsContent != "":
+		body = m.FindingsContent
+	case m.FindingsDoc != "":
+		if data, err := os.ReadFile(m.FindingsDoc); err == nil {
+			body = string(data)
 		}
+	}
+	if body == "" {
+		fmt.Fprintf(w, "No findings content available for run %s.\n", m.RunID)
 		return
 	}
-	if m.FindingsDoc != "" {
-		data, err := os.ReadFile(m.FindingsDoc)
-		if err == nil {
-			fmt.Fprintln(w, "--- Findings ---")
-			fmt.Fprintln(w)
-			fmt.Fprint(w, string(data))
-			if !strings.HasSuffix(string(data), "\n") {
-				fmt.Fprintln(w)
-			}
-			return
-		}
+	rendered, err := mdrender.RenderForWriter(w, body)
+	if err != nil {
+		// Glamour failure: fall back to raw markdown so the user still
+		// sees the content.
+		rendered = body
 	}
-	fmt.Fprintf(w, "No findings content available for run %s.\n", m.RunID)
+	fmt.Fprint(w, rendered)
+	if !strings.HasSuffix(rendered, "\n") {
+		fmt.Fprintln(w)
+	}
 }
