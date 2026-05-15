@@ -55,7 +55,7 @@ func TestComposeInvestigatePrompt_FirstRound(t *testing.T) {
 	// Sanity checks the golden doesn't catch on its own.
 	for _, want := range []string{
 		"You are agent: claude-code",
-		"Round: 1    (turn 1 overall in this session)",
+		"This is round 1, turn 1 overall.",
 		"Topic: Why is checkout flaky?",
 		"Findings: /abs/repo/.git/entire-investigations/abcdef012345/findings.md",
 		"State:    /abs/repo/.git/entire-investigations/abcdef012345/state.json",
@@ -84,7 +84,7 @@ func TestComposeInvestigatePrompt_MidLoop(t *testing.T) {
 
 	assertGoldenString(t, "testdata/prompt-mid-loop.txt", got)
 
-	if !strings.Contains(got, "Round: 2    (turn 5 overall in this session)") {
+	if !strings.Contains(got, "This is round 2, turn 5 overall.") {
 		t.Errorf("expected mid-loop round/turn coordinates")
 	}
 	if !strings.Contains(got, "You are agent: codex") {
@@ -146,7 +146,7 @@ func TestComposeInvestigatePrompt_WithPriorContext(t *testing.T) {
 	}
 	// Prior context should come BEFORE the body, not be appended at the end.
 	idxPrior := strings.Index(got, "## Prior context")
-	idxBody := strings.Index(got, "You are participating in an autonomous")
+	idxBody := strings.Index(got, "You are agent: claude-code")
 	if idxPrior > idxBody {
 		t.Errorf("PriorContext should render before body (idxPrior=%d idxBody=%d)", idxPrior, idxBody)
 	}

@@ -169,64 +169,43 @@ func Bootstrap(ctx context.Context, in BootstrapInput) (BootstrapResult, error) 
 	}, nil
 }
 
-// renderInvestigationScaffold returns the topic-only scaffold body. Mirrors
-// marvin's scaffold but without the multi-agent investigators line (entire's
-// loop knows the agent list separately and we don't want it baked into the
-// findings doc which lives in the user's repo).
+// renderInvestigationScaffold returns the topic-only scaffold body.
+//
+// The doc is a living document the agents edit in place each turn — not a
+// chronological log of attempts. It has exactly three content sections:
+// Current understanding (the team's best answer right now), Supporting
+// evidence (claims tied to concrete refs), and Disputed / unverified
+// (open questions and unverified claims).
 func renderInvestigationScaffold(topic, createdISODate, priorEntireContext string) string {
 	priorSection := ""
 	if strings.TrimSpace(priorEntireContext) != "" {
-		priorSection = "\n## Prior Entire Context\n\n" + strings.TrimSpace(priorEntireContext) + "\n"
+		priorSection = "## Prior Entire Context\n\n" + strings.TrimSpace(priorEntireContext) + "\n\n"
 	}
 	return fmt.Sprintf(`# Investigation: %s
 
 **Status:** investigating
 **Started:** %s
 
-## TLDR
+%s## Current understanding
 
-<!-- 2-4 sentences. The reader who only reads this section must understand:
-the question, the answer (root cause / conclusion), and the single most
-important piece of evidence. Updated every turn — until consensus, this
-section reflects the current best hypothesis with confidence ("likely",
-"confirmed"), not a final answer. -->
+<!-- The converged best answer to the question, in prose. Updated every
+turn to reflect what the agents collectively believe right now. Hedge
+with words like "likely" or "preliminary" until consensus; once agents
+converge, state the answer directly and flip Status to "converged". -->
 
-## Question
+## Supporting evidence
 
-%s
-%s
-## Prior work
+<!-- Bullets, each tying a claim to concrete evidence. Format:
+- <claim> — <file:line | command output | test result>
+Add evidence as you verify it. Remove or correct evidence that turns
+out to be wrong. Re-order so the most load-bearing items come first. -->
 
-<!-- What was searched, what was found, what was ruled out. If nothing
-relevant, say "no prior work found; searched for: <queries>". When a
-finding cites a commit hash, also note the Entire-Checkpoint trailer
-(if any) and what `+"`entire explain --checkpoint <id> --no-pager`"+`
-revealed. -->
+## Disputed / unverified
 
-## System under investigation
-
-<!-- A small diagram of the path under investigation. For
-producer/consumer or queue-shaped systems, show: who writes the input,
-who reads it, where retries happen, and the per-attempt cost. ASCII or
-mermaid both fine. Two boxes and an arrow beats a paragraph. -->
-
-## Approach
-
-<!-- Each agent describes how they investigated. Append, don't overwrite. -->
-
-## Findings
-
-<!-- One numbered subsection per finding. Every claim needs concrete evidence:
-file paths with line numbers (e.g. internal/cli/root.go:17), commands you ran,
-test output, or direct quotes. -->
-
-## Unknowns / Assumptions
-
-<!-- Anything you could not confirm; assumptions that should be flagged. -->
-
-## Conclusion
-
-<!-- Filled in once consensus is reached. Stop here. Recommendations and
-action items belong in a plan, not an investigation. -->
-`, topic, createdISODate, topic, priorSection)
+<!-- Anything an agent claims that another agent has not (or cannot)
+verify, plus open questions that haven't been resolved. Each item
+should explain WHY it's disputed or what evidence would resolve it.
+Move items to Supporting evidence when verified; delete items that
+are no longer relevant. -->
+`, topic, createdISODate, priorSection)
 }

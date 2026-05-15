@@ -64,6 +64,17 @@ func TestBootstrap_TopicScaffold(t *testing.T) {
 	got := string(body)
 	for _, want := range []string{
 		"# Investigation: Why is checkout flaky?",
+		"**Status:** investigating",
+		"## Current understanding",
+		"## Supporting evidence",
+		"## Disputed / unverified",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("scaffold missing section %q", want)
+		}
+	}
+	// Old sections must not appear.
+	for _, banned := range []string{
 		"## TLDR",
 		"## Question",
 		"## Prior work",
@@ -73,8 +84,8 @@ func TestBootstrap_TopicScaffold(t *testing.T) {
 		"## Unknowns / Assumptions",
 		"## Conclusion",
 	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("scaffold missing section %q", want)
+		if strings.Contains(got, banned) {
+			t.Errorf("scaffold should not contain old section %q", banned)
 		}
 	}
 	if strings.Contains(got, "## Prior Entire Context") {
@@ -109,12 +120,13 @@ func TestBootstrap_TopicScaffoldWithPriorEntireContext(t *testing.T) {
 	if !strings.Contains(got, "Prior session abc123 worked on the same area.") {
 		t.Errorf("scaffold missing prior block content")
 	}
-	// Prior block should be inserted between Question and Prior work.
-	idxQuestion := strings.Index(got, "## Question")
+	// Prior block should be inserted between the header (Status/Started)
+	// and Current understanding.
+	idxStarted := strings.Index(got, "**Started:**")
 	idxPrior := strings.Index(got, "## Prior Entire Context")
-	idxPriorWork := strings.Index(got, "## Prior work")
-	if idxQuestion >= idxPrior || idxPrior >= idxPriorWork {
-		t.Errorf("expected Question < PriorEntireContext < Prior work, got %d < %d < %d", idxQuestion, idxPrior, idxPriorWork)
+	idxCurrent := strings.Index(got, "## Current understanding")
+	if idxStarted >= idxPrior || idxPrior >= idxCurrent {
+		t.Errorf("expected Started < PriorEntireContext < Current understanding, got %d < %d < %d", idxStarted, idxPrior, idxCurrent)
 	}
 }
 

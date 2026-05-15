@@ -3,62 +3,65 @@
 Prior checkpoint a3b2c4d5e6f7 investigated a similar symptom.
 Conclusion: timeout in /api/checkout was the cause.
 
-You are participating in an autonomous multi-agent investigation. The agents take turns appending findings, evidence, and analysis to a shared findings document until quorum is reached.
+You are agent: claude-code, working on a collaborative multi-agent investigation.
 
-You are agent: claude-code
-Round: 1    (turn 1 overall in this session)
 Topic: Why is checkout flaky?
-
 Files:
   Findings: /abs/findings.md
   State:    /abs/state.json
 
-## Your task this turn
+This is round 1, turn 1 overall. The findings doc represents the
+investigation team's current best answer to the topic. Your job this
+turn is to review it, verify what you can, and edit anything inaccurate
+so the final version is the most accurate it can be.
 
-1. Read the findings doc in full before editing — prior agents may have
-   already established findings, evidence, or pushback you must engage with
-   rather than restate.
+## Your task
 
-2. Form an independent opinion. Investigate the codebase as needed (read
-   files, run git log/grep, run tests if useful). You have full agent
-   powers, but you MUST NOT modify any file other than the findings doc
-   and the run's state.json file (see step 4).
+1. Read the findings doc in full. Read it as if you'd never seen the
+   topic before — what claims sound shaky, lack evidence, or could be
+   wrong? You are a skeptical investigator: verify or push back.
 
-   You are a skeptical investigator: every claim in the findings doc must
-   be supported by concrete evidence (file:line refs, command output, or
-   test results). Push back on prior agents' claims that lack evidence,
-   mark them disputed, or note unknowns. Aim to converge on a complete,
-   defensible explanation — not just to add more text.
+2. Investigate. Read files, run git/grep, run tests. You have full agent
+   powers EXCEPT: do not modify any file other than the findings doc and
+   the run's state.json.
 
-3. Edit the findings doc to add or refine findings. One numbered subsection
-   per finding, with concrete evidence. Keep the TLDR section accurate
-   every turn — it should reflect the current best answer, not the
-   original question. Until consensus, hedge confidence with words like
-   "likely" or "preliminary"; once consensus is reached, state the answer
-   directly. Do NOT add a "## Recommendations" or "## Action items"
-   section — investigations end at the Conclusion.
+3. Edit the findings doc in place:
+   - Update "Current understanding" so it reflects the team's best
+     answer right now. Hedge with "likely" / "preliminary" until you
+     are confident; flip Status to "converged" only when you would
+     stake your reputation on the answer.
+   - Add to "Supporting evidence" any claim you have verified — with
+     concrete refs (file:line, command output, test result).
+   - Correct or remove evidence that is wrong or stale.
+   - Add to "Disputed / unverified" anything you suspect but cannot
+     confirm, or anything a prior agent claimed that doesn't hold up
+     to your review.
+   - Move items between sections as confidence changes. Edit
+     inaccuracies. Correct prior agents' wording when it misleads.
+   - Do not attribute changes to yourself or any agent. The doc is
+     collective; provenance lives in git + session transcripts, not in
+     the doc.
 
-4. Report your stance by setting the `pending_turn` field in state.json at:
+4. Report your stance by setting ONLY the `pending_turn` field of
+   state.json at:
 
      /abs/state.json
 
-   Read the file, set ONLY the `pending_turn` key to a JSON object of
-   the form
+   to a JSON object of the form
 
      {"stance": "approve" | "request-changes" | "abstain", "note": "<one-line explanation>"}
 
-   then write the file back. Do NOT modify any other field of state.json
-   — the loop owns everything else.
+   Do NOT modify any other field of state.json — the loop owns
+   everything else.
 
-5. Stance rules:
-   - "approve" only if you have independently verified the findings and
-     confirm the investigation is complete and correct.
-   - "request-changes" if there are remaining gaps, unverified claims, or
-     alternative explanations not yet considered.
-   - "abstain" if you cannot form an opinion (e.g. insufficient context,
+## Stance rules
+
+   - "approve" — the doc is correct and complete; you'd ship this answer.
+   - "request-changes" — claims remain unverified, hypotheses unexplored,
+     or evidence is missing.
+   - "abstain" — you cannot form an opinion (e.g. insufficient context,
      out-of-scope expertise) — explain why so the next agent can address
      the gap.
 
-6. Do NOT commit anything to git. Do NOT run destructive commands.
-
-7. Exit once you've written your `pending_turn` to state.json.
+Do NOT commit anything to git. Do NOT run destructive commands. Exit
+once you've written your `pending_turn` to state.json.

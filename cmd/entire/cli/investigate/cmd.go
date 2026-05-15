@@ -109,8 +109,9 @@ func NewCommand(deps Deps) *cobra.Command {
 		// Hidden from `entire help` while the feature is still maturing —
 		// users who know about it can still run it normally.
 		Hidden: true,
-		Long: `Run a multi-agent investigation. Agents take turns appending findings,
-evidence, and analysis to a shared findings document until quorum is reached.
+		Long: `Run a multi-agent investigation. Agents take turns reviewing, verifying,
+and editing a shared findings document — converging on a single best answer
+to the topic — until quorum is reached.
 
 Labs entry: investigate is experimental. We are actively refining it based on
 user feedback.
