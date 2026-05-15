@@ -469,9 +469,16 @@ func runExplain(ctx context.Context, w, errW io.Writer, sessionID, commitRef, ch
 // an ambiguity pre-check to avoid writing a summary to the wrong
 // checkpoint on short-prefix collisions.
 func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool, summaryTimeoutSeconds int) error {
-	stop := startSpinner(errW, "Loading checkpoints")
-	lookup, lookupErr := newExplainCheckpointLookup(ctx)
-	stop(false)
+	pw := newExplainProgressWriter(errW)
+	hooks := newPhaseProgressHooks(pw)
+	var (
+		lookup    *explainCheckpointLookup
+		lookupErr error
+	)
+	hooks.WithLabel("Loading local checkpoints", func() error {
+		lookup, lookupErr = newExplainCheckpointLookup(ctx)
+		return lookupErr
+	})
 	if generate {
 		if err := runExplainAutoAmbiguityGuard(ctx, target, lookup, lookupErr); err != nil {
 			return err

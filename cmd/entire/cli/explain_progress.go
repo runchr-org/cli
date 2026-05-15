@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 )
 
@@ -101,4 +104,48 @@ func formatPhaseDuration(d time.Duration) string {
 		return fmt.Sprintf("%dms", d.Milliseconds())
 	}
 	return fmt.Sprintf("%.1fs", d.Seconds())
+}
+
+// newPhaseProgressHooks adapts an explainProgressWriter to
+// checkpoint.AttemptHooks so phase events fire as each fetch/read attempt
+// runs. Successful attempts render as "✓ label (duration)"; failed attempts
+// render as "✗ label: <first stderr line>" so the user sees the immediate
+// reason rather than just "failed".
+func newPhaseProgressHooks(pw *explainProgressWriter) checkpoint.AttemptHooks {
+	if pw == nil {
+		return checkpoint.AttemptHooks{}
+	}
+	return checkpoint.AttemptHooks{
+		OnStart: func(label string) {
+			pw.StartPhase(label)
+		},
+		OnFinish: func(label string, duration time.Duration, err error) {
+			if err == nil {
+				pw.FinishPhase(label, true, formatPhaseDuration(duration))
+				return
+			}
+			pw.FinishPhase(label, false, firstStderrLine(err))
+		},
+	}
+}
+
+// firstStderrLine returns a short single-line representation of err
+// suitable for an inline "✗ <label>: <line>" diagnostic. Prefers the first
+// non-blank line from a captured FetchAttemptError stderr; falls back to
+// the first line of err.Error().
+func firstStderrLine(err error) string {
+	var fae *FetchAttemptError
+	if errors.As(err, &fae) && fae.Stderr != "" {
+		for _, line := range strings.Split(fae.Stderr, "\n") {
+			t := strings.TrimSpace(line)
+			if t != "" {
+				return t
+			}
+		}
+	}
+	msg := err.Error()
+	if i := strings.IndexByte(msg, '\n'); i > 0 {
+		msg = msg[:i]
+	}
+	return msg
 }

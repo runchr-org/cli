@@ -186,23 +186,27 @@ func lookupHasCheckpoint(lookup *explainCheckpointLookup, cpID id.CheckpointID) 
 
 // matchCheckpointPrefixWithRemoteFallback returns all committed checkpoints
 // whose ID starts with prefix. On a local miss, fetches metadata from the
-// remote (treeless origin → full origin chain) and retries once with a fresh
-// lookup. The returned lookup may differ from the input on retry.
+// remote (checkpoint_remote → treeless origin → local → full origin →
+// remote-tracking, plus the v2 variant) and retries once with a fresh
+// lookup. Each fetch/read attempt renders as a phase line via the explain
+// progress writer so the user can see which strategy is running and which
+// errored. The returned lookup may differ from the input on retry.
 func matchCheckpointPrefixWithRemoteFallback(ctx context.Context, errW io.Writer, lookup *explainCheckpointLookup, prefix string) ([]id.CheckpointID, *explainCheckpointLookup) {
 	matches := matchCheckpointPrefix(lookup, prefix)
 	if len(matches) > 0 {
 		return matches, lookup
 	}
 
-	stop := startSpinner(errW, "Fetching checkpoint metadata from remote")
-	_, _, v1Err := getMetadataTree(ctx)
+	pw := newExplainProgressWriter(errW)
+	hooks := newPhaseProgressHooks(pw)
+
+	_, _, v1Err := getMetadataTreeWithHooks(ctx, hooks)
 	v2OK := false
 	if shouldFetchV2Metadata(ctx, lookup) {
-		if _, _, v2Err := getV2MetadataTree(ctx); v2Err == nil {
+		if _, _, v2Err := getV2MetadataTreeWithHooks(ctx, hooks); v2Err == nil {
 			v2OK = true
 		}
 	}
-	stop(false)
 	if v1Err != nil && !v2OK {
 		return nil, lookup
 	}

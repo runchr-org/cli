@@ -414,6 +414,14 @@ func readCheckpointInfoFromLocalTree(
 //
 // Fallback order: treeless fetch → local → checkpoint_remote → full origin fetch → remote tree.
 func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error) {
+	return getMetadataTreeWithHooks(ctx, checkpoint.AttemptHooks{})
+}
+
+// getMetadataTreeWithHooks is the version that fires AttemptHooks events
+// around each of the 5 fallback strategies (checkpoint_remote → treeless
+// origin → local → full origin → remote-tracking). The zero-value hooks
+// argument makes this equivalent to getMetadataTree.
+func getMetadataTreeWithHooks(ctx context.Context, hooks checkpoint.AttemptHooks) (*object.Tree, *git.Repository, error) {
 	logCtx := logging.WithComponent(ctx, "resume.getMetadataTree")
 
 	// Helper to log ref hash for a repo's metadata branch
@@ -432,129 +440,205 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 		)
 	}
 
+	// Per-attempt wrapper: fires OnStart/OnFinish around fn, captures the
+	// resulting tree+repo via outer-var closure. Returns ok=true on success.
+	var (
+		outTree *object.Tree
+		outRepo *git.Repository
+	)
+	attempt := func(label string, fn func() (*object.Tree, *git.Repository, error)) bool {
+		var attemptErr error
+		hooks.WithLabel(label, func() error {
+			tree, repo, err := fn()
+			if err != nil {
+				attemptErr = err
+				return err
+			}
+			outTree, outRepo = tree, repo
+			return nil
+		})
+		return attemptErr == nil
+	}
+
 	// When checkpoint_remote is configured, try it first — that's where
 	// checkpoint data lives. Avoids a wasted fetch from origin (which may
 	// not have the metadata branch at all).
-	if fetchErr := FetchMetadataFromCheckpointRemote(ctx); fetchErr == nil {
+	if attempt("Fetching v1 metadata from checkpoint_remote", func() (*object.Tree, *git.Repository, error) {
+		if fetchErr := FetchMetadataFromCheckpointRemote(ctx); fetchErr != nil {
+			logging.Debug(logCtx, "checkpoint remote fetch skipped or failed",
+				slog.String("error", fetchErr.Error()),
+			)
+			return nil, nil, fetchErr
+		}
 		freshRepo, freshErr := openRepository(ctx)
-		if freshErr == nil {
-			logRefHash(freshRepo, "checkpoint-remote")
-			metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo)
-			if treeErr == nil {
-				logging.Debug(logCtx, "metadata tree obtained via checkpoint remote fetch",
-					slog.String("tree_hash", metadataTree.Hash.String()),
-				)
-				return metadataTree, freshRepo, nil
-			}
+		if freshErr != nil {
+			return nil, nil, freshErr
+		}
+		logRefHash(freshRepo, "checkpoint-remote")
+		metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo)
+		if treeErr != nil {
 			logging.Debug(logCtx, "checkpoint remote fetch succeeded but tree read failed",
 				slog.String("error", treeErr.Error()),
 			)
+			return nil, nil, fmt.Errorf("read v1 metadata tree: %w", treeErr)
 		}
-	} else {
-		logging.Debug(logCtx, "checkpoint remote fetch skipped or failed",
-			slog.String("error", fetchErr.Error()),
+		logging.Debug(logCtx, "metadata tree obtained via checkpoint remote fetch",
+			slog.String("tree_hash", metadataTree.Hash.String()),
 		)
+		return metadataTree, freshRepo, nil
+	}) {
+		return outTree, outRepo, nil
 	}
 
 	// Try treeless fetch from origin
-	if fetchErr := FetchMetadataTreeOnly(ctx); fetchErr == nil {
+	if attempt("Treeless fetch of v1 metadata from origin", func() (*object.Tree, *git.Repository, error) {
+		if fetchErr := FetchMetadataTreeOnly(ctx); fetchErr != nil {
+			logging.Debug(logCtx, "treeless fetch failed, trying local",
+				slog.String("error", fetchErr.Error()),
+			)
+			return nil, nil, fetchErr
+		}
 		freshRepo, repoErr := openRepository(ctx)
-		if repoErr == nil {
-			logRefHash(freshRepo, "treeless-fetch")
-			metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo)
-			if treeErr == nil {
-				logging.Debug(logCtx, "metadata tree obtained via treeless fetch",
-					slog.String("tree_hash", metadataTree.Hash.String()),
-				)
-				return metadataTree, freshRepo, nil
-			}
+		if repoErr != nil {
+			return nil, nil, repoErr
+		}
+		logRefHash(freshRepo, "treeless-fetch")
+		metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo)
+		if treeErr != nil {
 			logging.Debug(logCtx, "treeless fetch succeeded but tree read failed",
 				slog.String("error", treeErr.Error()),
 			)
+			return nil, nil, fmt.Errorf("read v1 metadata tree: %w", treeErr)
 		}
-	} else {
-		logging.Debug(logCtx, "treeless fetch failed, trying local",
-			slog.String("error", fetchErr.Error()),
+		logging.Debug(logCtx, "metadata tree obtained via treeless fetch",
+			slog.String("tree_hash", metadataTree.Hash.String()),
 		)
+		return metadataTree, freshRepo, nil
+	}) {
+		return outTree, outRepo, nil
 	}
 
 	// Try local (may have been set by a prior fetch or push)
-	localRepo, repoErr := openRepository(ctx)
-	if repoErr == nil {
+	if attempt("Reading v1 metadata from local branch", func() (*object.Tree, *git.Repository, error) {
+		localRepo, repoErr := openRepository(ctx)
+		if repoErr != nil {
+			return nil, nil, repoErr
+		}
 		logRefHash(localRepo, "local")
 		metadataTree, err := strategy.GetMetadataBranchTree(localRepo)
-		if err == nil {
-			logging.Debug(logCtx, "metadata tree obtained from local branch",
-				slog.String("tree_hash", metadataTree.Hash.String()),
+		if err != nil {
+			logging.Debug(logCtx, "local metadata branch not available",
+				slog.String("error", err.Error()),
 			)
-			return metadataTree, localRepo, nil
+			return nil, nil, fmt.Errorf("read v1 metadata tree: %w", err)
 		}
-		logging.Debug(logCtx, "local metadata branch not available",
-			slog.String("error", err.Error()),
+		logging.Debug(logCtx, "metadata tree obtained from local branch",
+			slog.String("tree_hash", metadataTree.Hash.String()),
 		)
+		return metadataTree, localRepo, nil
+	}) {
+		return outTree, outRepo, nil
 	}
 
 	// Fallback: full fetch from origin
-	if fetchErr := FetchMetadataBranch(ctx); fetchErr == nil {
+	if attempt("Full fetch of v1 metadata from origin", func() (*object.Tree, *git.Repository, error) {
+		if fetchErr := FetchMetadataBranch(ctx); fetchErr != nil {
+			logging.Debug(logCtx, "full fetch failed",
+				slog.String("error", fetchErr.Error()),
+			)
+			return nil, nil, fetchErr
+		}
 		freshRepo, repoErr := openRepository(ctx)
-		if repoErr == nil {
-			logRefHash(freshRepo, "full-fetch")
-			metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo)
-			if treeErr == nil {
-				logging.Debug(logCtx, "metadata tree obtained via full fetch",
-					slog.String("tree_hash", metadataTree.Hash.String()),
-				)
-				return metadataTree, freshRepo, nil
-			}
+		if repoErr != nil {
+			return nil, nil, repoErr
+		}
+		logRefHash(freshRepo, "full-fetch")
+		metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo)
+		if treeErr != nil {
 			logging.Debug(logCtx, "full fetch succeeded but tree read failed",
 				slog.String("error", treeErr.Error()),
 			)
+			return nil, nil, fmt.Errorf("read v1 metadata tree: %w", treeErr)
 		}
-	} else {
-		logging.Debug(logCtx, "full fetch failed",
-			slog.String("error", fetchErr.Error()),
+		logging.Debug(logCtx, "metadata tree obtained via full fetch",
+			slog.String("tree_hash", metadataTree.Hash.String()),
 		)
+		return metadataTree, freshRepo, nil
+	}) {
+		return outTree, outRepo, nil
 	}
 
 	// Try remote tree directly (origin/entire/checkpoints/v1)
-	remoteRepo, repoErr := openRepository(ctx)
-	if repoErr != nil {
-		return nil, nil, fmt.Errorf("failed to open repository: %w", repoErr)
-	}
-	logRefHash(remoteRepo, "remote-tracking")
-	remoteTree, remoteErr := strategy.GetRemoteMetadataBranchTree(remoteRepo)
-	if remoteErr == nil {
+	var remoteErr error
+	if attempt("Reading v1 metadata from remote-tracking branch", func() (*object.Tree, *git.Repository, error) {
+		remoteRepo, repoErr := openRepository(ctx)
+		if repoErr != nil {
+			return nil, nil, repoErr
+		}
+		logRefHash(remoteRepo, "remote-tracking")
+		remoteTree, err := strategy.GetRemoteMetadataBranchTree(remoteRepo)
+		if err != nil {
+			remoteErr = err
+			logging.Debug(logCtx, "remote metadata tree also not available",
+				slog.String("error", err.Error()),
+			)
+			return nil, nil, fmt.Errorf("read remote v1 metadata tree: %w", err)
+		}
 		logging.Debug(logCtx, "metadata tree obtained from remote-tracking branch")
 		return remoteTree, remoteRepo, nil
+	}) {
+		return outTree, outRepo, nil
 	}
-	logging.Debug(logCtx, "remote metadata tree also not available",
-		slog.String("error", remoteErr.Error()),
-	)
 
-	return nil, nil, fmt.Errorf("metadata branch not available: %w", remoteErr)
+	if remoteErr != nil {
+		return nil, nil, fmt.Errorf("metadata branch not available: %w", remoteErr)
+	}
+	return nil, nil, errors.New("metadata branch not available")
 }
 
 // getV2MetadataTree resolves the v2 /main ref tree with the same
 // fetch fallback pattern as getMetadataTree, including checkpoint remote support.
 func getV2MetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error) {
-	tree, repo, err := checkpoint.GetV2MetadataTree(ctx, FetchV2MainTreeOnly, FetchV2MainRef, openRepository)
+	return getV2MetadataTreeWithHooks(ctx, checkpoint.AttemptHooks{})
+}
+
+// getV2MetadataTreeWithHooks is the version that fires AttemptHooks events
+// around each attempt (3 strategies inside checkpoint.GetV2MetadataTree plus
+// the checkpoint_remote fallback layered on top here).
+func getV2MetadataTreeWithHooks(ctx context.Context, hooks checkpoint.AttemptHooks) (*object.Tree, *git.Repository, error) {
+	tree, repo, err := checkpoint.GetV2MetadataTreeWithHooks(ctx, FetchV2MainTreeOnly, FetchV2MainRef, openRepository, hooks)
 	if err == nil {
 		return tree, repo, nil
 	}
 
 	// Try checkpoint remote if configured (fetch ref, then read locally)
-	if fetchErr := FetchV2MetadataFromCheckpointRemote(ctx); fetchErr == nil {
-		tree, repo, localErr := checkpoint.GetV2MetadataTree(ctx, nil, nil, openRepository)
-		if localErr == nil {
-			return tree, repo, nil
+	var (
+		fetchAttemptErr error
+		outTree         *object.Tree
+		outRepo         *git.Repository
+	)
+	hooks.WithLabel("Fetching v2 /main from checkpoint_remote", func() error {
+		fetchErr := FetchV2MetadataFromCheckpointRemote(ctx)
+		if fetchErr != nil {
+			fetchAttemptErr = fetchErr
+			logging.Debug(ctx, "v2 checkpoint remote fetch skipped or failed",
+				slog.String("error", fetchErr.Error()),
+			)
+			return fetchErr
 		}
-		logging.Debug(ctx, "v2 checkpoint remote fetch succeeded but tree read failed",
-			slog.String("error", localErr.Error()),
-		)
-	} else {
-		logging.Debug(ctx, "v2 checkpoint remote fetch skipped or failed",
-			slog.String("error", fetchErr.Error()),
-		)
+		t, r, localErr := checkpoint.GetV2MetadataTreeWithHooks(ctx, nil, nil, openRepository, checkpoint.AttemptHooks{})
+		if localErr != nil {
+			fetchAttemptErr = localErr
+			logging.Debug(ctx, "v2 checkpoint remote fetch succeeded but tree read failed",
+				slog.String("error", localErr.Error()),
+			)
+			return fmt.Errorf("read v2 metadata tree: %w", localErr)
+		}
+		outTree, outRepo = t, r
+		return nil
+	})
+	if fetchAttemptErr == nil && outTree != nil {
+		return outTree, outRepo, nil
 	}
 
 	return nil, nil, fmt.Errorf("failed to get v2 metadata tree: %w", err)
