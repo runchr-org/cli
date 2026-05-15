@@ -23,7 +23,13 @@ const manifestTokenTestAgentType agenttypes.AgentType = "Review Token Test"
 
 func TestHydrateReviewSummaryTokensFromStates_PopulatesTokensFromSessionState(t *testing.T) {
 	t.Parallel()
-	started := time.Date(2026, 5, 8, 10, 0, 0, 0, time.UTC)
+	// Time-relative so this test doesn't go stale: session.StateStore.Load
+	// auto-deletes sessions whose StartedAt is older than 7 days
+	// (StaleSessionThreshold), and a hardcoded fixed date silently starts
+	// failing once the calendar clock crosses that threshold. Use "an hour
+	// ago" so we exercise the 5-second jitter check inside
+	// matchReviewSessionState while staying well inside the staleness window.
+	started := time.Now().UTC().Add(-time.Hour)
 	summary := reviewtypes.RunSummary{
 		StartedAt: started,
 		AgentRuns: []reviewtypes.AgentRun{
@@ -67,7 +73,13 @@ func TestHydrateReviewSummaryTokensFromStates_FallsBackToTranscript(t *testing.T
 		return manifestTokenTestAgent{}, nil
 	}
 
-	started := time.Date(2026, 5, 8, 10, 0, 0, 0, time.UTC)
+	// Time-relative so this test doesn't go stale: session.StateStore.Load
+	// auto-deletes sessions whose StartedAt is older than 7 days
+	// (StaleSessionThreshold), and a hardcoded fixed date silently starts
+	// failing once the calendar clock crosses that threshold. Use "an hour
+	// ago" so we exercise the 5-second jitter check inside
+	// matchReviewSessionState while staying well inside the staleness window.
+	started := time.Now().UTC().Add(-time.Hour)
 	tmp := t.TempDir()
 	transcriptPath := filepath.Join(tmp, "review.jsonl")
 	transcript := "review transcript\n"
@@ -112,7 +124,13 @@ func TestReviewSummaryTokenEnricher_LoadsCurrentSessionState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStateStore: %v", err)
 	}
-	started := time.Date(2026, 5, 8, 10, 0, 0, 0, time.UTC)
+	// Time-relative so this test doesn't go stale: session.StateStore.Load
+	// auto-deletes sessions whose StartedAt is older than 7 days
+	// (StaleSessionThreshold), and a hardcoded fixed date silently starts
+	// failing once the calendar clock crosses that threshold. Use "an hour
+	// ago" so we exercise the 5-second jitter check inside
+	// matchReviewSessionState while staying well inside the staleness window.
+	started := time.Now().UTC().Add(-time.Hour)
 	if err := store.Save(ctx, &session.State{
 		SessionID:    "codex-session-token",
 		Kind:         session.KindAgentReview,
