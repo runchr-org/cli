@@ -42,19 +42,38 @@ const (
 // MetadataBranchName is the orphan branch used by manual-commit strategy to store metadata
 const MetadataBranchName = "entire/checkpoints/v1"
 
+// MetadataCompactRefName is the custom ref carrying compact checkpoint
+// metadata + compact transcripts. Introduced in checkpoints v1.1. Lives
+// under refs/entire/ so it is invisible in GitHub's branch UI and
+// excluded from the default git clone refspec.
+const MetadataCompactRefName = "refs/entire/checkpoints/v1/main"
+
+// MetadataFullRefName is the custom ref carrying the full v1-style tree
+// (metadata + prompts + full.jsonl + content_hash.txt). Introduced in
+// checkpoints v1.1. On every condensation it is set to the same commit
+// hash as the legacy MetadataBranchName branch (write-alias), so the
+// two share their entire commit chain. A future release retires the
+// legacy branch in favor of this ref.
+const MetadataFullRefName = "refs/entire/checkpoints/v1/full"
+
 // V2 ref names use custom refs under refs/entire/ (not refs/heads/).
 // These are invisible in GitHub's branch UI and not fetched by default.
 const (
-	// V2MainRefName stores permanent metadata + compact transcripts.
-	V2MainRefName = "refs/entire/checkpoints/v2/main"
+	// V2MainRefName is a deprecated alias for MetadataCompactRefName.
+	// Retained so existing callers and tests continue to compile while
+	// v1.1 rolls out. New code should reference MetadataCompactRefName.
+	//
+	// Deprecated: use MetadataCompactRefName.
+	V2MainRefName = MetadataCompactRefName
 
-	// V2FullCurrentRefName stores the active generation of raw transcripts.
+	// V2FullCurrentRefName stores the active generation of raw transcripts
+	// in the v2 rotation scheme. Unrelated to MetadataFullRefName.
 	V2FullCurrentRefName = "refs/entire/checkpoints/v2/full/current"
 
-	// V2FullRefPrefix is the common prefix for all /full/* refs (current + archived).
+	// V2FullRefPrefix is the common prefix for all v2 /full/* refs (current + archived).
 	V2FullRefPrefix = "refs/entire/checkpoints/v2/full/"
 
-	// GenerationFileName is the metadata file at the root of each /full/* generation tree.
+	// GenerationFileName is the metadata file at the root of each v2 /full/* generation tree.
 	GenerationFileName = "generation.json"
 )
 

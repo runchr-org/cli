@@ -198,3 +198,27 @@ func TestNormalizeMSYSPath(t *testing.T) {
 		})
 	}
 }
+
+func TestMetadataCompactRefName_HasExpectedValue(t *testing.T) {
+	t.Parallel()
+	const want = "refs/entire/checkpoints/v1/main"
+	if MetadataCompactRefName != want {
+		t.Fatalf("MetadataCompactRefName = %q, want %q", MetadataCompactRefName, want)
+	}
+}
+
+func TestMetadataFullRefName_HasExpectedValue(t *testing.T) {
+	t.Parallel()
+	const want = "refs/entire/checkpoints/v1/full"
+	if MetadataFullRefName != want {
+		t.Fatalf("MetadataFullRefName = %q, want %q", MetadataFullRefName, want)
+	}
+}
+
+func TestV2MainRefName_IsAliasOfMetadataCompactRefName(t *testing.T) {
+	t.Parallel()
+	if V2MainRefName != MetadataCompactRefName {
+		t.Fatalf("V2MainRefName (%q) must alias MetadataCompactRefName (%q)",
+			V2MainRefName, MetadataCompactRefName)
+	}
+}

@@ -316,11 +316,11 @@ func TestPushV2Refs_SkipsUnrecordedArchiveRefs(t *testing.T) {
 	require.Error(t, err, "unrecorded older archived generation should not be pushed")
 
 	assert.Contains(t, output, "[entire] Syncing and pushing v2 checkpoints...")
-	assert.Contains(t, output, "[entire] Pushing v2/main, v2/full/current...")
+	assert.Contains(t, output, "[entire] Pushing v1/main, v2/full/current...")
 	assert.Contains(t, output, "[entire] All v2 checkpoints pushed")
 	assert.NotContains(t, output, "[entire] Successfully pushed", "successful refs should only be listed on partial failure")
-	assert.NotContains(t, output, "Pushing v2/main to", "per-ref progress should stay quiet")
-	assert.NotContains(t, output, "Syncing v2/main with remote", "per-ref sync progress should stay quiet")
+	assert.NotContains(t, output, "Pushing v1/main to", "per-ref progress should stay quiet")
+	assert.NotContains(t, output, "Syncing v1/main with remote", "per-ref sync progress should stay quiet")
 }
 
 // TestPushV2Refs_PushesPendingArchivePublications verifies migration-created
@@ -416,7 +416,7 @@ func TestPushV2Refs_PendingPublicationFailureLabelsSkippedActiveRefs(t *testing.
 	pushV2Refs(ctx, bareDir)
 	output := restore()
 
-	assert.Contains(t, output, "[entire] Warning: v2/full/0000000000099, v2/main, v2/full/current were not pushed")
+	assert.Contains(t, output, "[entire] Warning: v2/full/0000000000099, v1/main, v2/full/current were not pushed")
 	assert.NotContains(t, output, "non-fast-forward", "low-level git detail should go to debug logs")
 
 	bareRepo, err := git.PlainOpen(bareDir)
@@ -508,7 +508,7 @@ func TestPushV2Refs_PendingPublicationReadErrorDoesNotReportActiveRefFailures(t 
 	output := restore()
 
 	assert.Contains(t, output, "[entire] Warning: read pending v2 full generation publications:")
-	assert.NotContains(t, output, "failed to push v2/main")
+	assert.NotContains(t, output, "failed to push v1/main")
 	assert.NotContains(t, output, "failed to push v2/full/current")
 
 	bareRepo, err := git.PlainOpen(bareDir)
@@ -853,7 +853,7 @@ func TestPrintV2PartialPushResult(t *testing.T) {
 		[]error{errors.New("couldn't sync v2/full/current: fetch failed")},
 	)
 
-	assert.Contains(t, output.String(), "[entire] Successfully pushed v2/main")
+	assert.Contains(t, output.String(), "[entire] Successfully pushed v1/main")
 	assert.Contains(t, output.String(), "[entire] Warning: couldn't sync v2/full/current: fetch failed")
 	assert.NotContains(t, output.String(), "[entire] All v2 checkpoints pushed")
 }
@@ -868,7 +868,7 @@ func TestParsePushRefResults_MultiRefPorcelain(t *testing.T) {
 	}
 	output := strings.Join([]string{
 		"To https://example.com/repo.git",
-		"*\trefs/entire/checkpoints/v2/main:refs/entire/checkpoints/v2/main\t[new reference]",
+		"*\t" + paths.V2MainRefName + ":" + paths.V2MainRefName + "\t[new reference]",
 		"!\trefs/entire/checkpoints/v2/full/current:refs/entire/checkpoints/v2/full/current\t[rejected] (non-fast-forward)",
 		"=\trefs/entire/checkpoints/v2/full/0000000000002:refs/entire/checkpoints/v2/full/0000000000002\tup to date",
 	}, "\n")
@@ -895,7 +895,7 @@ func TestParsePushRefResults_MissingStatusUsesStatusMissing(t *testing.T) {
 	}
 	output := strings.Join([]string{
 		"To https://example.com/repo.git",
-		"*\trefs/entire/checkpoints/v2/main:refs/entire/checkpoints/v2/main\t[new reference]",
+		"*\t" + paths.V2MainRefName + ":" + paths.V2MainRefName + "\t[new reference]",
 	}, "\n")
 
 	results := parsePushRefResults(context.Background(), output, refs, errors.New("git push failed"))
@@ -909,7 +909,7 @@ func TestParsePushRefResults_GenericRejectionDoesNotBecomeNonFastForward(t *test
 	t.Parallel()
 
 	refs := []plumbing.ReferenceName{plumbing.ReferenceName(paths.V2MainRefName)}
-	output := "!\trefs/entire/checkpoints/v2/main:refs/entire/checkpoints/v2/main\t[remote rejected] auth rejected by server"
+	output := "!\t" + paths.V2MainRefName + ":" + paths.V2MainRefName + "\t[remote rejected] auth rejected by server"
 
 	results := parsePushRefResults(context.Background(), output, refs, errors.New("git push failed"))
 
@@ -933,11 +933,11 @@ func TestPushV2Refs_UnreachableTarget_NamesFailedRef(t *testing.T) {
 	output := restore()
 
 	assert.Contains(t, output, "[entire] Syncing and pushing v2 checkpoints...")
-	assert.Contains(t, output, "[entire] Pushing v2/main...")
-	assert.Contains(t, output, "[entire] Warning: failed to push v2/main:")
-	assert.NotContains(t, output, "[entire] Warning: couldn't sync v2/main:")
+	assert.Contains(t, output, "[entire] Pushing v1/main...")
+	assert.Contains(t, output, "[entire] Warning: failed to push v1/main:")
+	assert.NotContains(t, output, "[entire] Warning: couldn't sync v1/main:")
 	assert.NotContains(t, output, "[entire] All v2 checkpoints pushed")
-	assert.NotContains(t, output, "Pushing v2/main to", "failed aggregated pushes should avoid per-ref progress")
+	assert.NotContains(t, output, "Pushing v1/main to", "failed aggregated pushes should avoid per-ref progress")
 }
 
 // TestFetchAndMergeRef_RotationConflict verifies that when /full/current push
