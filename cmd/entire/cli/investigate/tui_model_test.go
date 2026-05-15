@@ -156,7 +156,7 @@ func TestFormatStance(t *testing.T) {
 	}{
 		{stanceApprove, "✓ approve"},
 		{stanceRequestChanges, "✗ changes"},
-		{stanceAbstain, "— abstain"},
+		{stanceReject, "✗ reject"},
 		{stanceUnknown, ""},
 		{"", ""},
 	}

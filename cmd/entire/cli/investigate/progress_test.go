@@ -51,7 +51,7 @@ func TestNullProgressSink_ImplementsInterface(t *testing.T) {
 
 	var s ProgressSink = nullProgressSink{}
 	s.TurnStarted("a", 1, 1, 1)
-	s.TurnFinished("a", 1, stanceAbstain, 0, true, errors.New("x"), "")
+	s.TurnFinished("a", 1, stanceReject, 0, true, errors.New("x"), "")
 	s.RunFinished(OutcomeStalled)
 	if !strings.HasPrefix(string(OutcomeQuorum), "qu") {
 		t.Errorf("sanity check on OutcomeQuorum failed")

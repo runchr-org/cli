@@ -33,7 +33,7 @@ type ProgressSink interface {
 
 	// TurnFinished is called once after the agent process exits AND the
 	// timeline doc has been parsed for the freshly-added turn block. stance
-	// is one of "approve", "request-changes", "abstain", "unknown". duration
+	// is one of "approve", "request-changes", "reject", "unknown". duration
 	// is the wall-clock duration of the agent process. failed is true when
 	// the turn was treated as a failure by the loop (spawn error, missing
 	// heading, etc.); err is the underlying error or nil.

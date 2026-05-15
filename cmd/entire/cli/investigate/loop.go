@@ -124,7 +124,7 @@ const defaultMaxTurns = 3
 const (
 	stanceApprove        = "approve"
 	stanceRequestChanges = "request-changes"
-	stanceAbstain        = "abstain"
+	stanceReject         = "reject"
 	stanceUnknown        = "unknown"
 )
 
@@ -274,6 +274,7 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 		Topic:        in.Topic,
 		AgentName:    agentName,
 		Round:        round,
+		MaxTurns:     cfg.maxPerAgent,
 		Turn:         state.Turn,
 		AlwaysPrompt: in.AlwaysPrompt,
 		Files:        Files{Findings: in.FindingsDoc, State: cfg.stateDoc},
@@ -392,8 +393,8 @@ func readPendingTurn(ctx context.Context, store *StateStore, runID string, _ *Ru
 		return stanceApprove, strings.TrimSpace(loaded.PendingTurn.Note), true
 	case stanceRequestChanges, "requestchanges", "request_changes":
 		return stanceRequestChanges, strings.TrimSpace(loaded.PendingTurn.Note), true
-	case stanceAbstain:
-		return stanceAbstain, strings.TrimSpace(loaded.PendingTurn.Note), true
+	case stanceReject:
+		return stanceReject, strings.TrimSpace(loaded.PendingTurn.Note), true
 	default:
 		// The agent wrote *something* — record it as an invalid-stance
 		// pending_turn so the loop's "no pending" branch doesn't fire,

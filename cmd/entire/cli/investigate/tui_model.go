@@ -54,7 +54,7 @@ type agentRow struct {
 	accumulated  time.Duration // sum of completed turn durations
 	turnsTaken   int           // increments on TurnFinished (success or fail)
 	maxTurns     int
-	latestStance string // canonical: "approve" | "request-changes" | "abstain" | ""
+	latestStance string // canonical: "approve" | "request-changes" | "reject" | ""
 	lastErr      error
 	buffer       []timelineEntry
 }
@@ -505,21 +505,21 @@ func (m investigateTUIModel) outcomeLine() string {
 
 // countsLine renders the per-stance totals at the end of the run.
 func (m investigateTUIModel) countsLine() string {
-	app, chg, abs, unk := 0, 0, 0, 0
+	app, chg, rej, unk := 0, 0, 0, 0
 	for _, r := range m.rows {
 		switch r.latestStance {
 		case stanceApprove:
 			app++
 		case stanceRequestChanges:
 			chg++
-		case stanceAbstain:
-			abs++
+		case stanceReject:
+			rej++
 		default:
 			unk++
 		}
 	}
-	return fmt.Sprintf("%d agent(s) — %d approved, %d request-changes, %d abstain, %d unknown",
-		len(m.rows), app, chg, abs, unk)
+	return fmt.Sprintf("%d agent(s) — %d approved, %d request-changes, %d reject, %d unknown",
+		len(m.rows), app, chg, rej, unk)
 }
 
 // formatRowDuration returns the display string for the DURATION column.
@@ -556,8 +556,8 @@ func formatStance(stance string) string {
 		return "✓ approve"
 	case stanceRequestChanges:
 		return "✗ changes"
-	case stanceAbstain:
-		return "— abstain"
+	case stanceReject:
+		return "✗ reject"
 	default:
 		return ""
 	}

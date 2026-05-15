@@ -64,7 +64,7 @@ type RunState struct {
 // unambiguous from context (the loop knows which turn it just ran), so the
 // agent does not include them.
 type PendingTurn struct {
-	Stance string `json:"stance"`         // "approve" | "request-changes" | "abstain"
+	Stance string `json:"stance"`         // "approve" | "request-changes" | "reject"
 	Note   string `json:"note,omitempty"` // short explanation; optional
 }
 
@@ -77,7 +77,7 @@ type TurnStance struct {
 	Round       int    `json:"round"`
 	Turn        int    `json:"turn"` // overall turn number
 	Agent       string `json:"agent"`
-	Stance      string `json:"stance"` // "approve" | "request-changes" | "abstain" | "unknown"
+	Stance      string `json:"stance"` // "approve" | "request-changes" | "reject" | "unknown"
 	PlanChanged bool   `json:"plan_changed"`
 	Note        string `json:"note,omitempty"`
 }

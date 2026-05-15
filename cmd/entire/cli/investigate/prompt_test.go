@@ -43,6 +43,7 @@ func TestComposeInvestigatePrompt_FirstRound(t *testing.T) {
 		Topic:     "Why is checkout flaky?",
 		AgentName: "claude-code",
 		Round:     1,
+		MaxTurns:  3,
 		Turn:      1,
 		Files: Files{
 			Findings: "/abs/repo/.git/entire-investigations/abcdef012345/findings.md",
@@ -54,13 +55,20 @@ func TestComposeInvestigatePrompt_FirstRound(t *testing.T) {
 
 	// Sanity checks the golden doesn't catch on its own.
 	for _, want := range []string{
+		"autonomous multi-agent investigation",
 		"You are agent: claude-code",
-		"This is round 1, turn 1 overall.",
-		"Topic: Why is checkout flaky?",
+		"Round: 1 of 3",
+		"(turn 1 overall in this session)",
 		"Findings: /abs/repo/.git/entire-investigations/abcdef012345/findings.md",
-		"State:    /abs/repo/.git/entire-investigations/abcdef012345/state.json",
+		"Use Entire tools deliberately",
+		"Audit both sides for failure-rate questions",
+		"Keep the TLDR section accurate every turn",
+		"Do NOT add a \"## Recommendations\"",
+		"marvin plan --from-investigation",
 		"pending_turn",
 		"approve",
+		"request-changes",
+		"reject",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing substring %q", want)
@@ -75,6 +83,7 @@ func TestComposeInvestigatePrompt_MidLoop(t *testing.T) {
 		Topic:     "Why is checkout flaky?",
 		AgentName: "codex",
 		Round:     2,
+		MaxTurns:  3,
 		Turn:      5,
 		Files: Files{
 			Findings: "/abs/repo/.git/entire-investigations/abcdef012345/findings.md",
@@ -84,8 +93,11 @@ func TestComposeInvestigatePrompt_MidLoop(t *testing.T) {
 
 	assertGoldenString(t, "testdata/prompt-mid-loop.txt", got)
 
-	if !strings.Contains(got, "This is round 2, turn 5 overall.") {
-		t.Errorf("expected mid-loop round/turn coordinates")
+	if !strings.Contains(got, "Round: 2 of 3") {
+		t.Errorf("expected mid-loop round/max coordinates")
+	}
+	if !strings.Contains(got, "(turn 5 overall in this session)") {
+		t.Errorf("expected mid-loop overall turn coordinate")
 	}
 	if !strings.Contains(got, "You are agent: codex") {
 		t.Errorf("expected codex as the rendered agent")
@@ -99,6 +111,7 @@ func TestComposeInvestigatePrompt_WithAlwaysPrompt(t *testing.T) {
 		Topic:        "Why is checkout flaky?",
 		AgentName:    "claude-code",
 		Round:        1,
+		MaxTurns:     3,
 		Turn:         1,
 		AlwaysPrompt: "Project rule: cite test names in evidence.",
 		Files: Files{
@@ -127,6 +140,7 @@ func TestComposeInvestigatePrompt_WithPriorContext(t *testing.T) {
 		Topic:     "Why is checkout flaky?",
 		AgentName: "claude-code",
 		Round:     1,
+		MaxTurns:  3,
 		Turn:      1,
 		PriorContext: "Prior checkpoint a3b2c4d5e6f7 investigated a similar symptom.\n" +
 			"Conclusion: timeout in /api/checkout was the cause.",
