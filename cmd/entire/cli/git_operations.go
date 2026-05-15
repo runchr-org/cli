@@ -19,6 +19,27 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
+// FetchAttemptError captures the observable state of a failed `git fetch`
+// invocation: the redacted target, the trimmed and URL-redacted stderr, and the
+// underlying exec error. Callers can extract these via errors.As to build
+// per-attempt diagnostics; the Error() string is intentionally identical to the
+// previous flat format so existing log/test expectations keep working.
+type FetchAttemptError struct {
+	Prefix         string
+	RedactedTarget string
+	Stderr         string
+	Err            error
+}
+
+func (e *FetchAttemptError) Error() string {
+	if e.Stderr != "" {
+		return fmt.Sprintf("%s from %s: %s: %v", e.Prefix, e.RedactedTarget, e.Stderr, e.Err)
+	}
+	return fmt.Sprintf("%s from %s: %v", e.Prefix, e.RedactedTarget, e.Err)
+}
+
+func (e *FetchAttemptError) Unwrap() error { return e.Err }
+
 func formatFilteredFetchError(prefix, fetchTarget string, output []byte, fetchErr error) error {
 	redactedTarget := fetchTarget
 	if isFetchTargetURL(fetchTarget) {
@@ -29,10 +50,12 @@ func formatFilteredFetchError(prefix, fetchTarget string, output []byte, fetchEr
 	if isFetchTargetURL(fetchTarget) {
 		msg = strings.TrimSpace(strings.ReplaceAll(msg, fetchTarget, redactedTarget))
 	}
-	if msg != "" {
-		return fmt.Errorf("%s from %s: %s: %w", prefix, redactedTarget, msg, fetchErr)
+	return &FetchAttemptError{
+		Prefix:         prefix,
+		RedactedTarget: redactedTarget,
+		Stderr:         msg,
+		Err:            fetchErr,
 	}
-	return fmt.Errorf("%s from %s: %w", prefix, redactedTarget, fetchErr)
 }
 
 func isFetchTargetURL(target string) bool {

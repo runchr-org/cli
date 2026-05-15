@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -827,4 +828,57 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 func gitDefaultBranch(t *testing.T, dir string) string {
 	t.Helper()
 	return gitOutput(t, dir, "rev-parse", "--abbrev-ref", "HEAD")
+}
+
+func TestFormatFilteredFetchError_ReturnsTypedError(t *testing.T) {
+	t.Parallel()
+
+	inner := errors.New("exit status 128")
+	output := []byte("fatal: Authentication failed for 'https://github.com/foo/bar'\n")
+
+	err := formatFilteredFetchError("failed to fetch refs/heads/main", "https://github.com/foo/bar", output, inner)
+
+	var fae *FetchAttemptError
+	require.ErrorAs(t, err, &fae, "expected typed FetchAttemptError")
+	require.Equal(t, "failed to fetch refs/heads/main", fae.Prefix)
+	require.NotEmpty(t, fae.RedactedTarget)
+	require.Contains(t, fae.Stderr, "Authentication failed")
+	require.ErrorIs(t, fae.Err, inner)
+
+	require.ErrorIs(t, err, inner, "errors.Is should reach inner error")
+
+	require.Contains(t, err.Error(), "failed to fetch refs/heads/main from ")
+	require.Contains(t, err.Error(), fae.RedactedTarget)
+	require.Contains(t, err.Error(), "Authentication failed")
+	require.Contains(t, err.Error(), inner.Error())
+}
+
+func TestFormatFilteredFetchError_NoOutput(t *testing.T) {
+	t.Parallel()
+
+	inner := errors.New("exit status 1")
+	err := formatFilteredFetchError("failed to fetch x", "origin", nil, inner)
+
+	var fae *FetchAttemptError
+	require.ErrorAs(t, err, &fae)
+	require.Empty(t, fae.Stderr)
+	require.Equal(t, "origin", fae.RedactedTarget)
+
+	require.Equal(t, "failed to fetch x from origin: exit status 1", err.Error())
+}
+
+func TestFormatFilteredFetchError_RedactsURLInStderr(t *testing.T) {
+	t.Parallel()
+
+	inner := errors.New("exit status 128")
+	target := "https://oauth2:secret-token@github.com/foo/bar"
+	output := []byte("fatal: could not read Username for '" + target + "'\n")
+
+	err := formatFilteredFetchError("failed to fetch x", target, output, inner)
+
+	var fae *FetchAttemptError
+	require.ErrorAs(t, err, &fae)
+	require.NotContains(t, fae.Stderr, "secret-token", "raw URL should be redacted from stderr")
+	require.NotContains(t, fae.RedactedTarget, "secret-token")
+	require.NotContains(t, err.Error(), "secret-token")
 }
