@@ -59,6 +59,27 @@ func (s *V2GitStore) WriteCommittedWithSessionIndex(ctx context.Context, opts Wr
 	return sessionIndex, nil
 }
 
+// WriteCompactOnly writes a committed checkpoint to
+// refs/entire/checkpoints/v1/main (the compact-metadata ref) and
+// intentionally does NOT touch /full/current.
+//
+// Used by the manual-commit strategy's always-on compact-ref write path
+// in v1.1: the /full/* archive is a v2-only concern and stays gated
+// behind settings.IsCheckpointsV2Enabled.
+//
+// Returns the session index used on /main so a subsequent /full/current
+// write can be aligned with it.
+func (s *V2GitStore) WriteCompactOnly(ctx context.Context, opts WriteCommittedOptions) (int, error) {
+	if err := validateWriteOpts(opts); err != nil {
+		return 0, err
+	}
+	idx, err := s.writeCommittedMain(ctx, opts)
+	if err != nil {
+		return 0, fmt.Errorf("compact-ref write failed: %w", err)
+	}
+	return idx, nil
+}
+
 // WriteCommittedMainBatch writes /main entries for every (checkpoint, session)
 // pair in batch using a single commit and a single ref CAS. The /full ref is
 // left untouched — callers handle full-transcript artifacts via the existing
