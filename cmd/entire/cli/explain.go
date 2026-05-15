@@ -644,40 +644,47 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 		return NewSilentError(fmt.Errorf("%w: %s matches %d checkpoints", errAmbiguousCommitPrefix, checkpointIDPrefix, len(matches)))
 	}
 
-	// One spinner covers the entire data-loading pipeline: prefetch's
-	// missing-blob analysis (which spawns one cat-file -e per blob and
-	// can take seconds on a deep checkpoint subtree), the prefetch fetch
-	// itself, ResolveCommittedReader's metadata read, session content
-	// reads, and getAssociatedCommits' git log walk. Stop strictly before
-	// any write to w (stdout) so stderr spinner frames and stdout output
-	// never interleave.
-	stopLoad := startSpinner(errW, fmt.Sprintf("Loading checkpoint %s", fullCheckpointID))
+	// One phase covers the entire data-loading pipeline: prefetch's
+	// missing-blob analysis (one cat-file -e per blob, seconds on deep
+	// subtrees), the prefetch fetch itself, ResolveCommittedReader's
+	// metadata read, session content reads, and getAssociatedCommits'
+	// git log walk. The sublabel ticks through each so the user sees
+	// which sub-step is running instead of a single opaque spinner.
+	loadPW := newExplainProgressWriter(errW)
+	loadPrefix := fmt.Sprintf("Loading checkpoint %s", fullCheckpointID)
+	loadStart := time.Now()
+	updateSub := func(label string) {
+		loadPW.UpdateSublabel(loadPrefix, label)
+	}
 
-	resolvedReader, summary, content, err := loadCheckpointForExplain(ctx, errW, lookup, fullCheckpointID, full, generate, rawTranscript)
+	resolvedReader, summary, content, err := loadCheckpointForExplain(ctx, errW, lookup, fullCheckpointID, full, generate, rawTranscript, updateSub)
 	if err != nil {
-		stopLoad(false)
+		loadPW.FinishPhase(loadPrefix, false, firstStderrLine(err))
 		return err
 	}
 	// Handle summary generation — uses raw transcript.
 	if generate {
-		stopLoad(false) // generation prints its own progress to w/errW
+		loadPW.FinishPhase(loadPrefix, true, formatPhaseDuration(time.Since(loadStart)))
 		if err := generateCheckpointSummary(ctx, w, errW, lookup.store, fullCheckpointID, summary, content, force, summaryTimeoutSeconds); err != nil {
 			return err
 		}
 		// Reload to get the updated summary. After generation, display can
 		// prefer v2 /main but must still fall back for v1-only checkpoints in
 		// dual-read mode.
-		stopLoad = startSpinner(errW, fmt.Sprintf("Reloading checkpoint %s", fullCheckpointID))
+		reloadPrefix := fmt.Sprintf("Reloading checkpoint %s", fullCheckpointID)
+		reloadStart := time.Now()
+		loadPW.UpdateSublabel(reloadPrefix, "content")
 		content, err = readCheckpointContentForExplain(ctx, resolvedReader, fullCheckpointID, summary, true)
 		if err != nil {
-			stopLoad(false)
+			loadPW.FinishPhase(reloadPrefix, false, firstStderrLine(err))
 			return fmt.Errorf("failed to reload checkpoint: %w", err)
 		}
+		loadPW.FinishPhase(reloadPrefix, true, formatPhaseDuration(time.Since(reloadStart)))
 	}
 
 	// Handle raw transcript output
 	if rawTranscript {
-		stopLoad(false)
+		loadPW.FinishPhase(loadPrefix, true, formatPhaseDuration(time.Since(loadStart)))
 		if len(content.Transcript) == 0 {
 			return fmt.Errorf("checkpoint %s has no transcript", fullCheckpointID)
 		}
@@ -689,6 +696,9 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 	}
 
 	// Find associated commits (git commits with matching Entire-Checkpoint trailer)
+	if !generate {
+		updateSub("associated commits")
+	}
 	associatedCommits, _ := getAssociatedCommits(ctx, lookup.repo, fullCheckpointID, searchAll) //nolint:errcheck // Best-effort
 
 	// Derive author from the first associated commit (the user who made the commit).
@@ -704,9 +714,11 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 		author, _ = lookup.store.GetCheckpointAuthor(ctx, fullCheckpointID) //nolint:errcheck // Author is optional
 	}
 
-	// Format and output. Stop spinner BEFORE any write to w to keep stderr
-	// frames and stdout content from interleaving.
-	stopLoad(false)
+	// Format and output. Finish the phase BEFORE any write to w so stderr
+	// progress and stdout content don't interleave.
+	if !generate {
+		loadPW.FinishPhase(loadPrefix, true, formatPhaseDuration(time.Since(loadStart)))
+	}
 	output := formatCheckpointOutput(summary, content, fullCheckpointID, associatedCommits, author, verbose, full, w)
 	outputExplainContent(w, output, noPager)
 	return nil
@@ -717,15 +729,24 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 // data-load pipeline out of runExplainCheckpointWithLookup so that
 // function stays under maintidx limits. Caller is responsible for the
 // surrounding spinner.
-func loadCheckpointForExplain(ctx context.Context, errW io.Writer, lookup *explainCheckpointLookup, cpID id.CheckpointID, full, generate, rawTranscript bool) (checkpoint.CommittedReader, *checkpoint.CheckpointSummary, *checkpoint.SessionContent, error) {
+func loadCheckpointForExplain(ctx context.Context, errW io.Writer, lookup *explainCheckpointLookup, cpID id.CheckpointID, full, generate, rawTranscript bool, onSubStep func(string)) (checkpoint.CommittedReader, *checkpoint.CheckpointSummary, *checkpoint.SessionContent, error) {
+	if onSubStep != nil {
+		onSubStep("prefetching blobs")
+	}
 	prefetchCheckpointBlobs(ctx, errW, lookup.repo, cpID)
 
+	if onSubStep != nil {
+		onSubStep("metadata")
+	}
 	store := lookup.store
 	summary, err := checkpoint.ReadCommittedCheckpoint(ctx, store, cpID)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to read checkpoint: %w", err)
 	}
 
+	if onSubStep != nil {
+		onSubStep("content")
+	}
 	needsRawTranscript := full || generate || rawTranscript
 	content, contentErr := readCheckpointContentForExplain(ctx, store, cpID, summary, !needsRawTranscript)
 	if contentErr != nil {
