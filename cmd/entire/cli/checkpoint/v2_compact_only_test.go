@@ -44,3 +44,37 @@ func TestV2GitStore_WriteCompactOnly_WritesCompactRefAndSkipsFullCurrent(t *test
 	_, err = repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
 	require.Error(t, err, "WriteCompactOnly must not touch /full/current")
 }
+
+func TestV2GitStore_WriteFullOnly_WritesFullCurrentForExistingMain(t *testing.T) {
+	t.Parallel()
+
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+
+	cpID := id.MustCheckpointID("b2c3d4e5f6a1")
+	opts := WriteCommittedOptions{
+		CheckpointID:      cpID,
+		SessionID:         "session-B",
+		Strategy:          "manual-commit",
+		Transcript:        redact.AlreadyRedacted([]byte(`{"event":"start"}` + "\n")),
+		Prompts:           []string{"hi"},
+		FilesTouched:      []string{"b.txt"},
+		AuthorName:        "Test",
+		AuthorEmail:       "test@example.com",
+		CompactTranscript: []byte(`{"event":"start"}` + "\n"),
+	}
+
+	// Seed /main so WriteFullOnly can discover the session index.
+	_, err := store.WriteCompactOnly(context.Background(), opts)
+	require.NoError(t, err)
+
+	// /full/current does not exist yet.
+	_, err = repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
+	require.Error(t, err)
+
+	require.NoError(t, store.WriteFullOnly(context.Background(), opts))
+
+	fullRef, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
+	require.NoError(t, err, "/full/current must exist after WriteFullOnly")
+	require.False(t, fullRef.Hash().IsZero())
+}
