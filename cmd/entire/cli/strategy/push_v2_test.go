@@ -202,12 +202,14 @@ func refContainsV2Checkpoint(t *testing.T, repo *git.Repository, refName plumbin
 func TestFetchAndMergeRef_MergesTrees(t *testing.T) {
 	ctx := context.Background()
 	refName := plumbing.ReferenceName(paths.V2MainRefName)
+	srcCP := id.MustCheckpointID("aabbccddeeff")
+	localCP := id.MustCheckpointID("112233445566")
 
 	// Create source repo with a v2 /main ref containing one checkpoint
 	srcDir := setupRepoWithV2Ref(t)
 	srcRepo, err := git.PlainOpen(srcDir)
 	require.NoError(t, err)
-	writeV2Checkpoint(t, srcRepo, id.MustCheckpointID("aabbccddeeff"), "session-src")
+	writeV2Checkpoint(t, srcRepo, srcCP, "session-src")
 
 	// Create a bare "remote" and push src to it
 	bareDir := t.TempDir()
@@ -215,22 +217,33 @@ func TestFetchAndMergeRef_MergesTrees(t *testing.T) {
 	initCmd.Dir = bareDir
 	initCmd.Env = testutil.GitIsolatedEnv()
 	require.NoError(t, initCmd.Run())
+	enableFilteredFetchServingForTest(t, bareDir)
+	bareURL := "file://" + bareDir
 
 	pushCmd := exec.CommandContext(ctx, "git", "push", bareDir,
 		string(refName)+":"+string(refName))
 	pushCmd.Dir = srcDir
 	require.NoError(t, pushCmd.Run())
 
+	bareRepo, err := git.PlainOpen(bareDir)
+	require.NoError(t, err)
+	remoteBlobHash := firstBlobInV2CheckpointShard(t, bareRepo, refName, srcCP)
+
 	// Create a local repo that also has the ref but with a different checkpoint
 	localDir := setupRepoWithV2Ref(t)
+	addOrigin := exec.CommandContext(ctx, "git", "remote", "add", "origin", bareURL)
+	addOrigin.Dir = localDir
+	addOrigin.Env = testutil.GitIsolatedEnv()
+	out, err := addOrigin.CombinedOutput()
+	require.NoError(t, err, "add origin failed: %s", out)
 	localRepo, err := git.PlainOpen(localDir)
 	require.NoError(t, err)
-	writeV2Checkpoint(t, localRepo, id.MustCheckpointID("112233445566"), "session-local")
+	writeV2Checkpoint(t, localRepo, localCP, "session-local")
 
 	t.Chdir(localDir)
 
 	// Fetch and merge — should combine both checkpoints
-	err = fetchAndMergeRef(ctx, bareDir, refName)
+	err = fetchAndMergeRef(ctx, "origin", refName)
 	require.NoError(t, err)
 
 	// Verify merged tree contains both checkpoints on /main
@@ -259,6 +272,16 @@ func TestFetchAndMergeRef_MergesTrees(t *testing.T) {
 	}
 	assert.True(t, hasAA, "merged tree should contain checkpoint aabbccddeeff")
 	assert.True(t, has11, "merged tree should contain checkpoint 112233445566")
+	require.Error(t, mergedRepo.Storer.HasEncodedObject(remoteBlobHash),
+		"remote checkpoint blob must NOT be locally available; recovery should avoid blob downloads")
+	assert.Empty(t, gitConfigValueForStrategyTest(t, localDir, "remote.origin.promisor"))
+	assert.Empty(t, gitConfigValueForStrategyTest(t, localDir, "remote.origin.partialclonefilter"))
+
+	require.NoError(t, tryPushRef(ctx, bareURL, refName))
+	bareRepo, err = git.PlainOpen(bareDir)
+	require.NoError(t, err)
+	assert.True(t, refContainsV2Checkpoint(t, bareRepo, refName, srcCP))
+	assert.True(t, refContainsV2Checkpoint(t, bareRepo, refName, localCP))
 }
 
 // TestPushV2Refs_SkipsUnrecordedArchiveRefs verifies that pushV2Refs pushes
@@ -809,40 +832,6 @@ func TestPushV2Refs_RepeatedLocalRotationsBeforePushPublishesAllArchives(t *test
 		"current should contain current checkpoint")
 }
 
-func TestDetectRemoteRotationArchives_IncludesSameNameDifferentHash(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	archiveRef := plumbing.ReferenceName(paths.V2FullRefPrefix + "0000000000001")
-
-	localDir := setupRepoWithV2Ref(t)
-	localRepo, err := git.PlainOpen(localDir)
-	require.NoError(t, err)
-	localHash := writeV2ArchiveRef(t, localRepo, archiveRef, "local archive")
-
-	remoteDir := setupRepoWithV2Ref(t)
-	remoteRepo, err := git.PlainOpen(remoteDir)
-	require.NoError(t, err)
-	remoteHash := writeV2ArchiveRef(t, remoteRepo, archiveRef, "remote archive")
-	require.NotEqual(t, localHash, remoteHash)
-
-	bareDir := t.TempDir()
-	initCmd := exec.CommandContext(ctx, "git", "init", "--bare")
-	initCmd.Dir = bareDir
-	initCmd.Env = testutil.GitIsolatedEnv()
-	out, err := initCmd.CombinedOutput()
-	require.NoError(t, err, "git init --bare failed: %s", out)
-
-	pushArchive := exec.CommandContext(ctx, "git", "push", bareDir,
-		string(archiveRef)+":"+string(archiveRef))
-	pushArchive.Dir = remoteDir
-	out, err = pushArchive.CombinedOutput()
-	require.NoError(t, err, "archive push failed: %s", out)
-
-	archives, err := detectRemoteRotationArchives(ctx, bareDir, localRepo)
-	require.NoError(t, err)
-	assert.Contains(t, archives, "0000000000001")
-}
-
 func TestPrintV2PartialPushResult(t *testing.T) {
 	t.Parallel()
 
@@ -1206,6 +1195,8 @@ func TestFetchAndMergeRef_RemoteRotatedMultipleTimesUsesRelatedArchive(t *testin
 	require.Error(t, err, "selected archive temp ref should be removed after rotation recovery")
 	_, err = localRepo.Reference(archiveTmpRefName("0000000000002"), true)
 	require.Error(t, err, "unselected archive temp ref should be removed after rotation recovery")
+	_, err = localRepo.Reference(archiveTmpRefName("current"), true)
+	require.Error(t, err, "wildcard current temp ref should be removed after rotation recovery")
 
 	assert.True(t, refContainsV2Checkpoint(t, localRepo, archive1Ref, localOnlyCP),
 		"local checkpoint from the first generation should be merged into archive 1")
@@ -1221,7 +1212,7 @@ func TestFetchAndMergeRef_RemoteRotatedMultipleTimesUsesRelatedArchive(t *testin
 }
 
 // Not parallel: uses t.Chdir()
-func TestFetchAndMergeRef_RotationConflict_BloblessProbeAvoidsUnmatchedBlobs(t *testing.T) {
+func TestFetchAndMergeRef_RotationConflict_BloblessProbeAvoidsArchiveBlobDownloads(t *testing.T) {
 	ctx := context.Background()
 	fullCurrentRef := plumbing.ReferenceName(paths.V2FullCurrentRefName)
 	archive1Ref := plumbing.ReferenceName(paths.V2FullRefPrefix + "0000000000001")
@@ -1244,6 +1235,11 @@ func TestFetchAndMergeRef_RotationConflict_BloblessProbeAvoidsUnmatchedBlobs(t *
 	testutil.WriteFile(t, localDir, "f.txt", "init")
 	testutil.GitAdd(t, localDir, "f.txt")
 	testutil.GitCommit(t, localDir, "init")
+	addOrigin := exec.CommandContext(ctx, "git", "remote", "add", "origin", bareURL)
+	addOrigin.Dir = localDir
+	addOrigin.Env = testutil.GitIsolatedEnv()
+	out, err := addOrigin.CombinedOutput()
+	require.NoError(t, err, "add origin failed: %s", out)
 	localRepo, err := git.PlainOpen(localDir)
 	require.NoError(t, err)
 	writeV2Checkpoint(t, localRepo, sharedCP, "shared-session")
@@ -1286,16 +1282,23 @@ func TestFetchAndMergeRef_RotationConflict_BloblessProbeAvoidsUnmatchedBlobs(t *
 	writeV2Checkpoint(t, localRepo, localOnlyCP, "local-session")
 
 	t.Chdir(localDir)
-	err = fetchAndMergeRef(ctx, bareURL, fullCurrentRef)
+	err = fetchAndMergeRef(ctx, "origin", fullCurrentRef)
 	require.NoError(t, err)
 
 	localRepo, err = git.PlainOpen(localDir)
 	require.NoError(t, err)
 
-	assert.NoError(t, localRepo.Storer.HasEncodedObject(matchedBlobHash),
-		"matched archive generation.json must be locally available after top-up")
-	assert.Error(t, localRepo.Storer.HasEncodedObject(unmatchedBlobHash),
+	require.Error(t, localRepo.Storer.HasEncodedObject(matchedBlobHash),
+		"matched archive generation.json must NOT be locally available; recovery should avoid full archive top-up")
+	require.Error(t, localRepo.Storer.HasEncodedObject(unmatchedBlobHash),
 		"unmatched archive shard blob must NOT be locally available; blobless probe over-fetched")
+	assert.Empty(t, gitConfigValueForStrategyTest(t, localDir, "remote.origin.promisor"))
+	assert.Empty(t, gitConfigValueForStrategyTest(t, localDir, "remote.origin.partialclonefilter"))
+
+	bareRepo, err = git.PlainOpen(bareDir)
+	require.NoError(t, err)
+	assert.True(t, refContainsV2Checkpoint(t, bareRepo, archive1Ref, sharedCP))
+	assert.True(t, refContainsV2Checkpoint(t, bareRepo, archive1Ref, localOnlyCP))
 }
 
 func blobAtTopLevel(t *testing.T, repo *git.Repository, refName plumbing.ReferenceName, filename string) plumbing.Hash {
@@ -1328,4 +1331,16 @@ func firstBlobInV2CheckpointShard(t *testing.T, repo *git.Repository, refName pl
 		return entry.Hash
 	}
 	return plumbing.ZeroHash
+}
+
+func gitConfigValueForStrategyTest(t *testing.T, dir, key string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", "config", "--local", "--get", key)
+	cmd.Dir = dir
+	cmd.Env = testutil.GitIsolatedEnv()
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }

@@ -309,6 +309,22 @@ func ResolveFetchTarget(ctx context.Context, target string) (string, error) {
 	return url, nil
 }
 
+// ResolveFilteredFetchTarget returns a fetch target suitable for an explicit
+// filtered fetch. Remote names are resolved to URLs even when the repo-level
+// filtered_fetches setting is disabled, because callers that pass
+// --filter=blob:none must not let git persist promisor settings onto a named
+// remote like origin.
+func ResolveFilteredFetchTarget(ctx context.Context, target string) (string, error) {
+	if target == "" || IsURL(target) || isLocalPath(target) {
+		return target, nil
+	}
+	url, err := GetRemoteURL(ctx, target)
+	if err != nil {
+		return "", fmt.Errorf("get remote URL: %w", err)
+	}
+	return url, nil
+}
+
 // newCommand creates an exec.Cmd for a git operation that may need
 // checkpoint token authentication. If ENTIRE_CHECKPOINT_TOKEN is set:
 //   - if the target in args is (or resolves to) an SSH remote, the target is
