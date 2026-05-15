@@ -143,12 +143,12 @@ func RunInvestigateConfigPicker(
 		)
 	}
 
-	// Defaults: select all eligible agents, MaxTurns=3, Quorum=0 (== all).
+	// Defaults: select all eligible agents, MaxTurns=2, Quorum=0 (== all).
 	picks := make([]string, len(eligible))
 	for i, c := range eligible {
 		picks[i] = c.Name
 	}
-	maxTurns := 3
+	maxTurns := 2
 	quorum := 0
 
 	fmt.Fprintf(out, "Configuring investigate with %d eligible agent(s).\n", len(eligible))
@@ -213,7 +213,7 @@ func runInvestigatePickerForm(ctx context.Context, eligible []AgentChoice, picks
 			Value(picks),
 		huh.NewInput().
 			Title("Max turns per agent").
-			Description("Per-agent turn budget. Defaults to 3.").
+			Description("Per-agent turn budget. Defaults to 2.").
 			Value(&maxTurnsStr),
 		huh.NewInput().
 			Title("Quorum").

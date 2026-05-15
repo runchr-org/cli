@@ -122,7 +122,7 @@ Inputs (mutually exclusive):
 
 Flags:
   --agents <csv>          override configured agents (comma-separated)
-  --max-turns N           per-agent turn budget (default 3)
+  --max-turns N           per-agent turn budget (default 2)
   --quorum N              approvals needed to terminate (0 = all agents)
   --continue <run-id>     resume an existing run
   --edit                  re-open the investigate config picker
@@ -170,7 +170,7 @@ Subcommands:
 	cmd.Flags().StringVar(&flags.topic, "topic", "", "free-form topic to investigate")
 	cmd.Flags().StringVar(&flags.issueLink, "issue-link", "", "GitHub issue or PR URL")
 	cmd.Flags().StringVar(&flags.agentsCSV, "agents", "", "override configured agents (comma-separated)")
-	cmd.Flags().IntVar(&flags.maxTurns, "max-turns", 0, "per-agent turn budget (default 3)")
+	cmd.Flags().IntVar(&flags.maxTurns, "max-turns", 0, "per-agent turn budget (default 2)")
 	cmd.Flags().IntVar(&flags.quorum, "quorum", 0, "approvals needed to terminate (0 = all agents)")
 	cmd.Flags().StringVar(&flags.cont, "continue", "", "resume an existing run by id")
 	cmd.Flags().BoolVar(&flags.edit, "edit", false, "re-open the investigate config picker")

@@ -116,7 +116,7 @@ type LoopResult struct {
 const pauseAfterConsecutiveFailures = 2
 
 // defaultMaxTurns is the per-agent turn budget when LoopInput.MaxTurns is 0.
-const defaultMaxTurns = 3
+const defaultMaxTurns = 2
 
 // stanceApprove and friends pin the stance vocabulary so callers can compare
 // without typo risk. The PendingTurn validator normalises to one of these
