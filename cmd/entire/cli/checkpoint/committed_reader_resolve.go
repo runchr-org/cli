@@ -43,7 +43,7 @@ func CommittedReadModeForOptions(checkpointsV2Enabled bool, checkpointsVersion i
 	return CommittedReadV1
 }
 
-func NewCommittedReader(v1Store *GitStore, v2Store *V2GitStore, mode CommittedReadMode) (CommittedListReader, error) {
+func NewCommittedReader(v1Store *GitStore, v2Store *V2GitStore, mode CommittedReadMode) (CommittedListReader, error) { //nolint:ireturn // Factory selects among v1, v2, and dual reader implementations.
 	switch mode {
 	case CommittedReadV2:
 		if v2Store == nil {
@@ -51,16 +51,16 @@ func NewCommittedReader(v1Store *GitStore, v2Store *V2GitStore, mode CommittedRe
 		}
 		return v2Store, nil
 	case CommittedReadDual:
-		if v2Store == nil {
-			if v1Store == nil {
-				return nil, errors.New("committed checkpoint reader unavailable")
-			}
+		switch {
+		case v2Store == nil && v1Store == nil:
+			return nil, errors.New("committed checkpoint reader unavailable")
+		case v2Store == nil:
 			return v1Store, nil
-		}
-		if v1Store == nil {
+		case v1Store == nil:
 			return v2Store, nil
+		default:
+			return &DualCheckpointReader{v2: v2Store, v1: v1Store}, nil
 		}
-		return &DualCheckpointReader{v2: v2Store, v1: v1Store}, nil
 	case CommittedReadV1:
 		if v1Store == nil {
 			return nil, errors.New("v1 committed checkpoint reader unavailable")
@@ -170,16 +170,16 @@ func (r *DualCheckpointReader) ListCommitted(ctx context.Context) ([]CommittedIn
 
 func (r *DualCheckpointReader) readFallbackSessionContent(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*SessionContent, error) {
 	metadata, err := r.v2.ReadSessionMetadata(ctx, checkpointID, sessionIndex)
-	if err == nil && metadata != nil && metadata.SessionID != "" {
-		return r.v1.ReadSessionContentByID(ctx, checkpointID, metadata.SessionID)
-	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
-	}
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
+		}
 		return nil, err
 	}
-	return nil, ErrNoTranscript
+	if metadata == nil || metadata.SessionID == "" {
+		return nil, ErrNoTranscript
+	}
+	return r.v1.ReadSessionContentByID(ctx, checkpointID, metadata.SessionID)
 }
 
 func (r *DualCheckpointReader) readV1SessionContentByIndex(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, originalErr error) (*SessionContent, error) {
@@ -317,10 +317,14 @@ func ResolveRawSessionLogForCheckpoint(
 		return nil, "", err //nolint:wrapcheck // Propagating context cancellation
 	}
 
-	reader, _, err := ResolveCommittedReaderForCheckpoint(ctx, checkpointID, v1Store, v2Store, preferCheckpointsV2)
+	reader, summary, err := ResolveCommittedReaderForCheckpoint(ctx, checkpointID, v1Store, v2Store, preferCheckpointsV2)
 	if err != nil {
 		return nil, "", err
 	}
 
-	return ReadRawSessionLogForCheckpoint(ctx, reader, checkpointID)
+	content, err := ReadLatestSessionContent(ctx, reader, checkpointID, summary)
+	if err != nil {
+		return nil, "", err
+	}
+	return content.Transcript, content.Metadata.SessionID, nil
 }
