@@ -4567,16 +4567,19 @@ func TestCondenseSession_V2Disabled_NoV2Refs(t *testing.T) {
 	result, err := s.CondenseSession(context.Background(), repo, checkpointID, state, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, 0, result.CompactTranscriptLines, "v2-disabled condensation should not report compact transcript line deltas")
 
 	// v1 should exist
 	_, err = repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
 	require.NoError(t, err, "v1 metadata branch should exist")
 
-	// v2 refs should NOT exist
-	_, err = repo.Reference(plumbing.ReferenceName(paths.V2MainRefName), true)
-	require.Error(t, err, "v2 /main ref should not exist when v2 is disabled")
+	// v1.1 compact ref (paths.MetadataCompactRefName, aka paths.V2MainRefName)
+	// is now ALWAYS written, regardless of v2 settings. The legacy
+	// "should not exist" assertion is intentionally inverted here.
+	_, err = repo.Reference(plumbing.ReferenceName(paths.MetadataCompactRefName), true)
+	require.NoError(t, err, "v1.1 compact ref should be written on every condensation")
 
+	// v2 /full/current is still gated on IsCheckpointsV2Enabled and must
+	// NOT exist when v2 is disabled.
 	_, err = repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
 	require.Error(t, err, "v2 /full/current ref should not exist when v2 is disabled")
 }

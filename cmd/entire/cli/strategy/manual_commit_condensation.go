@@ -262,7 +262,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 
 	v2 := settings.CheckpointsVersion(ctx) == 2
 
-	// Write checkpoint metadata to the primary store.
+	// Legacy v1 metadata branch (today's behavior, unchanged).
 	writeV1Start := time.Now()
 	writeCtx, writeCommittedSpan := perf.Start(ctx, "write_committed_v1")
 	if !v2 {
@@ -275,20 +275,57 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 	writeCommittedSpan.End()
 	writeV1Duration := time.Since(writeV1Start)
 
-	writeV2Start := time.Now()
-	writeV2Ctx, writeCommittedV2Span := perf.Start(ctx, "write_committed_v2")
-	if v2 {
-		if err := writeCommittedV2(writeV2Ctx, repo, writeOpts); err != nil {
-			writeCommittedV2Span.RecordError(err)
-			writeCommittedV2Span.End()
+	// v1.1 full-ref alias: point refs/entire/checkpoints/v1/full at the
+	// legacy branch's new tip. No-op when v2 mode is on (no legacy
+	// branch was written, nothing to alias).
+	writeFullStart := time.Now()
+	writeFullCtx, writeFullSpan := perf.Start(ctx, "write_full_ref")
+	if !v2 {
+		writeFullRef(writeFullCtx, repo)
+	}
+	writeFullSpan.End()
+	writeFullDuration := time.Since(writeFullStart)
+
+	// v1.1 compact-ref write: refs/entire/checkpoints/v1/main. Always
+	// runs. Fatal in v2 mode (primary metadata store); warn-and-continue
+	// in v1 mode (shadow of the legacy branch).
+	writeCompactStart := time.Now()
+	writeCompactCtx, writeCompactSpan := perf.Start(ctx, "write_compact_ref")
+	if err := writeCompactRef(writeCompactCtx, repo, writeOpts); err != nil {
+		if v2 {
+			writeCompactSpan.RecordError(err)
+			writeCompactSpan.End()
 			return nil, fmt.Errorf("failed to write checkpoint metadata to v2: %w", err)
 		}
-	} else {
-		writeCommittedV2IfEnabled(writeV2Ctx, repo, writeOpts)
+		logging.Warn(writeCompactCtx, "compact-ref write failed",
+			slog.String("checkpoint_id", checkpointID.String()),
+			slog.String("error", err.Error()),
+		)
 	}
-	writeTaskMetadataV2IfEnabled(writeV2Ctx, repo, checkpointID, state.SessionID, ref)
-	writeCommittedV2Span.End()
-	writeV2Duration := time.Since(writeV2Start)
+	writeCompactSpan.End()
+	writeCompactDuration := time.Since(writeCompactStart)
+
+	// v2 /full/current archive: write whenever IsCheckpointsV2Enabled is
+	// true (covers both checkpoints_v2 shadow-mode and checkpoints_version:
+	// 2 primary-mode). Errors are fatal only in true v2 primary mode.
+	writeV2FullStart := time.Now()
+	writeV2FullCtx, writeV2FullSpan := perf.Start(ctx, "write_committed_v2_full")
+	if settings.IsCheckpointsV2Enabled(ctx) {
+		if err := writeCommittedV2Full(writeV2FullCtx, repo, writeOpts); err != nil {
+			if v2 {
+				writeV2FullSpan.RecordError(err)
+				writeV2FullSpan.End()
+				return nil, fmt.Errorf("failed to write checkpoint metadata to v2: %w", err)
+			}
+			logging.Warn(writeV2FullCtx, "v2 /full write failed",
+				slog.String("checkpoint_id", checkpointID.String()),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
+	writeTaskMetadataV2IfEnabled(writeV2FullCtx, repo, checkpointID, state.SessionID, ref)
+	writeV2FullSpan.End()
+	writeV2FullDuration := time.Since(writeV2FullStart)
 
 	logging.Debug(logCtx, "condense timings",
 		slog.String("session_id", state.SessionID),
@@ -298,7 +335,9 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		slog.Int64("redact_transcript_ms", redactDuration.Milliseconds()),
 		slog.Int64("compact_transcript_v2_ms", compactResult.Duration.Milliseconds()),
 		slog.Int64("write_committed_v1_ms", writeV1Duration.Milliseconds()),
-		slog.Int64("write_committed_v2_ms", writeV2Duration.Milliseconds()),
+		slog.Int64("write_full_ref_ms", writeFullDuration.Milliseconds()),
+		slog.Int64("write_compact_ref_ms", writeCompactDuration.Milliseconds()),
+		slog.Int64("write_committed_v2_full_ms", writeV2FullDuration.Milliseconds()),
 		slog.Int64("total_ms", time.Since(condenseStart).Milliseconds()),
 		slog.Int("transcript_bytes", len(sessionData.Transcript)),
 		slog.Int("transcript_lines", sessionData.FullTranscriptLines),
@@ -521,11 +560,10 @@ func compactAndRedactExternalTranscript(ctx context.Context, ag agent.Agent, sta
 // agents by calling the agent's compact-transcript subcommand and redacting
 // the result. Returns nil if the agent is not external (caller should use
 // buildInternalCompactTranscript instead).
+//
+// Runs unconditionally as of checkpoints v1.1, since the compact ref is
+// always written (regardless of v2-mode settings).
 func buildExternalCompactTranscript(ctx context.Context, ag agent.Agent, state *SessionState) *compactTranscriptResult {
-	if !settings.IsCheckpointsV2Enabled(ctx) {
-		return nil
-	}
-
 	compactStart := time.Now()
 	compactCtx, compactSpan := perf.Start(ctx, "compact_transcript_v2")
 	defer compactSpan.End()
@@ -559,11 +597,10 @@ func buildExternalCompactTranscript(ctx context.Context, ag agent.Agent, state *
 
 // buildInternalCompactTranscript produces the compact transcript for built-in
 // agents from already-redacted transcript bytes.
+//
+// Runs unconditionally as of checkpoints v1.1, since the compact ref is
+// always written (regardless of v2-mode settings).
 func buildInternalCompactTranscript(ctx context.Context, ag agent.Agent, redacted redact.RedactedBytes, state *SessionState) compactTranscriptResult {
-	if !settings.IsCheckpointsV2Enabled(ctx) {
-		return compactTranscriptResult{}
-	}
-
 	compactStart := time.Now()
 	compactCtx, compactSpan := perf.Start(ctx, "compact_transcript_v2")
 	defer compactSpan.End()
@@ -1603,36 +1640,76 @@ func computeCompactTranscriptStart(ctx context.Context, ag agent.Agent, state *S
 	return offset
 }
 
-// writeCommittedV2 writes checkpoint data to v2 refs unconditionally.
-// Callers decide whether to propagate or swallow the error (v2-only vs dual-write).
-func writeCommittedV2(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) error {
+// writeCompactRef writes the compact metadata + transcript view to
+// refs/entire/checkpoints/v1/main. Returns an error so callers can
+// decide whether to propagate (v2 mode — this is the primary store)
+// or swallow (v1 mode — this is a shadow write).
+//
+// Always called from condensation regardless of settings, since v1.1's
+// compact ref is invariant of v2 mode.
+func writeCompactRef(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) error {
 	v2URL, err := remote.FetchURL(ctx)
 	if err != nil {
-		logging.Debug(ctx, "manual-commit condensation: using origin for v2 write fetch remote",
+		logging.Debug(ctx, "manual-commit condensation: using origin for compact-ref fetch remote",
 			slog.String("error", err.Error()),
 		)
 		v2URL = originRemote
 	}
-	v2Store := cpkg.NewV2GitStore(repo, v2URL)
-	if err := v2Store.WriteCommitted(ctx, opts); err != nil {
-		return fmt.Errorf("v2 write committed: %w", err)
+	store := cpkg.NewV2GitStore(repo, v2URL)
+	if _, err := store.WriteCompactOnly(ctx, opts); err != nil {
+		return fmt.Errorf("compact-ref write: %w", err)
 	}
 	return nil
 }
 
-// writeCommittedV2IfEnabled writes checkpoint data to v2 refs when checkpoints_v2
-// is enabled. Failures are logged as warnings — in dual-write mode v2 writes are
-// best-effort and must not block the v1 path.
-func writeCommittedV2IfEnabled(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) {
-	if !settings.IsCheckpointsV2Enabled(ctx) {
+// writeFullRef publishes refs/entire/checkpoints/v1/full as a write-alias
+// of the legacy MetadataBranchName branch — both refs point at the same
+// commit hash after every condensation. The full ref has no independent
+// tree work; this function only sets the ref.
+//
+// Failures are logged at warn level and swallowed — the legacy branch
+// remains in-band authoritative; the next condensation re-aligns v1/full.
+//
+// No-op if the legacy branch is missing (e.g. v2 mode skipped it).
+func writeFullRef(ctx context.Context, repo *git.Repository) {
+	legacyRef, err := repo.Reference(
+		plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
+	if err != nil {
+		logging.Debug(ctx, "full-ref alias skipped: legacy branch missing",
+			slog.String("error", err.Error()),
+		)
 		return
 	}
-	if err := writeCommittedV2(ctx, repo, opts); err != nil {
-		logging.Warn(ctx, "v2 dual-write failed",
-			slog.String("checkpoint_id", opts.CheckpointID.String()),
+	fullRefName := plumbing.ReferenceName(paths.MetadataFullRefName)
+	if err := repo.Storer.SetReference(
+		plumbing.NewHashReference(fullRefName, legacyRef.Hash())); err != nil {
+		logging.Warn(ctx, "full-ref write failed",
+			slog.String("ref", string(fullRefName)),
 			slog.String("error", err.Error()),
 		)
 	}
+}
+
+// writeCommittedV2Full writes the raw transcript artifacts to
+// refs/entire/checkpoints/v2/full/current. Returns an error so callers
+// can propagate (always fatal in v2 mode — this is the primary archive
+// store) or, in future shadow scenarios, decide to swallow.
+//
+// Only meaningful when settings.IsCheckpointsV2Enabled is true; the
+// caller is responsible for gating.
+func writeCommittedV2Full(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) error {
+	v2URL, err := remote.FetchURL(ctx)
+	if err != nil {
+		logging.Debug(ctx, "manual-commit condensation: using origin for v2 /full write fetch remote",
+			slog.String("error", err.Error()),
+		)
+		v2URL = originRemote
+	}
+	store := cpkg.NewV2GitStore(repo, v2URL)
+	if err := store.WriteFullOnly(ctx, opts); err != nil {
+		return fmt.Errorf("v2 /full write: %w", err)
+	}
+	return nil
 }
 
 // writeTaskMetadataV2IfEnabled copies task metadata trees from the shadow branch
