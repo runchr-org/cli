@@ -299,12 +299,11 @@ func TestPushV2Refs_SkipsUnrecordedArchiveRefs(t *testing.T) {
 	pushV2Refs(ctx, bareDir)
 	output := restore()
 
-	// Verify only active refs exist in bare repo.
+	// Verify only active /full refs exist in bare repo. As of v1.1, v1/main
+	// (the former V2MainRefName) is pushed via the PrePush always-on path,
+	// not pushV2Refs — so it does NOT land here.
 	bareRepo, err := git.PlainOpen(bareDir)
 	require.NoError(t, err)
-
-	_, err = bareRepo.Reference(plumbing.ReferenceName(paths.V2MainRefName), true)
-	require.NoError(t, err, "/main ref should exist in bare repo")
 
 	_, err = bareRepo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
 	require.NoError(t, err, "/full/current ref should exist in bare repo")
@@ -316,11 +315,9 @@ func TestPushV2Refs_SkipsUnrecordedArchiveRefs(t *testing.T) {
 	require.Error(t, err, "unrecorded older archived generation should not be pushed")
 
 	assert.Contains(t, output, "[entire] Syncing and pushing v2 checkpoints...")
-	assert.Contains(t, output, "[entire] Pushing v1/main, v2/full/current...")
+	assert.Contains(t, output, "[entire] Pushing v2/full/current...")
 	assert.Contains(t, output, "[entire] All v2 checkpoints pushed")
 	assert.NotContains(t, output, "[entire] Successfully pushed", "successful refs should only be listed on partial failure")
-	assert.NotContains(t, output, "Pushing v1/main to", "per-ref progress should stay quiet")
-	assert.NotContains(t, output, "Syncing v1/main with remote", "per-ref sync progress should stay quiet")
 }
 
 // TestPushV2Refs_PushesPendingArchivePublications verifies migration-created
@@ -416,13 +413,11 @@ func TestPushV2Refs_PendingPublicationFailureLabelsSkippedActiveRefs(t *testing.
 	pushV2Refs(ctx, bareDir)
 	output := restore()
 
-	assert.Contains(t, output, "[entire] Warning: v2/full/0000000000099, v1/main, v2/full/current were not pushed")
+	assert.Contains(t, output, "[entire] Warning: v2/full/0000000000099, v2/full/current were not pushed")
 	assert.NotContains(t, output, "non-fast-forward", "low-level git detail should go to debug logs")
 
 	bareRepo, err := git.PlainOpen(bareDir)
 	require.NoError(t, err)
-	_, err = bareRepo.Reference(plumbing.ReferenceName(paths.V2MainRefName), true)
-	require.Error(t, err, "/main should not be pushed when pending publication fails")
 	_, err = bareRepo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
 	require.Error(t, err, "/full/current should not be pushed when pending publication fails")
 }
@@ -927,17 +922,23 @@ func TestPushV2Refs_UnreachableTarget_NamesFailedRef(t *testing.T) {
 	tmpDir := setupRepoWithV2Ref(t)
 	t.Chdir(tmpDir)
 
+	// Seed /full/current so pushV2Refs has at least one ref to push.
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+	mainRef, err := repo.Reference(plumbing.ReferenceName(paths.V2MainRefName), true)
+	require.NoError(t, err)
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(
+		plumbing.ReferenceName(paths.V2FullCurrentRefName), mainRef.Hash())))
+
 	nonExistentPath := filepath.Join(t.TempDir(), "does-not-exist")
 	restore := captureStderr(t)
 	pushV2Refs(context.Background(), nonExistentPath)
 	output := restore()
 
 	assert.Contains(t, output, "[entire] Syncing and pushing v2 checkpoints...")
-	assert.Contains(t, output, "[entire] Pushing v1/main...")
-	assert.Contains(t, output, "[entire] Warning: failed to push v1/main:")
-	assert.NotContains(t, output, "[entire] Warning: couldn't sync v1/main:")
+	assert.Contains(t, output, "[entire] Pushing v2/full/current...")
+	assert.Contains(t, output, "[entire] Warning: failed to push v2/full/current:")
 	assert.NotContains(t, output, "[entire] All v2 checkpoints pushed")
-	assert.NotContains(t, output, "Pushing v1/main to", "failed aggregated pushes should avoid per-ref progress")
 }
 
 // TestFetchAndMergeRef_RotationConflict verifies that when /full/current push

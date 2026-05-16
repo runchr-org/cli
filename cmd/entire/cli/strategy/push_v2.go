@@ -925,10 +925,13 @@ func printV2PushFailures(ctx context.Context, target string, successfulRefs []pl
 	printCheckpointsV2MigrationHint(ctx)
 }
 
+// v2RefsToPush returns the v2-only refs to push via pushV2Refs.
+// As of v1.1, paths.MetadataCompactRefName (which V2MainRefName aliases)
+// is pushed via the always-on path in PrePush — not here — so v2RefsToPush
+// returns only /full/* refs.
 func v2RefsToPush(repo *git.Repository) []plumbing.ReferenceName {
 	var refs []plumbing.ReferenceName
 	for _, refName := range []plumbing.ReferenceName{
-		plumbing.ReferenceName(paths.V2MainRefName),
 		plumbing.ReferenceName(paths.V2FullCurrentRefName),
 	} {
 		if _, err := repo.Reference(refName, true); err == nil {
