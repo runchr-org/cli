@@ -1652,6 +1652,62 @@ func (s *GitStore) getSessionsBranchTree() (*object.Tree, error) {
 	return tree, nil
 }
 
+// getCompactRefTree returns the tree object for refs/entire/checkpoints/v1/main.
+// Returns an error if the ref does not exist locally — no remote fallback at
+// this layer (callers that need network fetch handle it themselves).
+func (s *GitStore) getCompactRefTree() (*object.Tree, error) {
+	return s.treeForRef(plumbing.ReferenceName(paths.MetadataCompactRefName), "compact")
+}
+
+// getFullRefTree returns the tree object for refs/entire/checkpoints/v1/full.
+// Returns an error if the ref does not exist locally.
+func (s *GitStore) getFullRefTree() (*object.Tree, error) {
+	return s.treeForRef(plumbing.ReferenceName(paths.MetadataFullRefName), "full")
+}
+
+func (s *GitStore) treeForRef(refName plumbing.ReferenceName, label string) (*object.Tree, error) {
+	ref, err := s.repo.Reference(refName, true)
+	if err != nil {
+		return nil, fmt.Errorf("%s ref not found: %w", label, err)
+	}
+	commit, err := s.repo.CommitObject(ref.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get %s-ref commit: %w", label, err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get %s-ref tree: %w", label, err)
+	}
+	return tree, nil
+}
+
+// getMetadataTree returns whichever ref currently carries the checkpoint
+// metadata view, preferring the v1.1 compact ref, then the v1.1 full ref,
+// and finally the legacy branch (or its remote-tracking equivalent).
+// Used for metadata reads (CheckpointSummary, session metadata, prompts);
+// callers that need full.jsonl must use getFullTranscriptTree.
+func (s *GitStore) getMetadataTree() (*object.Tree, error) {
+	if tree, err := s.getCompactRefTree(); err == nil {
+		return tree, nil
+	}
+	if tree, err := s.getFullRefTree(); err == nil {
+		return tree, nil
+	}
+	return s.getSessionsBranchTree()
+}
+
+// getFullTranscriptTree returns whichever ref currently carries the raw
+// full.jsonl view, preferring the v1.1 full ref and falling back to the
+// legacy branch (or its remote-tracking equivalent). The compact ref is
+// never consulted — its tree contains transcript.jsonl instead of
+// full.jsonl, so silently falling back to it would return wrong content.
+func (s *GitStore) getFullTranscriptTree() (*object.Tree, error) {
+	if tree, err := s.getFullRefTree(); err == nil {
+		return tree, nil
+	}
+	return s.getSessionsBranchTree()
+}
+
 // CreateBlobFromContent creates a blob object from in-memory content.
 // Exported for use by strategy package (session_test.go)
 func CreateBlobFromContent(repo *git.Repository, content []byte) (plumbing.Hash, error) {
