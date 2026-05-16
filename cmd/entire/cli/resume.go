@@ -383,6 +383,12 @@ func resolveLatestCheckpoint(ctx context.Context, checkpointIDs []id.CheckpointI
 func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error) {
 	logCtx := logging.WithComponent(ctx, "resume.getMetadataTree")
 
+	// v1.1: opportunistically fetch the new custom refs alongside the
+	// legacy branch. Best-effort — errors here don't block the legacy
+	// branch fetch path below. Populates the local refs so backend
+	// consumers and the v1.2 cutover have the data they need.
+	fetchV11CustomRefsBestEffort(logCtx)
+
 	// Helper to log ref hash for a repo's metadata branch
 	logRefHash := func(repo *git.Repository, source string) {
 		ref, refErr := repo.Reference(plumbing.NewBranchReferenceName("entire/checkpoints/v1"), true)
@@ -499,6 +505,29 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 	)
 
 	return nil, nil, fmt.Errorf("metadata branch not available: %w", remoteErr)
+}
+
+// fetchV11CustomRefsBestEffort fetches refs/entire/checkpoints/v1/main and
+// refs/entire/checkpoints/v1/full from origin into the same-named local
+// refs. Best-effort — failures are logged at debug level and do not
+// block the legacy branch fetch path.
+//
+// These refs are not in the default `git clone` refspec (they live under
+// refs/entire/, not refs/heads/), so a fresh clone won't have them until
+// something explicitly fetches them. Running this in resume's metadata
+// path ensures the v1.1 refs are populated whenever resume runs against
+// a fresh clone.
+func fetchV11CustomRefsBestEffort(ctx context.Context) {
+	if err := FetchV2MainRef(ctx); err != nil {
+		logging.Debug(ctx, "v1.1 compact-ref lazy fetch failed",
+			slog.String("error", err.Error()),
+		)
+	}
+	if err := FetchMetadataFullRef(ctx); err != nil {
+		logging.Debug(ctx, "v1.1 full-ref lazy fetch failed",
+			slog.String("error", err.Error()),
+		)
+	}
 }
 
 // getV2MetadataTree resolves the v2 /main ref tree with the same

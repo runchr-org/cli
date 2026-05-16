@@ -508,6 +508,39 @@ func fetchV2MainFromOrigin(ctx context.Context, shallow, noFilter bool) error {
 	return nil
 }
 
+// FetchMetadataFullRef fetches refs/entire/checkpoints/v1/full from origin
+// with full blob content. v1/full is a v1.1 custom ref aliased to the
+// legacy MetadataBranchName commit; it carries the same trees but lives
+// under refs/entire/ so it isn't pulled by default `git clone`.
+//
+// Used by resume/explain to lazy-fetch the ref when it's missing locally.
+// Best-effort: errors are returned to the caller for logging rather than
+// hard-failing the user's command.
+func FetchMetadataFullRef(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	fetchTarget, err := remote.ResolveFetchTarget(ctx, "origin")
+	if err != nil {
+		return fmt.Errorf("failed to resolve fetch target: %w", err)
+	}
+
+	refSpec := fmt.Sprintf("+%s:%s", paths.MetadataFullRefName, paths.MetadataFullRefName)
+	output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
+		Remote:   fetchTarget,
+		RefSpecs: []string{refSpec},
+		NoTags:   true,
+		NoFilter: true,
+	})
+	if fetchErr != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return errors.New("v1.1 full ref fetch timed out after 2 minutes")
+		}
+		return formatFilteredFetchError("failed to fetch v1/full", fetchTarget, output, fetchErr)
+	}
+	return nil
+}
+
 // FetchV2MetadataFromCheckpointRemote fetches the v2 /main ref from the
 // configured checkpoint_remote URL.
 // Returns an error if the fetch fails or no checkpoint_remote is configured.
