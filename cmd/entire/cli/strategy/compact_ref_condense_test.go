@@ -2,6 +2,8 @@ package strategy
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -82,6 +84,49 @@ func TestCondense_WritesLegacyBranchAndBothNewRefs_NoV2(t *testing.T) {
 	_, err = repo.Reference(
 		plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
 	require.Error(t, err, "v2 /full/current must NOT exist when v2 disabled")
+}
+
+// TestCondense_WritesFullCurrent_WhenV2Enabled asserts that the v1.1
+// refactor of writeCommittedV2IfEnabled into separate helpers still
+// produces v2 /full/current when checkpoints_v2 is enabled.
+func TestCondense_WritesFullCurrent_WhenV2Enabled(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	// Enable checkpoints_v2 dual-write.
+	entireDir := filepath.Join(dir, ".entire")
+	require.NoError(t, os.MkdirAll(entireDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(entireDir, "settings.json"),
+		[]byte(testCheckpointsV2SettingsJSON), 0o644))
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	s := &ManualCommitStrategy{}
+	sessionID := "test-v11-dualwrite-v2on"
+
+	setupSessionWithCheckpoint(t, s, repo, dir, sessionID)
+
+	state, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	state.Phase = session.PhaseIdle
+	state.AgentType = agent.AgentTypeClaudeCode
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	commitWithCheckpointTrailer(t, repo, dir, "b2c3d4e5f6a1")
+	require.NoError(t, s.PostCommit(context.Background()))
+
+	// v1.1 compact ref must exist (always-on).
+	_, err = repo.Reference(
+		plumbing.ReferenceName(paths.MetadataCompactRefName), true)
+	require.NoError(t, err, "compact ref must exist")
+
+	// v2 /full/current must exist when checkpoints_v2 is enabled.
+	fullRef, err := repo.Reference(
+		plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
+	require.NoError(t, err, "v2 /full/current must exist when v2 enabled")
+	require.False(t, fullRef.Hash().IsZero())
 }
 
 // refTreeContainsFile reports whether the tree at the given commit hash
