@@ -98,14 +98,33 @@ func TestGetMetadataTree_FallsBackToLegacyBranch(t *testing.T) {
 		"legacy branch tree must be the last fallback")
 }
 
-func TestGetFullTranscriptTree_PrefersFullRefOverLegacyBranch(t *testing.T) {
+func TestGetFullTranscriptTree_PrefersLegacyBranchOverFullRef(t *testing.T) {
 	t.Parallel()
 
 	repo := initTestRepo(t)
 	store := &GitStore{repo: repo}
 
 	seedRef(t, repo, plumbing.ReferenceName(paths.MetadataCompactRefName), "compact.txt", "compact")
-	seedRef(t, repo, plumbing.NewBranchReferenceName(paths.MetadataBranchName), "legacy.txt", "legacy")
+	legacyHash := seedRef(t, repo, plumbing.NewBranchReferenceName(paths.MetadataBranchName), "legacy.txt", "legacy")
+	seedRef(t, repo, plumbing.ReferenceName(paths.MetadataFullRefName), "full.txt", "full")
+
+	tree, err := store.getFullTranscriptTree()
+	require.NoError(t, err)
+	require.NotNil(t, tree)
+
+	legacyCommit, err := repo.CommitObject(legacyHash)
+	require.NoError(t, err)
+	require.Equal(t, legacyCommit.TreeHash, tree.Hash,
+		"legacy branch must win over full ref — legacy is in-band authoritative in v1.1")
+}
+
+func TestGetFullTranscriptTree_FallsBackToFullRef(t *testing.T) {
+	t.Parallel()
+
+	repo := initTestRepo(t)
+	store := &GitStore{repo: repo}
+
+	// No legacy branch, only the v1/full ref.
 	fullHash := seedRef(t, repo, plumbing.ReferenceName(paths.MetadataFullRefName), "full.txt", "full")
 
 	tree, err := store.getFullTranscriptTree()
@@ -115,7 +134,7 @@ func TestGetFullTranscriptTree_PrefersFullRefOverLegacyBranch(t *testing.T) {
 	fullCommit, err := repo.CommitObject(fullHash)
 	require.NoError(t, err)
 	require.Equal(t, fullCommit.TreeHash, tree.Hash,
-		"full ref must win over legacy branch")
+		"v1/full ref should be the fallback when legacy branch is missing")
 }
 
 func TestGetFullTranscriptTree_NeverConsultsCompactRef(t *testing.T) {

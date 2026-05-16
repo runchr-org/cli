@@ -948,6 +948,9 @@ func (s *GitStore) ReadCommitted(ctx context.Context, checkpointID id.Checkpoint
 		return nil, err //nolint:wrapcheck // Propagating context cancellation
 	}
 
+	// Use getFetchingTree (legacy/full path) so v1Store reads independently
+	// of the v1/main compact ref. This preserves the v1-vs-v2 resolver
+	// fallback semantics in ResolveCommittedReaderForCheckpoint.
 	ft, err := s.getFetchingTree(ctx)
 	if err != nil {
 		return nil, nil //nolint:nilnil,nilerr // No sessions branch means no checkpoint exists
@@ -1130,7 +1133,10 @@ func (s *GitStore) ListCommitted(ctx context.Context) ([]CommittedInfo, error) {
 		return nil, err //nolint:wrapcheck // Propagating context cancellation
 	}
 
-	tree, err := s.getSessionsBranchTree()
+	// Use getFullTranscriptTree (legacy/full path) so v1Store enumerates
+	// independently of the v1/main compact ref. Same reasoning as
+	// ReadCommitted: keeps v1/v2 resolver fallback semantics intact.
+	tree, err := s.getFullTranscriptTree()
 	if err != nil {
 		return []CommittedInfo{}, nil //nolint:nilerr // No sessions branch means empty list
 	}
@@ -1614,16 +1620,21 @@ func (s *GitStore) maybeMergeVercelConfig(ctx context.Context, rootTreeHash plum
 	return mergedTreeHash, nil
 }
 
-// getFetchingTree returns a FetchingTree for the metadata branch.
-// If a blob fetcher is configured on the store, File() calls on the returned
-// tree will automatically fetch missing blobs from the remote.
+// getFetchingTree returns a FetchingTree for the legacy metadata branch
+// (or its remote-tracking equivalent). Used by callers that need to read
+// full.jsonl — those callers cannot fall back to the v1.1 compact ref
+// because it contains transcript.jsonl instead.
+//
+// If a blob fetcher is configured on the store, File() calls on the
+// returned tree will automatically fetch missing blobs from the remote.
 func (s *GitStore) getFetchingTree(ctx context.Context) (*FetchingTree, error) {
-	tree, err := s.getSessionsBranchTree()
+	tree, err := s.getFullTranscriptTree()
 	if err != nil {
 		return nil, err
 	}
 	return NewFetchingTree(ctx, tree, s.repo.Storer, s.blobFetcher), nil
 }
+
 
 // getSessionsBranchTree returns the tree object for the entire/checkpoints/v1 branch.
 // Falls back to origin/entire/checkpoints/v1 if the local branch doesn't exist.
@@ -1697,15 +1708,19 @@ func (s *GitStore) getMetadataTree() (*object.Tree, error) {
 }
 
 // getFullTranscriptTree returns whichever ref currently carries the raw
-// full.jsonl view, preferring the v1.1 full ref and falling back to the
-// legacy branch (or its remote-tracking equivalent). The compact ref is
-// never consulted — its tree contains transcript.jsonl instead of
-// full.jsonl, so silently falling back to it would return wrong content.
+// full.jsonl view, preferring the legacy branch (which UpdateCommitted
+// writes to directly and which is the in-band source of truth in v1.1)
+// and falling back to the v1.1 full ref (which is a write-alias that
+// may lag between condensations).
+//
+// The compact ref is never consulted — its tree contains transcript.jsonl
+// instead of full.jsonl, so silently falling back to it would return
+// wrong content.
 func (s *GitStore) getFullTranscriptTree() (*object.Tree, error) {
-	if tree, err := s.getFullRefTree(); err == nil {
+	if tree, err := s.getSessionsBranchTree(); err == nil {
 		return tree, nil
 	}
-	return s.getSessionsBranchTree()
+	return s.getFullRefTree()
 }
 
 // CreateBlobFromContent creates a blob object from in-memory content.
