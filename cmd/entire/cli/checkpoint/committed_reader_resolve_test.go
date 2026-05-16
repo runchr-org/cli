@@ -16,7 +16,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
-func TestResolveCommittedReaderForCheckpoint_UsesV2WhenFound(t *testing.T) {
+func TestCommittedReader_UsesV2WhenFound(t *testing.T) {
 	t.Parallel()
 
 	repo := initTestRepo(t)
@@ -34,7 +34,9 @@ func TestResolveCommittedReaderForCheckpoint_UsesV2WhenFound(t *testing.T) {
 		AuthorEmail:  "test@test.com",
 	}))
 
-	reader, summary, err := ResolveCommittedReaderForCheckpoint(ctx, cpID, v1Store, v2Store, true)
+	reader, err := NewCommittedReader(v1Store, v2Store, CommittedReadDual)
+	require.NoError(t, err)
+	summary, err := ReadCommittedCheckpoint(ctx, reader, cpID)
 	require.NoError(t, err)
 	require.NotNil(t, summary)
 
@@ -72,7 +74,7 @@ func TestCommittedReadModeForOptions(t *testing.T) {
 	require.Equal(t, CommittedReadV2, CommittedReadModeForOptions(false, 2))
 }
 
-func TestResolveCommittedReaderForCheckpoint_V2ReaderFallsBackToV1RawTranscriptBySessionID(t *testing.T) {
+func TestDualCheckpointReader_FallsBackToV1RawTranscriptBySessionID(t *testing.T) {
 	t.Parallel()
 
 	repo := initTestRepo(t)
@@ -106,7 +108,9 @@ func TestResolveCommittedReaderForCheckpoint_V2ReaderFallsBackToV1RawTranscriptB
 		AuthorEmail:       "test@test.com",
 	}))
 
-	reader, summary, err := ResolveCommittedReaderForCheckpoint(ctx, cpID, v1Store, v2Store, true)
+	reader, err := NewCommittedReader(v1Store, v2Store, CommittedReadDual)
+	require.NoError(t, err)
+	summary, err := ReadCommittedCheckpoint(ctx, reader, cpID)
 	require.NoError(t, err)
 	require.Len(t, summary.Sessions, 1)
 
@@ -117,7 +121,36 @@ func TestResolveCommittedReaderForCheckpoint_V2ReaderFallsBackToV1RawTranscriptB
 	require.NotContains(t, string(content.Transcript), "from-v1-session-a")
 }
 
-func TestResolveRawSessionLogForCheckpoint_FallsBackToV1RawTranscriptByV2SessionID(t *testing.T) {
+func TestDualCheckpointReader_ReadSessionContentReturnsV2AndFallbackErrors(t *testing.T) {
+	t.Parallel()
+
+	repo := initTestRepo(t)
+	v1Store := NewGitStore(repo)
+	v2Store := NewV2GitStore(repo, "origin")
+	ctx := context.Background()
+	cpID := id.MustCheckpointID("565656565656")
+
+	require.NoError(t, v2Store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID:      cpID,
+		SessionID:         "session-missing-v1",
+		Strategy:          "manual-commit",
+		CompactTranscript: []byte(`{"text":"compact-only"}` + "\n"),
+		AuthorName:        "Test",
+		AuthorEmail:       "test@test.com",
+	}))
+
+	reader, err := NewCommittedReader(v1Store, v2Store, CommittedReadDual)
+	require.NoError(t, err)
+
+	content, err := reader.ReadSessionContent(ctx, cpID, 0)
+	require.Nil(t, content)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrNoTranscript)
+	require.ErrorIs(t, err, ErrCheckpointNotFound)
+	require.Contains(t, err.Error(), "read v1 fallback session content")
+}
+
+func TestReadRawSessionLogForCheckpoint_FallsBackToV1RawTranscriptByV2SessionID(t *testing.T) {
 	t.Parallel()
 
 	repo := initTestRepo(t)
@@ -151,14 +184,16 @@ func TestResolveRawSessionLogForCheckpoint_FallsBackToV1RawTranscriptByV2Session
 		AuthorEmail:       "test@test.com",
 	}))
 
-	logContent, sessionID, err := ResolveRawSessionLogForCheckpoint(ctx, cpID, v1Store, v2Store, true)
+	reader, err := NewCommittedReader(v1Store, v2Store, CommittedReadDual)
+	require.NoError(t, err)
+	logContent, sessionID, err := ReadRawSessionLogForCheckpoint(ctx, reader, cpID)
 	require.NoError(t, err)
 	require.Equal(t, "session-b", sessionID)
 	require.Contains(t, string(logContent), "from-v1-session-b")
 	require.NotContains(t, string(logContent), "from-v1-session-a")
 }
 
-func TestResolveCommittedReaderForCheckpoint_FallsBackToV1WhenMissingInV2(t *testing.T) {
+func TestCommittedReader_FallsBackToV1WhenMissingInV2(t *testing.T) {
 	t.Parallel()
 
 	repo := initTestRepo(t)
@@ -176,7 +211,9 @@ func TestResolveCommittedReaderForCheckpoint_FallsBackToV1WhenMissingInV2(t *tes
 		AuthorEmail:  "test@test.com",
 	}))
 
-	reader, summary, err := ResolveCommittedReaderForCheckpoint(ctx, cpID, v1Store, v2Store, true)
+	reader, err := NewCommittedReader(v1Store, v2Store, CommittedReadDual)
+	require.NoError(t, err)
+	summary, err := ReadCommittedCheckpoint(ctx, reader, cpID)
 	require.NoError(t, err)
 	require.NotNil(t, summary)
 
@@ -185,7 +222,7 @@ func TestResolveCommittedReaderForCheckpoint_FallsBackToV1WhenMissingInV2(t *tes
 	require.Equal(t, "session-v1", content.Metadata.SessionID)
 }
 
-func TestResolveCommittedReaderForCheckpoint_PrefersV1WhenV2Disabled(t *testing.T) {
+func TestCommittedReader_PrefersV1WhenV2Disabled(t *testing.T) {
 	t.Parallel()
 
 	repo := initTestRepo(t)
@@ -212,13 +249,15 @@ func TestResolveCommittedReaderForCheckpoint_PrefersV1WhenV2Disabled(t *testing.
 		AuthorEmail:  "test@test.com",
 	}))
 
-	reader, summary, err := ResolveCommittedReaderForCheckpoint(ctx, cpID, v1Store, v2Store, false)
+	reader, err := NewCommittedReader(v1Store, v2Store, CommittedReadV1)
+	require.NoError(t, err)
+	summary, err := ReadCommittedCheckpoint(ctx, reader, cpID)
 	require.NoError(t, err)
 	require.NotNil(t, summary)
 	require.IsType(t, &GitStore{}, reader)
 }
 
-func TestResolveRawSessionLogForCheckpoint_UsesV2WhenFound(t *testing.T) {
+func TestReadRawSessionLogForCheckpoint_UsesV2WhenFound(t *testing.T) {
 	t.Parallel()
 
 	repo := initTestRepo(t)
@@ -236,7 +275,9 @@ func TestResolveRawSessionLogForCheckpoint_UsesV2WhenFound(t *testing.T) {
 		AuthorEmail:  "test@test.com",
 	}))
 
-	logContent, sessionID, err := ResolveRawSessionLogForCheckpoint(ctx, cpID, v1Store, v2Store, true)
+	reader, err := NewCommittedReader(v1Store, v2Store, CommittedReadDual)
+	require.NoError(t, err)
+	logContent, sessionID, err := ReadRawSessionLogForCheckpoint(ctx, reader, cpID)
 	require.NoError(t, err)
 	require.Equal(t, "session-v2", sessionID)
 	require.Contains(t, string(logContent), "from-v2")
@@ -319,7 +360,7 @@ func TestCommittedReadV2DoesNotFallBackToV1(t *testing.T) {
 	require.Nil(t, summary)
 }
 
-func TestResolveRawSessionLogForCheckpoint_FallsBackToV1WhenMissingInV2(t *testing.T) {
+func TestReadRawSessionLogForCheckpoint_FallsBackToV1WhenMissingInV2(t *testing.T) {
 	t.Parallel()
 
 	repo := initTestRepo(t)
@@ -337,13 +378,15 @@ func TestResolveRawSessionLogForCheckpoint_FallsBackToV1WhenMissingInV2(t *testi
 		AuthorEmail:  "test@test.com",
 	}))
 
-	logContent, sessionID, err := ResolveRawSessionLogForCheckpoint(ctx, cpID, v1Store, v2Store, true)
+	reader, err := NewCommittedReader(v1Store, v2Store, CommittedReadDual)
+	require.NoError(t, err)
+	logContent, sessionID, err := ReadRawSessionLogForCheckpoint(ctx, reader, cpID)
 	require.NoError(t, err)
 	require.Equal(t, "session-v1", sessionID)
 	require.Contains(t, string(logContent), "from-v1")
 }
 
-func TestResolveRawSessionLogForCheckpoint_PrefersV1WhenV2Disabled(t *testing.T) {
+func TestReadRawSessionLogForCheckpoint_PrefersV1WhenV2Disabled(t *testing.T) {
 	t.Parallel()
 
 	repo := initTestRepo(t)
@@ -370,13 +413,15 @@ func TestResolveRawSessionLogForCheckpoint_PrefersV1WhenV2Disabled(t *testing.T)
 		AuthorEmail:  "test@test.com",
 	}))
 
-	logContent, sessionID, err := ResolveRawSessionLogForCheckpoint(ctx, cpID, v1Store, v2Store, false)
+	reader, err := NewCommittedReader(v1Store, v2Store, CommittedReadV1)
+	require.NoError(t, err)
+	logContent, sessionID, err := ReadRawSessionLogForCheckpoint(ctx, reader, cpID)
 	require.NoError(t, err)
 	require.Equal(t, "session-v1", sessionID)
 	require.Contains(t, string(logContent), "from-v1")
 }
 
-func TestResolveCommittedReaderForCheckpoint_FallsBackToV1WhenV2Malformed(t *testing.T) {
+func TestCommittedReader_FallsBackToV1WhenV2Malformed(t *testing.T) {
 	t.Parallel()
 
 	repo := initTestRepo(t)
@@ -407,7 +452,9 @@ func TestResolveCommittedReaderForCheckpoint_FallsBackToV1WhenV2Malformed(t *tes
 	corruptV2MainMetadata(t, repo, cpID)
 
 	// Should fall back to v1 instead of propagating the v2 parse error.
-	reader, summary, err := ResolveCommittedReaderForCheckpoint(ctx, cpID, v1Store, v2Store, true)
+	reader, err := NewCommittedReader(v1Store, v2Store, CommittedReadDual)
+	require.NoError(t, err)
+	summary, err := ReadCommittedCheckpoint(ctx, reader, cpID)
 	require.NoError(t, err)
 	require.NotNil(t, summary)
 	content, err := reader.ReadSessionContent(ctx, cpID, 0)

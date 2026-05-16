@@ -106,7 +106,7 @@ func (r *DualCheckpointReader) ReadSessionContent(ctx context.Context, checkpoin
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
 		}
-		return nil, err
+		return nil, fallbackReadError(err, "read v1 fallback session content", fallbackErr)
 	}
 	return r.readV1SessionContentByIndex(ctx, checkpointID, sessionIndex, err)
 }
@@ -190,7 +190,7 @@ func (r *DualCheckpointReader) readV1SessionContentByIndex(ctx context.Context, 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
 	}
-	return nil, originalErr
+	return nil, fallbackReadError(originalErr, "read v1 session content", err)
 }
 
 func (r *DualCheckpointReader) readV1SessionMetadataByIndex(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, originalErr error) (*CommittedMetadata, error) {
@@ -201,7 +201,14 @@ func (r *DualCheckpointReader) readV1SessionMetadataByIndex(ctx context.Context,
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
 	}
-	return nil, originalErr
+	return nil, fallbackReadError(originalErr, "read v1 session metadata", err)
+}
+
+func fallbackReadError(primaryErr error, fallbackOperation string, fallbackErr error) error {
+	if fallbackErr == nil {
+		return primaryErr
+	}
+	return errors.Join(primaryErr, fmt.Errorf("%s: %w", fallbackOperation, fallbackErr))
 }
 
 func logV2Fallback(ctx context.Context, message string, checkpointID id.CheckpointID, err error) {
@@ -245,79 +252,12 @@ func ReadLatestSessionContent(ctx context.Context, reader CommittedReader, check
 	return content, nil
 }
 
-// ResolveCommittedReaderForCheckpoint resolves a committed checkpoint summary
-// through the mode-level reader selected from the supplied stores.
-//
-// Fallback behavior:
-//   - Uses v1 when preferCheckpointsV2 is false
-//   - Uses DualCheckpointReader when preferCheckpointsV2 is true and v1/v2
-//     stores are available
-//   - Falls back to v1 through DualCheckpointReader when v2 artifacts are
-//     missing in dual-read mode
-func ResolveCommittedReaderForCheckpoint(
-	ctx context.Context,
-	checkpointID id.CheckpointID,
-	v1Store *GitStore,
-	v2Store *V2GitStore,
-	preferCheckpointsV2 bool,
-) (CommittedReader, *CheckpointSummary, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, nil, err //nolint:wrapcheck // Propagating context cancellation
-	}
-
-	mode := CommittedReadV1
-	if preferCheckpointsV2 {
-		mode = CommittedReadDual
-	}
-	reader, err := NewCommittedReader(v1Store, v2Store, mode)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	summary, err := ReadCommittedCheckpoint(ctx, reader, checkpointID)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return reader, summary, nil
-}
-
 func ReadRawSessionLogForCheckpoint(ctx context.Context, reader CommittedReader, checkpointID id.CheckpointID) ([]byte, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, "", err //nolint:wrapcheck // Propagating context cancellation
 	}
 
 	summary, err := ReadCommittedCheckpoint(ctx, reader, checkpointID)
-	if err != nil {
-		return nil, "", err
-	}
-
-	content, err := ReadLatestSessionContent(ctx, reader, checkpointID, summary)
-	if err != nil {
-		return nil, "", err
-	}
-	return content.Transcript, content.Metadata.SessionID, nil
-}
-
-// ResolveRawSessionLogForCheckpoint resolves the raw transcript log bytes for a
-// checkpoint with v2-first, v1-fallback behavior.
-//
-// Fallback behavior:
-//   - Uses ResolveCommittedReaderForCheckpoint
-//   - When v2 /main is chosen, raw transcript reads fall back to the matching
-//     v1 session ID if v2 /full/* has no raw transcript
-func ResolveRawSessionLogForCheckpoint(
-	ctx context.Context,
-	checkpointID id.CheckpointID,
-	v1Store *GitStore,
-	v2Store *V2GitStore,
-	preferCheckpointsV2 bool,
-) ([]byte, string, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, "", err //nolint:wrapcheck // Propagating context cancellation
-	}
-
-	reader, summary, err := ResolveCommittedReaderForCheckpoint(ctx, checkpointID, v1Store, v2Store, preferCheckpointsV2)
 	if err != nil {
 		return nil, "", err
 	}
