@@ -12,7 +12,6 @@ import (
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,13 +71,13 @@ func TestPrePush_PushesLegacyBranchAndBothNewRefs(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = bareRepo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
-	assert.NoError(t, err, "legacy branch must be pushed")
+	require.NoError(t, err, "legacy branch must be pushed")
 
 	_, err = bareRepo.Reference(plumbing.ReferenceName(paths.MetadataCompactRefName), true)
-	assert.NoError(t, err, "v1.1 compact ref must be pushed")
+	require.NoError(t, err, "v1.1 compact ref must be pushed")
 
 	_, err = bareRepo.Reference(plumbing.ReferenceName(paths.MetadataFullRefName), true)
-	assert.NoError(t, err, "v1.1 full ref must be pushed")
+	require.NoError(t, err, "v1.1 full ref must be pushed")
 }
 
 // TestPrePush_SkipsMissingV11Refs verifies that PrePush silently skips

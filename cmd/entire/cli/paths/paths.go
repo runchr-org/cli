@@ -59,11 +59,10 @@ const MetadataFullRefName = "refs/entire/checkpoints/v1/full"
 // V2 ref names use custom refs under refs/entire/ (not refs/heads/).
 // These are invisible in GitHub's branch UI and not fetched by default.
 const (
-	// V2MainRefName is a deprecated alias for MetadataCompactRefName.
-	// Retained so existing callers and tests continue to compile while
-	// v1.1 rolls out. New code should reference MetadataCompactRefName.
-	//
-	// Deprecated: use MetadataCompactRefName.
+	// V2MainRefName is a legacy alias for MetadataCompactRefName. New
+	// code should reference MetadataCompactRefName; this alias exists
+	// only to keep pre-v1.1 callers and tests compiling. Slated for
+	// removal in a follow-up release.
 	V2MainRefName = MetadataCompactRefName
 
 	// V2FullCurrentRefName stores the active generation of raw transcripts

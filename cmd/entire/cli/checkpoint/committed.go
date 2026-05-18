@@ -1635,7 +1635,6 @@ func (s *GitStore) getFetchingTree(ctx context.Context) (*FetchingTree, error) {
 	return NewFetchingTree(ctx, tree, s.repo.Storer, s.blobFetcher), nil
 }
 
-
 // getSessionsBranchTree returns the tree object for the entire/checkpoints/v1 branch.
 // Falls back to origin/entire/checkpoints/v1 if the local branch doesn't exist.
 func (s *GitStore) getSessionsBranchTree() (*object.Tree, error) {
