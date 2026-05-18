@@ -1465,6 +1465,12 @@ func (env *TestEnv) ListBranchesWithPrefix(prefix string) []string {
 
 	var branches []string
 	_ = refs.ForEach(func(ref *plumbing.Reference) error {
+		// Filter to actual branches (refs/heads/) — v1.1 introduced
+		// refs/entire/checkpoints/v1/{main,full} which share a short-
+		// name prefix with branches but are NOT branches.
+		if !ref.Name().IsBranch() {
+			return nil
+		}
 		name := ref.Name().Short()
 		if len(name) >= len(prefix) && name[:len(prefix)] == prefix {
 			branches = append(branches, name)
@@ -2005,6 +2011,35 @@ func (env *TestEnv) BranchExistsOnRemote(bareDir, branchName string) bool {
 	cmd.Dir = bareDir
 	cmd.Env = testutil.GitIsolatedEnv()
 	return cmd.Run() == nil
+}
+
+// RefExistsOnRemote returns true if the bare remote has the given
+// fully-qualified ref (e.g. "refs/entire/checkpoints/v1/main"). Unlike
+// BranchExistsOnRemote, this accepts custom refs outside refs/heads/.
+func (env *TestEnv) RefExistsOnRemote(bareDir, refName string) bool {
+	env.T.Helper()
+
+	cmd := exec.CommandContext(env.T.Context(), "git", "show-ref", "--verify", "--quiet", refName)
+	cmd.Dir = bareDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	return cmd.Run() == nil
+}
+
+// GetRefHash returns the commit hash for the given fully-qualified ref
+// (or a branch shorthand like "main"). Fails the test if the ref is
+// missing.
+func (env *TestEnv) GetRefHash(refName string) string {
+	env.T.Helper()
+
+	repo, err := git.PlainOpen(env.RepoDir)
+	if err != nil {
+		env.T.Fatalf("failed to open git repo: %v", err)
+	}
+	ref, err := repo.Reference(plumbing.ReferenceName(refName), true)
+	if err != nil {
+		env.T.Fatalf("ref %q not found: %v", refName, err)
+	}
+	return ref.Hash().String()
 }
 
 // PatchSettings merges extra keys into .entire/settings.json.

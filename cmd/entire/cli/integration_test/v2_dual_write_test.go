@@ -167,9 +167,17 @@ func TestV2DualWrite_Disabled(t *testing.T) {
 	assert.True(t, env.BranchExists(paths.MetadataBranchName),
 		"v1 metadata branch should exist")
 
-	// v2 refs should NOT exist
-	assert.False(t, env.RefExists(paths.V2MainRefName),
-		"v2 /main ref should NOT exist when v2 is disabled")
+	// With v1.1, the compact ref (paths.V2MainRefName aka
+	// MetadataCompactRefName) is ALWAYS written regardless of v2
+	// settings. The legacy "should not exist" assertion is intentionally
+	// inverted here.
+	assert.True(t, env.RefExists(paths.MetadataCompactRefName),
+		"v1.1 compact ref should always be written")
+	// The v1.1 full ref is also always aliased.
+	assert.True(t, env.RefExists(paths.MetadataFullRefName),
+		"v1.1 full ref should always be aliased")
+
+	// v2 /full/current is still gated on checkpoints_v2 / push_v2_refs.
 	assert.False(t, env.RefExists(paths.V2FullCurrentRefName),
 		"v2 /full/current ref should NOT exist when v2 is disabled")
 }

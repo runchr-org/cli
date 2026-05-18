@@ -175,12 +175,17 @@ func TestV2Resume_FallsBackToV1(t *testing.T) {
 	featureBranch := env.GetCurrentBranch()
 	env.GitCheckoutBranch("master")
 
-	// Resume should fall back to v1 since data was written before v2 was enabled
+	// Resume should succeed even though v2 was enabled after the first
+	// commit. Pre-v1.1 this exercised the v2→v1 fallback path; with
+	// v1.1's always-on compact write, refs/entire/checkpoints/v1/main
+	// is written from the very first condensation regardless of v2
+	// settings, so resume reads directly from there (no fallback).
 	output, err := env.RunResume(featureBranch)
 	require.NoError(t, err, "resume failed: %s", output)
 
 	assert.Equal(t, featureBranch, env.GetCurrentBranch())
-	assert.Contains(t, output, "Restored session")
+	assert.Contains(t, output, "Session restored",
+		"resume should print the session-restored confirmation")
 	assert.Contains(t, output, "claude -r")
 }
 

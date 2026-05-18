@@ -113,13 +113,19 @@ func TestV2Push_Disabled_NoV2Refs(t *testing.T) {
 
 	env.RunPrePush("origin")
 
-	// v2 refs should NOT be pushed
-	assert.False(t, bareRefExists(t, bareDir, paths.V2MainRefName),
-		"v2 /main ref should NOT exist on remote when push_v2_refs is disabled")
+	// v1.1 compact ref (paths.V2MainRefName aka MetadataCompactRefName) and
+	// the v1.1 full ref are ALWAYS pushed regardless of push_v2_refs.
+	assert.True(t, bareRefExists(t, bareDir, paths.MetadataCompactRefName),
+		"v1.1 compact ref should always be pushed")
+	assert.True(t, bareRefExists(t, bareDir, paths.MetadataFullRefName),
+		"v1.1 full ref should always be pushed")
+
+	// v2 /full/current is still gated and must NOT be pushed when
+	// push_v2_refs is disabled.
 	assert.False(t, bareRefExists(t, bareDir, paths.V2FullCurrentRefName),
 		"v2 /full/current ref should NOT exist on remote when push_v2_refs is disabled")
 
-	// v1 should still be pushed
+	// Legacy branch should still be pushed.
 	assert.True(t, bareRefExists(t, bareDir, "refs/heads/"+paths.MetadataBranchName),
 		"v1 metadata branch should still exist on remote")
 }
