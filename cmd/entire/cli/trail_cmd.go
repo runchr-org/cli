@@ -125,7 +125,6 @@ func printTrailDetails(w io.Writer, m *trail.Metadata) {
 func newTrailListCmd() *cobra.Command {
 	var authorFilter string
 	var statusFilter string
-	var mine bool
 	var jsonOutput bool
 	var limit int
 
@@ -133,19 +132,12 @@ func newTrailListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List recent trails",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if mine {
-				if cmd.Flags().Changed("author") {
-					return errors.New("--mine cannot be used with --author")
-				}
-				authorFilter = trailListAuthorMe
-			}
 			return runTrailListAll(cmd.Context(), cmd.OutOrStdout(), authorFilter, statusFilter, jsonOutput, limit, trailInsecureHTTP(cmd))
 		},
 	}
 
 	cmd.Flags().StringVar(&authorFilter, "author", defaultTrailListAuthor, "Filter by author login; use "+trailListAuthorMe+" for yourself; omit value for any author")
 	cmd.Flags().StringVar(&statusFilter, "status", defaultTrailListStatus, "Filter by comma-separated status(es): "+formatValidStatuses()+"; omit value for any status")
-	cmd.Flags().BoolVar(&mine, "mine", false, "Alias for --author me")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON")
 	cmd.Flags().IntVar(&limit, "limit", defaultTrailListLimit, "Maximum number of trails to show")
 	cmd.Flags().Lookup("author").NoOptDefVal = ""
