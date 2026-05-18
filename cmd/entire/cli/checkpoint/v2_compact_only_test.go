@@ -64,15 +64,15 @@ func TestV2GitStore_WriteFullOnly_WritesFullCurrentForExistingMain(t *testing.T)
 		CompactTranscript: []byte(`{"event":"start"}` + "\n"),
 	}
 
-	// Seed /main so WriteFullOnly can discover the session index.
-	_, err := store.WriteCompactOnly(context.Background(), opts)
+	// Seed /main and capture the session index for the /full write.
+	sessionIndex, err := store.WriteCompactOnly(context.Background(), opts)
 	require.NoError(t, err)
 
 	// /full/current does not exist yet.
 	_, err = repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
 	require.Error(t, err)
 
-	require.NoError(t, store.WriteFullOnly(context.Background(), opts))
+	require.NoError(t, store.WriteFullOnly(context.Background(), opts, sessionIndex))
 
 	fullRef, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
 	require.NoError(t, err, "/full/current must exist after WriteFullOnly")

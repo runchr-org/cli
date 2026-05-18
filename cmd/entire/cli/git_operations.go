@@ -508,14 +508,15 @@ func fetchV2MainFromOrigin(ctx context.Context, shallow, noFilter bool) error {
 	return nil
 }
 
-// FetchMetadataFullRef fetches refs/entire/checkpoints/v1/full from origin
-// with full blob content. v1/full is a v1.1 custom ref aliased to the
-// legacy MetadataBranchName commit; it carries the same trees but lives
-// under refs/entire/ so it isn't pulled by default `git clone`.
+// FetchMetadataFullRef fetches refs/entire/checkpoints/v1/full from
+// origin with full blob content via the tmp-ref-then-promote pattern,
+// so a fetch from a remote that happens to be behind cannot rewind a
+// locally-ahead full ref. Mirrors the safety contract of FetchV2MainRef
+// for the v1/main ref.
 //
-// Used by resume/explain to lazy-fetch the ref when it's missing locally.
-// Best-effort: errors are returned to the caller for logging rather than
-// hard-failing the user's command.
+// Used by resume/explain to lazy-fetch the ref when it's missing
+// locally. Best-effort: errors are returned to the caller for logging
+// rather than hard-failing the user's command.
 func FetchMetadataFullRef(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -525,7 +526,8 @@ func FetchMetadataFullRef(ctx context.Context) error {
 		return fmt.Errorf("failed to resolve fetch target: %w", err)
 	}
 
-	refSpec := fmt.Sprintf("+%s:%s", paths.MetadataFullRefName, paths.MetadataFullRefName)
+	const tmpRef = strategy.FetchTmpRefPrefix + "v11-full"
+	refSpec := fmt.Sprintf("+%s:%s", paths.MetadataFullRefName, tmpRef)
 	output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
 		Remote:   fetchTarget,
 		RefSpecs: []string{refSpec},
@@ -534,9 +536,16 @@ func FetchMetadataFullRef(ctx context.Context) error {
 	})
 	if fetchErr != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return errors.New("v1.1 full ref fetch timed out after 2 minutes")
+			return errors.New("v1/full fetch timed out after 2 minutes")
 		}
 		return formatFilteredFetchError("failed to fetch v1/full", fetchTarget, output, fetchErr)
+	}
+
+	if err := strategy.PromoteTmpRefSafely(ctx,
+		plumbing.ReferenceName(tmpRef),
+		plumbing.ReferenceName(paths.MetadataFullRefName),
+		"v1/full"); err != nil {
+		return fmt.Errorf("origin v1/full fetch: %w", err)
 	}
 	return nil
 }

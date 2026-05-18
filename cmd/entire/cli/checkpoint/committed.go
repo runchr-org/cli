@@ -1662,13 +1662,6 @@ func (s *GitStore) getSessionsBranchTree() (*object.Tree, error) {
 	return tree, nil
 }
 
-// getCompactRefTree returns the tree object for refs/entire/checkpoints/v1/main.
-// Returns an error if the ref does not exist locally — no remote fallback at
-// this layer (callers that need network fetch handle it themselves).
-func (s *GitStore) getCompactRefTree() (*object.Tree, error) {
-	return s.treeForRef(plumbing.ReferenceName(paths.MetadataCompactRefName), "compact")
-}
-
 // getFullRefTree returns the tree object for refs/entire/checkpoints/v1/full.
 // Returns an error if the ref does not exist locally.
 func (s *GitStore) getFullRefTree() (*object.Tree, error) {
@@ -1689,21 +1682,6 @@ func (s *GitStore) treeForRef(refName plumbing.ReferenceName, label string) (*ob
 		return nil, fmt.Errorf("failed to get %s-ref tree: %w", label, err)
 	}
 	return tree, nil
-}
-
-// getMetadataTree returns whichever ref currently carries the checkpoint
-// metadata view, preferring the v1.1 compact ref, then the v1.1 full ref,
-// and finally the legacy branch (or its remote-tracking equivalent).
-// Used for metadata reads (CheckpointSummary, session metadata, prompts);
-// callers that need full.jsonl must use getFullTranscriptTree.
-func (s *GitStore) getMetadataTree() (*object.Tree, error) {
-	if tree, err := s.getCompactRefTree(); err == nil {
-		return tree, nil
-	}
-	if tree, err := s.getFullRefTree(); err == nil {
-		return tree, nil
-	}
-	return s.getSessionsBranchTree()
 }
 
 // getFullTranscriptTree returns whichever ref currently carries the raw

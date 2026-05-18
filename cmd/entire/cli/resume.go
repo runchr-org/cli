@@ -507,16 +507,16 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 	return nil, nil, fmt.Errorf("metadata branch not available: %w", remoteErr)
 }
 
-// fetchV11CustomRefsBestEffort fetches refs/entire/checkpoints/v1/main and
-// refs/entire/checkpoints/v1/full from origin into the same-named local
-// refs. Best-effort — failures are logged at debug level and do not
-// block the legacy branch fetch path.
+// fetchV11CustomRefsBestEffort lazy-fetches the v1.1 custom refs from
+// origin. Best-effort — failures are logged at debug level and do not
+// block the legacy branch fetch path. Needed because these refs live
+// under refs/entire/ and aren't pulled by the default `git clone`
+// refspec.
 //
-// These refs are not in the default `git clone` refspec (they live under
-// refs/entire/, not refs/heads/), so a fresh clone won't have them until
-// something explicitly fetches them. Running this in resume's metadata
-// path ensures the v1.1 refs are populated whenever resume runs against
-// a fresh clone.
+// Both fetches use the tmp-ref-then-promote pattern so a remote that's
+// behind the local can't rewind locally-ahead refs (the safety
+// contract that TestExplain_CheckpointV2FetchDoesNotRewindLocalAheadRefs
+// guards). We accept the two-subprocess cost to keep that invariant.
 func fetchV11CustomRefsBestEffort(ctx context.Context) {
 	if err := FetchV2MainRef(ctx); err != nil {
 		logging.Debug(ctx, "v1.1 compact-ref lazy fetch failed",

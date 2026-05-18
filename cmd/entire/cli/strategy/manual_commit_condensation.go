@@ -291,15 +291,16 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 	// in v1 mode (shadow of the legacy branch).
 	writeCompactStart := time.Now()
 	writeCompactCtx, writeCompactSpan := perf.Start(ctx, "write_compact_ref")
-	if err := writeCompactRef(writeCompactCtx, repo, writeOpts); err != nil {
+	sessionIndex, compactErr := writeCompactRef(writeCompactCtx, repo, writeOpts)
+	if compactErr != nil {
 		if v2 {
-			writeCompactSpan.RecordError(err)
+			writeCompactSpan.RecordError(compactErr)
 			writeCompactSpan.End()
-			return nil, fmt.Errorf("failed to write checkpoint metadata to v2: %w", err)
+			return nil, fmt.Errorf("failed to write checkpoint metadata to v2: %w", compactErr)
 		}
 		logging.Warn(writeCompactCtx, "compact-ref write failed",
 			slog.String("checkpoint_id", checkpointID.String()),
-			slog.String("error", err.Error()),
+			slog.String("error", compactErr.Error()),
 		)
 	}
 	writeCompactSpan.End()
@@ -307,11 +308,13 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 
 	// v2 /full/current archive: write whenever IsCheckpointsV2Enabled is
 	// true (covers both checkpoints_v2 shadow-mode and checkpoints_version:
-	// 2 primary-mode). Errors are fatal only in true v2 primary mode.
+	// 2 primary-mode). Skipped when the preceding compact-ref write failed,
+	// since /full's session-index alignment depends on /main being current.
+	// Errors are fatal only in true v2 primary mode.
 	writeV2FullStart := time.Now()
 	writeV2FullCtx, writeV2FullSpan := perf.Start(ctx, "write_committed_v2_full")
-	if settings.IsCheckpointsV2Enabled(ctx) {
-		if err := writeCommittedV2Full(writeV2FullCtx, repo, writeOpts); err != nil {
+	if settings.IsCheckpointsV2Enabled(ctx) && compactErr == nil {
+		if err := writeCommittedV2Full(writeV2FullCtx, repo, writeOpts, sessionIndex); err != nil {
 			if v2 {
 				writeV2FullSpan.RecordError(err)
 				writeV2FullSpan.End()
@@ -1641,25 +1644,34 @@ func computeCompactTranscriptStart(ctx context.Context, ag agent.Agent, state *S
 }
 
 // writeCompactRef writes the compact metadata + transcript view to
-// refs/entire/checkpoints/v1/main. Returns an error so callers can
-// decide whether to propagate (v2 mode — this is the primary store)
-// or swallow (v1 mode — this is a shadow write).
+// refs/entire/checkpoints/v1/main. Returns the session index used on
+// /main (so a paired writeCommittedV2Full call can land at the same
+// slot) plus an error that the caller can choose to propagate (v2
+// mode — primary store) or swallow (v1 mode — shadow write).
 //
 // Always called from condensation regardless of settings, since v1.1's
 // compact ref is invariant of v2 mode.
-func writeCompactRef(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) error {
+func writeCompactRef(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) (int, error) {
+	store := newCondenseV2Store(ctx, repo)
+	idx, err := store.WriteCompactOnly(ctx, opts)
+	if err != nil {
+		return 0, fmt.Errorf("compact-ref write: %w", err)
+	}
+	return idx, nil
+}
+
+// newCondenseV2Store opens a V2GitStore configured with the same fetch
+// URL writeCompactRef / writeCommittedV2Full use. Centralizes the
+// FetchURL resolution + originRemote fallback so we don't repeat it.
+func newCondenseV2Store(ctx context.Context, repo *git.Repository) *cpkg.V2GitStore {
 	v2URL, err := remote.FetchURL(ctx)
 	if err != nil {
-		logging.Debug(ctx, "manual-commit condensation: using origin for compact-ref fetch remote",
+		logging.Debug(ctx, "manual-commit condensation: using origin for v2 store fetch remote",
 			slog.String("error", err.Error()),
 		)
 		v2URL = originRemote
 	}
-	store := cpkg.NewV2GitStore(repo, v2URL)
-	if _, err := store.WriteCompactOnly(ctx, opts); err != nil {
-		return fmt.Errorf("compact-ref write: %w", err)
-	}
-	return nil
+	return cpkg.NewV2GitStore(repo, v2URL)
 }
 
 // writeFullRef publishes refs/entire/checkpoints/v1/full as a write-alias
@@ -1691,22 +1703,15 @@ func writeFullRef(ctx context.Context, repo *git.Repository) {
 }
 
 // writeCommittedV2Full writes the raw transcript artifacts to
-// refs/entire/checkpoints/v2/full/current. Returns an error so callers
-// can propagate (always fatal in v2 mode — this is the primary archive
-// store) or, in future shadow scenarios, decide to swallow.
+// refs/entire/checkpoints/v2/full/current at the given session index.
+// Caller passes the index returned by the preceding writeCompactRef
+// call so both refs stay aligned without an extra /main re-read.
 //
 // Only meaningful when settings.IsCheckpointsV2Enabled is true; the
 // caller is responsible for gating.
-func writeCommittedV2Full(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) error {
-	v2URL, err := remote.FetchURL(ctx)
-	if err != nil {
-		logging.Debug(ctx, "manual-commit condensation: using origin for v2 /full write fetch remote",
-			slog.String("error", err.Error()),
-		)
-		v2URL = originRemote
-	}
-	store := cpkg.NewV2GitStore(repo, v2URL)
-	if err := store.WriteFullOnly(ctx, opts); err != nil {
+func writeCommittedV2Full(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions, sessionIndex int) error {
+	store := newCondenseV2Store(ctx, repo)
+	if err := store.WriteFullOnly(ctx, opts, sessionIndex); err != nil {
 		return fmt.Errorf("v2 /full write: %w", err)
 	}
 	return nil

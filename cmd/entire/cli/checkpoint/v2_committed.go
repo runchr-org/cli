@@ -81,66 +81,20 @@ func (s *V2GitStore) WriteCompactOnly(ctx context.Context, opts WriteCommittedOp
 }
 
 // WriteFullOnly writes the raw transcript artifacts for a checkpoint
-// session to refs/entire/checkpoints/v2/full/current, looking up the
-// session index from /main.
+// session to refs/entire/checkpoints/v2/full/current at the given
+// session index — typically the value just returned by WriteCompactOnly.
 //
 // Used by the manual-commit strategy when settings.IsCheckpointsV2Enabled
-// is true: WriteCompactOnly runs first (always), then this fills in the
-// /full/* archive entry with the same session-index alignment.
-//
-// Returns an error if /main does not yet contain the checkpoint or
-// session — callers must call WriteCompactOnly first.
-func (s *V2GitStore) WriteFullOnly(ctx context.Context, opts WriteCommittedOptions) error {
+// is true: WriteCompactOnly runs first (always) and produces the index;
+// this fills in the /full/* archive entry at the same slot.
+func (s *V2GitStore) WriteFullOnly(ctx context.Context, opts WriteCommittedOptions, sessionIndex int) error {
 	if err := validateWriteOpts(opts); err != nil {
 		return err
-	}
-	sessionIndex, err := s.lookupSessionIndexOnMain(ctx, opts.CheckpointID, opts.SessionID)
-	if err != nil {
-		return fmt.Errorf("look up session index for /full write: %w", err)
 	}
 	if err := s.writeCommittedFullTranscript(ctx, opts, sessionIndex); err != nil {
 		return fmt.Errorf("v2 /full/current write failed: %w", err)
 	}
 	return nil
-}
-
-// lookupSessionIndexOnMain reads /main and resolves the session index
-// for the given checkpoint + session ID. Used by WriteFullOnly to keep
-// /full/current's session numbering consistent with /main.
-func (s *V2GitStore) lookupSessionIndexOnMain(ctx context.Context, checkpointID id.CheckpointID, sessionID string) (int, error) {
-	refName := plumbing.ReferenceName(paths.V2MainRefName)
-	_, rootTreeHash, err := s.GetRefState(refName)
-	if err != nil {
-		return 0, fmt.Errorf("read /main ref state: %w", err)
-	}
-
-	basePath := checkpointID.Path() + "/"
-	checkpointPath := checkpointID.Path()
-
-	entries, err := s.gs.flattenCheckpointEntries(rootTreeHash, checkpointPath)
-	if err != nil {
-		return 0, fmt.Errorf("flatten checkpoint entries: %w", err)
-	}
-
-	rootMetadataPath := basePath + paths.MetadataFileName
-	entry, exists := entries[rootMetadataPath]
-	if !exists {
-		return 0, fmt.Errorf("checkpoint %s not found on /main", checkpointID)
-	}
-
-	summary, err := readJSONFromBlob[CheckpointSummary](s.repo, entry.Hash)
-	if err != nil {
-		return 0, fmt.Errorf("read checkpoint summary: %w", err)
-	}
-	if len(summary.Sessions) == 0 {
-		return 0, fmt.Errorf("checkpoint %s has no sessions on /main", checkpointID)
-	}
-
-	sessionIndex := s.gs.findSessionIndex(ctx, basePath, summary, entries, sessionID)
-	if sessionIndex >= len(summary.Sessions) {
-		return 0, fmt.Errorf("session %q not found on /main for checkpoint %s", sessionID, checkpointID)
-	}
-	return sessionIndex, nil
 }
 
 // WriteCommittedMainBatch writes /main entries for every (checkpoint, session)

@@ -41,63 +41,6 @@ func seedRef(t *testing.T, repo *git.Repository, refName plumbing.ReferenceName,
 	return commitHash
 }
 
-func TestGetMetadataTree_PrefersCompactRef(t *testing.T) {
-	t.Parallel()
-
-	repo := initTestRepo(t)
-	store := &GitStore{repo: repo}
-
-	seedRef(t, repo, plumbing.NewBranchReferenceName(paths.MetadataBranchName), "legacy.txt", "legacy")
-	seedRef(t, repo, plumbing.ReferenceName(paths.MetadataFullRefName), "full.txt", "full")
-	compactHash := seedRef(t, repo, plumbing.ReferenceName(paths.MetadataCompactRefName), "compact.txt", "compact")
-
-	tree, err := store.getMetadataTree()
-	require.NoError(t, err)
-	require.NotNil(t, tree)
-
-	compactCommit, err := repo.CommitObject(compactHash)
-	require.NoError(t, err)
-	require.Equal(t, compactCommit.TreeHash, tree.Hash,
-		"compact ref tree must win over full ref and legacy branch trees")
-}
-
-func TestGetMetadataTree_FallsBackToFullRef(t *testing.T) {
-	t.Parallel()
-
-	repo := initTestRepo(t)
-	store := &GitStore{repo: repo}
-
-	seedRef(t, repo, plumbing.NewBranchReferenceName(paths.MetadataBranchName), "legacy.txt", "legacy")
-	fullHash := seedRef(t, repo, plumbing.ReferenceName(paths.MetadataFullRefName), "full.txt", "full")
-
-	tree, err := store.getMetadataTree()
-	require.NoError(t, err)
-	require.NotNil(t, tree)
-
-	fullCommit, err := repo.CommitObject(fullHash)
-	require.NoError(t, err)
-	require.Equal(t, fullCommit.TreeHash, tree.Hash,
-		"full ref tree must win when compact ref is absent")
-}
-
-func TestGetMetadataTree_FallsBackToLegacyBranch(t *testing.T) {
-	t.Parallel()
-
-	repo := initTestRepo(t)
-	store := &GitStore{repo: repo}
-
-	legacyHash := seedRef(t, repo, plumbing.NewBranchReferenceName(paths.MetadataBranchName), "legacy.txt", "legacy")
-
-	tree, err := store.getMetadataTree()
-	require.NoError(t, err)
-	require.NotNil(t, tree)
-
-	legacyCommit, err := repo.CommitObject(legacyHash)
-	require.NoError(t, err)
-	require.Equal(t, legacyCommit.TreeHash, tree.Hash,
-		"legacy branch tree must be the last fallback")
-}
-
 func TestGetFullTranscriptTree_PrefersLegacyBranchOverFullRef(t *testing.T) {
 	t.Parallel()
 
