@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
+	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -56,6 +58,20 @@ type attachOptions struct {
 	// transcript's first user prompt. Used by `entire review attach` when a
 	// pending-review marker has the exact prompt the user was asked to run.
 	ReviewPromptOverride string
+	// TargetRepo, when non-empty, makes attach operate on this repo instead
+	// of the current working directory. The skill/orchestrator uses this to
+	// fan an agent session out to multiple repos without cd'ing per call.
+	// All downstream cwd-coupled lookups (git rev-parse, session state store
+	// path) resolve against this path for the duration of the attach.
+	TargetRepo string
+	// DryRun, when true, computes the plan (which checkpoint id would be
+	// written, whether HEAD already has a trailer, transcript size) and
+	// returns without amending the commit, writing checkpoint metadata, or
+	// saving session state. Combined with JSON for machine-readable output.
+	DryRun bool
+	// JSON, when true, emits the dry-run plan as JSON on the writer. Only
+	// meaningful with DryRun=true; ignored otherwise.
+	JSON bool
 }
 
 func newAttachCmd() *cobra.Command {
@@ -64,6 +80,9 @@ func newAttachCmd() *cobra.Command {
 		agentFlag  string
 		reviewFlag bool
 		skillsFlag []string
+		targetRepo string
+		dryRun     bool
+		jsonOut    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "attach <session-id>",
@@ -88,6 +107,16 @@ external_agents in settings. Run 'entire agent list' to see the full list.`,
 			if len(args) != 1 {
 				return cmd.Help()
 			}
+			if jsonOut && !dryRun {
+				return errors.New("--json is only valid with --dry-run")
+			}
+			if targetRepo != "" {
+				restore, err := chdirToTargetRepo(targetRepo)
+				if err != nil {
+					return err
+				}
+				defer restore()
+			}
 			if checkDisabledGuard(cmd.Context(), cmd.OutOrStdout()) {
 				return nil
 			}
@@ -99,6 +128,9 @@ external_agents in settings. Run 'entire agent list' to see the full list.`,
 				Force:                force,
 				Review:               reviewFlag,
 				ReviewSkillsOverride: skillsFlag,
+				TargetRepo:           targetRepo,
+				DryRun:               dryRun,
+				JSON:                 jsonOut,
 			}
 			return runAttachSurfaceReviewErrors(cmd, args[0], agentName, opts)
 		},
@@ -107,6 +139,9 @@ external_agents in settings. Run 'entire agent list' to see the full list.`,
 	cmd.Flags().StringVarP(&agentFlag, "agent", "a", string(agent.DefaultAgentName), "Agent that created the session (see 'entire agent list' for registered agents, including external)")
 	cmd.Flags().BoolVar(&reviewFlag, "review", false, "Tag the attached session as an agent review")
 	cmd.Flags().StringSliceVar(&skillsFlag, "skills", nil, "Optional: declare which review skills were run in this session. Only used with --review")
+	cmd.Flags().StringVar(&targetRepo, "target-repo", "", "Operate on this repo instead of the current working directory (skill orchestration)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print what would happen without amending the commit or writing checkpoint/session state")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Emit dry-run plan as JSON (only valid with --dry-run)")
 	return cmd
 }
 
@@ -141,16 +176,19 @@ func runAttachSurfaceReviewErrors(cmd *cobra.Command, sessionID string, agentNam
 }
 
 func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName types.AgentName, opts attachOptions) error {
-	// Initialize structured logger so logging.Warn/Info write to .entire/logs/ not stderr.
-	if err := logging.Init(ctx, sessionID); err != nil {
-		// Init failed — logging will use stderr fallback, non-fatal.
-		_ = err
+	// Skip log file creation on dry-run: a multi-repo orchestrator preview
+	// shouldn't leave a trail of empty .entire/logs/<id>.log files.
+	if !opts.DryRun {
+		if err := logging.Init(ctx, sessionID); err != nil {
+			// Init failed — logging will use stderr fallback, non-fatal.
+			_ = err
+		}
+		// Flush the 8KB buffered log writer on exit. Without this, any
+		// Warn/Info calls during attach (including the overwrite tripwire)
+		// get silently dropped when the process exits, matching the pattern
+		// already used by resume/clean/reset/rewind/migrate/explain.
+		defer logging.Close()
 	}
-	// Flush the 8KB buffered log writer on exit. Without this, any
-	// Warn/Info calls during attach (including the overwrite tripwire)
-	// get silently dropped when the process exits, matching the pattern
-	// already used by resume/clean/reset/rewind/migrate/explain.
-	defer logging.Close()
 
 	logCtx := logging.WithComponent(ctx, "attach")
 
@@ -184,6 +222,21 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 			)
 		}
 		cpID := existingState.LastCheckpointID.String()
+		if opts.DryRun {
+			_, isExistingCheckpoint := resolveCheckpointID(headCommit)
+			var existingTrailer string
+			if isExistingCheckpoint {
+				existingTrailer = cpID
+			}
+			return emitDryRunResult(w, opts, dryRunResult{
+				SessionID:           sessionID,
+				TargetRepo:          targetRepoPath(ctx),
+				HeadCommit:          headCommit.Hash.String(),
+				ExistingTrailer:     existingTrailer,
+				Action:              actionWouldSkipExistingInState,
+				CheckpointIDPlanned: cpID,
+			})
+		}
 		fmt.Fprintf(w, "Session %s already has checkpoint %s\n", sessionID, cpID)
 		if err := promptAmendCommit(logCtx, w, headCommit, cpID, opts.Force); err != nil {
 			logging.Warn(logCtx, "failed to amend commit", "error", err)
@@ -196,6 +249,30 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	ag, transcriptPath, err := resolveAgentAndTranscript(logCtx, w, sessionID, agentName, existingState)
 	if err != nil {
 		return err
+	}
+
+	if opts.DryRun {
+		// Determine checkpoint ID without reading the transcript so multi-repo
+		// previews stay fast (transcripts can be MBs).
+		plannedCheckpoint, isExistingCheckpoint := resolveCheckpointID(headCommit)
+		action := actionWouldAddTrailer
+		if isExistingCheckpoint {
+			action = actionWouldLinkExistingInHead
+		}
+		var existingTrailer string
+		if isExistingCheckpoint {
+			existingTrailer = plannedCheckpoint.String()
+		}
+		return emitDryRunResult(w, opts, dryRunResult{
+			SessionID:           sessionID,
+			TargetRepo:          targetRepoPath(ctx),
+			HeadCommit:          headCommit.Hash.String(),
+			ExistingTrailer:     existingTrailer,
+			Action:              action,
+			CheckpointIDPlanned: plannedCheckpoint.String(),
+			TranscriptBytes:     transcriptFileBytes(transcriptPath),
+			Agent:               string(ag.Type()),
+		})
 	}
 
 	var reviewSkills []string
@@ -736,4 +813,105 @@ func promptAmendCommit(ctx context.Context, w io.Writer, headCommit *object.Comm
 
 	fmt.Fprintf(w, "Amended commit %s with Entire-Checkpoint: %s\n", shortHash, checkpointIDStr)
 	return nil
+}
+
+// chdirToTargetRepo validates the path is a directory and chdirs into it.
+// Returns a restore function the caller must defer. The chdir is process-global
+// for the duration of the attach; safe because the CLI is one-shot.
+func chdirToTargetRepo(target string) (func(), error) {
+	abs, err := filepath.Abs(target)
+	if err != nil {
+		return nil, fmt.Errorf("--target-repo: resolve path: %w", err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, fmt.Errorf("--target-repo %s: %w", abs, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("--target-repo %s: not a directory", abs)
+	}
+	prev, err := os.Getwd() //nolint:forbidigo // CLI scope; restored on defer
+	if err != nil {
+		return nil, fmt.Errorf("--target-repo: getwd: %w", err)
+	}
+	if err := os.Chdir(abs); err != nil {
+		return nil, fmt.Errorf("--target-repo: chdir %s: %w", abs, err)
+	}
+	return func() {
+		// Best-effort restore — the CLI is exiting shortly after.
+		_ = os.Chdir(prev) //nolint:errcheck // best-effort restore on CLI exit
+	}, nil
+}
+
+// dryRunAction names the planned action surfaced by --dry-run. Keep in sync
+// with the JSON values consumed by the scope skill orchestrator.
+type dryRunAction string
+
+const (
+	actionWouldAddTrailer          dryRunAction = "would_add_trailer"
+	actionWouldLinkExistingInHead  dryRunAction = "would_link_existing_in_head"
+	actionWouldSkipExistingInState dryRunAction = "would_skip_existing_in_state"
+)
+
+// dryRunResult is the structured plan emitted when --dry-run is set.
+// Field ordering matches the human-readable output for predictable JSON diffs.
+type dryRunResult struct {
+	SessionID           string       `json:"session_id"`
+	TargetRepo          string       `json:"target_repo"`
+	HeadCommit          string       `json:"head_commit"`
+	ExistingTrailer     string       `json:"existing_trailer,omitempty"`
+	Action              dryRunAction `json:"action"`
+	CheckpointIDPlanned string       `json:"checkpoint_id_planned,omitempty"`
+	TranscriptBytes     int64        `json:"transcript_bytes,omitempty"`
+	Agent               string       `json:"agent,omitempty"`
+}
+
+func emitDryRunResult(w io.Writer, opts attachOptions, result dryRunResult) error {
+	if opts.JSON {
+		b, err := jsonutil.MarshalIndentWithNewline(result, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal dry-run result: %w", err)
+		}
+		if _, err := w.Write(b); err != nil {
+			return fmt.Errorf("write dry-run result: %w", err)
+		}
+		return nil
+	}
+	fmt.Fprintf(w, "dry-run: %s for session %s\n", result.Action, result.SessionID)
+	fmt.Fprintf(w, "  target repo:      %s\n", result.TargetRepo)
+	fmt.Fprintf(w, "  HEAD commit:      %s\n", result.HeadCommit)
+	if result.ExistingTrailer != "" {
+		fmt.Fprintf(w, "  existing trailer: %s\n", result.ExistingTrailer)
+	}
+	if result.CheckpointIDPlanned != "" {
+		fmt.Fprintf(w, "  checkpoint id:    %s\n", result.CheckpointIDPlanned)
+	}
+	if result.TranscriptBytes > 0 {
+		fmt.Fprintf(w, "  transcript bytes: %d\n", result.TranscriptBytes)
+	}
+	if result.Agent != "" {
+		fmt.Fprintf(w, "  agent:            %s\n", result.Agent)
+	}
+	return nil
+}
+
+// targetRepoPath returns the worktree root of the repo attach is operating on.
+// Used in dry-run output so the caller sees the canonical repo path (it matches
+// --target-repo when set, cwd's worktree root otherwise).
+func targetRepoPath(ctx context.Context) string {
+	root, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		return ""
+	}
+	return root
+}
+
+// transcriptFileBytes returns the on-disk size of the transcript without
+// reading it into memory. Used by --dry-run to keep multi-repo previews fast.
+func transcriptFileBytes(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
 }

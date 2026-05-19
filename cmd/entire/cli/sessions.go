@@ -178,6 +178,12 @@ Examples:
   entire session attach <session-id>       Attach an external session
   entire session resume <branch>           Resume from a branch`,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			// Subcommands that take --target-repo do their own repo validation
+			// against that target inside their RunE, so skip the cwd-based
+			// worktree-root check here when the flag is set.
+			if f := cmd.Flags().Lookup("target-repo"); f != nil && f.Value.String() != "" {
+				return nil
+			}
 			if _, err := paths.WorktreeRoot(cmd.Context()); err != nil {
 				return errors.New("not a git repository")
 			}
