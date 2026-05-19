@@ -14,10 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 
-	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
 
@@ -38,10 +35,7 @@ func maybePromptInvestigateSettingsMigration(
 	canPrompt bool,
 	promptYN func(context.Context, string, bool) (bool, error),
 ) error {
-	project, ok, err := loadProjectInvestigateSettings(ctx)
-	if err != nil {
-		return err
-	}
+	project, ok := loadProjectInvestigateSettings(ctx)
 	if !ok {
 		return nil
 	}
@@ -73,35 +67,22 @@ func maybePromptInvestigateSettingsMigration(
 	return nil
 }
 
-func loadProjectInvestigateSettings(ctx context.Context) (*projectInvestigateSettings, bool, error) {
-	path, err := paths.AbsPath(ctx, settings.EntireSettingsFile)
+// loadProjectInvestigateSettings returns the project settings carrying an
+// "investigate" key, or ok=false when no migration is needed. Malformed
+// JSON yields ok=false silently — the user will see the actual parse
+// error from settings.Load downstream with proper guidance, and blocking
+// the migration prompt on bad JSON would make `entire investigate`
+// unusable in the very situation it exists to help recover from.
+func loadProjectInvestigateSettings(ctx context.Context) (*projectInvestigateSettings, bool) {
+	path, raw, _, err := settings.LoadProjectRaw(ctx)
 	if err != nil {
-		path = settings.EntireSettingsFile
+		return nil, false
 	}
-
-	data, err := os.ReadFile(path) //nolint:gosec // path is resolved from repo settings
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("read project settings: %w", err)
-	}
-
-	raw := map[string]json.RawMessage{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		// Malformed project settings: skip migration silently. The user
-		// will see the actual parse error from settings.Load downstream
-		// (with proper guidance to fix the file), and blocking the
-		// migration prompt on bad JSON would make `entire investigate`
-		// unusable in the very situation it exists to help recover from.
-		return nil, false, nil //nolint:nilerr // intentional: fail-open on malformed settings
-	}
-
 	body, ok := raw["investigate"]
 	if !ok || isJSONNull(body) {
-		return nil, false, nil
+		return nil, false
 	}
-	return &projectInvestigateSettings{path: path, raw: raw, body: body}, true, nil
+	return &projectInvestigateSettings{path: path, raw: raw, body: body}, true
 }
 
 func migrateProjectInvestigateSettings(ctx context.Context, project *projectInvestigateSettings) error {
@@ -109,39 +90,20 @@ func migrateProjectInvestigateSettings(ctx context.Context, project *projectInve
 		return nil
 	}
 
-	localPath, err := paths.AbsPath(ctx, settings.EntireSettingsLocalFile)
+	localPath, localRaw, _, err := settings.LoadLocalRaw(ctx)
 	if err != nil {
-		localPath = settings.EntireSettingsLocalFile
-	}
-
-	localRaw := map[string]json.RawMessage{}
-	if data, readErr := os.ReadFile(localPath); readErr == nil { //nolint:gosec // path is from AbsPath
-		if err := json.Unmarshal(data, &localRaw); err != nil {
-			return fmt.Errorf("parse local settings during migration: %w", err)
-		}
-	} else if !os.IsNotExist(readErr) {
-		return fmt.Errorf("read local settings during migration: %w", readErr)
+		return fmt.Errorf("read local settings during migration: %w", err)
 	}
 
 	if _, exists := localRaw["investigate"]; !exists {
 		localRaw["investigate"] = project.body
-		localData, err := jsonutil.MarshalIndentWithNewline(localRaw, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshal local settings: %w", err)
-		}
-		//nolint:gosec // G306: settings file is config, not secrets; 0o644 is appropriate
-		if err := os.WriteFile(localPath, localData, 0o644); err != nil {
+		if err := settings.SaveLocalRaw(localPath, localRaw); err != nil {
 			return fmt.Errorf("write local settings: %w", err)
 		}
 	}
 
 	delete(project.raw, "investigate")
-	data, err := jsonutil.MarshalIndentWithNewline(project.raw, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal project settings: %w", err)
-	}
-	//nolint:gosec // G306
-	if err := os.WriteFile(project.path, data, 0o644); err != nil {
+	if err := settings.SaveProjectRaw(project.path, project.raw); err != nil {
 		return fmt.Errorf("write project settings: %w", err)
 	}
 	return nil
