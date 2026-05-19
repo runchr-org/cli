@@ -45,7 +45,7 @@ func TestWithoutReviewOrInvestigateEnv(t *testing.T) {
 				"ENTIRE_INVESTIGATE_TOPIC=topic",
 				"ENTIRE_INVESTIGATE_PROMPT=prompt",
 				"ENTIRE_INVESTIGATE_FINDINGS_DOC=/tmp/f.md",
-				"ENTIRE_INVESTIGATE_TIMELINE_DOC=/tmp/t.md",
+				"ENTIRE_INVESTIGATE_STATE_DOC=/tmp/state.json",
 				"ENTIRE_INVESTIGATE_STARTING_SHA=stale2",
 			},
 			want: []string{
@@ -66,7 +66,7 @@ func TestWithoutReviewOrInvestigateEnv(t *testing.T) {
 				"ENTIRE_INVESTIGATE_TOPIC=topic",
 				"ENTIRE_INVESTIGATE_PROMPT=prompt",
 				"ENTIRE_INVESTIGATE_FINDINGS_DOC=/tmp/f.md",
-				"ENTIRE_INVESTIGATE_TIMELINE_DOC=/tmp/t.md",
+				"ENTIRE_INVESTIGATE_STATE_DOC=/tmp/state.json",
 				"ENTIRE_INVESTIGATE_STARTING_SHA=stale2",
 			},
 			wantSize: 2,

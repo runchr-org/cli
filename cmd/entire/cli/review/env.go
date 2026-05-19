@@ -13,40 +13,19 @@ package review
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/provenance"
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
 )
 
+// Review env vars. Names live in cmd/entire/cli/provenance; review aliases
+// them so existing call sites (review.EnvSession, etc.) keep working.
 const (
-	// EnvSession is the review-session indicator. `entire review` sets this
-	// to "1" on the spawned agent process; the lifecycle hook treats any
-	// other value (including unset) as a normal coding session. Kept as a
-	// sentinel string rather than a bool so future versions can carry
-	// additional metadata in the value without breaking the contract.
-	EnvSession = "ENTIRE_REVIEW_SESSION"
-
-	// EnvAgent is the name of the agent spawned for the review (e.g.
-	// "claude-code"). The lifecycle hook requires this to match the hook's
-	// agent before tagging the session, preventing stale exported review env
-	// from tagging sessions for a different agent.
-	EnvAgent = "ENTIRE_REVIEW_AGENT"
-
-	// EnvSkills is a JSON-encoded []string of skill invocations passed to the
-	// agent verbatim (e.g. `["/pr-review-toolkit:review-pr","/test-auditor"]`).
-	// Use EncodeSkills / DecodeSkills to round-trip the value safely.
-	EnvSkills = "ENTIRE_REVIEW_SKILLS"
-
-	// EnvPrompt is the full prompt text sent to the agent at review start. The
-	// lifecycle hook stores this so the checkpoint records what the agent was
-	// asked to review.
-	EnvPrompt = "ENTIRE_REVIEW_PROMPT"
-
-	// EnvStartingSHA is the git commit SHA that was HEAD when `entire review`
-	// was invoked. The lifecycle hook requires this to match the session's
-	// initial base_commit before tagging the session, so stale env from an old
-	// HEAD does not mark a later normal session as a review.
-	EnvStartingSHA = "ENTIRE_REVIEW_STARTING_SHA"
+	EnvSession     = provenance.ReviewSession
+	EnvAgent       = provenance.ReviewAgent
+	EnvSkills      = provenance.ReviewSkills
+	EnvPrompt      = provenance.ReviewPrompt
+	EnvStartingSHA = provenance.ReviewStartingSHA
 )
 
 // EncodeSkills serialises a slice of skill invocation strings to a JSON value
@@ -113,16 +92,5 @@ func AppendReviewEnv(base []string, agentName string, cfg reviewtypes.RunConfig,
 // one of the ENTIRE_REVIEW_* contract variables. Exported for symmetry
 // with investigate.IsInvestigateEnvEntry.
 func IsReviewEnvEntry(kv string) bool {
-	for _, prefix := range []string{
-		EnvSession + "=",
-		EnvAgent + "=",
-		EnvSkills + "=",
-		EnvPrompt + "=",
-		EnvStartingSHA + "=",
-	} {
-		if strings.HasPrefix(kv, prefix) {
-			return true
-		}
-	}
-	return false
+	return provenance.IsReviewEntry(kv)
 }

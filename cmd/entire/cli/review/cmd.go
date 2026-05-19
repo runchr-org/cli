@@ -832,5 +832,5 @@ var _ reviewtypes.AgentReviewer = (*perAgentConfiguredReviewer)(nil)
 
 // currentHeadSHA returns the current HEAD commit hash as a 40-char hex string.
 func currentHeadSHA(ctx context.Context, repoRoot string) (string, error) {
-	return gitexec.HeadSHA(ctx, repoRoot)
+	return gitexec.HeadSHA(ctx, repoRoot) //nolint:wrapcheck // gitexec already wraps
 }

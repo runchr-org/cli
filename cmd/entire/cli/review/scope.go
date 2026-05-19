@@ -253,5 +253,5 @@ func countUncommitted(ctx context.Context, repoRoot string) (int, error) {
 // runGit runs `git <args>` in repoDir and returns stdout as a string. Thin
 // wrapper around gitexec.Run preserved so existing call sites don't change.
 func runGit(ctx context.Context, repoRoot string, args ...string) (string, error) {
-	return gitexec.Run(ctx, repoRoot, args...)
+	return gitexec.Run(ctx, repoRoot, args...) //nolint:wrapcheck // gitexec already wraps
 }

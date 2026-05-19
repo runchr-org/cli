@@ -5,10 +5,9 @@
 // themselves.
 //
 // The package is a leaf — review and investigate both depend on it, so it
-// cannot import them back. The provenance env-var prefix lists below
-// duplicate the names declared in review/env.go and investigate/env.go;
-// when those files add a new ENTIRE_REVIEW_* or ENTIRE_INVESTIGATE_* var,
-// the corresponding list here must be updated to match.
+// cannot import them back. The env-var names it needs to strip are owned
+// by cmd/entire/cli/provenance (also a leaf), which keeps the contract in
+// one place rather than mirrored across packages.
 package agentlaunch
 
 import (
@@ -17,40 +16,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	agenttypes "github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/provenance"
 )
-
-// reviewEnvPrefixes lists the ENTIRE_REVIEW_* env-var names that must be
-// stripped before launching a fix agent. Mirror of the constants in
-// cmd/entire/cli/review/env.go; kept local to avoid an import cycle
-// (review depends on agentlaunch).
-var reviewEnvPrefixes = []string{
-	"ENTIRE_REVIEW_SESSION=",
-	"ENTIRE_REVIEW_AGENT=",
-	"ENTIRE_REVIEW_SKILLS=",
-	"ENTIRE_REVIEW_PROMPT=",
-	"ENTIRE_REVIEW_STARTING_SHA=",
-}
-
-// investigateEnvPrefixes lists the ENTIRE_INVESTIGATE_* env-var names that
-// must be stripped before launching a fix agent. Mirror of the constants
-// in cmd/entire/cli/investigate/env.go; kept local for the same reason as
-// reviewEnvPrefixes.
-var investigateEnvPrefixes = []string{
-	"ENTIRE_INVESTIGATE_SESSION=",
-	"ENTIRE_INVESTIGATE_AGENT=",
-	"ENTIRE_INVESTIGATE_RUN_ID=",
-	"ENTIRE_INVESTIGATE_ROUND=",
-	"ENTIRE_INVESTIGATE_TURN=",
-	"ENTIRE_INVESTIGATE_TOPIC=",
-	"ENTIRE_INVESTIGATE_PROMPT=",
-	"ENTIRE_INVESTIGATE_FINDINGS_DOC=",
-	"ENTIRE_INVESTIGATE_TIMELINE_DOC=",
-	"ENTIRE_INVESTIGATE_STARTING_SHA=",
-}
 
 // LaunchFixAgent starts a normal coding agent session with the given
 // prompt. ENTIRE_REVIEW_* and ENTIRE_INVESTIGATE_* env entries are stripped
@@ -97,26 +67,10 @@ func LaunchFixAgent(ctx context.Context, agentName string, prompt string) error 
 func withoutReviewOrInvestigateEnv(base []string) []string {
 	out := make([]string, 0, len(base))
 	for _, kv := range base {
-		if isProvenanceEnvEntry(kv) {
+		if provenance.IsEntry(kv) {
 			continue
 		}
 		out = append(out, kv)
 	}
 	return out
-}
-
-// isProvenanceEnvEntry reports whether kv is one of the ENTIRE_REVIEW_* or
-// ENTIRE_INVESTIGATE_* contract entries.
-func isProvenanceEnvEntry(kv string) bool {
-	for _, p := range reviewEnvPrefixes {
-		if strings.HasPrefix(kv, p) {
-			return true
-		}
-	}
-	for _, p := range investigateEnvPrefixes {
-		if strings.HasPrefix(kv, p) {
-			return true
-		}
-	}
-	return false
 }

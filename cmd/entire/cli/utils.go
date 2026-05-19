@@ -21,11 +21,6 @@ func IsAccessibleMode() bool {
 	return uiform.IsAccessibleMode()
 }
 
-// entireTheme returns the Dracula theme for consistent styling.
-func entireTheme() huh.Theme { //nolint:ireturn // huh.Theme is an interface in v2
-	return uiform.Theme()
-}
-
 // NewAccessibleForm creates a new huh form with Entire's standard theme,
 // switching to accessibility mode when ACCESSIBLE is set.
 func NewAccessibleForm(groups ...*huh.Group) *huh.Form {

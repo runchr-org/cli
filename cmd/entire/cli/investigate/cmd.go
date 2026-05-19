@@ -1053,7 +1053,7 @@ func newRunID() (string, error) {
 // string. Thin wrapper around gitexec.HeadSHA preserved so existing call
 // sites don't change.
 func currentHeadSHA(ctx context.Context, repoRoot string) (string, error) {
-	return gitexec.HeadSHA(ctx, repoRoot)
+	return gitexec.HeadSHA(ctx, repoRoot) //nolint:wrapcheck // gitexec already wraps
 }
 
 // wrapSilent applies the silent-error wrapper if it is non-nil. Mirrors
@@ -1080,10 +1080,4 @@ func composeAlwaysPrompt(configured, perRun string) string {
 	default:
 		return c + "\n\n" + p
 	}
-}
-
-// runGit runs `git <args>` in repoDir and returns stdout as a string. Thin
-// wrapper around gitexec.Run preserved so existing call sites don't change.
-func runGit(ctx context.Context, repoRoot string, args ...string) (string, error) {
-	return gitexec.Run(ctx, repoRoot, args...)
 }
