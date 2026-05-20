@@ -55,6 +55,9 @@ var chunkTranscript = agent.ChunkTranscript
 //   - For incremental checkpoints: checkpoints/NNN-<tool-use-id>.json
 //   - For final checkpoints: checkpoint.json and agent-<agent-id>.jsonl
 func (s *GitStore) WriteCommitted(ctx context.Context, opts WriteCommittedOptions) error {
+	if err := PreserveV1History(ctx, s.repo); err != nil {
+		logging.Warn(ctx, "preserve v1 history failed; continuing", slog.String("error", err.Error()))
+	}
 	// Validate identifiers to prevent path traversal and malformed data
 	if opts.CheckpointID.IsEmpty() {
 		return errors.New("invalid checkpoint options: checkpoint ID is required")
@@ -122,7 +125,7 @@ func (s *GitStore) WriteCommitted(ctx context.Context, opts WriteCommittedOption
 		return err
 	}
 
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	refName := MetadataRef(ctx)
 	newRef := plumbing.NewHashReference(refName, newCommitHash)
 	if err := s.repo.Storer.SetReference(newRef); err != nil {
 		return fmt.Errorf("failed to set branch reference: %w", err)
@@ -591,7 +594,7 @@ func (s *GitStore) UpdateCheckpointSummary(ctx context.Context, checkpointID id.
 		return err
 	}
 
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	refName := MetadataRef(ctx)
 	newRef := plumbing.NewHashReference(refName, newCommitHash)
 	if err := s.repo.Storer.SetReference(newRef); err != nil {
 		return fmt.Errorf("failed to set branch reference: %w", err)
@@ -947,6 +950,9 @@ func (s *GitStore) ReadCommitted(ctx context.Context, checkpointID id.Checkpoint
 	if err := ctx.Err(); err != nil {
 		return nil, err //nolint:wrapcheck // Propagating context cancellation
 	}
+	if err := PreserveV1History(ctx, s.repo); err != nil {
+		logging.Warn(ctx, "preserve v1 history failed; continuing", slog.String("error", err.Error()))
+	}
 
 	ft, err := s.getFetchingTree(ctx)
 	if err != nil {
@@ -1204,8 +1210,11 @@ func (s *GitStore) ListCommitted(ctx context.Context) ([]CommittedInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err //nolint:wrapcheck // Propagating context cancellation
 	}
+	if err := PreserveV1History(ctx, s.repo); err != nil {
+		logging.Warn(ctx, "preserve v1 history failed; continuing", slog.String("error", err.Error()))
+	}
 
-	tree, err := s.getSessionsBranchTree()
+	tree, err := s.getSessionsBranchTree(ctx)
 	if err != nil {
 		return []CommittedInfo{}, nil //nolint:nilerr // No sessions branch means empty list
 	}
@@ -1415,7 +1424,7 @@ func (s *GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoint
 		return err
 	}
 
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	refName := MetadataRef(ctx)
 	newRef := plumbing.NewHashReference(refName, newCommitHash)
 	if err := s.repo.Storer.SetReference(newRef); err != nil {
 		return fmt.Errorf("failed to set branch reference: %w", err)
@@ -1534,7 +1543,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 		return err
 	}
 
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	refName := MetadataRef(ctx)
 	newRef := plumbing.NewHashReference(refName, newCommitHash)
 	if err := s.repo.Storer.SetReference(newRef); err != nil {
 		return fmt.Errorf("failed to set branch reference: %w", err)
@@ -1675,9 +1684,9 @@ func PrecomputeTranscriptBlobs(ctx context.Context, repo *git.Repository, transc
 	}, nil
 }
 
-// ensureSessionsBranch ensures the entire/checkpoints/v1 branch exists.
+// ensureSessionsBranch ensures the v1 metadata ref exists.
 func (s *GitStore) ensureSessionsBranch(ctx context.Context) error {
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	refName := MetadataRef(ctx)
 	_, err := s.repo.Reference(refName, true)
 	if err == nil {
 		return nil // Branch exists
@@ -1721,21 +1730,21 @@ func (s *GitStore) maybeMergeVercelConfig(ctx context.Context, rootTreeHash plum
 // If a blob fetcher is configured on the store, File() calls on the returned
 // tree will automatically fetch missing blobs from the remote.
 func (s *GitStore) getFetchingTree(ctx context.Context) (*FetchingTree, error) {
-	tree, err := s.getSessionsBranchTree()
+	tree, err := s.getSessionsBranchTree(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return NewFetchingTree(ctx, tree, s.repo.Storer, s.blobFetcher), nil
 }
 
-// getSessionsBranchTree returns the tree object for the entire/checkpoints/v1 branch.
-// Falls back to origin/entire/checkpoints/v1 if the local branch doesn't exist.
-func (s *GitStore) getSessionsBranchTree() (*object.Tree, error) {
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+// getSessionsBranchTree returns the tree object for the v1 metadata ref.
+// Falls back to the remote-tracking ref if the local ref doesn't exist.
+func (s *GitStore) getSessionsBranchTree(ctx context.Context) (*object.Tree, error) {
+	refName := MetadataRef(ctx)
 	ref, err := s.repo.Reference(refName, true)
 	if err != nil {
-		// Local branch doesn't exist, try remote-tracking branch
-		remoteRefName := plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
+		// Local ref doesn't exist, try remote-tracking
+		remoteRefName := MetadataTrackingRef(ctx)
 		ref, err = s.repo.Reference(remoteRefName, true)
 		if err != nil {
 			return nil, fmt.Errorf("sessions branch not found: %w", err)
@@ -2143,7 +2152,7 @@ type Author struct {
 // Finds the commit whose subject matches "Checkpoint: <id>" and returns its author.
 // Returns empty Author if the checkpoint is not found or the sessions branch doesn't exist.
 func (s *GitStore) GetCheckpointAuthor(ctx context.Context, checkpointID id.CheckpointID) (Author, error) {
-	return getCheckpointAuthorFromRef(ctx, s.repo, plumbing.NewBranchReferenceName(paths.MetadataBranchName), checkpointID)
+	return getCheckpointAuthorFromRef(ctx, s.repo, MetadataRef(ctx), checkpointID)
 }
 
 func getCheckpointAuthorFromRef(ctx context.Context, repo *git.Repository, refName plumbing.ReferenceName, checkpointID id.CheckpointID) (Author, error) {

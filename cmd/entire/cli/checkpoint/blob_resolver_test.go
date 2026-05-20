@@ -16,7 +16,7 @@ func TestBlobResolver_HasBlob_Present(t *testing.T) {
 	repo, store, cpID := setupRepoForUpdate(t)
 
 	// Get the metadata branch tree
-	tree, err := store.getSessionsBranchTree()
+	tree, err := store.getSessionsBranchTree(context.Background())
 	if err != nil {
 		t.Fatalf("getSessionsBranchTree() error = %v", err)
 	}
@@ -56,7 +56,7 @@ func TestBlobResolver_ReadBlob(t *testing.T) {
 
 	repo, store, cpID := setupRepoForUpdate(t)
 
-	tree, err := store.getSessionsBranchTree()
+	tree, err := store.getSessionsBranchTree(context.Background())
 	if err != nil {
 		t.Fatalf("getSessionsBranchTree() error = %v", err)
 	}
@@ -102,7 +102,7 @@ func TestCollectTranscriptBlobHashes_SingleSession(t *testing.T) {
 
 	_, store, cpID := setupRepoForUpdate(t)
 
-	tree, err := store.getSessionsBranchTree()
+	tree, err := store.getSessionsBranchTree(context.Background())
 	if err != nil {
 		t.Fatalf("getSessionsBranchTree() error = %v", err)
 	}
@@ -147,7 +147,7 @@ func TestCollectTranscriptBlobHashes_MultiSession(t *testing.T) {
 		t.Fatalf("WriteCommitted() for second session error = %v", err)
 	}
 
-	tree, err := store.getSessionsBranchTree()
+	tree, err := store.getSessionsBranchTree(context.Background())
 	if err != nil {
 		t.Fatalf("getSessionsBranchTree() error = %v", err)
 	}
@@ -188,7 +188,7 @@ func TestCollectTranscriptBlobHashes_NonexistentCheckpoint(t *testing.T) {
 
 	_, store, _ := setupRepoForUpdate(t)
 
-	tree, err := store.getSessionsBranchTree()
+	tree, err := store.getSessionsBranchTree(context.Background())
 	if err != nil {
 		t.Fatalf("getSessionsBranchTree() error = %v", err)
 	}
