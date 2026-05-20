@@ -446,6 +446,25 @@ func SaveProjectRaw(path string, raw map[string]json.RawMessage) error {
 	return nil
 }
 
+// SaveLocalRaw writes a generic JSON object back to .entire/settings.local.json
+// atomically (temp file + rename). Mirrors SaveProjectRaw for the per-developer
+// overrides file; the only difference is the error wording, which says "local
+// settings" so failure messages match the file actually being written.
+//
+// Pair with LoadLocalRaw for read-modify-write flows that target the local
+// override (e.g. persisting an interactive prompt's "always" choice without
+// touching the project-wide settings file).
+func SaveLocalRaw(path string, raw map[string]json.RawMessage) error {
+	data, err := jsonutil.MarshalIndentWithNewline(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal local settings: %w", err)
+	}
+	if err := jsonutil.WriteFileAtomic(path, data, 0o644); err != nil {
+		return fmt.Errorf("writing local settings: %w", err)
+	}
+	return nil
+}
+
 // ClonePreferencesPath returns the clone-local preferences path in the git common dir.
 func ClonePreferencesPath(ctx context.Context) (string, error) {
 	commonDir, err := session.GetGitCommonDir(ctx)

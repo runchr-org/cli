@@ -157,7 +157,7 @@ func persistOPFPromptDefaultAlways(ctx context.Context) error {
 	if err := writeSubObject(raw, "redaction", redactionRaw); err != nil {
 		return err
 	}
-	if err := settings.SaveProjectRaw(path, raw); err != nil {
+	if err := settings.SaveLocalRaw(path, raw); err != nil {
 		return fmt.Errorf("save local settings: %w", err)
 	}
 	return nil
