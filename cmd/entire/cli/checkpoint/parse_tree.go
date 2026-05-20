@@ -11,7 +11,6 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -441,10 +440,10 @@ func splitFirstSegment(path string) (first, rest string) {
 	return parts[0], parts[1]
 }
 
-// getSessionsBranchRef returns the sessions branch parent commit hash and root tree hash
+// getSessionsBranchRef returns the v1 metadata ref's commit hash and root tree hash
 // without flattening the tree.
-func (s *GitStore) getSessionsBranchRef() (plumbing.Hash, plumbing.Hash, error) {
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+func (s *GitStore) getSessionsBranchRef(ctx context.Context) (plumbing.Hash, plumbing.Hash, error) {
+	refName := MetadataRef(ctx)
 	ref, err := s.repo.Reference(refName, true)
 	if err != nil {
 		return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("failed to get sessions branch reference: %w", err)

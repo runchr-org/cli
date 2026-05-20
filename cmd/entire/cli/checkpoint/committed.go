@@ -78,7 +78,7 @@ func (s *GitStore) WriteCommitted(ctx context.Context, opts WriteCommittedOption
 	}
 
 	// Get branch ref and root tree hash (O(1), no flatten)
-	parentHash, rootTreeHash, err := s.getSessionsBranchRef()
+	parentHash, rootTreeHash, err := s.getSessionsBranchRef(ctx)
 	if err != nil {
 		return err
 	}
@@ -544,7 +544,7 @@ func (s *GitStore) UpdateCheckpointSummary(ctx context.Context, checkpointID id.
 		return fmt.Errorf("failed to ensure sessions branch: %w", err)
 	}
 
-	parentHash, rootTreeHash, err := s.getSessionsBranchRef()
+	parentHash, rootTreeHash, err := s.getSessionsBranchRef(ctx)
 	if err != nil {
 		return err
 	}
@@ -1354,7 +1354,7 @@ func (s *GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoint
 	}
 
 	// Get branch ref and root tree hash (O(1), no flatten)
-	parentHash, rootTreeHash, err := s.getSessionsBranchRef()
+	parentHash, rootTreeHash, err := s.getSessionsBranchRef(ctx)
 	if err != nil {
 		return err
 	}
@@ -1452,7 +1452,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 	}
 
 	// Get branch ref and root tree hash (O(1), no flatten)
-	parentHash, rootTreeHash, err := s.getSessionsBranchRef()
+	parentHash, rootTreeHash, err := s.getSessionsBranchRef(ctx)
 	if err != nil {
 		return err
 	}
