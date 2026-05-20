@@ -42,7 +42,12 @@ func newTUIProgressSink(topic, runID string, agents []string, maxTurns, quorum i
 
 // Start spawns the Bubble Tea program in its own goroutine. Subsequent
 // calls are no-ops.
-func (s *tuiProgressSink) Start() {
+//
+// ctx watcher: if ctx is cancelled (parent SIGINT, cobra shutdown, or the
+// loop returns early before RunFinished), the watcher calls program.Quit()
+// so the program exits and Wait() unblocks. Without this, an early-return
+// path that never calls RunFinished would leave Wait() waiting forever.
+func (s *tuiProgressSink) Start(ctx context.Context) {
 	s.mu.Lock()
 	if s.started {
 		s.mu.Unlock()
@@ -60,6 +65,16 @@ func (s *tuiProgressSink) Start() {
 			_ = err
 		}
 	}()
+
+	if ctx != nil {
+		go func() {
+			select {
+			case <-ctx.Done():
+				s.program.Quit()
+			case <-s.done:
+			}
+		}()
+	}
 }
 
 // Wait blocks until the Bubble Tea program exits. Safe to call after Start.

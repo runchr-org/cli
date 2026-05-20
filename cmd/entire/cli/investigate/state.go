@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/provenance"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 )
 
@@ -197,6 +200,12 @@ func (s *StateStore) List(ctx context.Context) ([]*RunState, error) {
 		}
 		st, loadErr := s.Load(ctx, runID)
 		if loadErr != nil {
+			// state.json exists but won't parse — surface so the user can
+			// inspect or `entire investigate clean <runID>`. Listing keeps
+			// going so one bad run doesn't hide the rest.
+			logging.Warn(ctx, "investigate: list skipped unreadable run state",
+				slog.String("run_id", runID),
+				slog.String("err", loadErr.Error()))
 			continue
 		}
 		if st == nil {
@@ -241,8 +250,8 @@ func validateRunID(runID string) error {
 }
 
 // IsValidRunID reports whether runID matches the 12-lowercase-hex format.
-// Exposed for callers in other packages (e.g. lifecycle adoption) that need
-// to validate without taking on the error-formatting overhead.
+// Delegates to provenance.IsValidRunID — the canonical validator lives
+// alongside the env-var contract it's most often paired with.
 func IsValidRunID(runID string) bool {
-	return runID != "" && runIDPattern.MatchString(runID)
+	return provenance.IsValidRunID(runID)
 }

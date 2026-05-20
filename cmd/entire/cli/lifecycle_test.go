@@ -1785,6 +1785,55 @@ func TestAdoptInvestigateEnv_SessionEnvNotOne(t *testing.T) {
 // handshake with a malformed (non-12-hex) or empty RunID does not tag the
 // session. This protects downstream condensation from joining on junk run
 // IDs leaked via stale shell env or hand-set vars.
+// TestAdoptInvestigateEnv_TagsSessionViaHandleLifecycleTurnStart is the
+// investigate twin of TestAdoptReviewEnv_TagsSession: it drives
+// handleLifecycleTurnStart end-to-end and asserts the persisted session
+// state carries Kind=agent_investigate plus the run id/topic decoded from
+// the env vars. Distinct from the more focused TestAdoptInvestigateEnv_*
+// cases above, which call adoptInvestigateEnv directly.
+func TestAdoptInvestigateEnv_TagsSessionViaHandleLifecycleTurnStart(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir() and t.Setenv()
+	tmp := t.TempDir()
+	testutil.InitRepo(t, tmp)
+	testutil.WriteFile(t, tmp, "f.txt", "x")
+	testutil.GitAdd(t, tmp, "f.txt")
+	testutil.GitCommit(t, tmp, "init")
+	t.Chdir(tmp)
+	paths.ClearWorktreeRootCache()
+
+	ag := newMockAgent()
+	headSHA := testutil.GetHeadHash(t, tmp)
+	setInvestigateEnv(t, string(ag.Name()), headSHA, "Why is checkout flaky?")
+
+	sessionID := "test-investigate-env-via-handle-001"
+	event := &agent.Event{
+		Type:      agent.TurnStart,
+		SessionID: sessionID,
+		Prompt:    "Investigate this.",
+		Timestamp: time.Now(),
+	}
+	if err := handleLifecycleTurnStart(context.Background(), ag, event); err != nil {
+		t.Fatalf("handleLifecycleTurnStart: %v", err)
+	}
+
+	state, loadErr := strategy.LoadSessionState(context.Background(), sessionID)
+	if loadErr != nil {
+		t.Fatalf("load state: %v", loadErr)
+	}
+	if state == nil {
+		t.Fatal("state is nil after turn start")
+	}
+	if state.Kind != session.KindAgentInvestigate {
+		t.Errorf("Kind: got %q, want agent_investigate", state.Kind)
+	}
+	if state.InvestigateRunID != testInvestigateRunID {
+		t.Errorf("InvestigateRunID: got %q, want %q", state.InvestigateRunID, testInvestigateRunID)
+	}
+	if state.InvestigateTopic != "Why is checkout flaky?" {
+		t.Errorf("InvestigateTopic: got %q", state.InvestigateTopic)
+	}
+}
+
 func TestAdoptInvestigateEnv_RejectsBadRunID(t *testing.T) {
 	cases := []struct {
 		name  string

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -131,7 +132,11 @@ func printShowFindings(w io.Writer, m LocalManifest) {
 	switch {
 	case m.FindingsContent != "":
 		body = m.FindingsContent
-	case m.FindingsDoc != "":
+	case m.FindingsDoc != "" && filepath.IsAbs(m.FindingsDoc):
+		// FindingsDoc is contractually absolute (see LocalManifest docs).
+		// Refuse to read relative paths: those would resolve against the
+		// current process cwd, which may differ from where the run wrote
+		// findings.md, and could surface unrelated content.
 		if data, err := os.ReadFile(m.FindingsDoc); err == nil {
 			body = string(data)
 		}

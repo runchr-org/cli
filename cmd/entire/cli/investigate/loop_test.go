@@ -310,8 +310,10 @@ func TestRunInvestigateLoop_PausedOnTwoFailures(t *testing.T) {
 	if res.Err == nil {
 		t.Errorf("res.Err = nil, want underlying error")
 	}
-	// Both turns should have run and recorded a stance "unknown" with a
-	// note describing the spawn failure.
+	// Both turns ran an executable that spawned successfully and exited
+	// non-zero, so classifyRunErr should tag them as exit errors (not
+	// spawn errors) — that distinction is what tells the operator the
+	// agent's installed but misbehaving versus missing from PATH.
 	if len(res.State.Stances) != 2 {
 		t.Errorf("Stances = %d, want 2", len(res.State.Stances))
 	}
@@ -319,8 +321,8 @@ func TestRunInvestigateLoop_PausedOnTwoFailures(t *testing.T) {
 		if s.Stance != stanceUnknown {
 			t.Errorf("stance[%d] = %q, want unknown", i, s.Stance)
 		}
-		if !strings.Contains(s.Note, "spawn error") {
-			t.Errorf("stance[%d].Note = %q, want spawn-error description", i, s.Note)
+		if !strings.Contains(s.Note, "exit error") {
+			t.Errorf("stance[%d].Note = %q, want exit-error description", i, s.Note)
 		}
 	}
 }

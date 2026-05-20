@@ -159,7 +159,15 @@ func (m investigateTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.finished = true
 		m.outcome = msg.outcome
 		for i := range m.rows {
-			if m.rows[i].status != rowStatusFailed {
+			switch {
+			case m.rows[i].status == rowStatusFailed:
+				// Preserve failure state.
+			case m.rows[i].turnsTaken == 0:
+				// Agent was queued but never ran (early termination, quorum
+				// reached before this agent's turn). Leave it visually
+				// distinct from agents that ran to completion.
+				m.rows[i].status = rowStatusQueued
+			default:
 				m.rows[i].status = rowStatusDone
 			}
 			if !m.rows[i].currentStart.IsZero() {
@@ -295,10 +303,9 @@ func (m investigateTUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 
 	switch {
 	case msg.Code == 'c' && msg.Mod == tea.ModCtrl:
-		if m.detailMode {
-			// Ctrl+C is ignored in detail mode; Esc first.
-			return m, nil
-		}
+		// Cancel from either view. Detail view's footer advertises "Ctrl+C
+		// cancel", so the binding must do that — Esc steps back to the
+		// dashboard, but Ctrl+C stops the run.
 		m.cancelOnce.Do(m.cancel)
 		return m, tea.Quit
 

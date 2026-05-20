@@ -135,19 +135,24 @@ func printCleanSummary(w io.Writer, targets []LocalManifest, all bool) {
 // against a partial state (e.g. previous interrupted cleanup) still
 // converges. Errors aggregate so the caller can decide whether to keep
 // going.
+//
+// Delete order: per-run dir first, manifest last. A failure removing the
+// run dir leaves the manifest as a recoverable breadcrumb so a subsequent
+// `clean` invocation can find and retry the same target — the reverse
+// order would orphan a state.json with no manifest record.
 func deleteOneInvestigation(m LocalManifest, deps CleanDeps) error {
 	var errs []string
-
-	manifestPath := deps.ManifestPath(m)
-	if err := os.Remove(manifestPath); err != nil && !os.IsNotExist(err) {
-		errs = append(errs, fmt.Sprintf("manifest: %v", err))
-	}
 
 	runDir := deps.RunDir(m.RunID)
 	if err := os.RemoveAll(runDir); err != nil {
 		// RemoveAll returns nil when the path doesn't exist, so this is
 		// a real failure (permissions, etc.).
 		errs = append(errs, fmt.Sprintf("run dir: %v", err))
+	}
+
+	manifestPath := deps.ManifestPath(m)
+	if err := os.Remove(manifestPath); err != nil && !os.IsNotExist(err) {
+		errs = append(errs, fmt.Sprintf("manifest: %v", err))
 	}
 
 	if len(errs) > 0 {

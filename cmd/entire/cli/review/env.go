@@ -65,16 +65,18 @@ func DecodeSkills(encoded string) ([]string, error) {
 // cfg carries skills and the starting SHA. prompt is the full composed
 // prompt text (result of ComposeReviewPrompt).
 //
-// Any pre-existing ENTIRE_REVIEW_* entries in base are stripped before the
-// new values are appended. This handles nested invocations (an `entire
-// review` run spawning another agent that calls `entire review`) and stale
-// inheritance from a parent shell — the most-recent values must win, with
-// no chance of duplicate keys whose precedence is implementation-defined.
+// Any pre-existing ENTIRE_REVIEW_* AND ENTIRE_INVESTIGATE_* entries in
+// base are stripped before the new values are appended. Stripping review
+// entries handles nested invocations and stale inheritance from a parent
+// shell — duplicate keys would otherwise have implementation-defined
+// precedence. Stripping investigate entries prevents an outer
+// `entire investigate` session from mis-tagging a child review session if
+// invoked nested (symmetric to AppendInvestigateEnv's behavior).
 func AppendReviewEnv(base []string, agentName string, cfg reviewtypes.RunConfig, prompt string) []string {
 	skillsJSON, _ := EncodeSkills(cfg.Skills) //nolint:errcheck // EncodeSkills only fails on json.Marshal([]string), which is infallible
 	out := make([]string, 0, len(base)+5)
 	for _, kv := range base {
-		if IsReviewEnvEntry(kv) {
+		if provenance.IsEntry(kv) {
 			continue
 		}
 		out = append(out, kv)

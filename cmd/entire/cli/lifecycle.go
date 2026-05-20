@@ -21,9 +21,9 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
-	"github.com/entireio/cli/cmd/entire/cli/investigate"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/provenance"
 	"github.com/entireio/cli/cmd/entire/cli/review"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -1134,6 +1134,18 @@ type envAdoptionSpec struct {
 //     against env vars surviving a commit boundary.
 //
 // All failures log at debug/warn and leave state untagged.
+//
+// Trust model: this gate (env-present + agent-match + SHA-match) treats
+// the parent process environment as trusted. The CLI never exports these
+// vars to a user shell — they exist only on the in-process env of agents
+// spawned by `entire review` / `entire investigate` themselves, plus the
+// lifecycle hook (a child of that agent) which inherits them naturally.
+// A user who manually `export`s ENTIRE_REVIEW_AGENT=<their-agent> and
+// ENTIRE_REVIEW_STARTING_SHA=<HEAD-sha> before launching an agent COULD
+// forge a review-tagged session; that is considered out-of-scope for the
+// adoption guard. The SHA gate also self-invalidates on the next commit
+// (BaseCommit changes), so a stale-env forgery cannot persist across a
+// commit boundary even if it succeeded once.
 func tryAdoptEnv(ctx context.Context, state *session.State, expectedAgent string, spec envAdoptionSpec) {
 	if state.Kind != "" {
 		return
@@ -1198,22 +1210,22 @@ func adoptReviewEnv(ctx context.Context, state *session.State, expectedAgent str
 func adoptInvestigateEnv(ctx context.Context, state *session.State, expectedAgent string) {
 	tryAdoptEnv(ctx, state, expectedAgent, envAdoptionSpec{
 		kindLabel:      "investigate",
-		envSession:     investigate.EnvSession,
-		envAgent:       investigate.EnvAgent,
-		envStartingSHA: investigate.EnvStartingSHA,
+		envSession:     provenance.InvestigateSession,
+		envAgent:       provenance.InvestigateAgent,
+		envStartingSHA: provenance.InvestigateStartingSHA,
 		apply: func(ctx context.Context, state *session.State, envAgent string) {
-			runID := os.Getenv(investigate.EnvRunID)
+			runID := os.Getenv(provenance.InvestigateRunID)
 			// Reject empty or malformed RunID — downstream condensation joins
 			// session metadata by run ID, and tagging a session with no/invalid
 			// ID would leak into checkpoint metadata as junk data.
-			if !investigate.IsValidRunID(runID) {
+			if !provenance.IsValidRunID(runID) {
 				logging.Warn(ctx, "investigate env adoption skipped: invalid run id",
 					slog.String("env_run_id", runID))
 				return
 			}
 			state.Kind = session.KindAgentInvestigate
 			state.InvestigateRunID = runID
-			state.InvestigateTopic = os.Getenv(investigate.EnvTopic)
+			state.InvestigateTopic = os.Getenv(provenance.InvestigateTopic)
 			logging.Debug(ctx, "adopted investigate env",
 				slog.String("agent", envAgent),
 				slog.String("run_id", state.InvestigateRunID))

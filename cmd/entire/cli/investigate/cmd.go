@@ -861,12 +861,16 @@ func executeLoopAndCapture(ctx context.Context, cmd *cobra.Command, in LoopInput
 
 	out := cmd.OutOrStdout()
 	progress, tuiSink, runCtx, cancelTUI := buildProgressSink(ctx, in, out)
+	// Defers run LIFO. Register Wait first so cancelTUI fires BEFORE Wait
+	// — Wait blocks on the Bubble Tea program exiting, and the ctx-watcher
+	// in Start() needs ctx cancelled to push tea.Quit when no RunFinished
+	// arrives (early loop return, validation error, etc.).
+	if tuiSink != nil {
+		tuiSink.Start(runCtx)
+		defer tuiSink.Wait()
+	}
 	if cancelTUI != nil {
 		defer cancelTUI()
-	}
-	if tuiSink != nil {
-		tuiSink.Start()
-		defer tuiSink.Wait()
 	}
 
 	ldeps := LoopDeps{

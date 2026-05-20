@@ -127,9 +127,15 @@ func TestInvestigateTUIModel_RunFinishedMarksDone(t *testing.T) {
 	if got := m.outcome; got != OutcomeQuorum {
 		t.Errorf("after RunFinished: m.outcome = %v, want quorum", got)
 	}
-	for i, r := range m.rows {
-		if r.status != rowStatusDone {
-			t.Errorf("rows[%d].status = %v, want done", i, r.status)
+	// Only the agent that took a turn flips to Done. Agents that never ran
+	// (quorum reached before their turn) stay Queued so the dashboard
+	// doesn't claim work that didn't happen.
+	if got := m.rows[0].status; got != rowStatusDone {
+		t.Errorf("rows[0] (turn-taker).status = %v, want done", got)
+	}
+	for i := 1; i < len(m.rows); i++ {
+		if got := m.rows[i].status; got != rowStatusQueued {
+			t.Errorf("rows[%d] (un-run).status = %v, want queued", i, got)
 		}
 	}
 }

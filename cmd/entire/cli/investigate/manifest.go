@@ -45,11 +45,13 @@ type LocalManifest struct {
 	WorktreePath string `json:"worktree_path,omitempty"`
 
 	// FindingsDoc is the absolute path to the findings document the run
-	// produced. May also be a repo-relative path when the caller chose
-	// to record it that way. The on-disk file is removed for terminal
-	// outcomes (Quorum/Stalled) once FindingsContent has been captured —
-	// the path remains here for resumable runs (Paused/Cancelled) where
-	// the file still lives in the per-run directory.
+	// produced. Always absolute — callers (writeRunManifest in particular)
+	// must resolve repo-relative paths before populating this field, since
+	// `entire investigate show` / `fix` read it back via os.ReadFile and
+	// do not perform their own resolution. The on-disk file is removed for
+	// terminal outcomes (Quorum/Stalled) once FindingsContent has been
+	// captured — the path remains here for resumable runs (Paused /
+	// Cancelled) where the file still lives in the per-run directory.
 	FindingsDoc string `json:"findings_doc,omitempty"`
 
 	// FindingsContent embeds the final findings.md content as of run
@@ -128,7 +130,10 @@ func (s *LocalManifestStore) Write(ctx context.Context, m LocalManifest) error {
 	}
 
 	finalPath := filepath.Join(s.dir, manifestFilename(m))
-	if err := jsonutil.WriteFileAtomic(finalPath, data, 0o644); err != nil {
+	// 0o600: manifests embed the user-supplied investigation prompt and
+	// (on terminal outcomes) the final findings body. Matches the mode
+	// state.go uses for state.json.
+	if err := jsonutil.WriteFileAtomic(finalPath, data, 0o600); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
 	return nil

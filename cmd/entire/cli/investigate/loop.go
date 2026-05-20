@@ -30,11 +30,14 @@ package investigate
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -204,7 +207,11 @@ func RunInvestigateLoop(ctx context.Context, in LoopInput, deps LoopDeps) (LoopR
 		}
 		advanceAgent(state)
 		if saveErr := deps.States.Save(ctx, state); saveErr != nil {
-			logging.Debug(ctx, "investigate: save state after turn",
+			// On-disk state is now one turn stale; if the process crashes
+			// or is killed before the next Save, `--continue` will resume
+			// from an older snapshot. Log at Warn so the staleness is
+			// visible without aborting the run.
+			logging.Warn(ctx, "investigate: save state after turn failed",
 				sErr(saveErr), sRun(in.RunID))
 		}
 		if state.NextAgentIdx == 0 {
@@ -305,7 +312,7 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 			Agent:       agentName,
 			Stance:      stanceUnknown,
 			PlanChanged: preFindings != postFindings,
-			Note:        "spawn error: " + runErr.Error(),
+			Note:        classifyRunErr(runErr),
 		}
 		state.Stances = append(state.Stances, turn)
 		state.PendingTurn = nil
@@ -314,7 +321,7 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 		logging.Warn(ctx, "investigate: turn failed",
 			sRun(in.RunID), sAgent(agentName),
 			sTurn(state.Turn), sRound(round),
-			slogString("err", runErr.Error()))
+			slog.String("err", runErr.Error()))
 		deps.Progress.TurnFinished(agentName, state.Turn, stanceUnknown, turnDuration, true, runErr, "")
 		return turnOutcome{round: round, failed: true, err: runErr}
 	}
@@ -338,8 +345,8 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 	logging.Info(ctx, "investigate: turn end",
 		sRun(in.RunID), sAgent(agentName),
 		sTurn(state.Turn), sRound(round),
-		slogString("stance", stance),
-		slogBool("plan_changed", turn.PlanChanged))
+		slog.String("stance", stance),
+		slog.Bool("plan_changed", turn.PlanChanged))
 
 	// Treat a missing pending_turn as a soft failure: the agent ran cleanly
 	// but produced no structured stance, so it should not count toward
@@ -497,33 +504,69 @@ func recordFailureStance(state *RunState, round int, agent string, err error, no
 	state.UpdatedAt = now()
 }
 
-// fileFingerprint returns "<size>:<unix-nanos-mtime>" for the file at path,
-// or the empty string when the file is missing or unreadable. Used to
-// drive PlanChanged: stat is enough to detect that the agent rewrote the
-// findings doc, and avoids re-hashing a growing document on every turn.
+// fileFingerprint returns "<size>:<sha256>" for the file at path, or the
+// empty string when the file is missing or unreadable. Used to drive
+// PlanChanged across a turn.
 //
-// Stat errors are NOT surfaced: the loop must keep running when the
-// findings file does not yet exist (turn 1 of a new run typically creates
-// it from a template). A missing file is detected downstream by comparing
-// the empty fingerprint before vs. after the turn.
+// Includes a content SHA rather than mtime: filesystems with second-
+// granularity mtime (FAT, some network mounts) would let a same-length
+// sub-second edit escape detection if we keyed on size+mtime alone, and
+// the typical findings doc is small enough that hashing once per turn is
+// cheap. Stat-only fallback keeps the loop moving when the file does not
+// yet exist (turn 1 of a new run); a missing file is detected downstream
+// by comparing the empty fingerprint before vs. after the turn.
 func fileFingerprint(ctx context.Context, path string) string {
 	info, err := os.Stat(path)
 	if err != nil {
 		logging.Debug(ctx, "investigate: stat findings doc failed",
-			slogString("path", path), sErr(err))
+			slog.String("path", path), sErr(err))
 		return ""
 	}
-	return fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano())
+	f, err := os.Open(path) //nolint:gosec // path is the findings doc the caller already validated
+	if err != nil {
+		// Fall back to size+mtime when content cannot be read; better than
+		// returning empty (which would mis-report PlanChanged for a missing
+		// vs unreadable file).
+		logging.Debug(ctx, "investigate: open findings doc for hashing failed",
+			slog.String("path", path), sErr(err))
+		return fmt.Sprintf("%d:m%d", info.Size(), info.ModTime().UnixNano())
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		logging.Debug(ctx, "investigate: hash findings doc failed",
+			slog.String("path", path), sErr(err))
+		return fmt.Sprintf("%d:m%d", info.Size(), info.ModTime().UnixNano())
+	}
+	return fmt.Sprintf("%d:%s", info.Size(), hex.EncodeToString(h.Sum(nil)))
+}
+
+// classifyRunErr formats the per-turn agent error so the recorded Note
+// distinguishes a process that never started (exec lookup failure, e.g.
+// binary missing) from one that started and exited non-zero. Both kinds
+// arrive here as cmd.Run() errors, but the operator needs to know which
+// to fix: PATH/install for spawn errors, agent behavior for exit errors.
+func classifyRunErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	var execErr *exec.Error
+	if errors.As(err, &execErr) {
+		return "spawn error: " + err.Error()
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return fmt.Sprintf("exit error: status %d", exitErr.ExitCode())
+	}
+	return "agent error: " + err.Error()
 }
 
 // --- small slog helpers ---------------------------------------------------
 //
-// Tiny wrappers around the most common slog attributes to keep call-sites
-// readable without sprinkling slog.String throughout the loop body.
-
-func slogString(k, v string) any { return slog.String(k, v) }
-
-func slogBool(k string, v bool) any { return slog.Bool(k, v) }
+// Wrappers below encode the key NAME used for common loop attributes
+// (sRun → "run_id", sAgent → "agent", etc.) so call sites read as
+// data without re-typing the key string. For attributes whose key is
+// only used once, call slog.String / slog.Bool directly.
 
 func sRun(runID string) any { return slog.String("run_id", runID) }
 

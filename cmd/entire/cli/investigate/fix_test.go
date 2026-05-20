@@ -75,8 +75,11 @@ func TestRunFix_PicksMostRecent(t *testing.T) {
 	if !rec.called {
 		t.Fatal("Launch was not called")
 	}
-	if !strings.Contains(rec.prompt, "Investigation: newest topic") {
+	if !strings.Contains(rec.prompt, "newest topic") {
 		t.Errorf("prompt did not reference newest topic: %q", rec.prompt)
+	}
+	if !strings.Contains(rec.prompt, `<untrusted source="investigation-prompt">`) {
+		t.Errorf("prompt should wrap the investigation prompt in an untrusted block: %q", rec.prompt)
 	}
 	if !strings.Contains(rec.prompt, "Run ID: bbbbbbbbbbbb") {
 		t.Errorf("prompt did not reference newest run ID: %q", rec.prompt)
@@ -103,8 +106,11 @@ func TestRunFix_ResolvesByRunID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunFix: %v", err)
 	}
-	if !strings.Contains(rec.prompt, "Investigation: older topic") {
+	if !strings.Contains(rec.prompt, "older topic") {
 		t.Errorf("prompt should target the requested run, got: %q", rec.prompt)
+	}
+	if !strings.Contains(rec.prompt, "Run ID: aaaaaaaaaaaa") {
+		t.Errorf("prompt should reference the requested run id, got: %q", rec.prompt)
 	}
 }
 
@@ -164,12 +170,14 @@ func TestRunFix_ComposesPromptBody(t *testing.T) {
 	findings := "## Finding 1\n\nThe checkout button times out after 30s.\n"
 	store := NewLocalManifestStoreWithDir(dir)
 	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	// Absolute sentinel — readDocOrWarn rejects relative paths.
+	findingsPath := filepath.Join(dir, "findings-sentinel.md")
 	writeFixManifest(t, store, "abcdef012345", "Why is checkout flaky?", now,
-		"FINDINGS_PATH",
+		findingsPath,
 	)
 
 	read := func(name string) ([]byte, error) {
-		if name == "FINDINGS_PATH" {
+		if name == findingsPath {
 			return []byte(findings), nil
 		}
 		t.Fatalf("unexpected ReadFile path: %q", name)
@@ -201,8 +209,11 @@ func TestRunFix_ComposesPromptBody(t *testing.T) {
 	if !strings.Contains(rec.prompt, strings.TrimSpace(findings)) {
 		t.Errorf("prompt missing findings body verbatim: %q", rec.prompt)
 	}
-	if !strings.Contains(rec.prompt, "Investigation: Why is checkout flaky?") {
-		t.Errorf("prompt missing investigation line: %q", rec.prompt)
+	if !strings.Contains(rec.prompt, "Why is checkout flaky?") {
+		t.Errorf("prompt missing investigation prompt: %q", rec.prompt)
+	}
+	if !strings.Contains(rec.prompt, `<untrusted source="prior-findings">`) {
+		t.Errorf("prompt should wrap findings in an untrusted block: %q", rec.prompt)
 	}
 }
 

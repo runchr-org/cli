@@ -11,7 +11,12 @@
 // These names are stable API; renaming any constant is a breaking change.
 package provenance
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+)
 
 const (
 	ReviewSession     = "ENTIRE_REVIEW_SESSION"
@@ -73,4 +78,17 @@ func hasAnyPrefix(s string, prefixes []string) bool {
 		}
 	}
 	return false
+}
+
+// runIDPattern matches a valid investigation run ID: exactly 12 lowercase
+// hex characters. Re-uses checkpoint/id.Pattern so the format stays in
+// lockstep with the checkpoint-ID format used elsewhere in the codebase.
+var runIDPattern = regexp.MustCompile("^" + id.Pattern + "$")
+
+// IsValidRunID reports whether runID is exactly 12 lowercase hex
+// characters. Lives here (next to the InvestigateRunID env name) so the
+// lifecycle hook can validate the env-supplied run ID without pulling in
+// the heavier investigate package.
+func IsValidRunID(runID string) bool {
+	return runID != "" && runIDPattern.MatchString(runID)
 }
