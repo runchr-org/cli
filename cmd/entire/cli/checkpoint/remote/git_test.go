@@ -652,11 +652,10 @@ func TestFetchBlobs_EmptyHashesNoOp(t *testing.T) {
 	t.Parallel()
 
 	called := false
-	restore := withFetchBlobsBatchStub(t, func(_ context.Context, _ string, _ []string) error {
+	withFetchBlobsBatchStub(t, func(_ context.Context, _ string, _ []string) error {
 		called = true
 		return nil
 	})
-	defer restore()
 
 	require.NoError(t, FetchBlobs(context.Background(), "https://example.com/repo.git", nil))
 	assert.False(t, called, "FetchBlobs with no hashes must not invoke git")
@@ -672,14 +671,13 @@ func TestFetchBlobs_BatchesLargeHashLists(t *testing.T) {
 	}
 
 	var batches [][]string
-	restore := withFetchBlobsBatchStub(t, func(_ context.Context, _ string, h []string) error {
+	withFetchBlobsBatchStub(t, func(_ context.Context, _ string, h []string) error {
 		// Copy: the slice header points at a sub-slice of the caller's hashes.
 		got := make([]string, len(h))
 		copy(got, h)
 		batches = append(batches, got)
 		return nil
 	})
-	defer restore()
 
 	require.NoError(t, FetchBlobs(context.Background(), "https://example.com/repo.git", hashes))
 
@@ -701,24 +699,21 @@ func TestFetchBlobs_AbortsOnBatchFailure(t *testing.T) {
 
 	calls := 0
 	wantErr := errors.New("fetch-pack failed")
-	restore := withFetchBlobsBatchStub(t, func(_ context.Context, _ string, _ []string) error {
+	withFetchBlobsBatchStub(t, func(_ context.Context, _ string, _ []string) error {
 		calls++
 		return wantErr
 	})
-	defer restore()
 
 	err := FetchBlobs(context.Background(), "https://example.com/repo.git", hashes)
 	require.ErrorIs(t, err, wantErr)
 	assert.Equal(t, 1, calls, "FetchBlobs must abort after the first failing batch")
 }
 
-func withFetchBlobsBatchStub(t *testing.T, stub func(context.Context, string, []string) error) func() {
+func withFetchBlobsBatchStub(t *testing.T, stub func(context.Context, string, []string) error) {
 	t.Helper()
 	original := fetchBlobsBatchFn
 	fetchBlobsBatchFn = stub
-	return func() {
-		fetchBlobsBatchFn = original
-	}
+	t.Cleanup(func() { fetchBlobsBatchFn = original })
 }
 
 // envToMap converts an env slice to a map for easy assertions.

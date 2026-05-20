@@ -58,7 +58,7 @@ func (a *OpenCodeAgent) ParseHookEvent(ctx context.Context, hookName string, std
 		if err != nil {
 			return nil, err
 		}
-		transcriptPath, err := sessionTranscriptPath(ctx, raw.SessionID)
+		transcriptPath, err := a.sessionTranscriptPath(ctx, raw.SessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -77,7 +77,7 @@ func (a *OpenCodeAgent) ParseHookEvent(ctx context.Context, hookName string, std
 			return nil, err
 		}
 		// Export is deferred to PrepareTranscript; we just compute the path here.
-		transcriptPath, err := sessionTranscriptPath(ctx, raw.SessionID)
+		transcriptPath, err := a.sessionTranscriptPath(ctx, raw.SessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -145,10 +145,12 @@ func (a *OpenCodeAgent) PrepareTranscript(ctx context.Context, sessionRef string
 	return err
 }
 
-// sessionTranscriptPath validates the session ID and returns the expected transcript path.
-// Matches GetSessionDir(repoRoot)/ResolveSessionFile(...) so the live export and the
-// path that AgentForTranscriptPath / rewind agree on are exactly the same location.
-func sessionTranscriptPath(ctx context.Context, sessionID string) (string, error) {
+// sessionTranscriptPath validates the session ID and returns the expected
+// transcript path. Composes GetSessionDir + ResolveSessionFile so the live
+// export, the path agent.AgentForTranscriptPath resolves, and the path rewind
+// reads from are guaranteed to be the same location — and so the
+// ENTIRE_TEST_OPENCODE_PROJECT_DIR test override applies uniformly.
+func (a *OpenCodeAgent) sessionTranscriptPath(ctx context.Context, sessionID string) (string, error) {
 	if err := validation.ValidateSessionID(sessionID); err != nil {
 		return "", fmt.Errorf("invalid session ID for transcript path: %w", err)
 	}
@@ -156,7 +158,11 @@ func sessionTranscriptPath(ctx context.Context, sessionID string) (string, error
 	if err != nil {
 		repoRoot = "."
 	}
-	return filepath.Join(repoRoot, paths.EntireTmpDir, OpenCodeSessionSubdir, sessionID+".json"), nil
+	dir, err := a.GetSessionDir(repoRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve opencode session dir: %w", err)
+	}
+	return a.ResolveSessionFile(dir, sessionID), nil
 }
 
 // fetchAndCacheExport calls `opencode export <sessionID>` and writes the result
@@ -177,8 +183,11 @@ func (a *OpenCodeAgent) fetchAndCacheExport(ctx context.Context, sessionID strin
 		repoRoot = "."
 	}
 
-	tmpDir := filepath.Join(repoRoot, paths.EntireTmpDir, OpenCodeSessionSubdir)
-	tmpFile := filepath.Join(tmpDir, sessionID+".json")
+	tmpDir, err := a.GetSessionDir(repoRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve opencode session dir: %w", err)
+	}
+	tmpFile := a.ResolveSessionFile(tmpDir, sessionID)
 
 	// Integration test mode: use pre-written mock file without calling opencode export
 	if os.Getenv("ENTIRE_TEST_OPENCODE_MOCK_EXPORT") != "" {

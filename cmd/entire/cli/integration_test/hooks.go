@@ -1382,21 +1382,8 @@ func (r *OpenCodeHookRunner) SimulateOpenCodeTurnStart(sessionID, _, prompt stri
 func (r *OpenCodeHookRunner) SimulateOpenCodeTurnEnd(sessionID, transcriptPath string) error {
 	r.T.Helper()
 
-	// For integration tests, write the mock transcript to the location where the
-	// lifecycle handler expects it (.entire/tmp/opencode/<session_id>.json)
 	if transcriptPath != "" {
-		srcData, err := os.ReadFile(transcriptPath)
-		if err != nil {
-			r.T.Fatalf("SimulateOpenCodeTurnEnd: failed to read transcript from %q: %v", transcriptPath, err)
-		}
-		destDir := filepath.Join(r.RepoDir, ".entire", "tmp", opencode.OpenCodeSessionSubdir)
-		if err := os.MkdirAll(destDir, 0o755); err != nil {
-			r.T.Fatalf("SimulateOpenCodeTurnEnd: failed to create directory %q: %v", destDir, err)
-		}
-		destPath := filepath.Join(destDir, sessionID+".json")
-		if err := os.WriteFile(destPath, srcData, 0o644); err != nil {
-			r.T.Fatalf("SimulateOpenCodeTurnEnd: failed to write transcript to %q: %v", destPath, err)
-		}
+		writeOpenCodeMockTranscript(r.T, r.RepoDir, sessionID, transcriptPath, "SimulateOpenCodeTurnEnd")
 	}
 
 	input := map[string]string{
@@ -1557,24 +1544,42 @@ func (env *TestEnv) SimulateOpenCodeSessionEnd(sessionID, transcriptPath string)
 	return runner.SimulateOpenCodeSessionEnd(sessionID, transcriptPath)
 }
 
-// CopyTranscriptToEntireTmp copies an OpenCode transcript to
-// .entire/tmp/opencode/<sessionID>.json. This simulates what `opencode export`
-// does in production. Required for mid-turn commits where PrepareTranscript
-// calls fetchAndCacheExport, which in mock mode expects the file to already
-// exist at that path.
+// CopyTranscriptToEntireTmp copies an OpenCode transcript to the location where
+// the OpenCode agent (via fetchAndCacheExport in mock mode) expects to find it.
+// Used for mid-turn commits where PrepareTranscript is invoked before turn-end.
 func (env *TestEnv) CopyTranscriptToEntireTmp(sessionID, transcriptPath string) {
 	env.T.Helper()
+	writeOpenCodeMockTranscript(env.T, env.RepoDir, sessionID, transcriptPath, "CopyTranscriptToEntireTmp")
+}
+
+// writeOpenCodeMockTranscript copies an OpenCode transcript into the path the
+// OpenCode agent reads in ENTIRE_TEST_OPENCODE_MOCK_EXPORT mode. The destination
+// is derived from the OpenCode agent itself so the test never hard-codes the
+// .entire/tmp/opencode layout.
+func writeOpenCodeMockTranscript(t fatalfHelper, repoDir, sessionID, transcriptPath, caller string) {
+	t.Helper()
 
 	srcData, err := os.ReadFile(transcriptPath)
 	if err != nil {
-		env.T.Fatalf("CopyTranscriptToEntireTmp: failed to read transcript from %q: %v", transcriptPath, err)
+		t.Fatalf("%s: failed to read transcript from %q: %v", caller, transcriptPath, err)
 	}
-	destDir := filepath.Join(env.RepoDir, ".entire", "tmp", opencode.OpenCodeSessionSubdir)
+	ag := &opencode.OpenCodeAgent{}
+	destDir, err := ag.GetSessionDir(repoDir)
+	if err != nil {
+		t.Fatalf("%s: failed to resolve opencode session dir: %v", caller, err)
+	}
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		env.T.Fatalf("CopyTranscriptToEntireTmp: failed to create directory %q: %v", destDir, err)
+		t.Fatalf("%s: failed to create directory %q: %v", caller, destDir, err)
 	}
-	destPath := filepath.Join(destDir, sessionID+".json")
+	destPath := ag.ResolveSessionFile(destDir, sessionID)
 	if err := os.WriteFile(destPath, srcData, 0o644); err != nil {
-		env.T.Fatalf("CopyTranscriptToEntireTmp: failed to write transcript to %q: %v", destPath, err)
+		t.Fatalf("%s: failed to write transcript to %q: %v", caller, destPath, err)
 	}
+}
+
+// fatalfHelper is the minimal *testing.T surface used by writeOpenCodeMockTranscript.
+// Both TestEnv.T and OpenCodeHookRunner.T satisfy it.
+type fatalfHelper interface {
+	Helper()
+	Fatalf(format string, args ...interface{})
 }

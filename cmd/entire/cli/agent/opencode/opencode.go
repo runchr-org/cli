@@ -164,13 +164,11 @@ func (a *OpenCodeAgent) GetSessionID(input *agent.HookInput) string {
 	return input.SessionID
 }
 
-// OpenCodeSessionSubdir is the per-agent subdirectory under .entire/tmp/
-// that holds OpenCode session transcripts. The subdir prevents
-// agent.AgentForTranscriptPath from misattributing other agents' files that
-// happen to land in .entire/tmp/ (notably in integration tests) to OpenCode
-// purely on a prefix match. lifecycle.go composes this with paths.EntireTmpDir
-// when writing the live transcript so the two paths stay in lockstep.
-const OpenCodeSessionSubdir = "opencode"
+// openCodeSessionSubdir keeps the OpenCode session dir under a unique
+// prefix inside .entire/tmp/. Without it, sibling agents (or integration
+// tests) that scribble into .entire/tmp/ would prefix-match
+// agent.AgentForTranscriptPath onto OpenCode.
+const openCodeSessionSubdir = "opencode"
 
 // GetSessionDir returns the directory where Entire stores OpenCode session transcripts.
 // Transcripts are ephemeral handoff files between the TS plugin and the Go hook handler.
@@ -187,7 +185,7 @@ func (a *OpenCodeAgent) GetSessionDir(repoPath string) (string, error) {
 		return override, nil
 	}
 
-	return filepath.Join(repoPath, paths.EntireTmpDir, OpenCodeSessionSubdir), nil
+	return filepath.Join(repoPath, paths.EntireTmpDir, openCodeSessionSubdir), nil
 }
 
 func (a *OpenCodeAgent) ResolveSessionFile(sessionDir, agentSessionID string) string {

@@ -372,7 +372,7 @@ func TestGetSessionDir_UnderRepoEntireTmpOpencode(t *testing.T) {
 	repo := t.TempDir()
 	got, err := ag.GetSessionDir(repo)
 	require.NoError(t, err)
-	require.Equal(t, filepath.Join(repo, paths.EntireTmpDir, OpenCodeSessionSubdir), got)
+	require.Equal(t, filepath.Join(repo, paths.EntireTmpDir, openCodeSessionSubdir), got)
 }
 
 func TestGetSessionDir_UniquePrefixFromBareEntireTmp(t *testing.T) {
