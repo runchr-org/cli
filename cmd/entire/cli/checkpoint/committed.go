@@ -55,7 +55,9 @@ var chunkTranscript = agent.ChunkTranscript
 //   - For incremental checkpoints: checkpoints/NNN-<tool-use-id>.json
 //   - For final checkpoints: checkpoint.json and agent-<agent-id>.jsonl
 func (s *GitStore) WriteCommitted(ctx context.Context, opts WriteCommittedOptions) error {
-	PreserveV1HistoryAndLog(ctx, s.repo)
+	if err := PreserveV1History(ctx, s.repo); err != nil {
+		logging.Warn(ctx, "preserve v1 history failed; continuing", slog.String("error", err.Error()))
+	}
 	// Validate identifiers to prevent path traversal and malformed data
 	if opts.CheckpointID.IsEmpty() {
 		return errors.New("invalid checkpoint options: checkpoint ID is required")
@@ -948,7 +950,9 @@ func (s *GitStore) ReadCommitted(ctx context.Context, checkpointID id.Checkpoint
 	if err := ctx.Err(); err != nil {
 		return nil, err //nolint:wrapcheck // Propagating context cancellation
 	}
-	PreserveV1HistoryAndLog(ctx, s.repo)
+	if err := PreserveV1History(ctx, s.repo); err != nil {
+		logging.Warn(ctx, "preserve v1 history failed; continuing", slog.String("error", err.Error()))
+	}
 
 	ft, err := s.getFetchingTree(ctx)
 	if err != nil {
@@ -1206,7 +1210,9 @@ func (s *GitStore) ListCommitted(ctx context.Context) ([]CommittedInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err //nolint:wrapcheck // Propagating context cancellation
 	}
-	PreserveV1HistoryAndLog(ctx, s.repo)
+	if err := PreserveV1History(ctx, s.repo); err != nil {
+		logging.Warn(ctx, "preserve v1 history failed; continuing", slog.String("error", err.Error()))
+	}
 
 	tree, err := s.getSessionsBranchTree(ctx)
 	if err != nil {

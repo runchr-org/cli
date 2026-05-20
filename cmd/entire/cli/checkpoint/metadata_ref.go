@@ -82,15 +82,6 @@ func MetadataTrackingRefForRemote(ctx context.Context, remoteName string) plumbi
 	return plumbing.NewRemoteReferenceName(remoteName, paths.MetadataBranchName)
 }
 
-// PreserveV1HistoryAndLog runs PreserveV1History and logs any failure at WARN
-// without surfacing the error. Suitable for read entry points that want best-
-// effort preservation without failing the read when something goes wrong.
-func PreserveV1HistoryAndLog(ctx context.Context, repo *git.Repository) {
-	if err := PreserveV1History(ctx, repo); err != nil {
-		logging.Warn(ctx, "preserve v1 history failed; continuing", slog.String("error", err.Error()))
-	}
-}
-
 // PreserveV1History initializes the custom ref at the legacy v1 branch's tip
 // so prior checkpoint history remains reachable under 1.1. Idempotent; runs
 // at most once per repo. Safe to call repeatedly.
