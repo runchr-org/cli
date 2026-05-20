@@ -47,6 +47,29 @@ func TestMetadataRef_LegacyVsCustom(t *testing.T) {
 	}
 }
 
+func TestRefDisplayName(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   plumbing.ReferenceName
+		want string
+	}{
+		{"legacy v1 branch", plumbing.NewBranchReferenceName(paths.MetadataBranchName), "entire/checkpoints/v1"},
+		{"v1.1 custom ref", plumbing.ReferenceName(paths.MetadataRefName), "checkpoints/v1"},
+		{"v1.1 tracking ref", plumbing.ReferenceName(paths.MetadataTrackingRefName), "remotes/origin/checkpoints/v1"},
+		{"unrecognized prefix returned verbatim", plumbing.ReferenceName("refs/tags/v1"), "refs/tags/v1"},
+		{"empty", plumbing.ReferenceName(""), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := checkpoint.RefDisplayName(tc.in); got != tc.want {
+				t.Fatalf("RefDisplayName(%q) = %q; want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestMetadataTrackingRef_LegacyVsCustom(t *testing.T) {
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)

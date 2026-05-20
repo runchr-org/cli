@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -12,6 +13,21 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
+
+// RefDisplayName produces a short, log-friendly name for a metadata ref by
+// stripping the refs/heads/ or refs/entire/ prefix. Use this for user-facing
+// messages so legacy v1 ("entire/checkpoints/v1") and 1.1
+// ("checkpoints/v1") both display naturally. Returns the input unchanged
+// when neither prefix matches.
+func RefDisplayName(ref plumbing.ReferenceName) string {
+	s := string(ref)
+	for _, prefix := range []string{"refs/heads/", "refs/entire/"} {
+		if strings.HasPrefix(s, prefix) {
+			return strings.TrimPrefix(s, prefix)
+		}
+	}
+	return s
+}
 
 // MetadataRef returns the plumbing.ReferenceName for v1 metadata storage,
 // resolved from settings.

@@ -88,7 +88,7 @@ func (s *ManualCommitStrategy) GetSessionMetadataRef(ctx context.Context, _ stri
 		return ""
 	}
 
-	display := strings.TrimPrefix(string(refName), "refs/heads/")
+	display := checkpoint.RefDisplayName(refName)
 	return trailers.FormatSourceRef(display, ref.Hash().String())
 }
 

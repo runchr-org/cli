@@ -357,7 +357,7 @@ func EnsureMetadataBranch(ctx context.Context, repo *git.Repository) error {
 		return fmt.Errorf("preserve v1 history: %w", err)
 	}
 	refName := checkpoint.MetadataRef(ctx)
-	refDisplay := strings.TrimPrefix(string(refName), "refs/heads/")
+	refDisplay := checkpoint.RefDisplayName(refName)
 
 	// Check if remote-tracking ref exists (e.g., after clone/fetch)
 	remoteRefName := checkpoint.MetadataTrackingRef(ctx)
@@ -463,7 +463,7 @@ func EnsureMetadataBranch(ctx context.Context, repo *git.Repository) error {
 		return fmt.Errorf("failed to create metadata branch: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "  ✓ Created orphan branch %s for session metadata\n", paths.MetadataBranchName)
+	fmt.Fprintf(os.Stderr, "  ✓ Created orphan ref %s for session metadata\n", refDisplay)
 	return nil
 }
 

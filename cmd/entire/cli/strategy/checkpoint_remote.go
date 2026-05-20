@@ -120,7 +120,7 @@ func resolvePushSettings(ctx context.Context, pushRemoteName string) pushSetting
 // (transcripts, metadata JSON) — not just tree objects.
 func FetchMetadataBranch(ctx context.Context, remoteURL string) error {
 	localRef := checkpoint.MetadataRef(ctx)
-	refDisplay := strings.TrimPrefix(string(localRef), "refs/heads/")
+	refDisplay := checkpoint.RefDisplayName(localRef)
 	tmpRef := FetchTmpRefPrefix + refDisplay
 	srcRef := string(localRef)
 

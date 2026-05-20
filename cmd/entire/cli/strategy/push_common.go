@@ -65,16 +65,11 @@ func hasUnpushedSessionsCommon(repo *git.Repository, localHash plumbing.Hash, tr
 	return localHash != ref.Hash()
 }
 
-// refDisplayName produces a short, log-friendly name for a ref. Strips the
-// refs/heads/ or refs/entire/ prefix so messages read naturally.
+// refDisplayName is a package-local alias for checkpoint.RefDisplayName so
+// the existing call sites in this file stay short. The shared
+// implementation lives in checkpoint/metadata_ref.go.
 func refDisplayName(ref plumbing.ReferenceName) string {
-	s := string(ref)
-	for _, prefix := range []string{"refs/heads/", "refs/entire/"} {
-		if strings.HasPrefix(s, prefix) {
-			return strings.TrimPrefix(s, prefix)
-		}
-	}
-	return s
+	return checkpoint.RefDisplayName(ref)
 }
 
 func displayPushTarget(target string) string {

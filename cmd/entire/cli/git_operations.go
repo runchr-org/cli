@@ -421,7 +421,7 @@ func FetchMetadataTreeOnly(ctx context.Context) error {
 func fetchMetadataFromOrigin(ctx context.Context, shallow, noFilter bool) error {
 	localRef := cpkg.MetadataRef(ctx)
 	trackingRef := cpkg.MetadataTrackingRef(ctx)
-	refDisplay := strings.TrimPrefix(string(localRef), "refs/heads/")
+	refDisplay := cpkg.RefDisplayName(localRef)
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
