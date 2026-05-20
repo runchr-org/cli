@@ -33,7 +33,6 @@ import (
 
 	"charm.land/huh/v2"
 	"github.com/go-git/go-git/v6"
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/spf13/cobra"
 )
@@ -444,7 +443,7 @@ func checkpointPresentLocally(ctx context.Context, repo *git.Repository, checkpo
 		return summary != nil, nil
 	}
 
-	localRef := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	localRef := cpkg.MetadataRef(ctx)
 	if _, err := repo.Reference(localRef, true); err != nil {
 		// Local branch ref doesn't exist — treat as "not present locally".
 		// We deliberately do not fall back to remote-tracking: see

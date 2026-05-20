@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -412,13 +413,15 @@ func FetchMetadataTreeOnly(ctx context.Context) error {
 	return fetchMetadataFromOrigin(ctx, true /* shallow */, false /* noFilter */)
 }
 
-// fetchMetadataFromOrigin fetches the v1 metadata branch from origin into the
-// remote-tracking ref refs/remotes/origin/<branch>, then safely advances the
-// local branch to match. When shallow is true, --depth=1 is added so only
-// the tip is downloaded. When noFilter is true, --filter=blob:none is suppressed
-// so blob content is included.
+// fetchMetadataFromOrigin fetches the v1 metadata ref from origin into the
+// remote-tracking ref, then safely advances the local ref to match.
+// Honors the 1.1 custom-ref namespace when configured. When shallow is true,
+// --depth=1 is added so only the tip is downloaded. When noFilter is true,
+// --filter=blob:none is suppressed so blob content is included.
 func fetchMetadataFromOrigin(ctx context.Context, shallow, noFilter bool) error {
-	branchName := paths.MetadataBranchName
+	localRef := cpkg.MetadataRef(ctx)
+	trackingRef := cpkg.MetadataTrackingRef(ctx)
+	refDisplay := strings.TrimPrefix(string(localRef), "refs/heads/")
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -428,7 +431,7 @@ func fetchMetadataFromOrigin(ctx context.Context, shallow, noFilter bool) error 
 		return fmt.Errorf("failed to resolve fetch target: %w", err)
 	}
 
-	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
+	refSpec := fmt.Sprintf("+%s:%s", string(localRef), string(trackingRef))
 
 	output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
 		Remote:   fetchTarget,
@@ -441,7 +444,7 @@ func fetchMetadataFromOrigin(ctx context.Context, shallow, noFilter bool) error 
 		if ctx.Err() == context.DeadlineExceeded {
 			return errors.New("fetch timed out after 2 minutes")
 		}
-		return formatFilteredFetchError("failed to fetch "+branchName, fetchTarget, output, fetchErr)
+		return formatFilteredFetchError("failed to fetch "+refDisplay, fetchTarget, output, fetchErr)
 	}
 
 	repo, err := openRepository(ctx)
@@ -449,12 +452,12 @@ func fetchMetadataFromOrigin(ctx context.Context, shallow, noFilter bool) error 
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
 
-	remoteRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", branchName), true)
+	remoteRef, err := repo.Reference(trackingRef, true)
 	if err != nil {
-		return fmt.Errorf("branch '%s' not found on origin: %w", branchName, err)
+		return fmt.Errorf("ref '%s' not found on origin: %w", refDisplay, err)
 	}
-	if err := strategy.SafelyAdvanceLocalRef(ctx, repo, plumbing.NewBranchReferenceName(branchName), remoteRef.Hash()); err != nil {
-		return fmt.Errorf("failed to advance local %s branch: %w", branchName, err)
+	if err := strategy.SafelyAdvanceLocalRef(ctx, repo, localRef, remoteRef.Hash()); err != nil {
+		return fmt.Errorf("failed to advance local %s: %w", refDisplay, err)
 	}
 	return nil
 }

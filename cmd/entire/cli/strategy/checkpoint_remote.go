@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -108,22 +109,25 @@ func resolvePushSettings(ctx context.Context, pushRemoteName string) pushSetting
 	return ps
 }
 
-// FetchMetadataBranch fetches the metadata branch from the checkpoint remote URL
-// and updates the local branch. Unlike fetchMetadataBranchIfMissing, this always
-// fetches regardless of whether the branch exists locally (for resume scenarios
-// where the local branch may be stale).
+// FetchMetadataBranch fetches the metadata ref from the checkpoint remote URL
+// and updates the local ref. Unlike fetchMetadataBranchIfMissing, this always
+// fetches regardless of whether the ref exists locally (for resume scenarios
+// where the local ref may be stale).
+//
+// Honors the 1.1 custom-ref namespace when configured.
 //
 // The fetch is unfiltered (NoFilter: true) because resume needs blob content
 // (transcripts, metadata JSON) — not just tree objects.
 func FetchMetadataBranch(ctx context.Context, remoteURL string) error {
-	branchName := paths.MetadataBranchName
-	tmpRef := FetchTmpRefPrefix + branchName
-	srcRef := "refs/heads/" + branchName
+	localRef := checkpoint.MetadataRef(ctx)
+	refDisplay := strings.TrimPrefix(string(localRef), "refs/heads/")
+	tmpRef := FetchTmpRefPrefix + refDisplay
+	srcRef := string(localRef)
 
 	if err := fetchURLIntoTmpRef(ctx, remoteURL, srcRef, tmpRef, "metadata branch", true); err != nil {
 		return err
 	}
-	return PromoteTmpRefSafely(ctx, plumbing.ReferenceName(tmpRef), plumbing.NewBranchReferenceName(branchName), branchName)
+	return PromoteTmpRefSafely(ctx, plumbing.ReferenceName(tmpRef), localRef, refDisplay)
 }
 
 // FetchV2MainFromURL fetches the v2 /main ref from a remote URL and advances
@@ -181,10 +185,10 @@ func fetchMetadataBranchIfMissing(ctx context.Context, remoteURL string) error {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
 
-	// Check if branch already exists locally - if so, nothing to do
-	branchRef := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	// Check if ref already exists locally - if so, nothing to do
+	branchRef := checkpoint.MetadataRef(ctx)
 	if _, err := repo.Reference(branchRef, true); err == nil {
-		return nil // Branch exists locally, skip fetch
+		return nil // Ref exists locally, skip fetch
 	}
 
 	// Branch doesn't exist locally - try to fetch it from the URL.

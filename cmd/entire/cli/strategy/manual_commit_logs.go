@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
@@ -74,23 +75,21 @@ func (s *ManualCommitStrategy) GetMetadataRef(_ context.Context, checkpoint Chec
 }
 
 // GetSessionMetadataRef returns a reference to the most recent metadata commit for a session.
-// For manual-commit strategy, metadata lives on the entire/checkpoints/v1 branch.
+// For manual-commit strategy, metadata lives on the v1 metadata ref (legacy branch or 1.1 custom ref).
 func (s *ManualCommitStrategy) GetSessionMetadataRef(ctx context.Context, _ string) string {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
 		return ""
 	}
 
-	// Get the sessions branch
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	refName := checkpoint.MetadataRef(ctx)
 	ref, err := repo.Reference(refName, true)
 	if err != nil {
 		return ""
 	}
 
-	// The tip of entire/checkpoints/v1 contains all condensed sessions
-	// Return a reference to it (sessionID is not used as all sessions are on the same branch)
-	return trailers.FormatSourceRef(paths.MetadataBranchName, ref.Hash().String())
+	display := strings.TrimPrefix(string(refName), "refs/heads/")
+	return trailers.FormatSourceRef(display, ref.Hash().String())
 }
 
 // GetCheckpointLog returns the session transcript for a specific checkpoint.

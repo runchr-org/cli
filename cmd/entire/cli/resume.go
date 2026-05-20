@@ -418,7 +418,7 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 
 	// Helper to log ref hash for a repo's metadata branch
 	logRefHash := func(repo *git.Repository, source string) {
-		ref, refErr := repo.Reference(plumbing.NewBranchReferenceName("entire/checkpoints/v1"), true)
+		ref, refErr := repo.Reference(checkpoint.MetadataRef(ctx), true)
 		if refErr != nil {
 			logging.Debug(logCtx, "metadata branch ref not found",
 				slog.String("source", source),
@@ -846,12 +846,12 @@ func checkRemoteMetadata(ctx context.Context, w, errW io.Writer, checkpointID id
 }
 
 func promoteRemoteTrackingMetadataBranch(ctx context.Context, repo *git.Repository) {
-	localRefName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	localRefName := checkpoint.MetadataRef(ctx)
 	if _, err := repo.Reference(localRefName, true); err == nil {
 		return
 	}
 
-	remoteRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName), true)
+	remoteRef, err := repo.Reference(checkpoint.MetadataTrackingRef(ctx), true)
 	if err != nil {
 		return
 	}

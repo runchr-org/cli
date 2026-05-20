@@ -29,7 +29,7 @@ var disconnectedOnce sync.Once //nolint:gochecknoglobals // intentional per-proc
 // and the provided fetched or remote-tracking ref exist but share no common
 // ancestor.
 func IsMetadataDisconnected(ctx context.Context, repo *git.Repository, remoteRefName plumbing.ReferenceName) (bool, error) {
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	refName := checkpoint.MetadataRef(ctx)
 	localRef, err := repo.Reference(refName, true)
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return false, nil
@@ -74,7 +74,7 @@ func WarnIfMetadataDisconnected() {
 				slog.String("error", err.Error()))
 			return
 		}
-		disconnected, err := IsMetadataDisconnected(ctx, repo, plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName))
+		disconnected, err := IsMetadataDisconnected(ctx, repo, checkpoint.MetadataTrackingRef(ctx))
 		if err != nil {
 			logging.Debug(ctx, "metadata disconnection check failed",
 				slog.String("error", err.Error()))
@@ -106,7 +106,7 @@ func ReconcileDisconnectedMetadataBranch(
 	remoteRefName plumbing.ReferenceName,
 	w io.Writer,
 ) error {
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	refName := checkpoint.MetadataRef(ctx)
 
 	// Check local branch
 	localRef, err := repo.Reference(refName, true)

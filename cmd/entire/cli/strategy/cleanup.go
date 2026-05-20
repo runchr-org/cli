@@ -72,7 +72,9 @@ var shadowBranchPattern = regexp.MustCompile(`^entire/[0-9a-fA-F]{7,}(-[0-9a-fA-
 // IsShadowBranch returns true if the branch name matches the shadow branch pattern.
 // Shadow branches have the format "entire/<commit-hash>-<worktree-hash>" where the
 // commit hash is at least 7 hex characters and worktree hash is 6 hex characters.
-// The "entire/checkpoints/v1" branch is NOT a shadow branch.
+// The "entire/checkpoints/v1" branch (legacy v1 metadata) is NOT a shadow branch.
+// On 1.1 repos the metadata lives at the custom ref refs/entire/checkpoints/v1
+// (outside refs/heads/), so it never enters this comparison at all.
 func IsShadowBranch(branchName string) bool {
 	// Explicitly exclude metadata and trails branches
 	if branchName == paths.MetadataBranchName || branchName == paths.TrailsBranchName {
@@ -259,8 +261,8 @@ func DeleteOrphanedCheckpoints(ctx context.Context, checkpointIDs []string) (del
 		return nil, nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
 
-	// Get sessions branch
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	// Get metadata ref (legacy branch or 1.1 custom ref)
+	refName := checkpoint.MetadataRef(ctx)
 	ref, err := repo.Reference(refName, true)
 	if err != nil {
 		return nil, nil, fmt.Errorf("sessions branch not found: %w", err)

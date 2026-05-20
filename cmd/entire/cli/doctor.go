@@ -388,7 +388,7 @@ func checkDisconnectedMetadata(cmd *cobra.Command, force bool) error {
 	}
 
 	ctx := cmd.Context()
-	remoteRefName := plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
+	remoteRefName := checkpoint.MetadataTrackingRef(ctx)
 	disconnected, err := strategy.IsMetadataDisconnected(ctx, repo, remoteRefName)
 	if err != nil {
 		return fmt.Errorf("could not check metadata branch state: %w", err)
