@@ -2,6 +2,7 @@ package checkpoint
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -43,9 +44,12 @@ func MetadataRef(ctx context.Context) plumbing.ReferenceName {
 	return plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 }
 
-// MetadataTrackingRef returns the plumbing.ReferenceName for the
-// remote-tracking counterpart of the v1 metadata ref. Used by the push
-// hook's divergence-detection logic and by `entire doctor`.
+// MetadataTrackingRef returns the plumbing.ReferenceName for the origin
+// remote-tracking counterpart of the v1 metadata ref. Use this for code
+// paths that are explicitly about the origin tracking ref (doctor,
+// resume promotion, EnsureMetadataBranch's origin check, fetch from
+// origin). For the push hook (which can push to any remote name), use
+// MetadataTrackingRefForRemote with the actual push remote.
 //
 // For legacy v1: refs/remotes/origin/entire/checkpoints/v1.
 // For 1.1: refs/entire/remotes/origin/checkpoints/v1.
@@ -55,10 +59,27 @@ func MetadataRef(ctx context.Context) plumbing.ReferenceName {
 // fetch. The separate namespace preserves local commits the way the
 // standard refs/heads/* ↔ refs/remotes/origin/* mapping does.
 func MetadataTrackingRef(ctx context.Context) plumbing.ReferenceName {
+	return MetadataTrackingRefForRemote(ctx, "origin")
+}
+
+// MetadataTrackingRefForRemote returns the local remote-tracking ref for
+// the v1 metadata ref under a specific remote name. The push hook uses
+// this so non-origin pushes (e.g. `git push upstream`) compare against
+// the right tracking ref, not always origin's.
+//
+// For legacy v1: refs/remotes/<remoteName>/entire/checkpoints/v1.
+// For 1.1: refs/entire/remotes/<remoteName>/checkpoints/v1.
+//
+// Note: for 1.1, only the origin refspec is installed by `entire enable`
+// (see installMetadataRefspec). Tracking refs for non-origin remotes will
+// not be populated by `git fetch` until a user installs the equivalent
+// refspec by hand. The push hook treats a missing tracking ref as
+// "needs push" — safe but suboptimal.
+func MetadataTrackingRefForRemote(ctx context.Context, remoteName string) plumbing.ReferenceName {
 	if settings.UsesCustomMetadataRef(ctx) {
-		return plumbing.ReferenceName(paths.MetadataTrackingRefName)
+		return plumbing.ReferenceName("refs/entire/remotes/" + remoteName + "/checkpoints/v1")
 	}
-	return plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
+	return plumbing.NewRemoteReferenceName(remoteName, paths.MetadataBranchName)
 }
 
 // PreserveV1History initializes the custom ref at the legacy v1 branch's tip
@@ -79,15 +100,24 @@ func PreserveV1History(ctx context.Context, repo *git.Repository) error {
 		return nil
 	}
 	target := plumbing.ReferenceName(paths.MetadataRefName)
-	if _, err := repo.Reference(target, false); err == nil {
+	switch _, err := repo.Reference(target, false); {
+	case err == nil:
 		return nil // already preserved (or freshly created)
+	case errors.Is(err, plumbing.ErrReferenceNotFound):
+		// fall through to check the legacy branch
+	default:
+		return fmt.Errorf("check custom metadata ref: %w", err)
 	}
 	legacy := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 	legacyRef, err := repo.Reference(legacy, false)
 	if err != nil {
-		// No legacy branch — nothing to preserve. Caller handles missing
-		// ref normally (fresh-orphan on write, empty result on read).
-		return nil //nolint:nilerr // expected when the repo started fresh on 1.1
+		if errors.Is(err, plumbing.ErrReferenceNotFound) {
+			// No legacy branch — nothing to preserve. Caller handles
+			// missing ref normally (fresh-orphan on write, empty result
+			// on read).
+			return nil
+		}
+		return fmt.Errorf("check legacy metadata branch: %w", err)
 	}
 	if err := repo.Storer.SetReference(plumbing.NewHashReference(target, legacyRef.Hash())); err != nil {
 		return fmt.Errorf("preserve v1 history at custom ref: %w", err)

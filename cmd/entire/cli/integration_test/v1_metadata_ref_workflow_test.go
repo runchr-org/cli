@@ -102,20 +102,16 @@ func TestV1MetadataRef_ExistingV1Repo_PreservesHistoryOnFlip(t *testing.T) {
 	customHash := refHash(t, env.RepoDir, paths.MetadataRefName)
 
 	// The legacy hash must be an ancestor of the custom hash (preservation +
-	// new commit on top).
+	// new commit on top). go-git's IsAncestor(other) returns true when the
+	// receiver is an ancestor of other.
 	customCommit, err := repo.CommitObject(customHash)
 	require.NoError(t, err)
-	isAncestor, err := customCommit.IsAncestor(mustCommit(t, repo, legacyHashBeforeFlip))
-	require.NoError(t, err)
-	// IsAncestor(parent) returns true if receiver is ancestor of parent.
-	// We want: legacy is ancestor of custom, i.e. legacyCommit.IsAncestor(customCommit).
 	legacyCommit := mustCommit(t, repo, legacyHashBeforeFlip)
 	ancestor, err := legacyCommit.IsAncestor(customCommit)
 	require.NoError(t, err)
 	assert.True(t, ancestor,
 		"legacy hash %s must be ancestor of custom hash %s after preservation+commit",
 		legacyHashBeforeFlip, customHash)
-	_ = isAncestor
 
 	// Legacy branch must be untouched at its pre-flip hash.
 	legacyHashAfterFlip := refHash(t, env.RepoDir, "refs/heads/"+paths.MetadataBranchName)

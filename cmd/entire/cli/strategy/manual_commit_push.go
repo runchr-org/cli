@@ -33,9 +33,13 @@ func (s *ManualCommitStrategy) PrePush(ctx context.Context, remote string) error
 	var err error
 	if settings.CheckpointsVersion(ctx) != 2 {
 		_, pushCheckpointsSpan := perf.Start(ctx, "push_checkpoints_branch")
+		// Use ps.remote (the user's actual push remote, e.g. "upstream"),
+		// not pushTarget() which can be the checkpoint_remote URL — the
+		// tracking ref must be the local mirror of the remote being pushed
+		// to, not the URL push target.
 		err = pushRefIfNeeded(ctx, ps.pushTarget(),
 			checkpoint.MetadataRef(ctx),
-			checkpoint.MetadataTrackingRef(ctx))
+			checkpoint.MetadataTrackingRefForRemote(ctx, ps.remote))
 		if err != nil {
 			pushCheckpointsSpan.RecordError(err)
 		}

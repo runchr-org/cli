@@ -84,3 +84,30 @@ func TestMetadataTrackingRef_LegacyVsCustom(t *testing.T) {
 		t.Fatalf("1.1 tracking = %s; want %s", got, paths.MetadataTrackingRefName)
 	}
 }
+
+func TestMetadataTrackingRefForRemote_UsesActualRemoteName(t *testing.T) {
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+
+	// Legacy v1 with a non-origin remote.
+	got := checkpoint.MetadataTrackingRefForRemote(context.Background(), "upstream")
+	want := plumbing.NewRemoteReferenceName("upstream", paths.MetadataBranchName)
+	if got != want {
+		t.Fatalf("v1 tracking for upstream = %s; want %s", got, want)
+	}
+
+	// 1.1 with a non-origin remote.
+	writeSettings(t, dir, `{"strategy_options":{"checkpoints_version":"1.1"}}`)
+	got = checkpoint.MetadataTrackingRefForRemote(context.Background(), "upstream")
+	want = plumbing.ReferenceName("refs/entire/remotes/upstream/checkpoints/v1")
+	if got != want {
+		t.Fatalf("1.1 tracking for upstream = %s; want %s", got, want)
+	}
+
+	// 1.1 with origin matches the default helper.
+	got = checkpoint.MetadataTrackingRefForRemote(context.Background(), "origin")
+	if got != plumbing.ReferenceName(paths.MetadataTrackingRefName) {
+		t.Fatalf("1.1 tracking for origin = %s; want %s (the documented default)", got, paths.MetadataTrackingRefName)
+	}
+}
