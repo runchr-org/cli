@@ -146,6 +146,8 @@ func (a *OpenCodeAgent) PrepareTranscript(ctx context.Context, sessionRef string
 }
 
 // sessionTranscriptPath validates the session ID and returns the expected transcript path.
+// Matches GetSessionDir(repoRoot)/ResolveSessionFile(...) so the live export and the
+// path that AgentForTranscriptPath / rewind agree on are exactly the same location.
 func sessionTranscriptPath(ctx context.Context, sessionID string) (string, error) {
 	if err := validation.ValidateSessionID(sessionID); err != nil {
 		return "", fmt.Errorf("invalid session ID for transcript path: %w", err)
@@ -154,7 +156,7 @@ func sessionTranscriptPath(ctx context.Context, sessionID string) (string, error
 	if err != nil {
 		repoRoot = "."
 	}
-	return filepath.Join(repoRoot, paths.EntireTmpDir, sessionID+".json"), nil
+	return filepath.Join(repoRoot, paths.EntireTmpDir, OpenCodeSessionSubdir, sessionID+".json"), nil
 }
 
 // fetchAndCacheExport calls `opencode export <sessionID>` and writes the result
@@ -162,7 +164,7 @@ func sessionTranscriptPath(ctx context.Context, sessionID string) (string, error
 //
 // Integration testing: Set ENTIRE_TEST_OPENCODE_MOCK_EXPORT=1 to skip the
 // `opencode export` call and use pre-written mock data instead. Tests must
-// pre-write the transcript file to .entire/tmp/<sessionID>.json before
+// pre-write the transcript file to .entire/tmp/opencode/<sessionID>.json before
 // triggering the hook. See integration_test/hooks.go:SimulateOpenCodeTurnEnd.
 func (a *OpenCodeAgent) fetchAndCacheExport(ctx context.Context, sessionID string) (string, error) {
 	if err := validation.ValidateSessionID(sessionID); err != nil {
@@ -175,7 +177,7 @@ func (a *OpenCodeAgent) fetchAndCacheExport(ctx context.Context, sessionID strin
 		repoRoot = "."
 	}
 
-	tmpDir := filepath.Join(repoRoot, paths.EntireTmpDir)
+	tmpDir := filepath.Join(repoRoot, paths.EntireTmpDir, OpenCodeSessionSubdir)
 	tmpFile := filepath.Join(tmpDir, sessionID+".json")
 
 	// Integration test mode: use pre-written mock file without calling opencode export

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent/opencode"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
@@ -1382,13 +1383,13 @@ func (r *OpenCodeHookRunner) SimulateOpenCodeTurnEnd(sessionID, transcriptPath s
 	r.T.Helper()
 
 	// For integration tests, write the mock transcript to the location where the
-	// lifecycle handler expects it (.entire/tmp/<session_id>.json)
+	// lifecycle handler expects it (.entire/tmp/opencode/<session_id>.json)
 	if transcriptPath != "" {
 		srcData, err := os.ReadFile(transcriptPath)
 		if err != nil {
 			r.T.Fatalf("SimulateOpenCodeTurnEnd: failed to read transcript from %q: %v", transcriptPath, err)
 		}
-		destDir := filepath.Join(r.RepoDir, ".entire", "tmp")
+		destDir := filepath.Join(r.RepoDir, ".entire", "tmp", opencode.OpenCodeSessionSubdir)
 		if err := os.MkdirAll(destDir, 0o755); err != nil {
 			r.T.Fatalf("SimulateOpenCodeTurnEnd: failed to create directory %q: %v", destDir, err)
 		}
@@ -1556,10 +1557,11 @@ func (env *TestEnv) SimulateOpenCodeSessionEnd(sessionID, transcriptPath string)
 	return runner.SimulateOpenCodeSessionEnd(sessionID, transcriptPath)
 }
 
-// CopyTranscriptToEntireTmp copies an OpenCode transcript to .entire/tmp/<sessionID>.json.
-// This simulates what `opencode export` does in production. Required for mid-turn commits
-// where PrepareTranscript calls fetchAndCacheExport, which in mock mode expects the file
-// to already exist at .entire/tmp/<sessionID>.json.
+// CopyTranscriptToEntireTmp copies an OpenCode transcript to
+// .entire/tmp/opencode/<sessionID>.json. This simulates what `opencode export`
+// does in production. Required for mid-turn commits where PrepareTranscript
+// calls fetchAndCacheExport, which in mock mode expects the file to already
+// exist at that path.
 func (env *TestEnv) CopyTranscriptToEntireTmp(sessionID, transcriptPath string) {
 	env.T.Helper()
 
@@ -1567,7 +1569,7 @@ func (env *TestEnv) CopyTranscriptToEntireTmp(sessionID, transcriptPath string) 
 	if err != nil {
 		env.T.Fatalf("CopyTranscriptToEntireTmp: failed to read transcript from %q: %v", transcriptPath, err)
 	}
-	destDir := filepath.Join(env.RepoDir, ".entire", "tmp")
+	destDir := filepath.Join(env.RepoDir, ".entire", "tmp", opencode.OpenCodeSessionSubdir)
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		env.T.Fatalf("CopyTranscriptToEntireTmp: failed to create directory %q: %v", destDir, err)
 	}
