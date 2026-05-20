@@ -82,7 +82,10 @@ func TestPreserveV1History_NoopWhenCustomRefAlreadyExists(t *testing.T) {
 		t.Fatalf("PreserveV1History: %v", err)
 	}
 
-	got, _ := repo.Reference(custom, false)
+	got, err := repo.Reference(custom, false)
+	if err != nil {
+		t.Fatalf("custom ref missing: %v", err)
+	}
 	if got.Hash() != customHash {
 		t.Fatalf("custom ref was rewritten: got %s want %s", got.Hash(), customHash)
 	}

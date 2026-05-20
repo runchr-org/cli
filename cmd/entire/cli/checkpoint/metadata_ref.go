@@ -71,7 +71,7 @@ func PreserveV1History(ctx context.Context, repo *git.Repository) error {
 	if err != nil {
 		// No legacy branch — nothing to preserve. Caller handles missing
 		// ref normally (fresh-orphan on write, empty result on read).
-		return nil
+		return nil //nolint:nilerr // expected when the repo started fresh on 1.1
 	}
 	if err := repo.Storer.SetReference(plumbing.NewHashReference(target, legacyRef.Hash())); err != nil {
 		return fmt.Errorf("preserve v1 history at custom ref: %w", err)

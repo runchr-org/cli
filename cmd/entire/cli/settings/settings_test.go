@@ -874,7 +874,6 @@ func TestEntireSettings_UsesCustomMetadataRef(t *testing.T) {
 		{"bool", map[string]any{"checkpoints_version": true}, false},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			s := &EntireSettings{StrategyOptions: tc.opts}
@@ -917,7 +916,6 @@ func TestParseCheckpointsVersion_OneDotOne(t *testing.T) {
 		{"unsupported bool", true, 1, false},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			gotMajor, gotOK := parseCheckpointsVersion(tc.input)

@@ -1129,16 +1129,19 @@ func runEnable(ctx context.Context, w io.Writer, useProjectSettings bool) error 
 // refspec is already present.
 func installMetadataRefspec(ctx context.Context) error {
 	if err := exec.CommandContext(ctx, "git", "remote", "get-url", "origin").Run(); err != nil {
-		return nil // no origin
+		return nil //nolint:nilerr // no origin configured is not an error for this idempotent helper
 	}
 	refspec := "+" + paths.MetadataRefName + ":" + paths.MetadataTrackingRefName
-	out, _ := exec.CommandContext(ctx, "git", "config", "--get-all", "remote.origin.fetch").Output()
+	out, _ := exec.CommandContext(ctx, "git", "config", "--get-all", "remote.origin.fetch").Output() //nolint:errcheck // missing config key is normal; treated as "no refspec set yet"
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line == refspec {
 			return nil
 		}
 	}
-	return exec.CommandContext(ctx, "git", "config", "--add", "remote.origin.fetch", refspec).Run()
+	if err := exec.CommandContext(ctx, "git", "config", "--add", "remote.origin.fetch", refspec).Run(); err != nil {
+		return fmt.Errorf("git config --add remote.origin.fetch %s: %w", refspec, err)
+	}
+	return nil
 }
 
 func runDisable(ctx context.Context, w io.Writer, useProjectSettings bool) error {
