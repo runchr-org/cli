@@ -209,6 +209,7 @@ Subcommands:
 	if deps.AttachCmd != nil {
 		cmd.AddCommand(deps.AttachCmd)
 	}
+	cmd.AddCommand(newReviewSetupCmd(deps))
 	return cmd
 }
 
