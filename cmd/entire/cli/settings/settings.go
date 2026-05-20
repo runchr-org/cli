@@ -82,6 +82,11 @@ type EntireSettings struct {
 	// multi-agent review findings with `entire review --fix`.
 	ReviewFixAgent string `json:"review_fix_agent,omitempty"`
 
+	// FixAfterReview controls whether `entire review` automatically runs
+	// the Fixer after a review completes. Default empty ("") prompts the
+	// user inline; "always" skips the prompt and just runs.
+	FixAfterReview FixAfterReviewMode `json:"fix_after_review,omitempty"`
+
 	// CommitLinking controls how commits are linked to agent sessions.
 	// "always" = auto-link without prompting, "prompt" = ask on each commit.
 	// Defaults to "prompt" (preserves existing user behavior).
@@ -125,6 +130,11 @@ type EntireSettings struct {
 type ClonePreferences struct {
 	Review         map[string]ReviewConfig `json:"review,omitempty"`
 	ReviewFixAgent string                  `json:"review_fix_agent,omitempty"`
+
+	// FixAfterReview mirrors EntireSettings.FixAfterReview at the clone-local
+	// layer; when set it wins over the project-settings value. Symmetric with
+	// ReviewFixAgent's clone-local override.
+	FixAfterReview FixAfterReviewMode `json:"fix_after_review,omitempty"`
 
 	// ReviewMigrationDismissed records that the user declined the one-shot
 	// migration of review keys from project settings to clone-local prefs.
@@ -222,6 +232,47 @@ func (s *EntireSettings) SummaryTimeoutValue() time.Duration {
 	return time.Duration(s.SummaryTimeoutSeconds) * time.Second
 }
 
+// Role expresses how a configured agent participates in `entire review`.
+// Stored as a string for stable JSON encoding; consumers should compare
+// against the Role* constants below rather than untyped strings.
+type Role string
+
+const (
+	RoleReviewer Role = "reviewer" // runs on `entire review`; N allowed
+	RoleFixer    Role = "fixer"    // runs on `entire review fix`; exactly 1 across the configured map
+	RoleBoth     Role = "both"     // reviews AND fixes; counts toward the one-fixer cap
+	RoleSkip     Role = "skip"     // configured but not used by review
+)
+
+// Valid reports whether r is a recognized role. The empty string is
+// considered valid because legacy ReviewConfig entries written before
+// roles existed have no role field; NormalizeRoles assigns Reviewer
+// to such entries on first load.
+func (r Role) Valid() bool {
+	switch r {
+	case "", RoleReviewer, RoleFixer, RoleBoth, RoleSkip:
+		return true
+	}
+	return false
+}
+
+// IsFixer reports whether r participates in the Fixer role (Fixer or Both).
+func (r Role) IsFixer() bool { return r == RoleFixer || r == RoleBoth }
+
+// IsReviewer reports whether r participates in the Reviewer role (Reviewer or Both).
+func (r Role) IsReviewer() bool { return r == RoleReviewer || r == RoleBoth }
+
+// FixAfterReviewMode controls whether `entire review` auto-runs the
+// Fixer after a review session completes.
+type FixAfterReviewMode string
+
+const (
+	// FixAfterReviewAsk prompts the user inline (default).
+	FixAfterReviewAsk FixAfterReviewMode = ""
+	// FixAfterReviewAlways skips the prompt and runs the Fixer automatically.
+	FixAfterReviewAlways FixAfterReviewMode = "always"
+)
+
 // ReviewConfig holds the per-agent review configuration. Both fields are
 // optional; together they describe what `entire review` should ask the
 // agent to do.
@@ -235,6 +286,12 @@ func (s *EntireSettings) SummaryTimeoutValue() time.Duration {
 // which path composed the prompt — they're the structured, queryable
 // tag alongside ReviewPrompt (which is the ground truth).
 type ReviewConfig struct {
+	// Role expresses how this agent participates in `entire review`.
+	// Empty Role is legacy data — settings.MigrateLegacyRoles upgrades it
+	// to RoleReviewer (or RoleFixer/RoleBoth based on ReviewFixAgent) the
+	// first time settings are loaded after upgrading.
+	Role Role `json:"role,omitempty"`
+
 	// Skills is the list of slash-prefixed skill invocations configured
 	// for this agent. May be empty when Prompt carries the full request.
 	Skills []string `json:"skills,omitempty"`
@@ -327,6 +384,10 @@ func loadMergedSettings(settingsFileAbs, preferencesFileAbs, localSettingsFileAb
 	if err := settings.SummaryGeneration.Validate(); err != nil {
 		return nil, fmt.Errorf("merged settings invalid: %w", err)
 	}
+
+	// In-memory role migration: idempotent, no disk write. Persistence
+	// happens lazily on the next settings write (e.g. `entire review setup`).
+	_ = MigrateLegacyRoles(settings)
 
 	return settings, nil
 }
@@ -542,6 +603,9 @@ func applyClonePreferences(settings *EntireSettings, prefs *ClonePreferences) {
 	if prefs.ReviewFixAgent != "" {
 		settings.ReviewFixAgent = prefs.ReviewFixAgent
 	}
+	if prefs.FixAfterReview != "" {
+		settings.FixAfterReview = prefs.FixAfterReview
+	}
 }
 
 // mergeJSON merges JSON data into existing settings.
@@ -623,6 +687,9 @@ func mergeScalarFields(settings *EntireSettings, raw map[string]json.RawMessage)
 		return err
 	}
 	if err := mergeRawStringNonEmpty(raw, "review_fix_agent", &settings.ReviewFixAgent); err != nil {
+		return err
+	}
+	if err := mergeRawStringNonEmpty(raw, "fix_after_review", (*string)(&settings.FixAfterReview)); err != nil {
 		return err
 	}
 	if err := mergeRawInt(raw, "summary_timeout_seconds", &settings.SummaryTimeoutSeconds); err != nil {

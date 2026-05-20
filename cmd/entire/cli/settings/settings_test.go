@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1197,5 +1198,48 @@ func TestReviewConfig_IsZero(t *testing.T) {
 				t.Errorf("IsZero() = %v, want %v (cfg=%+v)", got, tc.want, tc.cfg)
 			}
 		})
+	}
+}
+
+func TestRole_Valid(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   Role
+		want bool
+	}{
+		{RoleReviewer, true},
+		{RoleFixer, true},
+		{RoleBoth, true},
+		{RoleSkip, true},
+		{Role(""), true}, // empty = legacy; normalization upgrades to Reviewer
+		{Role("bogus"), false},
+	}
+	for _, c := range cases {
+		if got := c.in.Valid(); got != c.want {
+			t.Errorf("Role(%q).Valid() = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestEntireSettings_RoundtripWithRoles(t *testing.T) {
+	t.Parallel()
+	in := EntireSettings{
+		Enabled: true,
+		Review: map[string]ReviewConfig{
+			"claude-code": {Role: RoleReviewer, Skills: []string{"/review"}},
+			"codex":       {Role: RoleFixer},
+		},
+		FixAfterReview: FixAfterReviewAlways,
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out EntireSettings
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(in, out) {
+		t.Errorf("roundtrip mismatch:\n in = %+v\n out = %+v", in, out)
 	}
 }
