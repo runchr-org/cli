@@ -653,18 +653,26 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 	loadPW := newExplainProgressWriter(errW)
 	loadPrefix := fmt.Sprintf("Loading checkpoint %s", fullCheckpointID)
 	loadStart := time.Now()
+	loadFinished := false
+	finishLoad := func(ok bool, detail string) {
+		if loadFinished {
+			return
+		}
+		loadPW.FinishPhase(loadPrefix, ok, detail)
+		loadFinished = true
+	}
 	updateSub := func(label string) {
 		loadPW.UpdateSublabel(loadPrefix, label)
 	}
 
 	resolvedReader, summary, content, err := loadCheckpointForExplain(ctx, errW, lookup, fullCheckpointID, full, generate, rawTranscript, updateSub)
 	if err != nil {
-		loadPW.FinishPhase(loadPrefix, false, firstStderrLine(err))
+		finishLoad(false, firstStderrLine(err))
 		return err
 	}
 	// Handle summary generation — uses raw transcript.
 	if generate {
-		loadPW.FinishPhase(loadPrefix, true, formatPhaseDuration(time.Since(loadStart)))
+		finishLoad(true, formatPhaseDuration(time.Since(loadStart)))
 		if err := generateCheckpointSummary(ctx, w, errW, lookup.store, fullCheckpointID, summary, content, force, summaryTimeoutSeconds); err != nil {
 			return err
 		}
@@ -682,13 +690,10 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 		loadPW.FinishPhase(reloadPrefix, true, formatPhaseDuration(time.Since(reloadStart)))
 	}
 
-	// Handle raw transcript output. Skip the loadPrefix finish when generate
-	// already finished it above — defensive against any future flag config
-	// where the two paths aren't mutually exclusive.
+	// Handle raw transcript output. finishLoad is a no-op if generate already
+	// finished loadPrefix above.
 	if rawTranscript {
-		if !generate {
-			loadPW.FinishPhase(loadPrefix, true, formatPhaseDuration(time.Since(loadStart)))
-		}
+		finishLoad(true, formatPhaseDuration(time.Since(loadStart)))
 		if len(content.Transcript) == 0 {
 			return fmt.Errorf("checkpoint %s has no transcript", fullCheckpointID)
 		}
@@ -700,7 +705,7 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 	}
 
 	// Find associated commits (git commits with matching Entire-Checkpoint trailer)
-	if !generate {
+	if !loadFinished {
 		updateSub("associated commits")
 	}
 	associatedCommits, _ := getAssociatedCommits(ctx, lookup.repo, fullCheckpointID, searchAll) //nolint:errcheck // Best-effort
@@ -720,9 +725,7 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 
 	// Format and output. Finish the phase BEFORE any write to w so stderr
 	// progress and stdout content don't interleave.
-	if !generate {
-		loadPW.FinishPhase(loadPrefix, true, formatPhaseDuration(time.Since(loadStart)))
-	}
+	finishLoad(true, formatPhaseDuration(time.Since(loadStart)))
 	output := formatCheckpointOutput(summary, content, fullCheckpointID, associatedCommits, author, verbose, full, w)
 	outputExplainContent(w, output, noPager)
 	return nil
