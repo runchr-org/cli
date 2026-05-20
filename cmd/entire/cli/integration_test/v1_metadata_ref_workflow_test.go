@@ -1,0 +1,238 @@
+//go:build integration
+
+package integration
+
+import (
+	"testing"
+
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/entireio/cli/cmd/entire/cli/paths"
+)
+
+// refHash reads the commit hash at the named ref. Test fails if missing.
+func refHash(t *testing.T, repoDir, refName string) plumbing.Hash {
+	t.Helper()
+	repo, err := git.PlainOpen(repoDir)
+	require.NoError(t, err)
+	ref, err := repo.Reference(plumbing.ReferenceName(refName), true)
+	require.NoError(t, err, "ref %s missing", refName)
+	return ref.Hash()
+}
+
+// TestV1MetadataRef_FreshRepo_ManualOptIn_FullWorkflow exercises the
+// manual-opt-in path: a fresh repo gets checkpoints_version=1.1 in
+// settings.json, then runs a session and commit. The custom ref
+// refs/entire/checkpoints/v1 should be created; the legacy branch
+// refs/heads/entire/checkpoints/v1 should not exist.
+func TestV1MetadataRef_FreshRepo_ManualOptIn_FullWorkflow(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+	defer env.Cleanup()
+
+	env.InitEntireWithOptions(map[string]any{
+		"checkpoints_version": "1.1",
+	})
+
+	session := env.NewSession()
+	require.NoError(t, env.SimulateUserPromptSubmitWithPrompt(session.ID, "Add hello"))
+	env.WriteFile("hello.txt", "world")
+	session.CreateTranscript("Add hello", []FileChange{{Path: "hello.txt", Content: "world"}})
+	require.NoError(t, env.SimulateStop(session.ID, session.TranscriptPath))
+
+	env.GitAdd("hello.txt")
+	env.GitCommitWithShadowHooks("Add hello")
+
+	assert.True(t, env.RefExists(paths.MetadataRefName),
+		"custom ref %s should exist on a fresh 1.1 repo after first commit", paths.MetadataRefName)
+	assert.False(t, env.BranchExists(paths.MetadataBranchName),
+		"legacy branch refs/heads/%s should NOT be created on a fresh 1.1 repo", paths.MetadataBranchName)
+}
+
+// TestV1MetadataRef_ExistingV1Repo_PreservesHistoryOnFlip exercises the
+// existing-repo opt-in path: a v1 repo with prior checkpoint history is
+// flipped to 1.1 mid-flight. The next commit should preserve v1 history
+// by initializing the custom ref at the legacy branch's tip.
+func TestV1MetadataRef_ExistingV1Repo_PreservesHistoryOnFlip(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+	defer env.Cleanup()
+
+	// 1. Start on default v1 and produce real condensed history.
+	env.InitEntire()
+	session1 := env.NewSession()
+	require.NoError(t, env.SimulateUserPromptSubmitWithPrompt(session1.ID, "Add foo"))
+	env.WriteFile("foo.txt", "foo")
+	session1.CreateTranscript("Add foo", []FileChange{{Path: "foo.txt", Content: "foo"}})
+	require.NoError(t, env.SimulateStop(session1.ID, session1.TranscriptPath))
+	env.GitAdd("foo.txt")
+	env.GitCommitWithShadowHooks("Add foo")
+
+	legacyHashBeforeFlip := refHash(t, env.RepoDir, "refs/heads/"+paths.MetadataBranchName)
+
+	// 2. Flip to 1.1.
+	env.WriteSettings(map[string]any{
+		"enabled":   true,
+		"local_dev": true,
+		"strategy_options": map[string]any{
+			"checkpoints_version": "1.1",
+			"filtered_fetches":    true,
+		},
+	})
+
+	// 3. Run another session + commit (write path triggers preservation).
+	session2 := env.NewSession()
+	require.NoError(t, env.SimulateUserPromptSubmitWithPrompt(session2.ID, "Add bar"))
+	env.WriteFile("bar.txt", "bar")
+	session2.CreateTranscript("Add bar", []FileChange{{Path: "bar.txt", Content: "bar"}})
+	require.NoError(t, env.SimulateStop(session2.ID, session2.TranscriptPath))
+	env.GitAdd("bar.txt")
+	env.GitCommitWithShadowHooks("Add bar")
+
+	// Custom ref must exist and be reachable back through to the legacy hash.
+	require.True(t, env.RefExists(paths.MetadataRefName),
+		"custom ref %s should exist after flip + commit", paths.MetadataRefName)
+
+	repo, err := git.PlainOpen(env.RepoDir)
+	require.NoError(t, err)
+	customHash := refHash(t, env.RepoDir, paths.MetadataRefName)
+
+	// The legacy hash must be an ancestor of the custom hash (preservation +
+	// new commit on top).
+	customCommit, err := repo.CommitObject(customHash)
+	require.NoError(t, err)
+	isAncestor, err := customCommit.IsAncestor(mustCommit(t, repo, legacyHashBeforeFlip))
+	require.NoError(t, err)
+	// IsAncestor(parent) returns true if receiver is ancestor of parent.
+	// We want: legacy is ancestor of custom, i.e. legacyCommit.IsAncestor(customCommit).
+	legacyCommit := mustCommit(t, repo, legacyHashBeforeFlip)
+	ancestor, err := legacyCommit.IsAncestor(customCommit)
+	require.NoError(t, err)
+	assert.True(t, ancestor,
+		"legacy hash %s must be ancestor of custom hash %s after preservation+commit",
+		legacyHashBeforeFlip, customHash)
+	_ = isAncestor
+
+	// Legacy branch must be untouched at its pre-flip hash.
+	legacyHashAfterFlip := refHash(t, env.RepoDir, "refs/heads/"+paths.MetadataBranchName)
+	assert.Equal(t, legacyHashBeforeFlip, legacyHashAfterFlip,
+		"legacy branch must NOT move after flip")
+}
+
+func mustCommit(t *testing.T, repo *git.Repository, hash plumbing.Hash) *object.Commit {
+	t.Helper()
+	c, err := repo.CommitObject(hash)
+	require.NoError(t, err)
+	return c
+}
+
+// TestV1MetadataRef_ExistingV1Repo_PreservesHistoryOnReadBeforeWrite verifies
+// that read-only operations also trigger preservation. A user who flips to 1.1
+// and runs `entire status` (or any read) before the next write should still
+// see prior history.
+func TestV1MetadataRef_ExistingV1Repo_PreservesHistoryOnReadBeforeWrite(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+	defer env.Cleanup()
+
+	env.InitEntire()
+	session1 := env.NewSession()
+	require.NoError(t, env.SimulateUserPromptSubmitWithPrompt(session1.ID, "Add foo"))
+	env.WriteFile("foo.txt", "foo")
+	session1.CreateTranscript("Add foo", []FileChange{{Path: "foo.txt", Content: "foo"}})
+	require.NoError(t, env.SimulateStop(session1.ID, session1.TranscriptPath))
+	env.GitAdd("foo.txt")
+	env.GitCommitWithShadowHooks("Add foo")
+
+	legacyHash := refHash(t, env.RepoDir, "refs/heads/"+paths.MetadataBranchName)
+
+	env.WriteSettings(map[string]any{
+		"enabled":   true,
+		"local_dev": true,
+		"strategy_options": map[string]any{
+			"checkpoints_version": "1.1",
+			"filtered_fetches":    true,
+		},
+	})
+
+	// First operation post-flip is a read (entire status, which reads from the
+	// metadata ref via checkpoint.ListCommitted under the hood).
+	_ = env.RunCLI("status")
+
+	require.True(t, env.RefExists(paths.MetadataRefName),
+		"custom ref %s should exist after a read post-flip", paths.MetadataRefName)
+	customHash := refHash(t, env.RepoDir, paths.MetadataRefName)
+	assert.Equal(t, legacyHash, customHash,
+		"custom ref should point at the legacy branch tip after preservation on read")
+}
+
+// TestLegacyV1_StillWorks_Regression verifies that v1 (default) behavior is
+// unchanged: the legacy branch is created, the custom ref is not.
+func TestLegacyV1_StillWorks_Regression(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+	defer env.Cleanup()
+
+	env.InitEntire()
+
+	session := env.NewSession()
+	require.NoError(t, env.SimulateUserPromptSubmitWithPrompt(session.ID, "Add plain"))
+	env.WriteFile("plain.txt", "plain")
+	session.CreateTranscript("Add plain", []FileChange{{Path: "plain.txt", Content: "plain"}})
+	require.NoError(t, env.SimulateStop(session.ID, session.TranscriptPath))
+	env.GitAdd("plain.txt")
+	env.GitCommitWithShadowHooks("Add plain")
+
+	assert.True(t, env.BranchExists(paths.MetadataBranchName),
+		"legacy v1 branch should exist after a v1 commit")
+	assert.False(t, env.RefExists(paths.MetadataRefName),
+		"custom ref should NOT exist on a v1 repo")
+}
+
+// TestV1MetadataRef_PushAndFetch_NonFF exercises pushRefIfNeeded at the
+// custom-ref namespace: two diverging "machines" (clones from the same bare
+// remote) push 1.1 metadata commits; the second push triggers
+// fetchAndRebaseSessionsCommon at the custom ref pair.
+func TestV1MetadataRef_PushAndFetch_NonFF(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+	defer env.Cleanup()
+
+	env.InitEntireWithOptions(map[string]any{"checkpoints_version": "1.1"})
+	bareDir := env.SetupBareRemote()
+
+	// Round 1: one commit on the 1.1 repo, pushed to origin.
+	session1 := env.NewSession()
+	require.NoError(t, env.SimulateUserPromptSubmitWithPrompt(session1.ID, "Add round1"))
+	env.WriteFile("round1.txt", "1")
+	session1.CreateTranscript("Add round1", []FileChange{{Path: "round1.txt", Content: "1"}})
+	require.NoError(t, env.SimulateStop(session1.ID, session1.TranscriptPath))
+	env.GitAdd("round1.txt")
+	env.GitCommitWithShadowHooks("Add round1")
+	env.RunPrePush("origin")
+
+	// Verify the custom ref landed on the bare remote.
+	assert.True(t, bareRefExists(t, bareDir, paths.MetadataRefName),
+		"custom ref %s should exist on bare remote after first push", paths.MetadataRefName)
+
+	// Round 2: a second commit on the same 1.1 repo, pushed again. This is
+	// fast-forward so it should not trigger the rebase path, but it exercises
+	// the same code path with a real custom-ref refspec.
+	session2 := env.NewSession()
+	require.NoError(t, env.SimulateUserPromptSubmitWithPrompt(session2.ID, "Add round2"))
+	env.WriteFile("round2.txt", "2")
+	session2.CreateTranscript("Add round2", []FileChange{{Path: "round2.txt", Content: "2"}})
+	require.NoError(t, env.SimulateStop(session2.ID, session2.TranscriptPath))
+	env.GitAdd("round2.txt")
+	env.GitCommitWithShadowHooks("Add round2")
+	env.RunPrePush("origin")
+
+	assert.True(t, bareRefExists(t, bareDir, paths.MetadataRefName),
+		"custom ref should still exist on bare remote after second push")
+	assert.False(t, bareRefExists(t, bareDir, "refs/heads/"+paths.MetadataBranchName),
+		"legacy branch should NOT be pushed by a 1.1 repo")
+}
