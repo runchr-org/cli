@@ -197,7 +197,7 @@ func matchCheckpointPrefixWithRemoteFallback(ctx context.Context, errW io.Writer
 	stop := startSpinner(errW, "Fetching checkpoint metadata from remote")
 	_, _, v1Err := getMetadataTree(ctx)
 	v2OK := false
-	if settings.IsCheckpointsV2Enabled(ctx) {
+	if shouldFetchV2Metadata(ctx, lookup) {
 		if _, _, v2Err := getV2MetadataTree(ctx); v2Err == nil {
 			v2OK = true
 		}
@@ -211,6 +211,21 @@ func matchCheckpointPrefixWithRemoteFallback(ctx context.Context, errW io.Writer
 		return nil, lookup
 	}
 	return matchCheckpointPrefix(fresh, prefix), fresh
+}
+
+func shouldFetchV2Metadata(ctx context.Context, lookup *explainCheckpointLookup) bool {
+	if settings.IsCheckpointsV2Enabled(ctx) {
+		return true
+	}
+	if lookup == nil {
+		return false
+	}
+	switch lookup.store.(type) {
+	case *checkpoint.V2GitStore, *checkpoint.DualCheckpointReader:
+		return true
+	default:
+		return false
+	}
 }
 
 func matchCheckpointPrefix(lookup *explainCheckpointLookup, prefix string) []id.CheckpointID {

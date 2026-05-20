@@ -65,7 +65,6 @@ func (s *ManualCommitStrategy) getCheckpointStore() (*checkpoint.GitStore, error
 	return s.checkpointStore, s.checkpointStoreErr
 }
 
-//nolint:ireturn // Strategy callers need the selected v1, v2, or dual store implementation.
 func (s *ManualCommitStrategy) committedCheckpointStore(ctx context.Context) (checkpoint.CommittedListReader, error) {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
