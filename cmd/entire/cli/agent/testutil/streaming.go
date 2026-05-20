@@ -11,8 +11,10 @@ import (
 
 // FakeStreamCmd returns a CommandRunner factory whose *exec.Cmd, when
 // Start()'d and Wait()'d, produces stdout/stderr/exit-code as configured.
-// Implementation uses `sh -c` to write fixture data; on Windows runners
-// we would need PowerShell, but the project's CI is Linux/macOS only.
+// Implementation assumes a POSIX shell (`sh -c`) to write fixture data;
+// it is not usable from a Windows runner. The streaming agents these
+// helpers test are not currently exercised by the Windows E2E workflow
+// (e2e-windows.yml), so a POSIX-only fake is sufficient.
 func FakeStreamCmd(stdout, stderr string, exitCode int) func(ctx context.Context, name string, args ...string) *exec.Cmd {
 	return func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 		script := BuildFakeShellScript(stdout, stderr, exitCode)
