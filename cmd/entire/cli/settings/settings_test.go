@@ -856,6 +856,46 @@ func TestCheckpointsVersion(t *testing.T) {
 	}
 }
 
+func TestEntireSettings_UsesCustomMetadataRef(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		opts map[string]any
+		want bool
+	}{
+		{"nil opts", nil, false},
+		{"missing key", map[string]any{}, false},
+		{"float 1.1", map[string]any{"checkpoints_version": 1.1}, true},
+		{"string 1.1", map[string]any{"checkpoints_version": "1.1"}, true},
+		{"int 1", map[string]any{"checkpoints_version": 1}, false},
+		{"int 2", map[string]any{"checkpoints_version": 2}, false},
+		{"float 1.5", map[string]any{"checkpoints_version": 1.5}, false},
+		{"junk string", map[string]any{"checkpoints_version": "junk"}, false},
+		{"bool", map[string]any{"checkpoints_version": true}, false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := &EntireSettings{StrategyOptions: tc.opts}
+			if got := s.UsesCustomMetadataRef(); got != tc.want {
+				t.Fatalf("UsesCustomMetadataRef() = %v; want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEntireSettings_OneDotOneMajorVersionStillOne(t *testing.T) {
+	t.Parallel()
+	s := &EntireSettings{StrategyOptions: map[string]any{"checkpoints_version": 1.1}}
+	if got := s.CheckpointsVersion(); got != 1 {
+		t.Fatalf("CheckpointsVersion() = %d; want 1", got)
+	}
+	if got := s.IsCheckpointsV2Enabled(); got {
+		t.Fatalf("IsCheckpointsV2Enabled() = true; want false (1.1 is a v1 sub-mode)")
+	}
+}
+
 func TestParseCheckpointsVersion_OneDotOne(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

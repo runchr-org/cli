@@ -1070,6 +1070,36 @@ func (s *EntireSettings) IsCheckpointsV2Enabled() bool {
 	return ok && val
 }
 
+// UsesCustomMetadataRef reports whether checkpoints metadata is stored at the
+// custom ref (refs/entire/checkpoints/v1) rather than the legacy branch
+// (refs/heads/entire/checkpoints/v1). True iff checkpoints_version is 1.1.
+func (s *EntireSettings) UsesCustomMetadataRef() bool {
+	if s == nil || s.StrategyOptions == nil {
+		return false
+	}
+	val, ok := s.StrategyOptions["checkpoints_version"]
+	if !ok {
+		return false
+	}
+	switch v := val.(type) {
+	case float64:
+		return v == 1.1
+	case string:
+		return v == "1.1"
+	}
+	return false
+}
+
+// UsesCustomMetadataRef is the package-level convenience wrapper. Returns
+// false when settings cannot be loaded.
+func UsesCustomMetadataRef(ctx context.Context) bool {
+	s, err := Load(ctx)
+	if err != nil {
+		return false
+	}
+	return s.UsesCustomMetadataRef()
+}
+
 // CheckpointsVersion returns the configured checkpoints format version from
 // strategy_options.checkpoints_version. Returns 1 when unset, invalid, or
 // unsupported. The currently supported versions are 1 and 2.
