@@ -102,7 +102,7 @@ func ListSessions(ctx context.Context) ([]Session, error) {
 				})
 			} else {
 				// Get description from the checkpoint tree
-				description := getDescriptionForCheckpoint(repo, cp.CheckpointID)
+				description := getDescriptionForCheckpoint(ctx, repo, cp.CheckpointID)
 
 				sessionMap[sessionID] = &Session{
 					ID:          sessionID,
@@ -184,8 +184,8 @@ func GetSession(ctx context.Context, sessionID string) (*Session, error) {
 
 // getDescriptionForCheckpoint reads the description for a checkpoint from committed checkpoint storage.
 // It reads from the latest session subdirectory in the new storage format.
-func getDescriptionForCheckpoint(repo *git.Repository, checkpointID id.CheckpointID) string {
-	tree, err := GetMetadataBranchTree(repo)
+func getDescriptionForCheckpoint(ctx context.Context, repo *git.Repository, checkpointID id.CheckpointID) string {
+	tree, err := GetMetadataBranchTree(ctx, repo)
 	if err == nil {
 		description, readErr := readDescriptionForCheckpointFromTree(tree, checkpointID)
 		if readErr == nil {

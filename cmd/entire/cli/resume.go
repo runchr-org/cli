@@ -327,7 +327,7 @@ func readCheckpointInfoFromLocalTrees(ctx context.Context, repo *git.Repository,
 		slog.String("error", err.Error()),
 	)
 
-	v1Tree, err := strategy.GetMetadataBranchTree(repo)
+	v1Tree, err := strategy.GetMetadataBranchTree(ctx, repo)
 	if err == nil {
 		info, infoErr := readCheckpointInfoFromLocalTree(ctx, repo, checkpointID, "v1", v1Tree)
 		if infoErr == nil {
@@ -439,7 +439,7 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 		freshRepo, freshErr := openRepository(ctx)
 		if freshErr == nil {
 			logRefHash(freshRepo, "checkpoint-remote")
-			metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo)
+			metadataTree, treeErr := strategy.GetMetadataBranchTree(ctx, freshRepo)
 			if treeErr == nil {
 				logging.Debug(logCtx, "metadata tree obtained via checkpoint remote fetch",
 					slog.String("tree_hash", metadataTree.Hash.String()),
@@ -461,7 +461,7 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 		freshRepo, repoErr := openRepository(ctx)
 		if repoErr == nil {
 			logRefHash(freshRepo, "treeless-fetch")
-			metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo)
+			metadataTree, treeErr := strategy.GetMetadataBranchTree(ctx, freshRepo)
 			if treeErr == nil {
 				logging.Debug(logCtx, "metadata tree obtained via treeless fetch",
 					slog.String("tree_hash", metadataTree.Hash.String()),
@@ -482,7 +482,7 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 	localRepo, repoErr := openRepository(ctx)
 	if repoErr == nil {
 		logRefHash(localRepo, "local")
-		metadataTree, err := strategy.GetMetadataBranchTree(localRepo)
+		metadataTree, err := strategy.GetMetadataBranchTree(ctx, localRepo)
 		if err == nil {
 			logging.Debug(logCtx, "metadata tree obtained from local branch",
 				slog.String("tree_hash", metadataTree.Hash.String()),
@@ -499,7 +499,7 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 		freshRepo, repoErr := openRepository(ctx)
 		if repoErr == nil {
 			logRefHash(freshRepo, "full-fetch")
-			metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo)
+			metadataTree, treeErr := strategy.GetMetadataBranchTree(ctx, freshRepo)
 			if treeErr == nil {
 				logging.Debug(logCtx, "metadata tree obtained via full fetch",
 					slog.String("tree_hash", metadataTree.Hash.String()),
@@ -522,7 +522,7 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 		return nil, nil, fmt.Errorf("failed to open repository: %w", repoErr)
 	}
 	logRefHash(remoteRepo, "remote-tracking")
-	remoteTree, remoteErr := strategy.GetRemoteMetadataBranchTree(remoteRepo)
+	remoteTree, remoteErr := strategy.GetRemoteMetadataBranchTree(ctx, remoteRepo)
 	if remoteErr == nil {
 		logging.Debug(logCtx, "metadata tree obtained from remote-tracking branch")
 		return remoteTree, remoteRepo, nil
@@ -769,7 +769,7 @@ func checkRemoteMetadata(ctx context.Context, w, errW io.Writer, checkpointID id
 					logging.Debug(logCtx, "checkpoint remote: open repository failed after fetch",
 						slog.String("error", freshErr.Error()),
 					)
-				} else if metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo); treeErr != nil {
+				} else if metadataTree, treeErr := strategy.GetMetadataBranchTree(ctx, freshRepo); treeErr != nil {
 					logging.Debug(logCtx, "checkpoint remote: fetch succeeded but tree read failed",
 						slog.String("error", treeErr.Error()),
 					)
@@ -790,7 +790,7 @@ func checkRemoteMetadata(ctx context.Context, w, errW io.Writer, checkpointID id
 	}
 
 	// Fall back to origin's remote-tracking branch
-	if remoteTree, treeErr := strategy.GetRemoteMetadataBranchTree(repo); treeErr == nil {
+	if remoteTree, treeErr := strategy.GetRemoteMetadataBranchTree(ctx, repo); treeErr == nil {
 		metadata, err := tryReadCheckpointFromTree(ctx, remoteTree, repo, checkpointID)
 		if err == nil {
 			return resumeSession(ctx, w, errW, metadata, false)
@@ -811,7 +811,7 @@ func checkRemoteMetadata(ctx context.Context, w, errW io.Writer, checkpointID id
 			logging.Debug(logCtx, "origin metadata fetch succeeded but repository reopen failed",
 				slog.String("error", freshErr.Error()),
 			)
-		} else if metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo); treeErr != nil {
+		} else if metadataTree, treeErr := strategy.GetMetadataBranchTree(ctx, freshRepo); treeErr != nil {
 			logging.Debug(logCtx, "origin metadata fetch succeeded but local branch read failed",
 				slog.String("error", treeErr.Error()),
 			)

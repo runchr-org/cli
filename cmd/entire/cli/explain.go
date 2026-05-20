@@ -738,7 +738,9 @@ func loadCheckpointForExplain(ctx context.Context, errW io.Writer, lookup *expla
 // inside this function so the caller's spinner provides continuous
 // feedback.
 func prefetchCheckpointBlobs(ctx context.Context, _ io.Writer, repo *git.Repository, cpID id.CheckpointID) {
-	v1FT := buildCheckpointFetchingTree(ctx, repo, cpID, "v1", loadV1MetadataRootTree)
+	v1FT := buildCheckpointFetchingTree(ctx, repo, cpID, "v1", func(r *git.Repository) (*object.Tree, error) {
+		return loadV1MetadataRootTree(ctx, r)
+	})
 	v2FT := buildCheckpointFetchingTree(ctx, repo, cpID, "v2", loadV2MainRootTree)
 
 	missingCount := 0
@@ -802,11 +804,11 @@ func runPreFetch(ctx context.Context, ft *checkpoint.FetchingTree, cpID id.Check
 	}
 }
 
-func loadV1MetadataRootTree(repo *git.Repository) (*object.Tree, error) {
-	if tree, err := strategy.GetMetadataBranchTree(repo); err == nil {
+func loadV1MetadataRootTree(ctx context.Context, repo *git.Repository) (*object.Tree, error) {
+	if tree, err := strategy.GetMetadataBranchTree(ctx, repo); err == nil {
 		return tree, nil
 	}
-	tree, err := strategy.GetRemoteMetadataBranchTree(repo)
+	tree, err := strategy.GetRemoteMetadataBranchTree(ctx, repo)
 	if err != nil {
 		return nil, fmt.Errorf("read v1 metadata tree (local + remote-tracking): %w", err)
 	}

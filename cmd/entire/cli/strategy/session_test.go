@@ -314,7 +314,7 @@ func TestGetDescriptionForCheckpointFallsForwardToV2WhenV1MissesCheckpoint(t *te
 		t.Fatalf("WriteCommitted() error = %v", err)
 	}
 
-	if got := getDescriptionForCheckpoint(repo, targetCheckpointID); got != expectedDesc {
+	if got := getDescriptionForCheckpoint(context.Background(), repo, targetCheckpointID); got != expectedDesc {
 		t.Errorf("getDescriptionForCheckpoint() = %q, want %q", got, expectedDesc)
 	}
 }

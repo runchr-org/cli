@@ -660,9 +660,11 @@ func decodeCheckpointInfo(
 	return &metadata, nil
 }
 
-// GetMetadataBranchTree returns the tree object for the entire/checkpoints/v1 branch.
-func GetMetadataBranchTree(repo *git.Repository) (*object.Tree, error) {
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+// GetMetadataBranchTree returns the tree object for the v1 metadata ref.
+// Resolves to the legacy branch ref or the 1.1 custom ref via
+// checkpoint.MetadataRef.
+func GetMetadataBranchTree(ctx context.Context, repo *git.Repository) (*object.Tree, error) {
+	refName := checkpoint.MetadataRef(ctx)
 	ref, err := repo.Reference(refName, true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get metadata branch reference: %w", err)
@@ -890,9 +892,10 @@ func ReadAllSessionPromptsFromTree(tree *object.Tree, checkpointPath string, ses
 	return prompts
 }
 
-// GetRemoteMetadataBranchTree returns the tree object for origin/entire/checkpoints/v1.
-func GetRemoteMetadataBranchTree(repo *git.Repository) (*object.Tree, error) {
-	refName := plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
+// GetRemoteMetadataBranchTree returns the tree object for the v1 metadata
+// tracking ref (the remote-tracking counterpart of MetadataRef).
+func GetRemoteMetadataBranchTree(ctx context.Context, repo *git.Repository) (*object.Tree, error) {
+	refName := checkpoint.MetadataTrackingRef(ctx)
 	ref, err := repo.Reference(refName, true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get remote metadata branch reference: %w", err)
