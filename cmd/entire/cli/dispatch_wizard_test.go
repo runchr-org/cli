@@ -382,6 +382,51 @@ func TestRunDispatchWizard_ProceedsWhenCurrentBranchCannotBeResolved(t *testing.
 	}
 }
 
+func TestRunDispatchWizard_AbortsWithLoginHintOnExpiredToken(t *testing.T) {
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+
+	oldListRepos := listDispatchWizardRepos
+	listDispatchWizardRepos = func(context.Context) ([]string, error) {
+		return nil, &api.HTTPError{StatusCode: 401, Message: "Token expired"}
+	}
+	t.Cleanup(func() {
+		listDispatchWizardRepos = oldListRepos
+	})
+
+	oldRunForm := runDispatchWizardForm
+	formCalled := false
+	runDispatchWizardForm = func(*huh.Form) error {
+		formCalled = true
+		return nil
+	}
+	t.Cleanup(func() {
+		runDispatchWizardForm = oldRunForm
+	})
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var stderr strings.Builder
+	cmd.SetErr(&stderr)
+	cmd.SetOut(&strings.Builder{})
+
+	_, err := runDispatchWizard(cmd)
+	if err == nil {
+		t.Fatal("expected error on expired token")
+	}
+	var silent *SilentError
+	if !errors.As(err, &silent) {
+		t.Fatalf("expected SilentError so main.go does not double-print, got %T", err)
+	}
+	if formCalled {
+		t.Fatal("form should not run when token is expired")
+	}
+	if !strings.Contains(stderr.String(), "entire login") {
+		t.Fatalf("expected stderr hint to mention 'entire login', got %q", stderr.String())
+	}
+}
+
 func TestDispatchWizardState_CloudIgnoresCurrentBranchResolutionError(t *testing.T) {
 	t.Parallel()
 

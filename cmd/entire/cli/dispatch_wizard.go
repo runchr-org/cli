@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -246,6 +247,11 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 	// (the form computes group height before the async load resolves), so the
 	// row prefixes scrolled out of sync with the option text.
 	slugs, listErr := listDispatchWizardRepos(ctx)
+	if api.IsHTTPErrorStatus(listErr, http.StatusUnauthorized) {
+		cmd.SilenceUsage = true
+		fmt.Fprintln(cmd.ErrOrStderr(), "Your auth token has expired — run 'entire login' to refresh.")
+		return dispatchpkg.Options{}, NewSilentError(listErr)
+	}
 	if listErr != nil || len(slugs) == 0 {
 		slugs = discoverLocalRepoSlugs(ctx, currentRepo)
 	}
@@ -493,7 +499,10 @@ func resolveGitTopLevel(ctx context.Context, path string) (string, error) {
 func discoverAuthenticatedDispatchWizardRepos(ctx context.Context) ([]string, error) {
 	repos, err := listDispatchWizardRepoResources(ctx)
 	if err != nil {
-		logging.Warn(ctx, "dispatch wizard repo list failed", "error", err)
+		// Debug-level: the wizard falls back to local discovery, and 401s are
+		// surfaced explicitly by the caller. Routing this to Warn caused noise
+		// on stderr because the dispatch command does not call logging.Init.
+		logging.Debug(ctx, "dispatch wizard repo list failed", "error", err)
 		return nil, err
 	}
 
