@@ -73,7 +73,7 @@ func EnsureSetup(ctx context.Context) error {
 	if err := vercelconfig.InitSettings(ctx); err != nil {
 		return fmt.Errorf("failed to initialize vercel settings: %w", err)
 	}
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(ctx, repo); err != nil {
 		return fmt.Errorf("failed to ensure metadata branch: %w", err)
 	}
 
@@ -343,41 +343,50 @@ func resolveAgentType(ctxAgentType types.AgentType, state *SessionState) types.A
 	return ctxAgentType
 }
 
-// EnsureMetadataBranch creates or updates the local entire/checkpoints/v1 branch.
-// If the remote-tracking branch (origin/entire/checkpoints/v1) exists and the local
-// branch is missing or empty, creates/updates the local branch from it.
+// EnsureMetadataBranch creates or updates the local metadata ref.
+// On legacy v1 repos this is the branch refs/heads/entire/checkpoints/v1;
+// on 1.1 repos it is the custom ref refs/entire/checkpoints/v1, resolved
+// via checkpoint.MetadataRef. If the remote-tracking ref exists and the
+// local ref is missing or empty, creates/updates the local ref from it.
 // Otherwise creates an empty orphan.
-func EnsureMetadataBranch(repo *git.Repository) error {
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+//
+// On 1.1 repos this also preserves v1 history first, so prior checkpoints
+// on the legacy branch remain reachable from the custom ref.
+func EnsureMetadataBranch(ctx context.Context, repo *git.Repository) error {
+	if err := checkpoint.PreserveV1History(ctx, repo); err != nil {
+		return fmt.Errorf("preserve v1 history: %w", err)
+	}
+	refName := checkpoint.MetadataRef(ctx)
+	refDisplay := strings.TrimPrefix(string(refName), "refs/heads/")
 
-	// Check if remote-tracking branch exists (e.g., after clone/fetch)
-	remoteRefName := plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
+	// Check if remote-tracking ref exists (e.g., after clone/fetch)
+	remoteRefName := checkpoint.MetadataTrackingRef(ctx)
 	remoteRef, remoteErr := repo.Reference(remoteRefName, true)
 	if remoteErr != nil && !errors.Is(remoteErr, plumbing.ErrReferenceNotFound) {
-		return fmt.Errorf("failed to check remote metadata branch: %w", remoteErr)
+		return fmt.Errorf("failed to check remote metadata ref: %w", remoteErr)
 	}
 
-	// Check if local branch already exists
+	// Check if local ref already exists
 	localRef, err := repo.Reference(refName, true)
 	if err == nil {
 		if remoteErr == nil && localRef.Hash() != remoteRef.Hash() {
 			// Local and remote exist but differ — determine relationship
 			isEmpty, checkErr := isEmptyMetadataBranch(repo, localRef)
 			if checkErr != nil {
-				return fmt.Errorf("failed to check metadata branch contents: %w", checkErr)
+				return fmt.Errorf("failed to check metadata ref contents: %w", checkErr)
 			}
 			if isEmpty {
 				// Empty orphan — just point to remote
 				ref := plumbing.NewHashReference(refName, remoteRef.Hash())
 				if setErr := repo.Storer.SetReference(ref); setErr != nil {
-					return fmt.Errorf("failed to update metadata branch from remote: %w", setErr)
+					return fmt.Errorf("failed to update metadata ref from remote: %w", setErr)
 				}
-				fmt.Fprintf(os.Stderr, "[entire] Updated local branch '%s' from origin\n", paths.MetadataBranchName)
+				fmt.Fprintf(os.Stderr, "[entire] Updated local ref '%s' from origin\n", refDisplay)
 			} else {
 				// Local has real data and differs from remote — if disconnected
 				// (no common ancestor), reconciliation happens at pre-push time
 				// or via 'entire doctor'. Read paths warn but do not auto-fix.
-				logging.Debug(context.Background(), "metadata branch differs from remote, reconciliation deferred to read/write time",
+				logging.Debug(ctx, "metadata ref differs from remote, reconciliation deferred to read/write time",
 					"local_hash", localRef.Hash().String()[:7],
 					"remote_hash", remoteRef.Hash().String()[:7],
 				)
@@ -386,16 +395,16 @@ func EnsureMetadataBranch(repo *git.Repository) error {
 		return nil
 	}
 	if !errors.Is(err, plumbing.ErrReferenceNotFound) {
-		return fmt.Errorf("failed to check metadata branch: %w", err)
+		return fmt.Errorf("failed to check metadata ref: %w", err)
 	}
 
-	// Local branch doesn't exist — create from remote if available
+	// Local ref doesn't exist — create from remote if available
 	if remoteErr == nil {
 		ref := plumbing.NewHashReference(refName, remoteRef.Hash())
 		if err := repo.Storer.SetReference(ref); err != nil {
-			return fmt.Errorf("failed to create metadata branch from remote: %w", err)
+			return fmt.Errorf("failed to create metadata ref from remote: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "✓ Created local branch '%s' from origin\n", paths.MetadataBranchName)
+		fmt.Fprintf(os.Stderr, "✓ Created local ref '%s' from origin\n", refDisplay)
 		return nil
 	}
 

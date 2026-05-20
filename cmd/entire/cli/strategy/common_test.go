@@ -962,6 +962,36 @@ func initBareWithMetadataBranch(t *testing.T) string {
 	return bareDir
 }
 
+func TestEnsureMetadataBranch_CallsPreserveV1HistoryFirst(t *testing.T) {
+	// Not t.Parallel() — uses t.Chdir.
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	t.Chdir(dir)
+	testutil.WriteFile(t, dir, ".entire/settings.json", `{"strategy_options":{"checkpoints_version":"1.1"}}`)
+
+	repo, err := git.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("PlainOpen: %v", err)
+	}
+	legacy := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	legacyHash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(legacy, legacyHash)); err != nil {
+		t.Fatalf("seed legacy: %v", err)
+	}
+
+	if err := EnsureMetadataBranch(context.Background(), repo); err != nil {
+		t.Fatalf("EnsureMetadataBranch: %v", err)
+	}
+
+	customRef, err := repo.Reference(plumbing.ReferenceName(paths.MetadataRefName), false)
+	if err != nil {
+		t.Fatalf("custom ref missing: %v", err)
+	}
+	if customRef.Hash() != legacyHash {
+		t.Fatalf("custom ref hash = %s; want %s", customRef.Hash(), legacyHash)
+	}
+}
+
 func TestEnsureMetadataBranch(t *testing.T) {
 	t.Parallel()
 
@@ -978,7 +1008,7 @@ func TestEnsureMetadataBranch(t *testing.T) {
 			t.Fatalf("failed to open repo: %v", err)
 		}
 
-		if err := EnsureMetadataBranch(repo); err != nil {
+		if err := EnsureMetadataBranch(context.Background(), repo); err != nil {
 			t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 		}
 
@@ -1042,7 +1072,7 @@ func TestEnsureMetadataBranch(t *testing.T) {
 			t.Fatalf("failed to set ref: %v", err)
 		}
 
-		if err := EnsureMetadataBranch(repo); err != nil {
+		if err := EnsureMetadataBranch(context.Background(), repo); err != nil {
 			t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 		}
 
@@ -1064,7 +1094,7 @@ func TestEnsureMetadataBranch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to open repo: %v", err)
 		}
-		if err := EnsureMetadataBranch(repo); err != nil {
+		if err := EnsureMetadataBranch(context.Background(), repo); err != nil {
 			t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 		}
 
@@ -1108,7 +1138,7 @@ func TestEnsureMetadataBranch_WritesVercelConfigWhenEnabled(t *testing.T) {
 		t.Fatalf("InitSettings() failed: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(context.Background(), repo); err != nil {
 		t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 	}
 
@@ -1198,7 +1228,7 @@ func TestEnsureMetadataBranch_DisconnectedBranchesNotReconciledInEnable(t *testi
 		t.Fatalf("local branch not found: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(context.Background(), repo); err != nil {
 		t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 	}
 
@@ -1225,7 +1255,7 @@ func TestEnsureMetadataBranch_DoesNotFastForwardWhenBehind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open repo: %v", err)
 	}
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(context.Background(), repo); err != nil {
 		t.Fatalf("first EnsureMetadataBranch() failed: %v", err)
 	}
 
@@ -1265,7 +1295,7 @@ func TestEnsureMetadataBranch_DoesNotFastForwardWhenBehind(t *testing.T) {
 		t.Fatalf("failed to reopen repo: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(context.Background(), repo); err != nil {
 		t.Fatalf("second EnsureMetadataBranch() failed: %v", err)
 	}
 
