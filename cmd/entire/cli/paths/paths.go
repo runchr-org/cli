@@ -42,6 +42,16 @@ const (
 // MetadataBranchName is the orphan branch used by manual-commit strategy to store metadata
 const MetadataBranchName = "entire/checkpoints/v1"
 
+// MetadataRefName is the custom ref used when checkpoints_version is "1.1".
+// Lives under refs/entire/ for the same reasons V2*RefName does: invisible
+// in GitHub's branch UI and not fetched by default by `git clone`.
+const MetadataRefName = "refs/entire/checkpoints/v1"
+
+// MetadataTrackingRefName is the local tracking ref for MetadataRefName.
+// Distinct from MetadataRefName so that fetches don't clobber local writes
+// (mirroring how refs/heads/* and refs/remotes/origin/* are distinct).
+const MetadataTrackingRefName = "refs/entire/remotes/origin/checkpoints/v1"
+
 // V2 ref names use custom refs under refs/entire/ (not refs/heads/).
 // These are invisible in GitHub's branch UI and not fetched by default.
 const (
