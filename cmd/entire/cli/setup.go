@@ -13,6 +13,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/gitremote"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -1128,13 +1129,13 @@ func runEnable(ctx context.Context, w io.Writer, useProjectSettings bool) error 
 // remote-tracking ref. Idempotent. No-op when origin is absent or the
 // refspec is already present.
 func installMetadataRefspec(ctx context.Context) error {
-	if err := exec.CommandContext(ctx, "git", "remote", "get-url", "origin").Run(); err != nil {
+	if _, err := gitremote.GetRemoteURL(ctx, "origin"); err != nil {
 		return nil //nolint:nilerr // no origin configured is not an error for this idempotent helper
 	}
 	refspec := "+" + paths.MetadataRefName + ":" + paths.MetadataTrackingRefName
 	out, _ := exec.CommandContext(ctx, "git", "config", "--get-all", "remote.origin.fetch").Output() //nolint:errcheck // missing config key is normal; treated as "no refspec set yet"
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line == refspec {
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) == refspec {
 			return nil
 		}
 	}

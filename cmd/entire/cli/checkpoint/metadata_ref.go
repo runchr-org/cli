@@ -77,9 +77,18 @@ func MetadataTrackingRef(ctx context.Context) plumbing.ReferenceName {
 // "needs push" — safe but suboptimal.
 func MetadataTrackingRefForRemote(ctx context.Context, remoteName string) plumbing.ReferenceName {
 	if settings.UsesCustomMetadataRef(ctx) {
-		return plumbing.ReferenceName("refs/entire/remotes/" + remoteName + "/checkpoints/v1")
+		return plumbing.ReferenceName(paths.BuildMetadataTrackingRef(remoteName))
 	}
 	return plumbing.NewRemoteReferenceName(remoteName, paths.MetadataBranchName)
+}
+
+// PreserveV1HistoryAndLog runs PreserveV1History and logs any failure at WARN
+// without surfacing the error. Suitable for read entry points that want best-
+// effort preservation without failing the read when something goes wrong.
+func PreserveV1HistoryAndLog(ctx context.Context, repo *git.Repository) {
+	if err := PreserveV1History(ctx, repo); err != nil {
+		logging.Warn(ctx, "preserve v1 history failed; continuing", slog.String("error", err.Error()))
+	}
 }
 
 // PreserveV1History initializes the custom ref at the legacy v1 branch's tip

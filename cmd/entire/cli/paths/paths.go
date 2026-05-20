@@ -47,10 +47,25 @@ const MetadataBranchName = "entire/checkpoints/v1"
 // in GitHub's branch UI and not fetched by default by `git clone`.
 const MetadataRefName = "refs/entire/checkpoints/v1"
 
-// MetadataTrackingRefName is the local tracking ref for MetadataRefName.
-// Distinct from MetadataRefName so that fetches don't clobber local writes
-// (mirroring how refs/heads/* and refs/remotes/origin/* are distinct).
-const MetadataTrackingRefName = "refs/entire/remotes/origin/checkpoints/v1"
+// MetadataTrackingRefPrefix and MetadataTrackingRefSuffix build the local
+// remote-tracking ref for the 1.1 custom metadata namespace. The remote
+// name goes between them — see paths.BuildMetadataTrackingRef.
+const (
+	MetadataTrackingRefPrefix = "refs/entire/remotes/"
+	MetadataTrackingRefSuffix = "/checkpoints/v1"
+)
+
+// MetadataTrackingRefName is the local tracking ref for MetadataRefName on
+// `origin`. Distinct from MetadataRefName so that fetches don't clobber
+// local writes (mirroring how refs/heads/* and refs/remotes/origin/* are
+// distinct).
+const MetadataTrackingRefName = MetadataTrackingRefPrefix + "origin" + MetadataTrackingRefSuffix
+
+// BuildMetadataTrackingRef returns the 1.1 tracking-ref name for the given
+// remote (e.g. "origin" → refs/entire/remotes/origin/checkpoints/v1).
+func BuildMetadataTrackingRef(remoteName string) string {
+	return MetadataTrackingRefPrefix + remoteName + MetadataTrackingRefSuffix
+}
 
 // V2 ref names use custom refs under refs/entire/ (not refs/heads/).
 // These are invisible in GitHub's branch UI and not fetched by default.

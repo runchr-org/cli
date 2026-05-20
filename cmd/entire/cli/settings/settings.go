@@ -1070,6 +1070,18 @@ func (s *EntireSettings) IsCheckpointsV2Enabled() bool {
 	return ok && val
 }
 
+// Recognized `strategy_options.checkpoints_version` literals. Accepted as
+// `int`, `float64`, or `string` per the parsing rules in
+// parseCheckpointsVersion.
+const (
+	checkpointsVersion1FloatLit   = 1.0
+	checkpointsVersion11FloatLit  = 1.1
+	checkpointsVersion2FloatLit   = 2.0
+	checkpointsVersion1StringLit  = "1"
+	checkpointsVersion11StringLit = "1.1"
+	checkpointsVersion2StringLit  = "2"
+)
+
 // UsesCustomMetadataRef reports whether checkpoints metadata is stored at the
 // custom ref (refs/entire/checkpoints/v1) rather than the legacy branch
 // (refs/heads/entire/checkpoints/v1). True iff checkpoints_version is 1.1.
@@ -1083,9 +1095,9 @@ func (s *EntireSettings) UsesCustomMetadataRef() bool {
 	}
 	switch v := val.(type) {
 	case float64:
-		return v == 1.1
+		return v == checkpointsVersion11FloatLit
 	case string:
-		return v == "1.1"
+		return v == checkpointsVersion11StringLit
 	}
 	return false
 }
@@ -1126,16 +1138,16 @@ func parseCheckpointsVersion(val any) (int, bool) {
 		}
 	case float64:
 		switch v {
-		case 1.0, 1.1:
+		case checkpointsVersion1FloatLit, checkpointsVersion11FloatLit:
 			return 1, true
-		case 2.0:
+		case checkpointsVersion2FloatLit:
 			return 2, true
 		}
 	case string:
 		switch v {
-		case "1", "1.1":
+		case checkpointsVersion1StringLit, checkpointsVersion11StringLit:
 			return 1, true
-		case "2":
+		case checkpointsVersion2StringLit:
 			return 2, true
 		}
 	}
