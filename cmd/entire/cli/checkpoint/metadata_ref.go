@@ -2,9 +2,13 @@ package checkpoint
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 
+	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
@@ -39,4 +43,42 @@ func MetadataTrackingRef(ctx context.Context) plumbing.ReferenceName {
 		return plumbing.ReferenceName(paths.MetadataTrackingRefName)
 	}
 	return plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
+}
+
+// PreserveV1History initializes the custom ref at the legacy v1 branch's tip
+// so prior checkpoint history remains reachable under 1.1. Idempotent; runs
+// at most once per repo. Safe to call repeatedly.
+//
+// Returns nil and is a no-op when:
+//   - The repo is not configured for v1.1.
+//   - The custom ref already exists (regardless of legacy branch state).
+//   - Neither ref exists (no history to preserve; fresh-orphan creation is
+//     the caller's responsibility via strategy.EnsureMetadataBranch).
+//
+// Does NOT create an orphan ref when neither exists — that responsibility
+// lives with strategy.EnsureMetadataBranch, which is only called from write
+// paths.
+func PreserveV1History(ctx context.Context, repo *git.Repository) error {
+	if !settings.UsesCustomMetadataRef(ctx) {
+		return nil
+	}
+	target := plumbing.ReferenceName(paths.MetadataRefName)
+	if _, err := repo.Reference(target, false); err == nil {
+		return nil // already preserved (or freshly created)
+	}
+	legacy := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	legacyRef, err := repo.Reference(legacy, false)
+	if err != nil {
+		// No legacy branch — nothing to preserve. Caller handles missing
+		// ref normally (fresh-orphan on write, empty result on read).
+		return nil
+	}
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(target, legacyRef.Hash())); err != nil {
+		return fmt.Errorf("preserve v1 history at custom ref: %w", err)
+	}
+	logging.Info(ctx, "preserved v1 history at custom ref",
+		slog.String("legacy_hash", legacyRef.Hash().String()),
+		slog.String("target_ref", string(target)),
+	)
+	return nil
 }
