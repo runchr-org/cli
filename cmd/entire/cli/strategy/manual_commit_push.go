@@ -3,7 +3,7 @@ package strategy
 import (
 	"context"
 
-	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/perf"
 )
@@ -33,7 +33,9 @@ func (s *ManualCommitStrategy) PrePush(ctx context.Context, remote string) error
 	var err error
 	if settings.CheckpointsVersion(ctx) != 2 {
 		_, pushCheckpointsSpan := perf.Start(ctx, "push_checkpoints_branch")
-		err = pushBranchIfNeeded(ctx, ps.pushTarget(), paths.MetadataBranchName)
+		err = pushRefIfNeeded(ctx, ps.pushTarget(),
+			checkpoint.MetadataRef(ctx),
+			checkpoint.MetadataTrackingRef(ctx))
 		if err != nil {
 			pushCheckpointsSpan.RecordError(err)
 		}
