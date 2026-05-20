@@ -6144,6 +6144,64 @@ func TestGetBranchCheckpoints_ReadsPromptFromCommittedCheckpoint(t *testing.T) {
 	}
 }
 
+func TestGetBranchCheckpoints_PopulatesCommittedSessionIDs(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+
+	w, err := repo.Worktree()
+	require.NoError(t, err)
+
+	testFile := filepath.Join(tmpDir, "test.txt")
+	require.NoError(t, os.WriteFile(testFile, []byte("initial"), 0o644))
+	_, err = w.Add("test.txt")
+	require.NoError(t, err)
+	_, err = w.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	cpID := id.MustCheckpointID("bbcc33445566")
+	store := checkpoint.NewGitStore(repo)
+	for _, sessionID := range []string{"older-session-aaaa", "latest-session-bbbb"} {
+		require.NoError(t, store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+			CheckpointID: cpID,
+			SessionID:    sessionID,
+			Strategy:     "manual-commit",
+			Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user"}` + "\n")),
+			AuthorName:   "Test",
+			AuthorEmail:  "test@example.com",
+		}))
+	}
+
+	require.NoError(t, os.WriteFile(testFile, []byte("updated"), 0o644))
+	_, err = w.Add("test.txt")
+	require.NoError(t, err)
+	_, err = w.Commit(trailers.FormatCheckpoint("Multi-session checkpoint", cpID), &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	points, err := getBranchCheckpoints(context.Background(), repo, 10)
+	require.NoError(t, err)
+
+	var found *strategy.RewindPoint
+	for i := range points {
+		if points[i].CheckpointID == cpID {
+			found = &points[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "expected committed checkpoint in branch listing")
+	require.Equal(t, "latest-session-bbbb", found.SessionID)
+	require.Equal(t, 2, found.SessionCount)
+	require.Equal(t, []string{"older-session-aaaa", "latest-session-bbbb"}, found.SessionIDs)
+	require.True(t, checkpointMatchesSessionFilter(*found, "older-session"))
+}
+
 func TestGetBranchCheckpoints_V2OnlyCheckpointDiscoverable(t *testing.T) {
 	// When the v1 metadata branch doesn't exist but v2 has the checkpoint,
 	// getBranchCheckpoints should still find committed checkpoints.

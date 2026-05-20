@@ -2107,6 +2107,8 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 			IsLogsOnly:       true, // Committed checkpoints are logs-only
 			CheckpointID:     cpID,
 			SessionID:        cpInfo.SessionID,
+			SessionCount:     cpInfo.SessionCount,
+			SessionIDs:       cpInfo.SessionIDs,
 			IsTaskCheckpoint: cpInfo.IsTask,
 			ToolUseID:        cpInfo.ToolUseID,
 			Agent:            cpInfo.Agent,

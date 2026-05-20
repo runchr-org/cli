@@ -248,6 +248,15 @@ func (r *DualCheckpointReader) ReadSessionMetadataAndPrompts(ctx context.Context
 func (r *DualCheckpointReader) ReadSessionPrompts(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (string, error) {
 	prompts, err := r.v2.ReadSessionPrompts(ctx, checkpointID, sessionIndex)
 	if err == nil {
+		if prompts == "" {
+			v1Prompts, fallbackErr := r.v1.ReadSessionPrompts(ctx, checkpointID, sessionIndex)
+			if fallbackErr == nil {
+				return v1Prompts, nil
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", ctxErr //nolint:wrapcheck // Propagating context cancellation
+			}
+		}
 		return prompts, nil
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
