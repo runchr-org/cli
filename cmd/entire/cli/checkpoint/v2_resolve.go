@@ -39,10 +39,9 @@ func GetV2MetadataTreeWithHooks(ctx context.Context, treelessFetchFn, fullFetchF
 	// whatever step failed first (or nil on success).
 	attempt := func(label string, fetchFn FetchRefFunc) (*object.Tree, *git.Repository, bool) {
 		var (
-			tree    *object.Tree
-			repo    *git.Repository
-			runErr  error
-			started bool
+			tree   *object.Tree
+			repo   *git.Repository
+			runErr error
 		)
 		fn := func() error {
 			if fetchFn != nil {
@@ -65,8 +64,7 @@ func GetV2MetadataTreeWithHooks(ctx context.Context, treelessFetchFn, fullFetchF
 			return nil
 		}
 		hooks.WithLabel(label, fn)
-		started = runErr == nil
-		return tree, repo, started
+		return tree, repo, runErr == nil
 	}
 
 	if treelessFetchFn != nil {

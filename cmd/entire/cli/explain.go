@@ -682,9 +682,13 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 		loadPW.FinishPhase(reloadPrefix, true, formatPhaseDuration(time.Since(reloadStart)))
 	}
 
-	// Handle raw transcript output
+	// Handle raw transcript output. Skip the loadPrefix finish when generate
+	// already finished it above — defensive against any future flag config
+	// where the two paths aren't mutually exclusive.
 	if rawTranscript {
-		loadPW.FinishPhase(loadPrefix, true, formatPhaseDuration(time.Since(loadStart)))
+		if !generate {
+			loadPW.FinishPhase(loadPrefix, true, formatPhaseDuration(time.Since(loadStart)))
+		}
 		if len(content.Transcript) == 0 {
 			return fmt.Errorf("checkpoint %s has no transcript", fullCheckpointID)
 		}

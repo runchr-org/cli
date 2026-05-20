@@ -412,7 +412,7 @@ func readCheckpointInfoFromLocalTree(
 // are invisible to the repo opened before the fetch). To avoid this, each
 // attempt opens a fresh repo after the fetch succeeds.
 //
-// Fallback order: treeless fetch → local → checkpoint_remote → full origin fetch → remote tree.
+// Fallback order: checkpoint_remote → treeless origin fetch → local → full origin fetch → remote-tracking tree.
 func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error) {
 	return getMetadataTreeWithHooks(ctx, checkpoint.AttemptHooks{})
 }
@@ -573,7 +573,8 @@ func getMetadataTreeWithHooks(ctx context.Context, hooks checkpoint.AttemptHooks
 	if attempt("Reading v1 metadata from remote-tracking branch", func() (*object.Tree, *git.Repository, error) {
 		remoteRepo, repoErr := openRepository(ctx)
 		if repoErr != nil {
-			return nil, nil, repoErr
+			remoteErr = fmt.Errorf("failed to open repository: %w", repoErr)
+			return nil, nil, remoteErr
 		}
 		logRefHash(remoteRepo, "remote-tracking")
 		remoteTree, err := strategy.GetRemoteMetadataBranchTree(remoteRepo)
