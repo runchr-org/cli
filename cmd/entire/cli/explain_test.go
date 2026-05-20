@@ -2284,6 +2284,7 @@ func TestRunExplainCheckpoint_GenerateV1OnlyDualModeReloadsFromV1(t *testing.T) 
 		_ []string,
 		_ types.AgentType,
 		_ summarize.Generator,
+		_ agent.ProgressFn,
 	) (*checkpoint.Summary, error) {
 		sawV1Transcript = strings.Contains(string(transcript.Bytes()), "v1-only generate prompt")
 		return &checkpoint.Summary{Intent: "generated intent", Outcome: "generated outcome"}, nil
@@ -2354,6 +2355,7 @@ func TestRunExplainCheckpoint_GenerateV1ModeUsesSelectedStore(t *testing.T) {
 		_ []string,
 		_ types.AgentType,
 		_ summarize.Generator,
+		_ agent.ProgressFn,
 	) (*checkpoint.Summary, error) {
 		sawV1Transcript = strings.Contains(string(transcript.Bytes()), "v1-mode generate prompt")
 		return &checkpoint.Summary{Intent: "generated v1 intent", Outcome: "generated v1 outcome"}, nil
@@ -2430,6 +2432,7 @@ func TestRunExplainCheckpoint_V2PreferredGenerateWritesSelectedStore(t *testing.
 		_ []string,
 		_ types.AgentType,
 		_ summarize.Generator,
+		_ agent.ProgressFn,
 	) (*checkpoint.Summary, error) {
 		return &checkpoint.Summary{Intent: "selected v2 intent", Outcome: "selected v2 outcome"}, nil
 	}
