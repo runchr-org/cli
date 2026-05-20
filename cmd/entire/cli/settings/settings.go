@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1090,19 +1089,24 @@ func (s *EntireSettings) CheckpointsVersion() int {
 }
 
 func parseCheckpointsVersion(val any) (int, bool) {
-	v, ok := val.(int)
-	if ok && (v == 1 || v == 2) {
-		return v, true
-	}
-	floatV, ok := val.(float64)
-	if ok && (floatV == 1 || floatV == 2) {
-		return int(floatV), true
-	}
-	stringV, ok := val.(string)
-	if ok {
-		parsed, err := strconv.Atoi(stringV)
-		if err == nil && (parsed == 1 || parsed == 2) {
-			return parsed, true
+	switch v := val.(type) {
+	case int:
+		if v == 1 || v == 2 {
+			return v, true
+		}
+	case float64:
+		switch v {
+		case 1.0, 1.1:
+			return 1, true
+		case 2.0:
+			return 2, true
+		}
+	case string:
+		switch v {
+		case "1", "1.1":
+			return 1, true
+		case "2":
+			return 2, true
 		}
 	}
 	return 1, false

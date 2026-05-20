@@ -856,6 +856,39 @@ func TestCheckpointsVersion(t *testing.T) {
 	}
 }
 
+func TestParseCheckpointsVersion_OneDotOne(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		input     any
+		wantMajor int
+		wantOK    bool
+	}{
+		{"float 1.1", 1.1, 1, true},
+		{"string 1.1", "1.1", 1, true},
+		{"float 1.0 still major 1", 1.0, 1, true},
+		{"float 2.0 still major 2", 2.0, 2, true},
+		{"string 2", "2", 2, true},
+		{"string 1", "1", 1, true},
+		{"int 1", 1, 1, true},
+		{"int 2", 2, 2, true},
+		{"unsupported float 1.5", 1.5, 1, false},
+		{"unsupported string 3", "3", 1, false},
+		{"unsupported bool", true, 1, false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotMajor, gotOK := parseCheckpointsVersion(tc.input)
+			if gotMajor != tc.wantMajor || gotOK != tc.wantOK {
+				t.Fatalf("parseCheckpointsVersion(%#v) = (%d, %v); want (%d, %v)",
+					tc.input, gotMajor, gotOK, tc.wantMajor, tc.wantOK)
+			}
+		})
+	}
+}
+
 func TestIsPushV2RefsEnabled_DefaultsFalse(t *testing.T) {
 	t.Parallel()
 	s := &EntireSettings{Enabled: true}
