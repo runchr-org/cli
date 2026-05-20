@@ -241,13 +241,15 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 		return dispatchpkg.Options{}, fmt.Errorf("not in a git repository: %w", err)
 	}
 
-	loadRepos := newLazyOptions(func() []huh.Option[string] {
-		slugs, listErr := listDispatchWizardRepos(ctx)
-		if listErr != nil || len(slugs) == 0 {
-			slugs = discoverLocalRepoSlugs(ctx, currentRepo)
-		}
-		return buildDispatchRepoOptions(slugs)
-	})
+	// Pre-load repos so the multi-select renders with options at construction
+	// time. Using OptionsFunc here triggered huh v2 viewport-sizing artifacts
+	// (the form computes group height before the async load resolves), so the
+	// row prefixes scrolled out of sync with the option text.
+	slugs, listErr := listDispatchWizardRepos(ctx)
+	if listErr != nil || len(slugs) == 0 {
+		slugs = discoverLocalRepoSlugs(ctx, currentRepo)
+	}
+	repoOptions := buildDispatchRepoOptions(slugs)
 
 	state := newDispatchWizardState()
 	state.currentBranch, state.currentBranchErr = getDispatchWizardCurrentBranch(ctx)
@@ -266,7 +268,7 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 				Title("Repos").
 				Description(fmt.Sprintf("Press / to filter. Up to %d repos.", dispatchpkg.CloudRepoLimit)).
 				Filterable(true).
-				OptionsFunc(loadRepos, nil).
+				Options(repoOptions...).
 				Value(&state.selectedRepos).
 				Validate(func(value []string) error {
 					selected := normalizeDispatchWizardSelections(value)
@@ -364,21 +366,6 @@ func runDispatchWizard(cmd *cobra.Command) (dispatchpkg.Options, error) {
 	}
 
 	return state.resolve()
-}
-
-// newLazyOptions returns a func that runs loader once (under sync.Once) and
-// returns the cached result on subsequent calls. Safe for concurrent use.
-func newLazyOptions(loader func() []huh.Option[string]) func() []huh.Option[string] {
-	var (
-		once    sync.Once
-		options []huh.Option[string]
-	)
-	return func() []huh.Option[string] {
-		once.Do(func() {
-			options = loader()
-		})
-		return options
-	}
 }
 
 // buildDispatchRepoOptions dedupes but preserves the caller's order so each

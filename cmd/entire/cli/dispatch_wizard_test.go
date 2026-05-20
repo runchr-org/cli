@@ -352,6 +352,15 @@ func TestRunDispatchWizard_ProceedsWhenCurrentBranchCannotBeResolved(t *testing.
 		getDispatchWizardCurrentBranch = oldGetCurrentBranch
 	})
 
+	// Stub the eager repo lookup so the test does not hit the keychain or API.
+	oldListRepos := listDispatchWizardRepos
+	listDispatchWizardRepos = func(context.Context) ([]string, error) {
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		listDispatchWizardRepos = oldListRepos
+	})
+
 	// Stub form execution so the test does not block on a TTY when run from a
 	// terminal. The "run dispatch wizard" error wrapper only exists after the
 	// wizard proceeds past branch resolution, so the assertion below is
