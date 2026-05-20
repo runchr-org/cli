@@ -123,7 +123,7 @@ func runRecap(ctx context.Context, w, errW io.Writer, f *recapFlags) error {
 	if err != nil {
 		return err
 	}
-	client, err := newRecapClient(f.insecureHTTP)
+	client, err := newRecapClient(ctx, f.insecureHTTP)
 	if err != nil {
 		var keyringErr *keyringReadError
 		switch {
@@ -178,8 +178,17 @@ func (e *keyringReadError) Unwrap() error { return e.Cause }
 // real auth error are not collapsed into one "sign in" hint. A keyring read
 // failure is surfaced as *keyringReadError so the caller can show a targeted
 // message instead of misattributing it to a missing login.
-func newRecapClient(insecureHTTP bool) (*api.Client, error) {
-	token, err := auth.LookupCurrentToken()
+//
+// Goes through auth.TokenForResource so split-host deployments get a
+// resource-scoped bearer via RFC 8693 exchange. ErrNotLoggedIn is
+// collapsed back into an empty token so the caller's "render with no
+// bearer, let the server respond 401" path still fires.
+func newRecapClient(ctx context.Context, insecureHTTP bool) (*api.Client, error) {
+	token, err := auth.TokenForResource(ctx, api.BaseURL())
+	if errors.Is(err, auth.ErrNotLoggedIn) {
+		token = ""
+		err = nil
+	}
 	if err != nil {
 		return nil, &keyringReadError{Cause: err}
 	}

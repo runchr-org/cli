@@ -76,14 +76,6 @@ branch:<name>, repo:<owner/name>, and repo:* to search all accessible repos.`,
 				return errors.New("query required when using --json, accessible mode, or piped output. Usage: entire search <query>")
 			}
 
-			ghToken, err := auth.LookupCurrentToken()
-			if err != nil {
-				return fmt.Errorf("reading credentials: %w", err)
-			}
-			if ghToken == "" {
-				return errors.New("not authenticated. Run 'entire login' to authenticate")
-			}
-
 			// Get the repo's GitHub remote URL
 			repo, err := strategy.OpenRepository(ctx)
 			if err != nil {
@@ -108,7 +100,24 @@ branch:<name>, repo:<owner/name>, and repo:* to search all accessible repos.`,
 
 			serviceURL := os.Getenv("ENTIRE_SEARCH_URL")
 			if serviceURL == "" {
-				serviceURL = search.DefaultServiceURL
+				// Search lives on the data API host. Fall back to
+				// api.BaseURL() so ENTIRE_API_BASE_URL applies; the search
+				// package's DefaultServiceURL is only consulted by callers
+				// that bypass this entry point.
+				serviceURL = api.BaseURL()
+			}
+
+			// Resolve a bearer scoped to the search service host. In split-host
+			// deployments this triggers an RFC 8693 exchange so the bearer
+			// carries the data-API audience rather than the auth-host one;
+			// single-host setups hit the same-host shortcut and return the
+			// core token unchanged.
+			ghToken, err := auth.TokenForResource(ctx, api.OriginOnly(serviceURL))
+			if errors.Is(err, auth.ErrNotLoggedIn) {
+				return errors.New("not authenticated. Run 'entire login' to authenticate")
+			}
+			if err != nil {
+				return fmt.Errorf("reading credentials: %w", err)
 			}
 
 			searchCfg := search.Config{
@@ -207,7 +216,7 @@ branch:<name>, repo:<owner/name>, and repo:* to search all accessible repos.`,
 // must never pollute the user's prompt with error output.
 func completeRepoFlag(cmd *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 	suggestions := []string{"*"}
-	client, err := NewAuthenticatedAPIClient(false)
+	client, err := NewAuthenticatedAPIClient(cmd.Context(), false)
 	if err != nil {
 		return suggestions, cobra.ShellCompDirectiveNoFileComp
 	}
