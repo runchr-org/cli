@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -446,11 +447,14 @@ func TestDualCheckpointReader_ListCommittedMergesV2AndV1(t *testing.T) {
 	v2Store := NewV2GitStore(repo)
 	ctx := context.Background()
 	transcript := redact.AlreadyRedacted([]byte(`{"text":"hello"}` + "\n"))
+	newer := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+	older := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 
 	v1OnlyID := id.MustCheckpointID("888888888888")
 	require.NoError(t, v1Store.WriteCommitted(ctx, WriteCommittedOptions{
 		CheckpointID: v1OnlyID,
 		SessionID:    "session-v1-only",
+		CreatedAt:    newer,
 		Strategy:     "manual-commit",
 		Transcript:   transcript,
 		AuthorName:   "Test",
@@ -461,6 +465,7 @@ func TestDualCheckpointReader_ListCommittedMergesV2AndV1(t *testing.T) {
 	require.NoError(t, v1Store.WriteCommitted(ctx, WriteCommittedOptions{
 		CheckpointID: dualID,
 		SessionID:    "session-dual",
+		CreatedAt:    older,
 		Strategy:     "manual-commit",
 		Transcript:   transcript,
 		AuthorName:   "Test",
@@ -469,6 +474,7 @@ func TestDualCheckpointReader_ListCommittedMergesV2AndV1(t *testing.T) {
 	require.NoError(t, v2Store.WriteCommitted(ctx, WriteCommittedOptions{
 		CheckpointID: dualID,
 		SessionID:    "session-dual",
+		CreatedAt:    older,
 		Strategy:     "manual-commit",
 		Transcript:   transcript,
 		AuthorName:   "Test",
@@ -486,6 +492,9 @@ func TestDualCheckpointReader_ListCommittedMergesV2AndV1(t *testing.T) {
 	}
 	require.Equal(t, 1, counts[v1OnlyID])
 	require.Equal(t, 1, counts[dualID])
+	require.Len(t, results, 2)
+	require.Equal(t, v1OnlyID, results[0].CheckpointID)
+	require.Equal(t, dualID, results[1].CheckpointID)
 }
 
 func TestCommittedReadV2DoesNotFallBackToV1(t *testing.T) {

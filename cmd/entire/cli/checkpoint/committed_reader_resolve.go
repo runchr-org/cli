@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
@@ -307,6 +308,9 @@ func (r *DualCheckpointReader) ListCommitted(ctx context.Context) ([]CommittedIn
 			committed = append(committed, c)
 		}
 	}
+	slices.SortFunc(committed, func(a, b CommittedInfo) int {
+		return b.CreatedAt.Compare(a.CreatedAt)
+	})
 	return committed, nil
 }
 
