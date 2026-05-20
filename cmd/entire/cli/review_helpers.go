@@ -40,8 +40,8 @@ import (
 // display the appropriate flag's prose around it.
 //
 // Single lookup: read the Entire-Checkpoint trailer from HEAD, then resolve
-// the CheckpointSummary through the configured committed checkpoint reader
-// (v1 + v2 stores per the user's checkpoints-v2 setting).
+// the CheckpointSummary through the configured committed checkpoint store
+// (handles v1, v2, and dual reader selection internally).
 func headCheckpointFlags(ctx context.Context) (hasReview, hasInvestigation bool, info string) {
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
@@ -64,14 +64,12 @@ func headCheckpointFlags(ctx context.Context) (hasReview, hasInvestigation bool,
 		logging.Debug(ctx, "head checkpoint flags: open repository", slog.String("error", err.Error()))
 		return false, false, ""
 	}
-	checkpointReader, readerErr := newCommittedCheckpointReader(ctx, repo, committedCheckpointReaderOptions{
-		fetchRemoteLog: "head checkpoint flags: no configured v2 fetch remote",
-	})
-	if readerErr != nil {
-		logging.Debug(ctx, "head checkpoint flags: checkpoint reader unavailable", slog.String("error", readerErr.Error()))
+	store, storeErr := checkpoint.NewCommittedReader(ctx, repo, checkpoint.CommittedReaderOptions{})
+	if storeErr != nil {
+		logging.Debug(ctx, "head checkpoint flags: checkpoint store unavailable", slog.String("error", storeErr.Error()))
 		return false, false, ""
 	}
-	summary, err := checkpoint.ReadCommittedCheckpoint(ctx, checkpointReader.reader, cpID)
+	summary, err := checkpoint.ReadCommittedCheckpoint(ctx, store, cpID)
 	if err != nil || summary == nil {
 		logging.Debug(ctx, "head checkpoint flags: resolve checkpoint summary",
 			slog.String("checkpoint_id", cpID.String()),
