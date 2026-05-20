@@ -444,6 +444,36 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 - PrePush hook can push `entire/checkpoints/v1` branch alongside user pushes
 - Safe to use on main/master since it never modifies commit history
 
+##### v1.1: custom-ref storage (opt-in)
+
+When `strategy_options.checkpoints_version` is set to `1.1` (number `1.1`
+or string `"1.1"`) in `.entire/settings.json`, metadata is stored at the
+custom ref `refs/entire/checkpoints/v1` instead of the branch
+`refs/heads/entire/checkpoints/v1`. Same format, same trailers, same
+sharded tree layout; only the ref location differs. The custom ref is
+invisible to `git branch -a` and to GitHub's branch UI, and is not pulled
+by default `git clone`.
+
+Activation is **manual opt-in**: edit `.entire/settings.json` to set
+`strategy_options.checkpoints_version` to `1.1`. `entire enable` does not
+auto-enroll. On existing v1 repos with prior history, the first metadata
+access after the flip (read or write) initializes the custom ref at the
+legacy branch's tip via `checkpoint.PreserveV1History` — a single
+`SetReference` call. No data is copied or transformed. The legacy branch
+is left intact as a read-only artifact; future cleanup is a separate,
+opt-in step.
+
+The fetch refspec
+`+refs/entire/checkpoints/v1:refs/entire/remotes/origin/checkpoints/v1`
+is installed on origin by `entire enable` whenever settings already
+specify 1.1. Push and rebase-on-non-FF use the same machinery as the
+legacy branch path via `strategy.pushRefIfNeeded`.
+
+Key entry points: `checkpoint.MetadataRef(ctx)`,
+`checkpoint.MetadataTrackingRef(ctx)`, `checkpoint.PreserveV1History(ctx, repo)`,
+`paths.MetadataRefName`, `paths.MetadataTrackingRefName`,
+`settings.EntireSettings.UsesCustomMetadataRef`.
+
 #### Key Files
 
 - `strategy.go` - Interface definition and context structs (`StepContext`, `TaskStepContext`, `RewindPoint`, etc.)
