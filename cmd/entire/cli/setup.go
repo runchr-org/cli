@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -1113,7 +1114,31 @@ func runEnable(ctx context.Context, w io.Writer, useProjectSettings bool) error 
 
 	fmt.Fprintln(w, "Entire is now enabled.")
 	printEnabledStatus(ctx, w)
+
+	if s.UsesCustomMetadataRef() {
+		if err := installMetadataRefspec(ctx); err != nil {
+			fmt.Fprintf(w, "Warning: failed to install fetch refspec for %s: %v\n", paths.MetadataRefName, err)
+		}
+	}
 	return nil
+}
+
+// installMetadataRefspec appends a fetch refspec on origin so subsequent
+// `git fetch` calls pull refs/entire/checkpoints/v1 into the non-clobbering
+// remote-tracking ref. Idempotent. No-op when origin is absent or the
+// refspec is already present.
+func installMetadataRefspec(ctx context.Context) error {
+	if err := exec.CommandContext(ctx, "git", "remote", "get-url", "origin").Run(); err != nil {
+		return nil // no origin
+	}
+	refspec := "+" + paths.MetadataRefName + ":" + paths.MetadataTrackingRefName
+	out, _ := exec.CommandContext(ctx, "git", "config", "--get-all", "remote.origin.fetch").Output()
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == refspec {
+			return nil
+		}
+	}
+	return exec.CommandContext(ctx, "git", "config", "--add", "remote.origin.fetch", refspec).Run()
 }
 
 func runDisable(ctx context.Context, w io.Writer, useProjectSettings bool) error {
