@@ -326,7 +326,7 @@ func TestResolveIssueLink_FencesUntrustedBody(t *testing.T) {
 	}
 	// 2. The adversarial close-tag inside the body must be defanged so an
 	//    attacker cannot break out of the envelope.
-	defanged := "</untrusted​>" // note: zero-width space
+	defanged := "</untrusted\u200b>" // note: zero-width space
 	if !strings.Contains(body, defanged) {
 		t.Errorf("expected defanged close tag inside body; envelope-break is possible.\nGOT:\n%s", body)
 	}

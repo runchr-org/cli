@@ -273,7 +273,8 @@ type InvestigateConfig struct {
 	// Agents is the ordered list of agent names to round-robin during the loop.
 	Agents []string `json:"agents,omitempty"`
 
-	// MaxTurns is the per-agent turn budget. Defaults to 3 when zero.
+	// MaxTurns is the per-agent turn budget. Defaults to 2 when zero
+	// (see investigate.defaultMaxTurns).
 	MaxTurns int `json:"max_turns,omitempty"`
 
 	// Quorum is the count of `approve` stances needed to terminate the loop.

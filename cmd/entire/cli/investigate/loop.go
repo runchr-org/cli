@@ -69,7 +69,7 @@ type LoopInput struct {
 	RunID        string    // 12-hex
 	Topic        string    // human-readable subject of the investigation
 	Agents       []string  // ordered, length >= 1
-	MaxTurns     int       // per-agent turn budget; 0 → 3
+	MaxTurns     int       // per-agent turn budget; 0 → defaultMaxTurns (2)
 	Quorum       int       // approvals needed; 0 → len(Agents)
 	AlwaysPrompt string    // optional, appended verbatim to every prompt
 	FindingsDoc  string    // absolute path
@@ -195,10 +195,32 @@ func RunInvestigateLoop(ctx context.Context, in LoopInput, deps LoopDeps) (LoopR
 		}
 
 		outcome := runOneTurn(ctx, cfg, state)
+
+		// ctx cancellation classifies the run regardless of the turn's
+		// recorded result. cmd.Run() returns context.Canceled wrapped as
+		// an *exec.ExitError when SIGINT kills the child mid-run, which
+		// runOneTurn would otherwise report as a normal turn failure —
+		// and two such cancels in a row would mis-trigger OutcomePaused.
+		if ctx.Err() != nil {
+			if saveErr := deps.States.Save(context.Background(), state); saveErr != nil {
+				logging.Warn(ctx, "investigate: save state on cancel failed",
+					sErr(saveErr), sRun(in.RunID))
+			}
+			deps.Progress.RunFinished(OutcomeCancelled)
+
+			return LoopResult{Outcome: OutcomeCancelled, State: state, Err: lastErr}, nil
+		}
+
 		if outcome.failed {
 			lastErr = outcome.err
 			consecutiveFails++
 			if consecutiveFails >= pauseAfterConsecutiveFailures {
+				// Persist before returning paused so --continue resumes
+				// from a snapshot that includes the failing turn (PR#11).
+				if saveErr := deps.States.Save(ctx, state); saveErr != nil {
+					logging.Warn(ctx, "investigate: save state on pause failed",
+						sErr(saveErr), sRun(in.RunID))
+				}
 				deps.Progress.RunFinished(OutcomePaused)
 				return LoopResult{Outcome: OutcomePaused, State: state, Err: lastErr}, nil
 			}

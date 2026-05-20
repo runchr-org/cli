@@ -18,11 +18,12 @@ import (
 var ErrGhNotFound = errors.New("gh CLI not found on PATH")
 
 // issueLinkPathRE matches GitHub paths of the shape
-// /<owner>/<repo>/(issues|pull|pulls)/<number>. The prefix is anchored to the
-// start of the path; trailing segments (e.g. /files, /commits) are tolerated
-// only when matching against the trimmed path. Both `pull` and `pulls` are
-// accepted because GitHub's redirector accepts both forms.
-var issueLinkPathRE = regexp.MustCompile(`^/([^/]+)/([^/]+)/(issues|pull|pulls)/(\d+)$`)
+// /<owner>/<repo>/(issues|pull|pulls)/<number>(/trailing)?. Trailing
+// segments (e.g. /files, /commits, /comments) and trailing slashes are
+// tolerated and ignored — only the resource and number are captured.
+// Both `pull` and `pulls` are accepted because GitHub's redirector
+// accepts both forms.
+var issueLinkPathRE = regexp.MustCompile(`^/([^/]+)/([^/]+)/(issues|pull|pulls)/(\d+)(?:/.*)?/?$`)
 
 // IssueLinkResult is the output of ResolveIssueLink.
 type IssueLinkResult struct {
@@ -84,7 +85,10 @@ func runGhExec(ctx context.Context, args ...string) ([]byte, error) {
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		safeArgs := redactArgsForError(args)
-		stderrStr := strings.TrimSpace(stderr.String())
+		// gh stderr may echo the failing URL verbatim; redact userinfo
+		// before wrapping into our error string so a token embedded in
+		// --issue-link doesn't leak via the error path either.
+		stderrStr := redactURLsInText(strings.TrimSpace(stderr.String()))
 		if stderrStr != "" {
 			return nil, fmt.Errorf("gh %s: %w: %s", safeArgs, err, stderrStr)
 		}
@@ -113,6 +117,29 @@ func redactURLUserinfo(s string) string {
 		return s
 	}
 	return u.Redacted()
+}
+
+// redactURLsInText walks the whitespace-separated tokens in text, replaces
+// any token that parses as a URL with userinfo by its Redacted() form,
+// and rejoins. Used to scrub gh stderr (and any other free-form text)
+// before it lands in an error message or log. Punctuation that hugs the
+// URL (trailing comma, parenthesis) is preserved by splitting it off
+// before parsing and rejoining after.
+func redactURLsInText(text string) string {
+	if text == "" {
+		return text
+	}
+	const trim = `.,;:!?)]}>'"`
+	fields := strings.Fields(text)
+	for i, f := range fields {
+		trail := ""
+		for len(f) > 0 && strings.ContainsRune(trim, rune(f[len(f)-1])) {
+			trail = string(f[len(f)-1]) + trail
+			f = f[:len(f)-1]
+		}
+		fields[i] = redactURLUserinfo(f) + trail
+	}
+	return strings.Join(fields, " ")
 }
 
 // ResolveIssueLink resolves a GitHub issue or PR URL via the gh CLI and
@@ -295,6 +322,6 @@ func writeUntrustedBlock(b *strings.Builder, label, body string) {
 	const closeTag = "</untrusted>"
 	// Defang any literal close-tag inside the body so the envelope is
 	// not breakable by adversarial content.
-	safe := strings.ReplaceAll(body, closeTag, "</untrusted​>")
+	safe := strings.ReplaceAll(body, closeTag, "</untrusted\u200b>")
 	fmt.Fprintf(b, "<untrusted source=%q>\n%s\n</untrusted>\n", label, safe)
 }

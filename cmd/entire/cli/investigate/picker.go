@@ -7,6 +7,7 @@ import (
 	"io"
 	"sort"
 	"strconv"
+	"sync/atomic"
 
 	"charm.land/huh/v2"
 
@@ -84,14 +85,35 @@ type pickerFormFn func(ctx context.Context, eligible []AgentChoice, picks *[]str
 
 // pickerFormOverride, when non-nil, replaces the production huh form
 // inside RunInvestigateConfigPicker. Test seam.
-var pickerFormOverride pickerFormFn
+//
+// Stored as an atomic pointer so parallel tests that swap the override
+// via SetPickerFormFnForTest don't race with each other or with the
+// production read path. The variable is still process-global, so tests
+// that install conflicting overrides must not run in parallel with each
+// other — but they can coexist with parallel tests that never touch the
+// override at all.
+var pickerFormOverride atomic.Pointer[pickerFormFn]
 
 // SetPickerFormFnForTest swaps the picker form function. Returns a
 // cleanup function the caller must defer to restore the previous value.
 func SetPickerFormFnForTest(fn pickerFormFn) func() {
-	prev := pickerFormOverride
-	pickerFormOverride = fn
-	return func() { pickerFormOverride = prev }
+	prev := pickerFormOverride.Load()
+	if fn == nil {
+		pickerFormOverride.Store(nil)
+	} else {
+		pickerFormOverride.Store(&fn)
+	}
+	return func() { pickerFormOverride.Store(prev) }
+}
+
+// loadPickerFormOverride returns the current override (or nil if none
+// is installed). Reads are wait-free.
+func loadPickerFormOverride() pickerFormFn {
+	p := pickerFormOverride.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 // RunInvestigateConfigPicker shows a multi-select of eligible agents and
@@ -136,7 +158,7 @@ func RunInvestigateConfigPicker(
 	fmt.Fprintln(out, "(Space to toggle, enter to confirm.)")
 	fmt.Fprintln(out)
 
-	formFn := pickerFormOverride
+	formFn := loadPickerFormOverride()
 	if formFn == nil {
 		formFn = runInvestigatePickerForm
 	}
@@ -161,7 +183,9 @@ func RunInvestigateConfigPicker(
 		MaxTurns: maxTurns,
 		Quorum:   quorum,
 	}
-	fmt.Fprintln(out, "Saved investigate config to .entire/settings.local.json. Edit directly or run `entire investigate --edit`.")
+	// Note: the "saved" confirmation is printed by saveInvestigateConfig
+	// after persistence succeeds — printing here before the caller writes
+	// the file would lie when SaveLocal then errors out.
 	return cfg, nil
 }
 

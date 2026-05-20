@@ -208,7 +208,7 @@ func newFixSubcommand(deps Deps) *cobra.Command {
 			if launch == nil {
 				return errors.New("fix: launch function not wired")
 			}
-			return RunFix(ctx, FixInput{
+			err = RunFix(ctx, FixInput{
 				RunID:  runID,
 				Out:    cmd.OutOrStdout(),
 				ErrOut: cmd.ErrOrStderr(),
@@ -216,6 +216,14 @@ func newFixSubcommand(deps Deps) *cobra.Command {
 				ManifestStore: store,
 				Launch:        launch,
 			})
+			// Ctrl+C in the spawned fix agent surfaces as a wrapped
+			// context.Canceled. Suppress the noisy cobra usage banner —
+			// cancellation is the user's intent, not a bug.
+			if err != nil && errors.Is(err, context.Canceled) {
+				cmd.SilenceUsage = true
+				return wrapSilent(deps.NewSilentError, err)
+			}
+			return err
 		},
 	}
 }
@@ -392,14 +400,19 @@ func confirmUntrustedIssueSeed(ctx context.Context, cmd *cobra.Command, deps Dep
 		prompt = realPromptYN
 		canPrompt = interactive.IsTerminalWriter(cmd.OutOrStdout()) && interactive.CanPromptInteractively()
 	}
+	// --issue-link may carry URL userinfo (https://user:TOKEN@github.com/...)
+	// that the operator never sees in their tape until it lands in CI logs.
+	// Redact before printing the Source: line in either interactive or
+	// non-interactive paths.
+	safeLink := redactURLUserinfo(issueLink)
 	if !canPrompt {
 		fmt.Fprintf(cmd.ErrOrStderr(),
 			"%s\nProceeding non-interactively (no TTY to prompt). Source: %s\n",
-			warning, issueLink)
+			warning, safeLink)
 		return true, nil
 	}
 	fmt.Fprintln(cmd.ErrOrStderr(), warning)
-	fmt.Fprintf(cmd.ErrOrStderr(), "Source: %s\n", issueLink)
+	fmt.Fprintf(cmd.ErrOrStderr(), "Source: %s\n", safeLink)
 	ok, err := prompt(ctx, "Continue with externally seeded investigation?", false)
 	if err != nil {
 		return false, fmt.Errorf("issue-link confirmation prompt: %w", err)
@@ -419,7 +432,11 @@ func runEdit(ctx context.Context, cmd *cobra.Command, deps Deps) error {
 	if cfg == nil {
 		return nil
 	}
-	return saveInvestigateConfig(ctx, cfg)
+	if saveErr := saveInvestigateConfig(ctx, cfg); saveErr != nil {
+		return saveErr
+	}
+	fmt.Fprintln(out, "Saved investigate config to .entire/settings.local.json. Edit directly or run `entire investigate --edit`.")
+	return nil
 }
 
 // saveInvestigateConfig persists cfg into .entire/settings.local.json
@@ -755,6 +772,20 @@ func resolveRunConfig(cfg *settings.InvestigateConfig, f runFlags) (agents []str
 	if f.quorum > 0 {
 		quorum = f.quorum
 	}
+	// Settings come from a JSON file the user can hand-edit, and the
+	// flag parser only checks for parse errors. Validate bounds before
+	// the loop sees them: negative max_turns silently stalls; oversized
+	// quorum is unreachable (the picker rejects this case but raw
+	// settings.json does not).
+	if maxTurns < 0 {
+		return nil, 0, 0, fmt.Errorf("invalid max_turns %d: must be >= 0 (0 uses the default)", maxTurns)
+	}
+	if quorum < 0 {
+		return nil, 0, 0, fmt.Errorf("invalid quorum %d: must be >= 0 (0 means all agents must approve)", quorum)
+	}
+	if quorum > len(agents) {
+		return nil, 0, 0, fmt.Errorf("invalid quorum %d: exceeds configured agent count %d", quorum, len(agents))
+	}
 	return agents, maxTurns, quorum, nil
 }
 
@@ -1015,7 +1046,15 @@ func writeInvestigateFooter(w io.Writer, m LocalManifest) {
 	if m.Outcome != "" {
 		fmt.Fprintf(w, "Outcome: %s\n", m.Outcome)
 	}
-	fmt.Fprintln(w, "Investigation complete.")
+	// Quorum/Stalled are terminal (per-run dir cleaned, findings captured);
+	// Paused/Cancelled are resumable. "complete" would mislead users into
+	// thinking a paused run can't be picked up.
+	switch m.Outcome {
+	case string(OutcomePaused), string(OutcomeCancelled):
+		fmt.Fprintln(w, "Investigation ended (resumable with `entire investigate --continue "+m.RunID+"`).")
+	default:
+		fmt.Fprintln(w, "Investigation complete.")
+	}
 	fmt.Fprintln(w)
 
 	body := findingsContentFor(m)
@@ -1033,8 +1072,17 @@ func writeInvestigateFooter(w io.Writer, m LocalManifest) {
 		fmt.Fprintln(w)
 	}
 
-	fmt.Fprintln(w, "To apply these findings:")
-	fmt.Fprintf(w, "  entire investigate fix %s\n", m.RunID)
+	// For terminal outcomes, suggest `fix` (which feeds findings into a
+	// coding agent). For paused/cancelled, `fix` would launch off stale
+	// partial findings; the resume hint above is the right next step
+	// instead.
+	switch m.Outcome {
+	case string(OutcomePaused), string(OutcomeCancelled):
+		// Resume hint already emitted above.
+	default:
+		fmt.Fprintln(w, "To apply these findings:")
+		fmt.Fprintf(w, "  entire investigate fix %s\n", m.RunID)
+	}
 }
 
 // findingsContentFor returns the findings body to render in the footer.
