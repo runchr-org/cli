@@ -5,23 +5,11 @@ package integration
 import (
 	"testing"
 
-	"github.com/go-git/go-git/v6"
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
-
-// refHash reads the commit hash at the named ref. Test fails if missing.
-func refHash(t *testing.T, repoDir, refName string) plumbing.Hash {
-	t.Helper()
-	repo, err := git.PlainOpen(repoDir)
-	require.NoError(t, err)
-	ref, err := repo.Reference(plumbing.ReferenceName(refName), true)
-	require.NoError(t, err, "ref %s missing", refName)
-	return ref.Hash()
-}
 
 // TestV1MetadataRef_FreshRepo_ManualOptIn_FullWorkflow exercises the
 // manual-opt-in path: a fresh repo gets checkpoints_version=1.1 in
