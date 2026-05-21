@@ -559,7 +559,7 @@ func treeChangesForCherryPick(ctx context.Context, repo *git.Repository, commit 
 func changeToTreeChange(change *object.Change) (checkpoint.TreeChange, error) {
 	action, err := change.Action()
 	if err != nil {
-		return checkpoint.TreeChange{}, err
+		return checkpoint.TreeChange{}, fmt.Errorf("change action: %w", err)
 	}
 
 	switch action {
