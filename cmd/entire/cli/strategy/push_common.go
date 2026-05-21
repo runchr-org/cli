@@ -19,6 +19,7 @@ import (
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
@@ -299,9 +300,8 @@ func printProtectedRefBlock(w io.Writer, ref, target string) {
 	fmt.Fprintln(w, banner)
 }
 
-// fetchAndRebaseSessionsCommon fetches remote sessions and rebases local commits
-// on top of the remote tip. Since checkpoint shards use unique paths, rebases
-// always apply cleanly.
+// fetchAndRebaseSessionsCommon fetches remote sessions and merges local changes
+// on top of the remote tip.
 // The target can be a remote name or a URL.
 func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -393,30 +393,18 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 		return nil
 	}
 
-	// Collect commits reachable from local but not from remote and cherry-pick
-	// them onto the remote tip. This preserves local-only commits even when the
-	// local metadata branch already contains old merge commits, while avoiding
-	// replaying shared ancestors older than the true merge-base.
-	localCommits, err := collectCommitsSince(ctx, repo, repoPath, localRef.Hash(), remoteRef.Hash())
-	if err != nil {
-		return fmt.Errorf("failed to collect local commits: %w", err)
-	}
-
-	if len(localCommits) == 0 {
-		// No local-only commits — just point to remote
-		ref := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), remoteRef.Hash())
-		if err := repo.Storer.SetReference(ref); err != nil {
-			return fmt.Errorf("failed to update branch ref: %w", err)
-		}
+	// If remote is an ancestor of local, local already contains the fetched
+	// remote tip. This happens after disconnected-branch reconciliation.
+	if mergeBase == remoteRef.Hash() {
 		if usedTempRef {
 			_ = repo.Storer.RemoveReference(fetchedRefName) //nolint:errcheck // cleanup is best-effort
 		}
 		return nil
 	}
 
-	newTip, err := cherryPickOnto(ctx, repo, remoteRef.Hash(), localCommits)
+	newTip, err := mergeMetadataBranchChanges(ctx, repo, repoPath, branchName, mergeBase, localRef.Hash(), remoteRef.Hash())
 	if err != nil {
-		return fmt.Errorf("failed to rebase local commits onto remote: %w", err)
+		return fmt.Errorf("failed to merge local metadata changes onto remote: %w", err)
 	}
 
 	// Update branch ref
@@ -433,6 +421,102 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 	return nil
 }
 
+func mergeMetadataBranchChanges(
+	ctx context.Context,
+	repo *git.Repository,
+	repoPath string,
+	branchName string,
+	mergeBase plumbing.Hash,
+	localHash plumbing.Hash,
+	remoteHash plumbing.Hash,
+) (plumbing.Hash, error) {
+	remoteCommit, err := repo.CommitObject(remoteHash)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to get remote commit: %w", err)
+	}
+
+	changes, err := treeChangesBetween(ctx, repoPath, mergeBase, localHash)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	if len(changes) == 0 {
+		return remoteHash, nil
+	}
+
+	mergedTreeHash, err := checkpoint.ApplyTreeChanges(ctx, repo, remoteCommit.TreeHash, changes)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to apply local changes to remote tree: %w", err)
+	}
+
+	return createMergeCommitCommon(ctx, repo, mergedTreeHash,
+		[]plumbing.Hash{remoteHash, localHash},
+		"Merge remote "+branchName)
+}
+
+func treeChangesBetween(ctx context.Context, repoPath string, from plumbing.Hash, to plumbing.Hash) ([]checkpoint.TreeChange, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "diff-tree", "-r", "--raw", "--no-commit-id", "--no-renames", from.String(), to.String())
+	cmd.Dir = repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git diff-tree failed: %w", err)
+	}
+
+	trimmed := strings.TrimSpace(string(output))
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	changes := make([]checkpoint.TreeChange, 0, len(lines))
+	for _, line := range lines {
+		change, parseErr := parseRawTreeChange(line)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		changes = append(changes, change)
+	}
+	return changes, nil
+}
+
+func parseRawTreeChange(line string) (checkpoint.TreeChange, error) {
+	meta, path, ok := strings.Cut(line, "\t")
+	if !ok || path == "" {
+		return checkpoint.TreeChange{}, fmt.Errorf("parse git diff-tree: malformed raw line %q", line)
+	}
+
+	fields := strings.Fields(meta)
+	if len(fields) != 5 {
+		return checkpoint.TreeChange{}, fmt.Errorf("parse git diff-tree: malformed metadata %q", meta)
+	}
+
+	status := fields[4]
+	if status == "" {
+		return checkpoint.TreeChange{}, fmt.Errorf("parse git diff-tree: missing status in %q", line)
+	}
+	if status[0] == 'D' {
+		return checkpoint.TreeChange{Path: path}, nil
+	}
+
+	mode, err := filemode.New(fields[1])
+	if err != nil {
+		return checkpoint.TreeChange{}, fmt.Errorf("parse git diff-tree mode %q: %w", fields[1], err)
+	}
+	if mode.IsMalformed() {
+		return checkpoint.TreeChange{}, fmt.Errorf("parse git diff-tree mode %q: malformed", fields[1])
+	}
+
+	return checkpoint.TreeChange{
+		Path: path,
+		Entry: &object.TreeEntry{
+			Mode: mode,
+			Hash: plumbing.NewHash(fields[3]),
+		},
+	}, nil
+}
+
 // getMergeBase returns the merge base hash of two commits, or an error if they
 // have no common ancestor.
 func getMergeBase(ctx context.Context, repoPath, hashA, hashB string) (plumbing.Hash, error) {
@@ -447,43 +531,6 @@ func getMergeBase(ctx context.Context, repoPath, hashA, hashB string) (plumbing.
 	}
 
 	return plumbing.NewHash(strings.TrimSpace(string(output))), nil
-}
-
-// collectCommitsSince returns non-merge commits reachable from tip but not from
-// exclude, ordered oldest-first in topological order.
-func collectCommitsSince(ctx context.Context, repo *git.Repository, repoPath string, tip, exclude plumbing.Hash) ([]*object.Commit, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	// cherryPickOnto computes each commit's delta against its first parent, so
-	// replaying merge commits would incorrectly re-apply changes that arrived via
-	// non-first-parent history. Limit the replay set to non-merge commits.
-	cmd := exec.CommandContext(ctx, "git", "rev-list", "--reverse", "--topo-order", "--no-merges", exclude.String()+".."+tip.String())
-	cmd.Dir = repoPath
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("git rev-list failed: %w", err)
-	}
-
-	lines := strings.Fields(string(output))
-	if len(lines) > MaxCommitTraversalDepth {
-		return nil, fmt.Errorf("commit chain exceeded %d commits; aborting rebase", MaxCommitTraversalDepth)
-	}
-
-	commits := make([]*object.Commit, 0, len(lines))
-	for _, line := range lines {
-		hash := plumbing.NewHash(line)
-		commit, commitErr := repo.CommitObject(hash)
-		if commitErr != nil {
-			return nil, fmt.Errorf("failed to get commit %s: %w", hash, commitErr)
-		}
-		if len(commit.ParentHashes) > 1 {
-			continue
-		}
-		commits = append(commits, commit)
-	}
-
-	return commits, nil
 }
 
 // startProgressDots prints dots to w every second until the returned stop function

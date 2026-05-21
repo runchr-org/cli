@@ -182,8 +182,8 @@ func TestPushBranchIfNeeded_LocalBareRepo_PushesSuccessfully(t *testing.T) {
 
 // TestFetchAndRebase_DivergedBranches verifies that when local and remote
 // metadata branches have diverged (shared ancestor, different commits on each),
-// fetchAndRebaseSessionsCommon produces a linear history (no merge commits)
-// with all data from both sides preserved.
+// fetchAndRebaseSessionsCommon creates a merge commit with all data from both
+// sides preserved.
 //
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_DivergedBranches(t *testing.T) {
@@ -280,21 +280,14 @@ func TestFetchAndRebase_DivergedBranches(t *testing.T) {
 	localRef, err := repo.Reference(refName, true)
 	require.NoError(t, err)
 
-	// Walk history and verify it's fully linear (no merge commits)
-	current := localRef.Hash()
-	for range 10 {
-		c, cErr := repo.CommitObject(current)
-		require.NoError(t, cErr)
-		assert.LessOrEqual(t, len(c.ParentHashes), 1, "expected linear history, commit %s has %d parents", c.Hash, len(c.ParentHashes))
-		if len(c.ParentHashes) == 0 {
-			break
-		}
-		current = c.ParentHashes[0]
-	}
-
 	// Verify the final tree contains all three checkpoints
 	tipCommit, err := repo.CommitObject(localRef.Hash())
 	require.NoError(t, err)
+	remoteRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", branchName), true)
+	require.NoError(t, err)
+	require.Len(t, tipCommit.ParentHashes, 2)
+	assert.Equal(t, remoteRef.Hash(), tipCommit.ParentHashes[0], "remote tip should be first parent")
+
 	tree, err := tipCommit.Tree()
 	require.NoError(t, err)
 
@@ -498,19 +491,8 @@ func TestFetchAndRebase_MergeBaseOnSecondParent_DoesNotReplayAncestors(t *testin
 	entries := make(map[string]object.TreeEntry)
 	require.NoError(t, checkpoint.FlattenTree(repo, tree, "", entries))
 
-	current := localRef.Hash()
-	for range 10 {
-		c, cErr := repo.CommitObject(current)
-		require.NoError(t, cErr)
-		assert.LessOrEqual(t, len(c.ParentHashes), 1, "replayed history should stay linear, commit %s has %d parents", c.Hash, len(c.ParentHashes))
-		if len(c.ParentHashes) == 0 {
-			break
-		}
-		current = c.ParentHashes[0]
-	}
-
 	assert.NotContains(t, entries, "aa/aaaaaaaaaa/metadata.json",
-		"rebasing should not replay ancestors older than the true merge-base")
+		"sync should not replay ancestors older than the true merge-base")
 	assert.Contains(t, entries, "bb/bbbbbbbbbb/metadata.json", "local checkpoint should be preserved")
 	assert.Contains(t, entries, "cc/cccccccccc/metadata.json", "merged remote checkpoint should be preserved")
 	assert.Contains(t, entries, "dd/dddddddddd/metadata.json", "new remote checkpoint should be preserved")
