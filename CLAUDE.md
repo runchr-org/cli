@@ -456,12 +456,14 @@ by default `git clone`.
 
 Activation is **manual opt-in**: edit `.entire/settings.json` to set
 `strategy_options.checkpoints_version` to `1.1`. `entire enable` does not
-auto-enroll. On existing v1 repos with prior history, the first metadata
-access after the flip (read or write) initializes the custom ref at the
-legacy branch's tip via `checkpoint.PreserveV1History` — a single
-`SetReference` call. No data is copied or transformed. The legacy branch
-is left intact as a read-only artifact; future cleanup is a separate,
-opt-in step.
+auto-enroll. On existing v1 repos with prior history, the custom ref
+starts empty — past checkpoints on the legacy branch are NOT
+automatically reachable under 1.1. A future migration command can handle
+that; today, a user who wants their old history reachable can run, once:
+
+```
+git update-ref refs/entire/checkpoints/v1 refs/heads/entire/checkpoints/v1
+```
 
 The fetch refspec
 `+refs/entire/checkpoints/v1:refs/entire/remotes/origin/checkpoints/v1`
@@ -470,7 +472,7 @@ specify 1.1. Push and rebase-on-non-FF use the same machinery as the
 legacy branch path via `strategy.pushRefIfNeeded`.
 
 Key entry points: `checkpoint.MetadataRef(ctx)`,
-`checkpoint.MetadataTrackingRef(ctx)`, `checkpoint.PreserveV1History(ctx, repo)`,
+`checkpoint.MetadataTrackingRef(ctx)`,
 `paths.MetadataRefName`, `paths.MetadataTrackingRefName`,
 `settings.EntireSettings.UsesCustomMetadataRef`.
 

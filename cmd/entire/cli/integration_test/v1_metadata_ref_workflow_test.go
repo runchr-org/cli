@@ -7,7 +7,6 @@ import (
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -51,119 +50,6 @@ func TestV1MetadataRef_FreshRepo_ManualOptIn_FullWorkflow(t *testing.T) {
 		"custom ref %s should exist on a fresh 1.1 repo after first commit", paths.MetadataRefName)
 	assert.False(t, env.BranchExists(paths.MetadataBranchName),
 		"legacy branch refs/heads/%s should NOT be created on a fresh 1.1 repo", paths.MetadataBranchName)
-}
-
-// TestV1MetadataRef_ExistingV1Repo_PreservesHistoryOnFlip exercises the
-// existing-repo opt-in path: a v1 repo with prior checkpoint history is
-// flipped to 1.1 mid-flight. The next commit should preserve v1 history
-// by initializing the custom ref at the legacy branch's tip.
-func TestV1MetadataRef_ExistingV1Repo_PreservesHistoryOnFlip(t *testing.T) {
-	t.Parallel()
-	env := NewFeatureBranchEnv(t)
-	defer env.Cleanup()
-
-	// 1. Start on default v1 and produce real condensed history.
-	env.InitEntire()
-	session1 := env.NewSession()
-	require.NoError(t, env.SimulateUserPromptSubmitWithPrompt(session1.ID, "Add foo"))
-	env.WriteFile("foo.txt", "foo")
-	session1.CreateTranscript("Add foo", []FileChange{{Path: "foo.txt", Content: "foo"}})
-	require.NoError(t, env.SimulateStop(session1.ID, session1.TranscriptPath))
-	env.GitAdd("foo.txt")
-	env.GitCommitWithShadowHooks("Add foo")
-
-	legacyHashBeforeFlip := refHash(t, env.RepoDir, "refs/heads/"+paths.MetadataBranchName)
-
-	// 2. Flip to 1.1.
-	env.WriteSettings(map[string]any{
-		"enabled":   true,
-		"local_dev": true,
-		"strategy_options": map[string]any{
-			"checkpoints_version": "1.1",
-			"filtered_fetches":    true,
-		},
-	})
-
-	// 3. Run another session + commit (write path triggers preservation).
-	session2 := env.NewSession()
-	require.NoError(t, env.SimulateUserPromptSubmitWithPrompt(session2.ID, "Add bar"))
-	env.WriteFile("bar.txt", "bar")
-	session2.CreateTranscript("Add bar", []FileChange{{Path: "bar.txt", Content: "bar"}})
-	require.NoError(t, env.SimulateStop(session2.ID, session2.TranscriptPath))
-	env.GitAdd("bar.txt")
-	env.GitCommitWithShadowHooks("Add bar")
-
-	// Custom ref must exist and be reachable back through to the legacy hash.
-	require.True(t, env.RefExists(paths.MetadataRefName),
-		"custom ref %s should exist after flip + commit", paths.MetadataRefName)
-
-	repo, err := git.PlainOpen(env.RepoDir)
-	require.NoError(t, err)
-	customHash := refHash(t, env.RepoDir, paths.MetadataRefName)
-
-	// The legacy hash must be an ancestor of the custom hash (preservation +
-	// new commit on top). go-git's IsAncestor(other) returns true when the
-	// receiver is an ancestor of other.
-	customCommit, err := repo.CommitObject(customHash)
-	require.NoError(t, err)
-	legacyCommit := mustCommit(t, repo, legacyHashBeforeFlip)
-	ancestor, err := legacyCommit.IsAncestor(customCommit)
-	require.NoError(t, err)
-	assert.True(t, ancestor,
-		"legacy hash %s must be ancestor of custom hash %s after preservation+commit",
-		legacyHashBeforeFlip, customHash)
-
-	// Legacy branch must be untouched at its pre-flip hash.
-	legacyHashAfterFlip := refHash(t, env.RepoDir, "refs/heads/"+paths.MetadataBranchName)
-	assert.Equal(t, legacyHashBeforeFlip, legacyHashAfterFlip,
-		"legacy branch must NOT move after flip")
-}
-
-func mustCommit(t *testing.T, repo *git.Repository, hash plumbing.Hash) *object.Commit {
-	t.Helper()
-	c, err := repo.CommitObject(hash)
-	require.NoError(t, err)
-	return c
-}
-
-// TestV1MetadataRef_ExistingV1Repo_PreservesHistoryOnReadBeforeWrite verifies
-// that read-only operations also trigger preservation. A user who flips to 1.1
-// and runs `entire status` (or any read) before the next write should still
-// see prior history.
-func TestV1MetadataRef_ExistingV1Repo_PreservesHistoryOnReadBeforeWrite(t *testing.T) {
-	t.Parallel()
-	env := NewFeatureBranchEnv(t)
-	defer env.Cleanup()
-
-	env.InitEntire()
-	session1 := env.NewSession()
-	require.NoError(t, env.SimulateUserPromptSubmitWithPrompt(session1.ID, "Add foo"))
-	env.WriteFile("foo.txt", "foo")
-	session1.CreateTranscript("Add foo", []FileChange{{Path: "foo.txt", Content: "foo"}})
-	require.NoError(t, env.SimulateStop(session1.ID, session1.TranscriptPath))
-	env.GitAdd("foo.txt")
-	env.GitCommitWithShadowHooks("Add foo")
-
-	legacyHash := refHash(t, env.RepoDir, "refs/heads/"+paths.MetadataBranchName)
-
-	env.WriteSettings(map[string]any{
-		"enabled":   true,
-		"local_dev": true,
-		"strategy_options": map[string]any{
-			"checkpoints_version": "1.1",
-			"filtered_fetches":    true,
-		},
-	})
-
-	// First operation post-flip is a read (entire status, which reads from the
-	// metadata ref via checkpoint.ListCommitted under the hood).
-	_ = env.RunCLI("status")
-
-	require.True(t, env.RefExists(paths.MetadataRefName),
-		"custom ref %s should exist after a read post-flip", paths.MetadataRefName)
-	customHash := refHash(t, env.RepoDir, paths.MetadataRefName)
-	assert.Equal(t, legacyHash, customHash,
-		"custom ref should point at the legacy branch tip after preservation on read")
 }
 
 // TestLegacyV1_StillWorks_Regression verifies that v1 (default) behavior is

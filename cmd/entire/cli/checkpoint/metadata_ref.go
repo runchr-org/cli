@@ -2,15 +2,10 @@ package checkpoint
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"log/slog"
 	"strings"
 
-	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 
-	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
@@ -37,6 +32,12 @@ func RefDisplayName(ref plumbing.ReferenceName) string {
 // checkpoints_version 1.1 repos return the custom ref
 // (refs/entire/checkpoints/v1). Falls back to the legacy branch ref when
 // settings cannot be loaded.
+//
+// 1.1 repos start with an empty custom ref — prior history on the legacy
+// branch is NOT automatically reachable from the new ref. Users who want
+// the old checkpoints under 1.1 can run, once:
+//
+//	git update-ref refs/entire/checkpoints/v1 refs/heads/entire/checkpoints/v1
 func MetadataRef(ctx context.Context) plumbing.ReferenceName {
 	if settings.UsesCustomMetadataRef(ctx) {
 		return plumbing.ReferenceName(paths.MetadataRefName)
@@ -80,51 +81,4 @@ func MetadataTrackingRefForRemote(ctx context.Context, remoteName string) plumbi
 		return plumbing.ReferenceName(paths.BuildMetadataTrackingRef(remoteName))
 	}
 	return plumbing.NewRemoteReferenceName(remoteName, paths.MetadataBranchName)
-}
-
-// PreserveV1History initializes the custom ref at the legacy v1 branch's tip
-// so prior checkpoint history remains reachable under 1.1. Idempotent; runs
-// at most once per repo. Safe to call repeatedly.
-//
-// Returns nil and is a no-op when:
-//   - The repo is not configured for v1.1.
-//   - The custom ref already exists (regardless of legacy branch state).
-//   - Neither ref exists (no history to preserve; fresh-orphan creation is
-//     the caller's responsibility via strategy.EnsureMetadataBranch).
-//
-// Does NOT create an orphan ref when neither exists — that responsibility
-// lives with strategy.EnsureMetadataBranch, which is only called from write
-// paths.
-func PreserveV1History(ctx context.Context, repo *git.Repository) error {
-	if !settings.UsesCustomMetadataRef(ctx) {
-		return nil
-	}
-	target := plumbing.ReferenceName(paths.MetadataRefName)
-	switch _, err := repo.Reference(target, false); {
-	case err == nil:
-		return nil // already preserved (or freshly created)
-	case errors.Is(err, plumbing.ErrReferenceNotFound):
-		// fall through to check the legacy branch
-	default:
-		return fmt.Errorf("check custom metadata ref: %w", err)
-	}
-	legacy := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
-	legacyRef, err := repo.Reference(legacy, false)
-	if err != nil {
-		if errors.Is(err, plumbing.ErrReferenceNotFound) {
-			// No legacy branch — nothing to preserve. Caller handles
-			// missing ref normally (fresh-orphan on write, empty result
-			// on read).
-			return nil
-		}
-		return fmt.Errorf("check legacy metadata branch: %w", err)
-	}
-	if err := repo.Storer.SetReference(plumbing.NewHashReference(target, legacyRef.Hash())); err != nil {
-		return fmt.Errorf("preserve v1 history at custom ref: %w", err)
-	}
-	logging.Info(ctx, "preserved v1 history at custom ref",
-		slog.String("legacy_hash", legacyRef.Hash().String()),
-		slog.String("target_ref", string(target)),
-	)
-	return nil
 }

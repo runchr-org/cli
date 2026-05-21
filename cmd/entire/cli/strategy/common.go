@@ -350,12 +350,10 @@ func resolveAgentType(ctxAgentType types.AgentType, state *SessionState) types.A
 // local ref is missing or empty, creates/updates the local ref from it.
 // Otherwise creates an empty orphan.
 //
-// On 1.1 repos this also preserves v1 history first, so prior checkpoints
-// on the legacy branch remain reachable from the custom ref.
+// On 1.1 repos the custom ref starts empty; prior history on the legacy
+// branch is NOT automatically imported. A future migration command can
+// handle that.
 func EnsureMetadataBranch(ctx context.Context, repo *git.Repository) error {
-	if err := checkpoint.PreserveV1History(ctx, repo); err != nil {
-		return fmt.Errorf("preserve v1 history: %w", err)
-	}
 	refName := checkpoint.MetadataRef(ctx)
 	refDisplay := checkpoint.RefDisplayName(refName)
 
