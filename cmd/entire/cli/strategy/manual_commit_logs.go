@@ -65,15 +65,6 @@ func (s *ManualCommitStrategy) GetSessionInfo(ctx context.Context) (*SessionInfo
 	return info, nil
 }
 
-// GetMetadataRef returns a reference to the metadata for the given checkpoint.
-// For manual-commit strategy, returns the sharded path on entire/checkpoints/v1 branch.
-func (s *ManualCommitStrategy) GetMetadataRef(_ context.Context, checkpoint Checkpoint) string {
-	if checkpoint.CheckpointID.IsEmpty() {
-		return ""
-	}
-	return paths.MetadataBranchName + ":" + checkpoint.CheckpointID.Path()
-}
-
 // GetSessionMetadataRef returns a reference to the most recent metadata commit for a session.
 // For manual-commit strategy, metadata lives on the v1 metadata ref (legacy branch or 1.1 custom ref).
 func (s *ManualCommitStrategy) GetSessionMetadataRef(ctx context.Context, _ string) string {

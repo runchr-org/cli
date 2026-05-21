@@ -406,7 +406,7 @@ func ensureCheckpointAvailable(ctx, logCtx context.Context, repo *git.Repository
 		}
 	}
 
-	branchDescription := "entire/checkpoints/v1 branch"
+	branchDescription := cpkg.RefDisplayName(cpkg.MetadataRef(ctx)) + " ref"
 	if v2Only {
 		branchDescription = "v2 /main ref"
 	}
@@ -460,11 +460,17 @@ func checkpointPresentLocally(ctx context.Context, repo *git.Repository, checkpo
 // suggestCheckpointFetchCommand returns a git fetch command the user can
 // paste to pull the missing metadata ref. v2 refs live under refs/entire/
 // (not refs/heads/), so they need an explicit fully-qualified refspec;
-// v1 lives on a regular branch and its short name is enough.
+// legacy v1 lives on a regular branch and its short name is enough, while
+// 1.1 (custom-ref storage) uses a fully-qualified src:dst pair so the
+// fetched ref lands in the tracking namespace instead of clobbering the
+// local ref.
 func suggestCheckpointFetchCommand(ctx context.Context, v2Only bool) string {
-	ref := "entire/checkpoints/v1:entire/checkpoints/v1"
-	if v2Only {
+	var ref string
+	switch {
+	case v2Only:
 		ref = paths.V2MainRefName + ":" + paths.V2MainRefName
+	default:
+		ref = metadataFetchRefspec(ctx)
 	}
 	if remote.Configured(ctx) {
 		if url, err := remote.FetchURL(ctx); err == nil && url != "" {
@@ -472,6 +478,17 @@ func suggestCheckpointFetchCommand(ctx context.Context, v2Only bool) string {
 		}
 	}
 	return "git fetch origin " + ref
+}
+
+// metadataFetchRefspec returns the src:dst pair a user should paste into
+// `git fetch origin <refspec>` to pull v1 metadata. For legacy v1 it
+// refers to the branch by short name; for 1.1 it uses the fully-qualified
+// custom ref and the separate tracking namespace.
+func metadataFetchRefspec(ctx context.Context) string {
+	if settings.UsesCustomMetadataRef(ctx) {
+		return "+" + paths.MetadataRefName + ":" + paths.MetadataTrackingRefName
+	}
+	return paths.MetadataBranchName + ":" + paths.MetadataBranchName
 }
 
 func resolveCheckpointID(headCommit *object.Commit) (id.CheckpointID, bool) {

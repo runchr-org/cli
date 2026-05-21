@@ -870,6 +870,16 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 					if !usedSetupFlow {
 						fmt.Fprintln(w, "Entire is already enabled.")
 					}
+					// Re-running `entire enable` on an already-enabled repo is
+					// the documented opt-in path for 1.1 (edit settings, re-run
+					// enable). installMetadataRefspec is idempotent, so calling
+					// it here makes that flow actually install the fetch
+					// refspec instead of silently no-opping.
+					if settings.UsesCustomMetadataRef(ctx) {
+						if err := installMetadataRefspec(ctx); err != nil {
+							fmt.Fprintf(w, "Warning: failed to install fetch refspec for %s: %v\n", paths.MetadataRefName, err)
+						}
+					}
 					printEnabledStatus(ctx, w)
 					return nil
 				}

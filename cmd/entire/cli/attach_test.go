@@ -523,7 +523,7 @@ func TestAttach_RefusesWhenCheckpointMissingFromLocalBranch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error: checkpoint referenced by HEAD is missing locally and attach should refuse")
 	}
-	if !strings.Contains(err.Error(), "missing from the local entire/checkpoints/v1 branch") {
+	if !strings.Contains(err.Error(), "missing from the local entire/checkpoints/v1 ref") {
 		t.Errorf("error message should explain the missing-branch situation; got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "git fetch origin entire/checkpoints/v1") {
@@ -602,7 +602,7 @@ func TestAttach_RefusesWhenCheckpointOnlyInRemoteTrackingRef(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected attach to refuse when checkpoint is only in the remote-tracking ref")
 	}
-	if !strings.Contains(err.Error(), "missing from the local entire/checkpoints/v1 branch") {
+	if !strings.Contains(err.Error(), "missing from the local entire/checkpoints/v1 ref") {
 		t.Errorf("error should explain the local-branch gap; got: %v", err)
 	}
 
@@ -1345,7 +1345,7 @@ func TestAttach_ReviewRefusesWhenCheckpointMissingFromLocalBranch(t *testing.T) 
 	if err == nil {
 		t.Fatal("expected error: checkpoint referenced by HEAD is missing locally and attach should refuse")
 	}
-	if !strings.Contains(err.Error(), "missing from the local entire/checkpoints/v1 branch") {
+	if !strings.Contains(err.Error(), "missing from the local entire/checkpoints/v1 ref") {
 		t.Errorf("error message should explain the missing-branch situation; got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "git fetch origin entire/checkpoints/v1") {
