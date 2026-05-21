@@ -69,7 +69,8 @@ type V1RefMovedError struct {
 
 func (e *V1RefMovedError) Error() string {
 	return fmt.Sprintf("entire/checkpoints/v1 moved during OPF rewrite "+
-		"(expected %s, found %s); concurrent push detected — re-run `git push` after fetching",
+		"(expected %s, found %s); another local worktree advanced the ref "+
+		"mid-rewrite — re-run `git push` (no fetch needed; the move was local)",
 		e.Expected.String()[:7], e.Actual.String()[:7])
 }
 
@@ -376,15 +377,18 @@ func parseShardPathFromCommitMessage(message string) string {
 // everything (used for bootstrap/unknown-subject commits).
 //
 // Path-specific behavior (when in the target shard):
-//   - *.jsonl, *.txt, *.json → redacted via checkpoint.RedactBlobBytes
-//     (OPF on). .json files include checkpoint and per-session
-//     metadata.json, which carry free-form fields like Summary.Intent
-//     / Summary.Outcome / ReviewPrompt that can contain PII the regex
-//     layers miss; RedactBlobBytes uses the JSON-aware redactor for
-//     them so the JSON structure is preserved while leaves are
-//     redacted.
 //   - content_hash.txt → SHA256 of the sibling full.jsonl's new bytes
-//   - other files → copied verbatim (no user text expected)
+//     (deferred; not redacted itself)
+//   - everything else → redacted via checkpoint.RedactBlobBytes (OPF on).
+//     The fail-closed policy intentionally redacts ANY regular file
+//     inside the shard, not just a closed allowlist of suffixes — a
+//     future blob type (e.g. .md prose, agent dumps, no-extension
+//     transcript blobs) is redacted by default rather than slipping
+//     through. RedactBlobBytes itself dispatches: .jsonl/.json get
+//     JSON-aware leaf redaction (so free-form fields like Summary.Intent
+//     / ReviewPrompt are scrubbed); other files get byte redaction. The
+//     has-space gate inside OPF naturally excludes binary blobs from
+//     paying the model cost.
 func rebuildTreeWithOPF(ctx context.Context, repo *git.Repository, tree *object.Tree, pathPrefix, shardPath string) (plumbing.Hash, error) {
 	entries := make([]object.TreeEntry, 0, len(tree.Entries))
 	// deferredHashes records indexes of content_hash.txt entries we
@@ -429,13 +433,11 @@ func rebuildTreeWithOPF(ctx context.Context, repo *git.Repository, tree *object.
 				entries = append(entries, e)
 				continue
 			}
-			switch {
-			case e.Name == paths.ContentHashFileName:
+			switch e.Name {
+			case paths.ContentHashFileName:
 				deferredHashes = append(deferredHashes, deferred{idx: len(entries), entryName: e.Name, entryMode: e.Mode})
 				entries = append(entries, e) // placeholder; fixed in second pass
-			case strings.HasSuffix(e.Name, ".jsonl"),
-				strings.HasSuffix(e.Name, ".txt"),
-				strings.HasSuffix(e.Name, ".json"):
+			default:
 				content, err := readBlob(repo, e.Hash)
 				if err != nil {
 					return plumbing.ZeroHash, fmt.Errorf("read blob %s/%s: %w", pathPrefix, e.Name, err)
@@ -449,8 +451,6 @@ func rebuildTreeWithOPF(ctx context.Context, repo *git.Repository, tree *object.
 				if e.Name == paths.TranscriptFileName {
 					newFullJSONLHash = newHash
 				}
-			default:
-				entries = append(entries, e)
 			}
 		default:
 			entries = append(entries, e)

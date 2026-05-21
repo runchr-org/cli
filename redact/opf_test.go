@@ -479,3 +479,53 @@ func TestJSONLContentWithPrivacyFilter_FallsBackOnBatchError(t *testing.T) {
 		t.Error("fallback should still return non-empty content")
 	}
 }
+
+// shortReturnRuntime returns FEWER span slices than inputs — a runtime
+// contract violation that would silently leave the tail leaves
+// un-redacted under the old "log warning + proceed" behavior. The fix
+// trips the circuit breaker so the pre-push rewrite aborts before
+// commits are tagged Entire-OPF-Applied: true.
+type shortReturnRuntime struct{}
+
+func (r *shortReturnRuntime) Redact(_ context.Context, _ string, _ []string) ([]Span, error) {
+	return nil, nil
+}
+
+func (r *shortReturnRuntime) RedactBatch(_ context.Context, inputs []string, _ []string) ([][]Span, error) {
+	if len(inputs) == 0 {
+		return nil, nil
+	}
+	// Return exactly ONE span slice regardless of input count — the
+	// violation we're testing for.
+	return [][]Span{nil}, nil
+}
+
+// TestJSONLContentWithPrivacyFilter_ShortReturnTripsBreaker pins the
+// privacy contract: if the OPF runtime returns fewer span slices than
+// inputs, we treat it as a runtime failure (trip the breaker + 7-layer
+// fallback) rather than silently produce under-redacted output. The
+// per-blob caller in the pre-push rewrite then catches the tripped
+// breaker via OPFBreakerTripped() and aborts before CAS.
+func TestJSONLContentWithPrivacyFilter_ShortReturnTripsBreaker(t *testing.T) {
+	resetOPFConfig()
+	t.Cleanup(resetOPFConfig)
+	origStderr := opfStderr
+	opfStderr = io.Discard
+	t.Cleanup(func() { opfStderr = origStderr })
+
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"private_person": true},
+	}, &shortReturnRuntime{})
+
+	// Three distinct leaves — the fake will return ONE span slice instead
+	// of three, triggering the short-return path.
+	content := `{"a":"Alice met Bob","b":"Charlie sat down","c":"Eve walked home"}`
+	_, err := JSONLContentWithPrivacyFilter(context.Background(), content)
+	if err != nil {
+		t.Fatalf("short return should fall back to 7-layer (no error), got %v", err)
+	}
+	if !opfBreakerTripped.Load() {
+		t.Error("short return must trip the OPF breaker so the rewrite's post-loop check aborts the push")
+	}
+}

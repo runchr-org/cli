@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"math"
 	"net/url"
 	"regexp"
@@ -661,17 +660,23 @@ func JSONLContentWithPrivacyFilter(ctx context.Context, content string) (string,
 			return jsonlContentImpl(content, String)
 		}
 		fmt.Fprintf(opfStderr, "✓ OpenAI Privacy Filter: done (%.1fs)\n", time.Since(start).Seconds())
-		if len(batched) < len(inputs) {
-			slog.Warn("OPF runtime returned fewer span slices than inputs",
-				slog.String("component", "redaction"),
-				slog.Int("inputs", len(inputs)),
-				slog.Int("returned", len(batched)),
-			)
+		// A short return means the runtime gave us fewer span slices than
+		// inputs — the tail leaves would receive zero OPF spans and the
+		// caller would proceed as if OPF had found nothing. That silently
+		// produces under-redacted output and is indistinguishable from a
+		// "no PII present" result. Treat as a runtime contract violation:
+		// trip the breaker so the pre-push rewrite's post-loop
+		// OPFBreakerTripped() check aborts before the Entire-OPF-Applied
+		// trailer can be attached to under-redacted commits. The production
+		// shell-out always returns len(inputs), so this only fires for a
+		// misbehaving custom runtime — but the cost of leaving it dormant
+		// is too high for a privacy contract.
+		if len(batched) != len(inputs) {
+			shortErr := fmt.Errorf("opf runtime returned %d span slices for %d inputs", len(batched), len(inputs))
+			handleOPFFailure(ctx, cfg, shortErr)
+			return jsonlContentImpl(content, String)
 		}
 		for i, in := range inputs {
-			if i >= len(batched) {
-				break
-			}
 			spansByInput[in] = batched[i]
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/entireio/cli/redact"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/stretchr/testify/require"
 )
@@ -361,6 +363,87 @@ func TestShouldDescendAndInsideShard(t *testing.T) {
 			require.Equal(t, tc.descend, shouldDescend(tc.path, shard), "shouldDescend")
 			require.Equal(t, tc.inside, insideShard(tc.path, shard), "insideShard")
 		})
+	}
+}
+
+// TestRebuildTreeWithOPF_RedactsAllFileTypesInsideShard pins the
+// fail-closed file-type policy. Previously the walker only redacted
+// .jsonl / .txt / .json suffixes and copied everything else verbatim
+// inside the shard — a privacy hole for any future blob type (.md
+// prose, agent dumps, no-extension transcript files) that landed in a
+// checkpoint shard. After P3 the policy is inverted: every regular
+// file inside the shard except content_hash.txt flows through OPF.
+//
+// This test stands up a synthetic tree containing one .md and one
+// no-extension file with the OPF sentinel, runs the walker, and
+// asserts both files come out redacted.
+func TestRebuildTreeWithOPF_RedactsAllFileTypesInsideShard(t *testing.T) {
+	configureFakeOPF(t, &fakeOPFForRewrite{})
+	tempDir := t.TempDir()
+	testutil.InitRepo(t, tempDir)
+	repo, err := git.PlainOpen(tempDir)
+	require.NoError(t, err)
+
+	writeBlob := func(content string) plumbing.Hash {
+		obj := repo.Storer.NewEncodedObject()
+		obj.SetType(plumbing.BlobObject)
+		w, err := obj.Writer()
+		require.NoError(t, err)
+		_, err = w.Write([]byte(content))
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+		hash, err := repo.Storer.SetEncodedObject(obj)
+		require.NoError(t, err)
+		return hash
+	}
+	mdHash := writeBlob("Agent transcript: PERSONABC reported the issue")
+	rawHash := writeBlob("PERSONABC also appeared in this no-extension blob")
+	hashTxtHash := writeBlob("sha256:abcd")
+
+	// Entries must be sorted lexicographically per git's tree format.
+	tree := &object.Tree{Entries: []object.TreeEntry{
+		{Name: paths.ContentHashFileName, Mode: filemode.Regular, Hash: hashTxtHash},
+		{Name: "notes.md", Mode: filemode.Regular, Hash: mdHash},
+		{Name: "transcript", Mode: filemode.Regular, Hash: rawHash},
+	}}
+
+	// Empty shardPath = "walk everything" (bootstrap fallback). With the
+	// inverted policy, both notes.md and transcript get redacted.
+	newTreeHash, err := rebuildTreeWithOPF(context.Background(), repo, tree, "", "")
+	require.NoError(t, err)
+
+	newTree, err := repo.TreeObject(newTreeHash)
+	require.NoError(t, err)
+
+	readEntry := func(name string) string {
+		for _, e := range newTree.Entries {
+			if e.Name != name {
+				continue
+			}
+			blob, err := repo.BlobObject(e.Hash)
+			require.NoError(t, err)
+			r, err := blob.Reader()
+			require.NoError(t, err)
+			defer func() { _ = r.Close() }()
+			data, err := io.ReadAll(r)
+			require.NoError(t, err)
+			return string(data)
+		}
+		t.Fatalf("entry %q not in rebuilt tree", name)
+		return ""
+	}
+
+	if strings.Contains(readEntry("notes.md"), "PERSONABC") {
+		t.Error(".md blob inside the shard must be redacted — slipped through verbatim")
+	}
+	if strings.Contains(readEntry("transcript"), "PERSONABC") {
+		t.Error("no-extension blob inside the shard must be redacted — slipped through verbatim")
+	}
+	// content_hash.txt is on the deferred path: since there's no
+	// transcript file (named full.jsonl) in this synthetic tree, the
+	// deferred recomputation keeps the original hash.
+	if got := readEntry(paths.ContentHashFileName); got != "sha256:abcd" {
+		t.Errorf("content_hash.txt should be preserved when no transcript exists, got %q", got)
 	}
 }
 

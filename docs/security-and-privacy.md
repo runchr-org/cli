@@ -149,6 +149,8 @@ Ctrl-C to cancel the push.
 
 Non-interactive contexts (CI, scripted pipes with no TTY) skip the prompt and run OPF automatically when enabled, printing `→ OpenAI Privacy Filter: scanning checkpoints…` to stderr so the wait isn't silent. Set `ENTIRE_OPF=no` to skip OPF in those contexts without disabling the feature globally.
 
+**CI consideration**: if you've enabled OPF locally and your CI runs `git push` (e.g. an agent-driven workflow), the CI push will attempt to run OPF too. If the `opf` binary isn't installed in CI, the push will abort with `OPFRuntimeFailedError` rather than silently shipping under-redacted content — by design, since "I enabled OPF" should mean "no content leaves my machines without OPF." The remedies are (a) install `opf` in CI, (b) set `ENTIRE_OPF=no` for CI pushes, or (c) set `prompt_default: "never"` if you only want OPF on interactive pushes.
+
 OPF failures at push time are **fail-closed**: if OPF is not on PATH, fails to start, or times out during the pre-push rewrite, the per-process circuit breaker trips and the rewrite aborts the push with `OPF runtime failed; aborting push`. Nothing reaches the remote. The intent is that "the user enabled OPF" means "I do not want unredacted content leaving this machine" — falling back to 7-layer silently on the push path would violate that contract. Fix the install or set `ENTIRE_OPF=no` for a one-off push.
 
 (The circuit breaker is per-process, so a broken install costs one warning instead of one timeout per blob — but the push still aborts.)
