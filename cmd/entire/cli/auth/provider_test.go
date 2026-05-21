@@ -23,16 +23,18 @@ func TestResolveProvider_V2(t *testing.T) {
 	t.Parallel()
 
 	got := resolveProvider("v2")
-	if got.DeviceCodePath != "/api/auth/oauth/device/code" {
+	if got.DeviceCodePath != "/device_authorization" {
 		t.Errorf("v2 DeviceCodePath = %q", got.DeviceCodePath)
 	}
-	if got.TokenPath != "/api/auth/token" {
+	if got.TokenPath != "/oauth/token" {
 		t.Errorf("v2 TokenPath = %q", got.TokenPath)
 	}
-	if got.STSPath != "/api/authz/sts/token" {
+	// Token poll and RFC 8693 exchange share the same OIDC endpoint —
+	// grant_type differentiates them on the wire.
+	if got.STSPath != "/oauth/token" {
 		t.Errorf("v2 STSPath = %q", got.STSPath)
 	}
-	if got.AuthTokensPath != "/api/auth/tokens" {
+	if got.AuthTokensPath != "/api/v1/auth/tokens" {
 		t.Errorf("v2 AuthTokensPath = %q", got.AuthTokensPath)
 	}
 }

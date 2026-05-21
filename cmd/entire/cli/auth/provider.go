@@ -47,11 +47,20 @@ var providers = map[string]Provider{
 		AuthTokensPath: "/api/v1/auth/tokens",
 	},
 	"v2": { //nolint:gosec // OAuth client_id and endpoint paths, not credentials
+		// Matches an OIDC-standard auth server's discovery doc — confirmed
+		// against us.auth.partial.to's /.well-known/openid-configuration.
+		// Device authorization, token poll, and RFC 8693 exchange all hit
+		// the standard endpoints; grant_type differentiates token vs
+		// exchange at the shared /oauth/token endpoint.
 		ClientID:       "entire-cli",
-		DeviceCodePath: "/api/auth/oauth/device/code",
-		TokenPath:      "/api/auth/token",
-		STSPath:        "/api/authz/sts/token",
-		AuthTokensPath: "/api/auth/tokens",
+		DeviceCodePath: "/device_authorization",
+		TokenPath:      "/oauth/token",
+		STSPath:        "/oauth/token",
+		// API token management lives on the data API (not the auth host).
+		// auth.go / logout.go pass api.AuthBaseURL() for the keyring key,
+		// but the AuthTokensPath calls should route to api.BaseURL() in
+		// split-host setups — see TODO in auth.go's newAuthHostAPIClient.
+		AuthTokensPath: "/api/v1/auth/tokens",
 	},
 }
 

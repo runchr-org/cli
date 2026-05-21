@@ -57,11 +57,15 @@ func requireSecureBaseURL(insecureHTTPAuth bool) error {
 	return nil
 }
 
-// newAuthHostAPIClient builds an api.Client pointed at the auth host with the
-// provider-routed auth-tokens path wired in. Used by every command that hits
-// the auth-token management endpoints (status/list/revoke/logout).
-func newAuthHostAPIClient(token string) *api.Client {
-	return api.NewClientWithBaseURL(token, api.AuthBaseURL()).
+// newAPITokensClient builds an api.Client for the auth-token management
+// endpoints (list / revoke / current). API tokens live on the data API
+// regardless of split-host config — the auth host (entire-core in v2) mints
+// OAuth tokens but doesn't manage application API tokens — so this targets
+// api.BaseURL(). The bearer is whatever the caller already extracted from
+// the keyring (keyed by api.AuthBaseURL()); the data API validates it via
+// ENTIRE_CORE_BEARER_ENABLED in split-host setups.
+func newAPITokensClient(token string) *api.Client {
+	return api.NewClientWithBaseURL(token, api.BaseURL()).
 		WithAuthTokensPath(auth.CurrentProvider().AuthTokensPath)
 }
 
@@ -112,7 +116,7 @@ func newAuthStatusCmd() *cobra.Command {
 }
 
 func defaultListTokens(ctx context.Context, token string) ([]api.Token, error) {
-	return newAuthHostAPIClient(token).ListTokens(ctx) //nolint:wrapcheck // ListTokens already wraps with action context
+	return newAPITokensClient(token).ListTokens(ctx) //nolint:wrapcheck // ListTokens already wraps with action context
 }
 
 func runAuthStatus(ctx context.Context, w io.Writer, store tokenStore, list authTokenLister, baseURL string) error {
@@ -438,7 +442,7 @@ func newAuthRevokeCmd() *cobra.Command {
 }
 
 func defaultRevokeTokenByID(ctx context.Context, callerToken, id string) error {
-	return newAuthHostAPIClient(callerToken).RevokeToken(ctx, id) //nolint:wrapcheck // RevokeToken already wraps with action context
+	return newAPITokensClient(callerToken).RevokeToken(ctx, id) //nolint:wrapcheck // RevokeToken already wraps with action context
 }
 
 func runAuthRevoke(
