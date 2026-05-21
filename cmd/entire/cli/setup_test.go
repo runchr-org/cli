@@ -17,6 +17,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -3097,7 +3098,7 @@ func TestInstallMetadataRefspec_NoOrigin_NoOp(t *testing.T) {
 	if err := installMetadataRefspec(context.Background()); err != nil {
 		t.Fatalf("installMetadataRefspec: %v", err)
 	}
-	out, _ := exec.CommandContext(context.Background(), "git", "config", "--get-all", "remote.origin.fetch").Output() //nolint:errcheck // missing config key is normal
+	out, _ := execx.NonInteractive(context.Background(), "git", "config", "--get-all", "remote.origin.fetch").Output() //nolint:errcheck // missing config key is normal
 	if strings.Contains(string(out), paths.MetadataRefName) {
 		t.Fatalf("refspec should not be installed when origin is absent")
 	}
@@ -3107,7 +3108,7 @@ func TestInstallMetadataRefspec_AddsIdempotently(t *testing.T) {
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
 	t.Chdir(dir)
-	if out, err := exec.CommandContext(context.Background(), "git", "remote", "add", "origin", "https://example.invalid/repo.git").CombinedOutput(); err != nil {
+	if out, err := execx.NonInteractive(context.Background(), "git", "remote", "add", "origin", "https://example.invalid/repo.git").CombinedOutput(); err != nil {
 		t.Fatalf("git remote add: %v: %s", err, out)
 	}
 	for range 2 {
@@ -3115,7 +3116,7 @@ func TestInstallMetadataRefspec_AddsIdempotently(t *testing.T) {
 			t.Fatalf("installMetadataRefspec: %v", err)
 		}
 	}
-	out, _ := exec.CommandContext(context.Background(), "git", "config", "--get-all", "remote.origin.fetch").Output() //nolint:errcheck // missing config key is normal
+	out, _ := execx.NonInteractive(context.Background(), "git", "config", "--get-all", "remote.origin.fetch").Output() //nolint:errcheck // missing config key is normal
 	refspec := "+" + paths.MetadataRefName + ":" + paths.MetadataTrackingRefName
 	if got := strings.Count(string(out), refspec); got != 1 {
 		t.Fatalf("refspec count = %d; want 1\noutput:\n%s", got, out)
@@ -3126,7 +3127,7 @@ func TestRunEnable_On1_1Repo_InstallsRefspec(t *testing.T) {
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
 	t.Chdir(dir)
-	if out, err := exec.CommandContext(context.Background(), "git", "remote", "add", "origin", "https://example.invalid/repo.git").CombinedOutput(); err != nil {
+	if out, err := execx.NonInteractive(context.Background(), "git", "remote", "add", "origin", "https://example.invalid/repo.git").CombinedOutput(); err != nil {
 		t.Fatalf("git remote add: %v: %s", err, out)
 	}
 	testutil.WriteFile(t, dir, ".entire/settings.json", `{"strategy_options":{"checkpoints_version":"1.1"}}`)
@@ -3136,7 +3137,7 @@ func TestRunEnable_On1_1Repo_InstallsRefspec(t *testing.T) {
 		t.Fatalf("runEnable: %v", err)
 	}
 
-	out, _ := exec.CommandContext(context.Background(), "git", "config", "--get-all", "remote.origin.fetch").Output() //nolint:errcheck // missing config key is normal
+	out, _ := execx.NonInteractive(context.Background(), "git", "config", "--get-all", "remote.origin.fetch").Output() //nolint:errcheck // missing config key is normal
 	refspec := "+" + paths.MetadataRefName + ":" + paths.MetadataTrackingRefName
 	if !strings.Contains(string(out), refspec) {
 		t.Fatalf("refspec not installed; remote.origin.fetch=%s", string(out))
@@ -3147,7 +3148,7 @@ func TestRunEnable_OnV1Repo_DoesNotTouchRefspec(t *testing.T) {
 	dir := t.TempDir()
 	testutil.InitRepo(t, dir)
 	t.Chdir(dir)
-	if out, err := exec.CommandContext(context.Background(), "git", "remote", "add", "origin", "https://example.invalid/repo.git").CombinedOutput(); err != nil {
+	if out, err := execx.NonInteractive(context.Background(), "git", "remote", "add", "origin", "https://example.invalid/repo.git").CombinedOutput(); err != nil {
 		t.Fatalf("git remote add: %v: %s", err, out)
 	}
 	testutil.WriteFile(t, dir, ".entire/settings.json", `{"strategy_options":{"checkpoints_version":1}}`)
@@ -3156,7 +3157,7 @@ func TestRunEnable_OnV1Repo_DoesNotTouchRefspec(t *testing.T) {
 	if err := runEnable(context.Background(), &buf, true); err != nil {
 		t.Fatalf("runEnable: %v", err)
 	}
-	out, _ := exec.CommandContext(context.Background(), "git", "config", "--get-all", "remote.origin.fetch").Output() //nolint:errcheck // missing config key is normal
+	out, _ := execx.NonInteractive(context.Background(), "git", "config", "--get-all", "remote.origin.fetch").Output() //nolint:errcheck // missing config key is normal
 	if strings.Contains(string(out), paths.MetadataRefName) {
 		t.Fatalf("v1 repo should not get the 1.1 refspec; got %s", string(out))
 	}
