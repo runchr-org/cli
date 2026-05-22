@@ -29,14 +29,12 @@ func (s *ManualCommitStrategy) PrePush(ctx context.Context, remote string) error
 	settings.WarnIfCheckpointsV2Disallowed(ctx)
 
 	var err error
-	if settings.CheckpointsWriteVersion(ctx) != 2 {
-		_, pushCheckpointsSpan := perf.Start(ctx, "push_checkpoints_branch")
-		err = pushBranchIfNeeded(ctx, ps.pushTarget(), paths.MetadataBranchName)
-		if err != nil {
-			pushCheckpointsSpan.RecordError(err)
-		}
-		pushCheckpointsSpan.End()
+	_, pushCheckpointsSpan := perf.Start(ctx, "push_checkpoints_branch")
+	err = pushBranchIfNeeded(ctx, ps.pushTarget(), paths.MetadataBranchName)
+	if err != nil {
+		pushCheckpointsSpan.RecordError(err)
 	}
+	pushCheckpointsSpan.End()
 
 	// Push v2 refs when enabled.
 	if settings.IsPushV2RefsEnabled(ctx) {
