@@ -2,7 +2,7 @@
 set -euo pipefail
 
 #
-# migrate-v2-checkpoints-to-v1.sh - Inspect legacy v2 checkpoints for v1 migration.
+# migrate-v2-checkpoints-to-v1.sh - Migrate legacy v2 checkpoints to v1.
 #
 # USAGE:
 #   ./scripts/migrate-v2-checkpoints-to-v1.sh [OPTIONS] [SINCE_COMMIT]
@@ -11,22 +11,22 @@ set -euo pipefail
 #   -h, --help            Show this help message
 #   --list                Print checkpoint IDs and associated commit IDs only
 #   --dry-run             Print every v2 folder/file that would be migrated
-#   --apply               Build migration commit support path (currently blocked before writing)
+#   --apply               Write one local refs/heads/entire/checkpoints/v1 migration commit
 #   --repo <path>         Local repository path to inspect
 #   --since <commit>      Commit before the checkpoints to inspect
 #   --head <commit>       Limit scan to one history tip (default: all branches/remotes)
 #
 # DESCRIPTION:
-#   Read-only first pass for converting legacy checkpoints v2 data back to the
-#   v1 checkpoint format. The script finds commits newer than SINCE_COMMIT on
-#   local branches/remotes (or on --head, when supplied), extracts
-#   Entire-Checkpoint trailers, and prints the v2 /full folders/files that
-#   contain raw transcripts:
+#   Standalone helper for converting legacy checkpoints v2 data back to the v1
+#   checkpoint format. The script finds commits newer than SINCE_COMMIT on local
+#   branches/remotes (or on --head, when supplied), extracts Entire-Checkpoint
+#   trailers, and locates the v2 /full folders/files that contain raw transcripts:
 #
 #     refs/entire/checkpoints/v2/full/*:<checkpoint-path>/<session>/raw_transcript*
 #
-#   When refs/entire/checkpoints/v2/main is available, companion checkpoint and
-#   session metadata paths are printed after the full transcript folders.
+#   The default mode prints a migration plan without writing refs. --dry-run
+#   prints every source folder/file. --apply writes one local migration commit to
+#   refs/heads/entire/checkpoints/v1.
 #
 #   If --repo or SINCE_COMMIT is omitted, the script prompts for it.
 #
@@ -42,7 +42,15 @@ repo_path=""
 dry_run=false
 apply=false
 list_mode=false
+tmp_dir=""
 plan_entries_file=""
+checkpoint_commits_file=""
+checkpoint_ids_file=""
+checkpoint_paths_file=""
+full_artifacts_file=""
+raw_sessions_file=""
+raw_checkpoint_ids_file=""
+main_metadata_file=""
 
 show_help() {
 	sed -n '3,/^$/p' "$0" | sed -E 's/^# ?//'
@@ -58,8 +66,8 @@ warn() {
 }
 
 cleanup() {
-	if [[ -n "$plan_entries_file" && -f "$plan_entries_file" ]]; then
-		rm -f "$plan_entries_file"
+	if [[ -n "$tmp_dir" && -d "$tmp_dir" ]]; then
+		rm -rf "$tmp_dir"
 	fi
 }
 trap cleanup EXIT
@@ -84,50 +92,69 @@ list_numeric_dirs() {
 }
 
 list_full_refs() {
-	git for-each-ref --format='%(refname)' "$V2_FULL_REF_PREFIX" | sort
+	git for-each-ref --format='%(refname)' "$V2_FULL_REF_PREFIX" |
+		sort |
+		awk -v current="${V2_FULL_REF_PREFIX}/current" '
+			$0 == current { current_ref = $0; next }
+			{ refs[++n] = $0 }
+			END {
+				if (current_ref != "") {
+					print current_ref
+				}
+				for (i = n; i >= 1; i--) {
+					print refs[i]
+				}
+			}
+		'
 }
 
-list_checkpoint_ids_between() {
+write_checkpoint_commit_index_between() {
 	local since="$1"
 	local head="$2"
-	git log --format=%B "${since}..${head}" |
-		sed -nE "s/^[[:space:]]*${TRAILER_KEY}:[[:space:]]*([0-9a-f]{12})[[:space:]]*$/\\1/p" |
-		awk '!seen[$0]++'
+	local output_file="$3"
+
+	git log --format='__ENTIRE_COMMIT__%H%n%B' "${since}..${head}" |
+		awk -v key="$TRAILER_KEY" '
+			/^__ENTIRE_COMMIT__/ {
+				commit = substr($0, length("__ENTIRE_COMMIT__") + 1)
+				next
+			}
+			{
+				line = $0
+				pattern = "^[[:space:]]*" key ":[[:space:]]*([0-9a-f]{12})[[:space:]]*$"
+				if (line ~ pattern) {
+					sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
+					sub("[[:space:]]*$", "", line)
+					if (commit != "" && !seen[line SUBSEP commit]++) {
+						print line "\t" commit
+					}
+				}
+			}
+		' > "$output_file"
 }
 
-list_checkpoint_ids_from_all_refs() {
+write_checkpoint_commit_index_from_all_refs() {
 	local since="$1"
-	git log HEAD --branches --remotes --format=%B --not "$since" |
-		sed -nE "s/^[[:space:]]*${TRAILER_KEY}:[[:space:]]*([0-9a-f]{12})[[:space:]]*$/\\1/p" |
-		awk '!seen[$0]++'
-}
+	local output_file="$2"
 
-list_commit_ids_for_checkpoint() {
-	local checkpoint_id="$1"
-	local since="$2"
-	local head="$3"
-	local commits
-
-	if [[ -n "$head" ]]; then
-		commits=$(git log --format=%H --extended-regexp \
-			--grep="^${TRAILER_KEY}:[[:space:]]*${checkpoint_id}[[:space:]]*$" \
-			"${since}..${head}")
-	else
-		commits=$(git log HEAD --branches --remotes --format=%H --extended-regexp \
-			--grep="^${TRAILER_KEY}:[[:space:]]*${checkpoint_id}[[:space:]]*$" \
-			--not "$since")
-	fi
-
-	printf '%s\n' "$commits" | awk 'NF && !seen[$0]++'
-}
-
-list_full_artifacts() {
-	local ref_name="$1"
-	local session_path="$2"
-	local entries
-	entries=$(git ls-tree --name-only "${ref_name}:${session_path}" 2>/dev/null || true)
-	printf '%s\n' "$entries" |
-		sed -nE '/^raw_transcript(\.[0-9]+)?$/p; /^raw_transcript_hash\.txt$/p'
+	git log HEAD --branches --remotes --format='__ENTIRE_COMMIT__%H%n%B' --not "$since" |
+		awk -v key="$TRAILER_KEY" '
+			/^__ENTIRE_COMMIT__/ {
+				commit = substr($0, length("__ENTIRE_COMMIT__") + 1)
+				next
+			}
+			{
+				line = $0
+				pattern = "^[[:space:]]*" key ":[[:space:]]*([0-9a-f]{12})[[:space:]]*$"
+				if (line ~ pattern) {
+					sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
+					sub("[[:space:]]*$", "", line)
+					if (commit != "" && !seen[line SUBSEP commit]++) {
+						print line "\t" commit
+					}
+				}
+			}
+		' > "$output_file"
 }
 
 v1_raw_artifact_name() {
@@ -148,47 +175,35 @@ v1_raw_artifact_name() {
 	esac
 }
 
-append_tree_entry_from_source() {
-	local source_ref="$1"
-	local source_path="$2"
-	local target_path="$3"
-	local entry meta mode type hash
-
-	entry=$(git ls-tree "$source_ref" -- "$source_path" || true)
-	[[ -n "$entry" ]] || return 1
-
-	meta=${entry%%$'\t'*}
-	read -r mode type hash <<< "$meta"
-	[[ "$type" == "blob" && -n "$hash" ]] || return 1
-
-	printf '%s %s %s\t%s\n' "$mode" "$type" "$hash" "$target_path" >> "$plan_entries_file"
-}
-
 write_unique_mktree_input() {
 	local entries_file="$1"
-	awk -F '\t' 'NF >= 2 { line[$2] = $0 } END { for (path in line) print line[path] }' "$entries_file" |
+	awk -F '\t' 'NF >= 2 && !seen[$2]++ { print }' "$entries_file" |
 		sort -k2
 }
 
 build_v1_tree_from_plan() {
 	local entries_file="$1"
-	local combined
-	combined=$(mktemp "${TMPDIR:-/tmp}/v2-to-v1-tree.XXXXXX")
+	local combined index_file
+	combined="$tmp_dir/combined_index_info"
+	index_file="$tmp_dir/migration.index"
+
+	rm -f "$index_file"
 	if git show-ref --verify --quiet "$V1_REF"; then
-		git ls-tree -r "$V1_REF" > "$combined"
+		cat "$entries_file" > "$combined"
+		git ls-tree -r "$V1_REF" >> "$combined"
 	else
-		: > "$combined"
+		cat "$entries_file" > "$combined"
 	fi
-	cat "$entries_file" >> "$combined"
-	write_unique_mktree_input "$combined" | git mktree
-	rm -f "$combined"
+
+	write_unique_mktree_input "$combined" |
+		GIT_INDEX_FILE="$index_file" git update-index --index-info
+	GIT_INDEX_FILE="$index_file" git write-tree
 }
 
 create_v1_migration_commit() {
-	local entries_file="$1"
-	local tree_hash parent_hash commit_hash
+	local tree_hash="$1"
+	local parent_hash commit_hash
 
-	tree_hash=$(build_v1_tree_from_plan "$entries_file")
 	if git show-ref --verify --quiet "$V1_REF"; then
 		parent_hash=$(git rev-parse "$V1_REF^{commit}")
 		commit_hash=$(printf 'Migrate checkpoints v2 to v1\n\nSource refs: %s and %s/*\n' "$V2_MAIN_REF" "$V2_FULL_REF_PREFIX" |
@@ -199,6 +214,310 @@ create_v1_migration_commit() {
 	fi
 
 	printf '%s\n' "$commit_hash"
+}
+
+write_checkpoint_id_files() {
+	awk -F '\t' 'NF >= 2 && !seen[$1]++ { print $1 }' "$checkpoint_commits_file" > "$checkpoint_ids_file"
+	awk 'NF { print $0 "\t" substr($0, 1, 2) "/" substr($0, 3) }' "$checkpoint_ids_file" > "$checkpoint_paths_file"
+}
+
+write_full_artifact_index() {
+	local full_ref
+	: > "$full_artifacts_file"
+	: > "$raw_sessions_file"
+	: > "$raw_checkpoint_ids_file"
+
+	while IFS= read -r full_ref; do
+		[[ -n "$full_ref" ]] || continue
+		git ls-tree -r "$full_ref" |
+			awk -F '\t' \
+				-v ref="$full_ref" \
+				-v checkpoint_paths_file="$checkpoint_paths_file" \
+				-v full_artifacts_file="$full_artifacts_file" \
+				-v raw_sessions_file="$raw_sessions_file" \
+				-v raw_checkpoint_ids_file="$raw_checkpoint_ids_file" \
+				-v plan_entries_file="$plan_entries_file" '
+				BEGIN {
+					while ((getline line < checkpoint_paths_file) > 0) {
+						split(line, fields, "\t")
+						checkpoint_by_path[fields[2]] = fields[1]
+					}
+				}
+				NF >= 2 {
+					meta = $1
+					path = $2
+					n = split(path, parts, "/")
+					if (n != 4) {
+						next
+					}
+					checkpoint_path = parts[1] "/" parts[2]
+					if (!(checkpoint_path in checkpoint_by_path)) {
+						next
+					}
+					session_index = parts[3]
+					artifact = parts[4]
+					if (artifact == "raw_transcript") {
+						target = checkpoint_path "/" session_index "/full.jsonl"
+					} else if (artifact ~ /^raw_transcript\.[0-9][0-9][0-9]$/) {
+						suffix = artifact
+						sub(/^raw_transcript/, "", suffix)
+						target = checkpoint_path "/" session_index "/full.jsonl" suffix
+					} else if (artifact == "raw_transcript_hash.txt") {
+						target = checkpoint_path "/" session_index "/content_hash.txt"
+					} else {
+						next
+					}
+					checkpoint_id = checkpoint_by_path[checkpoint_path]
+					print checkpoint_id "\t" checkpoint_path "\t" session_index "\t" ref "\t" artifact "\t" path "\t" target "\t" meta >> full_artifacts_file
+					print checkpoint_id "\t" checkpoint_path "\t" session_index >> raw_sessions_file
+					print checkpoint_id >> raw_checkpoint_ids_file
+					print meta "\t" target >> plan_entries_file
+				}
+			'
+	done <<< "$full_refs"
+
+	sort -u "$raw_sessions_file" -o "$raw_sessions_file"
+	awk 'NF && !seen[$0]++' "$raw_checkpoint_ids_file" > "${raw_checkpoint_ids_file}.tmp"
+	mv "${raw_checkpoint_ids_file}.tmp" "$raw_checkpoint_ids_file"
+}
+
+write_main_metadata_index() {
+	: > "$main_metadata_file"
+	if [[ "$main_ref_available" != "true" ]]; then
+		return
+	fi
+
+	git ls-tree -r "$V2_MAIN_REF" |
+		awk -F '\t' \
+			-v checkpoint_paths_file="$checkpoint_paths_file" \
+			-v raw_sessions_file="$raw_sessions_file" \
+			-v main_metadata_file="$main_metadata_file" \
+			-v plan_entries_file="$plan_entries_file" '
+			BEGIN {
+				while ((getline line < checkpoint_paths_file) > 0) {
+					split(line, fields, "\t")
+					checkpoint_by_path[fields[2]] = fields[1]
+				}
+				while ((getline line < raw_sessions_file) > 0) {
+					split(line, fields, "\t")
+					session_wanted[fields[2] "/" fields[3]] = 1
+					checkpoint_has_raw[fields[2]] = 1
+				}
+			}
+			NF >= 2 {
+				meta = $1
+				path = $2
+				n = split(path, parts, "/")
+				checkpoint_path = parts[1] "/" parts[2]
+				if (!(checkpoint_path in checkpoint_by_path)) {
+					next
+				}
+				checkpoint_id = checkpoint_by_path[checkpoint_path]
+				if (n == 3 && parts[3] == "metadata.json") {
+					if (!(checkpoint_path in checkpoint_has_raw)) {
+						next
+					}
+					print checkpoint_id "\t" checkpoint_path "\t-\tcheckpoint_metadata\t" path "\t" meta >> main_metadata_file
+					next
+				}
+				if (n == 4 && (parts[4] == "metadata.json" || parts[4] == "prompt.txt")) {
+					session_key = checkpoint_path "/" parts[3]
+					if (!(session_key in session_wanted)) {
+						next
+					}
+					kind = parts[4] == "metadata.json" ? "session_metadata" : "prompt"
+					print checkpoint_id "\t" checkpoint_path "\t" parts[3] "\t" kind "\t" path "\t" meta >> main_metadata_file
+					print meta "\t" path >> plan_entries_file
+				}
+			}
+		'
+}
+
+append_checkpoint_metadata_plan_entries() {
+	if ! awk -F '\t' '$4 == "checkpoint_metadata" { found = 1; exit } END { exit found ? 0 : 1 }' "$main_metadata_file"; then
+		return
+	fi
+
+	if [[ "$apply" == "true" ]]; then
+		rewrite_checkpoint_metadata_plan_entries
+		return
+	fi
+
+	awk -F '\t' '$4 == "checkpoint_metadata" { print $6 "\t" $5 }' "$main_metadata_file" >> "$plan_entries_file"
+}
+
+rewrite_checkpoint_metadata_plan_entries() {
+	command -v python3 >/dev/null 2>&1 || die "python3 is required for --apply metadata rewriting"
+
+	local rewrite_dir rewrite_manifest rewrite_paths rewrite_hashes
+	rewrite_dir="$tmp_dir/rewritten-checkpoint-metadata"
+	rewrite_manifest="$tmp_dir/rewritten-checkpoint-metadata.tsv"
+	rewrite_paths="$tmp_dir/rewritten-checkpoint-metadata.paths"
+	rewrite_hashes="$tmp_dir/rewritten-checkpoint-metadata.hashes"
+
+	mkdir -p "$rewrite_dir"
+
+	python3 - "$main_metadata_file" "$raw_sessions_file" "$rewrite_dir" "$rewrite_manifest" "$rewrite_paths" <<'PY'
+import json
+import os
+import subprocess
+import sys
+
+main_metadata_file, raw_sessions_file, rewrite_dir, rewrite_manifest, rewrite_paths = sys.argv[1:]
+
+sessions_by_checkpoint = {}
+with open(raw_sessions_file, "r", encoding="utf-8") as f:
+    for line in f:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        checkpoint_id, checkpoint_path, session_index = line.split("\t")
+        del checkpoint_id
+        sessions_by_checkpoint.setdefault(checkpoint_path, set()).add(session_index)
+
+records = []
+with open(main_metadata_file, "r", encoding="utf-8") as f:
+    for line in f:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        fields = line.split("\t")
+        if len(fields) < 6:
+            continue
+        checkpoint_id, checkpoint_path, session_index, kind, target_path, object_info = fields[:6]
+        del checkpoint_id, session_index
+        if kind == "checkpoint_metadata" and checkpoint_path in sessions_by_checkpoint:
+            object_parts = object_info.split()
+            if len(object_parts) != 3 or object_parts[1] != "blob":
+                sys.stderr.write(f"unexpected ls-tree metadata for {target_path}: {object_info}\n")
+                sys.exit(1)
+            records.append((object_parts[2], target_path, checkpoint_path))
+
+if not records:
+    open(rewrite_manifest, "w", encoding="utf-8").close()
+    open(rewrite_paths, "w", encoding="utf-8").close()
+    sys.exit(0)
+
+batch_input = "".join(blob + "\n" for blob, _, _ in records).encode("ascii")
+batch = subprocess.run(
+    ["git", "cat-file", "--batch"],
+    input=batch_input,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    check=False,
+)
+if batch.returncode != 0:
+    sys.stderr.write(batch.stderr.decode("utf-8", errors="replace"))
+    sys.exit(batch.returncode)
+
+out = batch.stdout
+offset = 0
+
+with open(rewrite_manifest, "w", encoding="utf-8") as manifest, open(rewrite_paths, "w", encoding="utf-8") as paths:
+    for blob, target_path, checkpoint_path in records:
+        header_end = out.find(b"\n", offset)
+        if header_end < 0:
+            sys.stderr.write(f"missing git cat-file header for {blob}\n")
+            sys.exit(1)
+        header = out[offset:header_end].decode("ascii", errors="replace")
+        offset = header_end + 1
+        parts = header.split()
+        if len(parts) < 3 or parts[1] != "blob":
+            sys.stderr.write(f"unexpected git cat-file header for {blob}: {header}\n")
+            sys.exit(1)
+        size = int(parts[2])
+        data = out[offset:offset + size]
+        offset += size
+        if offset >= len(out) or out[offset:offset + 1] != b"\n":
+            sys.stderr.write(f"missing git cat-file record separator for {blob}\n")
+            sys.exit(1)
+        offset += 1
+
+        metadata = json.loads(data.decode("utf-8"))
+        session_entries = []
+        for session_index in sorted(sessions_by_checkpoint[checkpoint_path], key=lambda value: int(value)):
+            session_prefix = f"/{checkpoint_path}/{session_index}"
+            session_entries.append({
+                "metadata": f"{session_prefix}/metadata.json",
+                "transcript": f"{session_prefix}/full.jsonl",
+                "content_hash": f"{session_prefix}/content_hash.txt",
+                "prompt": f"{session_prefix}/prompt.txt",
+            })
+        metadata["sessions"] = session_entries
+
+        rewritten_path = os.path.join(rewrite_dir, checkpoint_path, "metadata.json")
+        os.makedirs(os.path.dirname(rewritten_path), exist_ok=True)
+        with open(rewritten_path, "w", encoding="utf-8") as rewritten:
+            json.dump(metadata, rewritten, indent=2)
+            rewritten.write("\n")
+
+        manifest.write(f"{rewritten_path}\t{target_path}\n")
+        paths.write(rewritten_path + "\n")
+PY
+
+	if [[ ! -s "$rewrite_paths" ]]; then
+		return
+	fi
+
+	git hash-object -w --stdin-paths < "$rewrite_paths" > "$rewrite_hashes"
+	awk -F '\t' '
+		NR == FNR {
+			target[FNR] = $2
+			next
+		}
+		{
+			print "100644 blob " $1 "\t" target[FNR]
+		}
+	' "$rewrite_manifest" "$rewrite_hashes" >> "$plan_entries_file"
+}
+
+compute_plan_counts() {
+	planned_checkpoints=$(wc -l < "$raw_checkpoint_ids_file" | tr -d '[:space:]')
+	planned_sessions=$(wc -l < "$raw_sessions_file" | tr -d '[:space:]')
+	planned_raw_transcripts=$(awk -F '\t' '$5 == "raw_transcript" { count++ } END { print count + 0 }' "$full_artifacts_file")
+	missing_raw_checkpoints=$(awk '
+		NR == FNR {
+			raw[$1] = 1
+			next
+		}
+		NF && !($1 in raw) {
+			count++
+		}
+		END {
+			print count + 0
+		}
+	' "$raw_checkpoint_ids_file" "$checkpoint_ids_file")
+	missing_metadata_checkpoints=$(awk -F '\t' '
+		NR == FNR {
+			if ($4 == "checkpoint_metadata") {
+				have[$1] = 1
+			}
+			next
+		}
+		NF && !($1 in have) {
+			count++
+		}
+		END {
+			print count + 0
+		}
+	' "$main_metadata_file" "$raw_checkpoint_ids_file")
+	missing_metadata_sessions=$(awk -F '\t' '
+		NR == FNR {
+			if ($4 == "session_metadata") {
+				have[$1 "\t" $3] = 1
+			}
+			next
+		}
+		NF {
+			key = $1 "\t" $3
+			if (!(key in have)) {
+				count++
+			}
+		}
+		END {
+			print count + 0
+		}
+	' "$main_metadata_file" "$raw_sessions_file")
 }
 
 while [[ $# -gt 0 ]]; do
@@ -253,7 +572,16 @@ if (( mode_count > 1 )); then
 	die "--list, --dry-run, and --apply are mutually exclusive"
 fi
 
-plan_entries_file=$(mktemp "${TMPDIR:-/tmp}/v2-to-v1-plan.XXXXXX")
+tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/v2-to-v1.XXXXXX")
+plan_entries_file="$tmp_dir/plan_entries"
+checkpoint_commits_file="$tmp_dir/checkpoint_commits"
+checkpoint_ids_file="$tmp_dir/checkpoint_ids"
+checkpoint_paths_file="$tmp_dir/checkpoint_paths"
+full_artifacts_file="$tmp_dir/full_artifacts"
+raw_sessions_file="$tmp_dir/raw_sessions"
+raw_checkpoint_ids_file="$tmp_dir/raw_checkpoint_ids"
+main_metadata_file="$tmp_dir/main_metadata"
+: > "$plan_entries_file"
 
 if [[ -z "$repo_path" ]]; then
 	printf 'Local repo path: ' >&2
@@ -288,6 +616,44 @@ if [[ -n "$head_commitish" ]]; then
 		die "$since_commit is not an ancestor of $head_commitish"
 fi
 
+if [[ -n "$head_hash" ]]; then
+	write_checkpoint_commit_index_between "$since_hash" "$head_hash" "$checkpoint_commits_file"
+else
+	write_checkpoint_commit_index_from_all_refs "$since_hash" "$checkpoint_commits_file"
+fi
+if [[ ! -s "$checkpoint_commits_file" ]]; then
+	if [[ -n "$head_hash" ]]; then
+		printf 'No %s trailers found in %s..%s\n' "$TRAILER_KEY" "$since_hash" "$head_hash"
+	else
+		printf 'No %s trailers found on local branches/remotes after %s\n' "$TRAILER_KEY" "$since_hash"
+	fi
+	exit 0
+fi
+write_checkpoint_id_files
+
+if [[ "$list_mode" == "true" ]]; then
+	checkpoint_count=$(wc -l < "$checkpoint_ids_file" | tr -d '[:space:]')
+	printf 'Checkpoints: %s\n' "$checkpoint_count"
+	printf 'checkpoint_id\tcommit_ids\n'
+	awk -F '\t' '
+		NF >= 2 {
+			if (!seen_checkpoint[$1]++) {
+				order[++n] = $1
+			}
+			key = $1 SUBSEP $2
+			if (!seen_pair[key]++) {
+				commits[$1] = commits[$1] == "" ? $2 : commits[$1] " " $2
+			}
+		}
+		END {
+			for (i = 1; i <= n; i++) {
+				print order[i] "\t" commits[order[i]]
+			}
+		}
+	' "$checkpoint_commits_file"
+	exit 0
+fi
+
 main_ref_available=false
 if git show-ref --verify --quiet "$V2_MAIN_REF"; then
 	main_ref_available=true
@@ -297,36 +663,6 @@ fi
 
 full_refs=$(list_full_refs)
 [[ -n "$full_refs" ]] || die "missing refs under $V2_FULL_REF_PREFIX; cannot locate raw transcripts"
-
-if [[ -n "$head_hash" ]]; then
-	checkpoint_ids=$(list_checkpoint_ids_between "$since_hash" "$head_hash")
-else
-	checkpoint_ids=$(list_checkpoint_ids_from_all_refs "$since_hash")
-fi
-if [[ -z "$checkpoint_ids" ]]; then
-	if [[ -n "$head_hash" ]]; then
-		printf 'No %s trailers found in %s..%s\n' "$TRAILER_KEY" "$since_hash" "$head_hash"
-	else
-		printf 'No %s trailers found on local branches/remotes after %s\n' "$TRAILER_KEY" "$since_hash"
-	fi
-	exit 0
-fi
-
-if [[ "$list_mode" == "true" ]]; then
-	checkpoint_count=$(printf '%s\n' "$checkpoint_ids" | sed '/^$/d' | wc -l | tr -d '[:space:]')
-	printf 'Checkpoints: %s\n' "$checkpoint_count"
-	printf 'checkpoint_id\tcommit_ids\n'
-	while IFS= read -r checkpoint_id; do
-		[[ -n "$checkpoint_id" ]] || continue
-		commits=$(list_commit_ids_for_checkpoint "$checkpoint_id" "$since_hash" "$head_hash" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
-		printf '%s\t' "$checkpoint_id"
-		if [[ -n "$commits" ]]; then
-			printf '%s' "$commits"
-		fi
-		printf '\n'
-	done <<< "$checkpoint_ids"
-	exit 0
-fi
 
 printf 'Repository: %s\n' "$repo_root"
 if [[ -n "$head_hash" ]]; then
@@ -341,119 +677,74 @@ printf 'Full refs:\n'
 printf '%s\n' "$full_refs" | sed 's/^/  /'
 printf '\n'
 
-planned_checkpoints=0
-planned_sessions=0
-planned_raw_transcripts=0
-missing_raw_checkpoints=0
-missing_metadata_checkpoints=0
-missing_metadata_sessions=0
+write_full_artifact_index
+write_main_metadata_index
+append_checkpoint_metadata_plan_entries
+compute_plan_counts
 
-while IFS= read -r checkpoint_id; do
-	[[ -n "$checkpoint_id" ]] || continue
-
-	checkpoint_path=$(checkpoint_to_path "$checkpoint_id")
-
-	found_full_artifact=false
-	found_sessions=""
-	checkpoint_output=""
-	while IFS= read -r full_ref; do
-		[[ -n "$full_ref" ]] || continue
-
-		sessions=$(list_numeric_dirs "$full_ref" "$checkpoint_path")
-		printed_full_checkpoint=false
-		while IFS= read -r session_index; do
-			[[ -n "$session_index" ]] || continue
-			session_path="$checkpoint_path/$session_index"
-			artifacts=$(list_full_artifacts "$full_ref" "$session_path")
-			if [[ -z "$artifacts" ]]; then
-				continue
-			fi
-
-			found_full_artifact=true
-			found_sessions="${found_sessions}${session_index}"$'\n'
-			if [[ "$printed_full_checkpoint" != "true" ]]; then
-				printed_full_checkpoint=true
-				checkpoint_output="${checkpoint_output}  full checkpoint folder: ${full_ref}:${checkpoint_path}"$'\n'
-			fi
-			checkpoint_output="${checkpoint_output}  full session folder: ${full_ref}:${session_path}"$'\n'
-			while IFS= read -r artifact; do
-				[[ -n "$artifact" ]] || continue
-				checkpoint_output="${checkpoint_output}    raw artifact: ${full_ref}:${session_path}/${artifact}"$'\n'
-			done <<< "$artifacts"
-		done <<< "$sessions"
-	done <<< "$full_refs"
-
-	if [[ "$found_full_artifact" != "true" ]]; then
-		warn "no raw_transcript artifacts found for checkpoint $checkpoint_id"
-		missing_raw_checkpoints=$((missing_raw_checkpoints + 1))
-		continue
+if [[ "$dry_run" != "true" ]]; then
+	if (( missing_raw_checkpoints > 0 )); then
+		warn "$missing_raw_checkpoints checkpoint trailer(s) do not have raw_transcript artifacts and will be skipped"
 	fi
+	if (( missing_metadata_checkpoints > 0 )); then
+		warn "$missing_metadata_checkpoints checkpoint(s) with raw transcripts are missing companion checkpoint metadata"
+	fi
+	if (( missing_metadata_sessions > 0 )); then
+		warn "$missing_metadata_sessions session(s) with raw transcripts are missing companion session metadata"
+	fi
+fi
 
-	planned_checkpoints=$((planned_checkpoints + 1))
+if [[ "$dry_run" == "true" ]]; then
+	while IFS= read -r checkpoint_id; do
+		[[ -n "$checkpoint_id" ]] || continue
 
-	if [[ "$main_ref_available" == "true" ]] && tree_path_exists "$V2_MAIN_REF" "$checkpoint_path"; then
-		checkpoint_output="${checkpoint_output}  companion metadata folder: ${V2_MAIN_REF}:${checkpoint_path}"$'\n'
-		if tree_path_exists "$V2_MAIN_REF" "$checkpoint_path/metadata.json"; then
-			checkpoint_output="${checkpoint_output}    checkpoint metadata: ${V2_MAIN_REF}:${checkpoint_path}/metadata.json"$'\n'
-			append_tree_entry_from_source "$V2_MAIN_REF" "$checkpoint_path/metadata.json" "$checkpoint_path/metadata.json" ||
-				warn "failed to plan checkpoint metadata for $checkpoint_id"
+		checkpoint_path=$(checkpoint_to_path "$checkpoint_id")
+
+		checkpoint_output=""
+
+		if ! awk -F '\t' -v checkpoint_id="$checkpoint_id" '$1 == checkpoint_id { found = 1; exit } END { exit found ? 0 : 1 }' "$full_artifacts_file"; then
+			warn "no raw_transcript artifacts found for checkpoint $checkpoint_id"
+			continue
+		fi
+		checkpoint_output=$(awk -F '\t' -v checkpoint_id="$checkpoint_id" '
+			$1 == checkpoint_id {
+				full_checkpoint_key = $4 SUBSEP $2
+				if (!seen_full_checkpoint[full_checkpoint_key]++) {
+					print "  full checkpoint folder: " $4 ":" $2
+				}
+				session_key = $4 SUBSEP $2 SUBSEP $3
+				if (!seen_session[session_key]++) {
+					print "  full session folder: " $4 ":" $2 "/" $3
+				}
+				print "    raw artifact: " $4 ":" $6
+			}
+		' "$full_artifacts_file")
+
+		if [[ "$main_ref_available" == "true" ]] && awk -F '\t' -v checkpoint_id="$checkpoint_id" '$1 == checkpoint_id && $4 == "checkpoint_metadata" { found = 1; exit } END { exit found ? 0 : 1 }' "$main_metadata_file"; then
+			metadata_output=$(awk -F '\t' -v checkpoint_id="$checkpoint_id" -v main_ref="$V2_MAIN_REF" '
+				$1 == checkpoint_id {
+					if (!printed_folder++) {
+						print "  companion metadata folder: " main_ref ":" $2
+					}
+					if ($4 == "checkpoint_metadata") {
+						print "    checkpoint metadata: " main_ref ":" $5
+					} else if ($4 == "session_metadata") {
+						print "    session metadata: " main_ref ":" $5
+					} else if ($4 == "prompt") {
+						print "    prompt: " main_ref ":" $5
+					}
+				}
+			' "$main_metadata_file")
+			checkpoint_output="${checkpoint_output}"$'\n'"${metadata_output}"
+		elif [[ "$main_ref_available" == "true" ]]; then
+			warn "checkpoint $checkpoint_id has raw transcript artifacts but no companion metadata on $V2_MAIN_REF"
 		fi
 
-		metadata_sessions=$(printf '%s' "$found_sessions" | sed '/^$/d' | sort -n | uniq)
-		while IFS= read -r session_index; do
-			[[ -n "$session_index" ]] || continue
-			session_path="$checkpoint_path/$session_index"
-			planned_sessions=$((planned_sessions + 1))
-			if tree_path_exists "$V2_MAIN_REF" "$session_path/metadata.json"; then
-				checkpoint_output="${checkpoint_output}    session metadata: ${V2_MAIN_REF}:${session_path}/metadata.json"$'\n'
-				append_tree_entry_from_source "$V2_MAIN_REF" "$session_path/metadata.json" "$session_path/metadata.json" ||
-					warn "failed to plan session metadata for checkpoint $checkpoint_id session $session_index"
-			else
-				missing_metadata_sessions=$((missing_metadata_sessions + 1))
-				warn "missing session metadata for checkpoint $checkpoint_id session $session_index on $V2_MAIN_REF"
-			fi
-			if tree_path_exists "$V2_MAIN_REF" "$session_path/prompt.txt"; then
-				checkpoint_output="${checkpoint_output}    prompt: ${V2_MAIN_REF}:${session_path}/prompt.txt"$'\n'
-				append_tree_entry_from_source "$V2_MAIN_REF" "$session_path/prompt.txt" "$session_path/prompt.txt" ||
-					warn "failed to plan prompt for checkpoint $checkpoint_id session $session_index"
-			fi
-		done <<< "$metadata_sessions"
-	elif [[ "$main_ref_available" == "true" ]]; then
-		missing_metadata_checkpoints=$((missing_metadata_checkpoints + 1))
-		warn "checkpoint $checkpoint_id has raw transcript artifacts but no companion metadata on $V2_MAIN_REF"
-	fi
-
-	while IFS=$'\t' read -r full_ref session_index artifact; do
-		[[ -n "${full_ref:-}" && -n "${session_index:-}" && -n "${artifact:-}" ]] || continue
-		session_path="$checkpoint_path/$session_index"
-		v1_artifact=$(v1_raw_artifact_name "$artifact") || continue
-		append_tree_entry_from_source "$full_ref" "$session_path/$artifact" "$session_path/$v1_artifact" ||
-			warn "failed to plan raw artifact for checkpoint $checkpoint_id session $session_index: $artifact"
-		if [[ "$artifact" == "raw_transcript" ]]; then
-			planned_raw_transcripts=$((planned_raw_transcripts + 1))
-		fi
-	done < <(
-		while IFS= read -r full_ref; do
-			[[ -n "$full_ref" ]] || continue
-			sessions=$(list_numeric_dirs "$full_ref" "$checkpoint_path")
-			while IFS= read -r session_index; do
-				[[ -n "$session_index" ]] || continue
-				session_path="$checkpoint_path/$session_index"
-				artifacts=$(list_full_artifacts "$full_ref" "$session_path")
-				while IFS= read -r artifact; do
-					[[ -n "$artifact" ]] || continue
-					printf '%s\t%s\t%s\n' "$full_ref" "$session_index" "$artifact"
-				done <<< "$artifacts"
-			done <<< "$sessions"
-		done <<< "$full_refs"
-	)
-
-	if [[ "$dry_run" == "true" ]]; then
 		printf 'checkpoint %s\n' "$checkpoint_id"
 		printf '%s' "$checkpoint_output"
 		printf '\n'
-	fi
-done <<< "$checkpoint_ids"
+	done < "$checkpoint_ids_file"
+fi
 
 planned_entries=$(wc -l < "$plan_entries_file" | tr -d '[:space:]')
 unique_planned_entries=$(write_unique_mktree_input "$plan_entries_file" | wc -l | tr -d '[:space:]')
@@ -472,13 +763,39 @@ if [[ "$dry_run" != "true" ]]; then
 fi
 
 if [[ "$apply" == "true" ]]; then
-	# This is the final write path, intentionally blocked until the migration
-	# behavior is reviewed with real repo output. It reuses v2 blob objects,
-	# builds one complete v1 tree, and would then update V1_REF to the commit.
-	die "--apply is scaffolded but intentionally blocked before creating a migration commit or updating $V1_REF"
+	if [[ "$unique_planned_entries" == "0" ]]; then
+		die "nothing to migrate: no v1 tree entries were planned"
+	fi
+
+	old_ref_hash=""
+	if git show-ref --verify --quiet "$V1_REF"; then
+		old_ref_hash=$(git rev-parse "$V1_REF^{commit}")
+	fi
+
+	if [[ -n "$old_ref_hash" ]]; then
+		old_tree_hash=$(git rev-parse "$old_ref_hash^{tree}")
+	else
+		old_tree_hash=""
+	fi
+
+	tree_hash=$(build_v1_tree_from_plan "$plan_entries_file")
+	if [[ -n "$old_tree_hash" && "$old_tree_hash" == "$tree_hash" ]]; then
+		printf '%s is already up to date; no migration commit created.\n' "$V1_REF"
+		exit 0
+	fi
+
+	commit_hash=$(create_v1_migration_commit "$tree_hash")
+	if [[ -n "$old_ref_hash" ]]; then
+		git update-ref "$V1_REF" "$commit_hash" "$old_ref_hash"
+	else
+		git update-ref "$V1_REF" "$commit_hash"
+	fi
+
+	printf 'Wrote migration commit: %s\n' "$commit_hash"
+	printf 'Updated %s\n' "$V1_REF"
+	exit 0
 fi
 
 if [[ "$dry_run" != "true" ]]; then
-	printf 'No refs were written. Use --dry-run to print every source and target artifact.\n'
-	printf 'The single-commit apply path is scaffolded but blocked before updating %s.\n' "$V1_REF"
+	printf 'Plan only: no refs were written. Use --dry-run to print every source and target artifact, or --apply to write the migration commit.\n'
 fi
