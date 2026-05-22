@@ -347,35 +347,6 @@ func TestAttach_CheckpointsVersion2_FallsBackToV1(t *testing.T) {
 	}
 }
 
-func TestAttach_V2DualWriteDisabled(t *testing.T) {
-	setupAttachTestRepo(t)
-
-	repoDir := mustGetwd(t)
-
-	sessionID := "test-attach-v2-disabled"
-	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"create hello.txt"},"uuid":"uuid-1"}
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Write","input":{"file_path":"hello.txt","content":"hello"}}]},"uuid":"uuid-2"}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_1","content":"wrote file"}]},"uuid":"uuid-3"}
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]},"uuid":"uuid-4"}
-`)
-
-	var out bytes.Buffer
-	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{Force: true}); err != nil {
-		t.Fatalf("runAttach failed: %v", err)
-	}
-
-	repo, err := git.PlainOpen(repoDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repo.Reference(plumbing.ReferenceName(paths.V2MainRefName), true); err == nil {
-		t.Fatalf("did not expect %s when checkpoints_v2 is disabled", paths.V2MainRefName)
-	}
-	if _, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true); err == nil {
-		t.Fatalf("did not expect %s when checkpoints_v2 is disabled", paths.V2FullCurrentRefName)
-	}
-}
-
 func TestAttach_AppendsAsAdditionalSessionWhenIDDiffers(t *testing.T) {
 	setupAttachTestRepo(t)
 

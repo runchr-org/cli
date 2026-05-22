@@ -2682,19 +2682,19 @@ func TestListCommittedForExplain_MergesV1AndV2(t *testing.T) {
 		AuthorEmail:  "t@t.com",
 	}))
 
-	// Write a dual-write checkpoint (exists in both v1 and v2).
-	dualID := id.MustCheckpointID("bbb444555666")
+	// Write one checkpoint to both stores to verify merged reads deduplicate it.
+	overlapID := id.MustCheckpointID("bbb444555666")
 	require.NoError(t, v1Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
-		CheckpointID: dualID,
-		SessionID:    "session-dual",
+		CheckpointID: overlapID,
+		SessionID:    "session-overlap",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted(transcript),
 		AuthorName:   "T",
 		AuthorEmail:  "t@t.com",
 	}))
 	require.NoError(t, v2Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
-		CheckpointID: dualID,
-		SessionID:    "session-dual",
+		CheckpointID: overlapID,
+		SessionID:    "session-overlap",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted(transcript),
 		AuthorName:   "T",
@@ -2704,7 +2704,7 @@ func TestListCommittedForExplain_MergesV1AndV2(t *testing.T) {
 	store, err := checkpoint.NewCommittedReader(ctx, repo, checkpoint.CommittedReaderOptions{})
 	require.NoError(t, err)
 
-	// In dual-read mode: should return both the dual-write AND the v1-only checkpoint.
+	// In dual-read mode: should return both the overlap and the v1-only checkpoint.
 	results, err := store.ListCommitted(ctx)
 	require.NoError(t, err)
 
@@ -2713,16 +2713,16 @@ func TestListCommittedForExplain_MergesV1AndV2(t *testing.T) {
 		foundIDs[r.CheckpointID] = true
 	}
 	require.True(t, foundIDs[v1OnlyID], "v1-only checkpoint should be visible when v2 is preferred")
-	require.True(t, foundIDs[dualID], "dual-write checkpoint should be visible")
+	require.True(t, foundIDs[overlapID], "overlapping checkpoint should be visible")
 
-	// No duplicates: dual checkpoint should appear exactly once.
-	dualCount := 0
+	// No duplicates: overlapping checkpoint should appear exactly once.
+	overlapCount := 0
 	for _, r := range results {
-		if r.CheckpointID == dualID {
-			dualCount++
+		if r.CheckpointID == overlapID {
+			overlapCount++
 		}
 	}
-	require.Equal(t, 1, dualCount, "dual-write checkpoint should not be duplicated")
+	require.Equal(t, 1, overlapCount, "overlapping checkpoint should not be duplicated")
 }
 
 func TestListCommittedForExplain_NoLocalV2RefReturnsV1Only(t *testing.T) {
@@ -6202,7 +6202,8 @@ func TestGetBranchCheckpoints_V2OnlyCheckpointDiscoverable(t *testing.T) {
 }
 
 func TestGetBranchCheckpoints_V2PromptFallbackWhenV1Deleted(t *testing.T) {
-	// When v2 is preferred and v1 metadata branch is deleted after dual-write,
+	// When v2 is preferred and v1 metadata branch is deleted after a checkpoint
+	// exists in both stores,
 	// prompts should still be readable from v2 /main.
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)

@@ -51,7 +51,7 @@ func TestV2Resume_SwitchBranchWithSession(t *testing.T) {
 	err = env.SimulateStop(session.ID, session.TranscriptPath)
 	require.NoError(t, err)
 
-	// Commit (triggers dual-write to v1 + v2)
+	// Commit writes v1 metadata; the v2-enabled reader should still resolve it.
 	env.GitCommitWithShadowHooks("Create hello script", "hello.rb")
 
 	featureBranch := env.GetCurrentBranch()
