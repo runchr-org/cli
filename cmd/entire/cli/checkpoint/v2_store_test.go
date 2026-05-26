@@ -31,8 +31,6 @@ func TestV2GitStore_GetRefState_ReturnsParentAndTree(t *testing.T) {
 		CheckpointID: id.MustCheckpointID("a1a2a3a4a5a6"),
 		SessionID:    "session-1",
 		Strategy:     "manual-commit",
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	parentHash, treeHash, err := store.GetRefState(plumbing.ReferenceName(paths.V2MainRefName))

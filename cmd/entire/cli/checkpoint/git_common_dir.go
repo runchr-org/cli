@@ -22,8 +22,11 @@ func resolveGitCommonDir(ctx context.Context, repo *git.Repository) (string, err
 	}
 
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--git-common-dir")
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if detail := strings.TrimSpace(string(output)); detail != "" {
+			return "", fmt.Errorf("resolve git common dir: %w: %s", err, detail)
+		}
 		return "", fmt.Errorf("resolve git common dir: %w", err)
 	}
 	commonDir := strings.TrimSpace(string(output))

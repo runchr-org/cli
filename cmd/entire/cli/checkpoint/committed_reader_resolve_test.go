@@ -32,8 +32,6 @@ func TestCommittedReader_UsesV2WhenFound(t *testing.T) {
 		SessionID:    "session-v2",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n")),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	reader := &DualCheckpointReader{v2: v2Store, v1: v1Store}
@@ -68,8 +66,6 @@ func TestDualCheckpointReader_UpdateSummaryUpdatesV1Only(t *testing.T) {
 		SessionID:    "session-v2",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"text":"from-v2"}` + "\n")),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	reader := &DualCheckpointReader{v2: v2Store, v1: v1Store}
@@ -112,8 +108,6 @@ func TestDualCheckpointReader_ReadSessionPromptsFallsBackWhenV2PromptMissing(t *
 		SessionID:    "session-with-v1-prompt",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"text":"from-v2"}` + "\n")),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	reader := &DualCheckpointReader{v2: v2Store, v1: v1Store}
@@ -154,8 +148,6 @@ func TestDualCheckpointReader_ReadSessionMetadataAndPromptsFallsBackWhenV2Prompt
 		SessionID:         "session-b",
 		Strategy:          "manual-commit",
 		CompactTranscript: []byte(`{"text":"compact-session-b"}` + "\n"),
-		AuthorName:        "Test",
-		AuthorEmail:       "test@test.com",
 	})
 
 	reader := &DualCheckpointReader{v2: v2Store, v1: v1Store}
@@ -252,8 +244,6 @@ func TestDualCheckpointReader_FallsBackToV1RawTranscriptBySessionID(t *testing.T
 		SessionID:         "session-b",
 		Strategy:          "manual-commit",
 		CompactTranscript: []byte(`{"text":"compact-session-b"}` + "\n"),
-		AuthorName:        "Test",
-		AuthorEmail:       "test@test.com",
 	})
 
 	reader := &DualCheckpointReader{v2: v2Store, v1: v1Store}
@@ -302,8 +292,6 @@ func TestDualCheckpointReader_DoesNotUseIndexFallbackWhenV2CheckpointExists(t *t
 		SessionID:         "session-b",
 		Strategy:          "manual-commit",
 		CompactTranscript: []byte(`{"text":"compact-session-b"}` + "\n"),
-		AuthorName:        "Test",
-		AuthorEmail:       "test@test.com",
 	})
 	removeV2MainSessionTree(t, repo, cpID)
 
@@ -342,8 +330,6 @@ func TestDualCheckpointReader_ReadSessionMetadataAndPromptsDoesNotUseSingleV1Fal
 		SessionID:         "session-b",
 		Strategy:          "manual-commit",
 		CompactTranscript: []byte(`{"text":"compact-session-b"}` + "\n"),
-		AuthorName:        "Test",
-		AuthorEmail:       "test@test.com",
 	})
 	removeV2MainSessionTree(t, repo, cpID)
 
@@ -388,8 +374,6 @@ func TestDualCheckpointReader_ReadSessionMetadataAndPromptsDoesNotFallbackByInde
 		Strategy:          "manual-commit",
 		CompactTranscript: []byte(`{"text":"compact-session-b"}` + "\n"),
 		Prompts:           []string{"v2 prompt"},
-		AuthorName:        "Test",
-		AuthorEmail:       "test@test.com",
 	})
 	corruptV2MainSessionMetadata(t, repo, cpID, 0)
 
@@ -415,8 +399,6 @@ func TestDualCheckpointReader_ReadSessionContentReturnsV2AndFallbackErrors(t *te
 		SessionID:         "session-missing-v1",
 		Strategy:          "manual-commit",
 		CompactTranscript: []byte(`{"text":"compact-only"}` + "\n"),
-		AuthorName:        "Test",
-		AuthorEmail:       "test@test.com",
 	})
 
 	reader := &DualCheckpointReader{v2: v2Store, v1: v1Store}
@@ -459,8 +441,6 @@ func TestReadRawSessionLogForCheckpoint_FallsBackToV1RawTranscriptByV2SessionID(
 		SessionID:         "session-b",
 		Strategy:          "manual-commit",
 		CompactTranscript: []byte(`{"text":"compact-session-b"}` + "\n"),
-		AuthorName:        "Test",
-		AuthorEmail:       "test@test.com",
 	})
 
 	reader := &DualCheckpointReader{v2: v2Store, v1: v1Store}
@@ -512,8 +492,6 @@ func TestCommittedReader_PrefersV1WhenV2Disabled(t *testing.T) {
 		SessionID:    "session-v2",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n")),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	require.NoError(t, v1Store.WriteCommitted(ctx, WriteCommittedOptions{
@@ -546,8 +524,6 @@ func TestReadRawSessionLogForCheckpoint_UsesV2WhenFound(t *testing.T) {
 		SessionID:    "session-v2",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"from-v2"}]}}` + "\n")),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	reader := &DualCheckpointReader{v2: v2Store, v1: v1Store}
@@ -595,8 +571,6 @@ func TestDualCheckpointReader_ListCommittedMergesV2AndV1(t *testing.T) {
 		CreatedAt:    older,
 		Strategy:     "manual-commit",
 		Transcript:   transcript,
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	reader := &DualCheckpointReader{v2: v2Store, v1: v1Store}
@@ -678,8 +652,6 @@ func TestReadRawSessionLogForCheckpoint_PrefersV1WhenV2Disabled(t *testing.T) {
 		SessionID:    "session-v2",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"from-v2"}]}}` + "\n")),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	require.NoError(t, v1Store.WriteCommitted(ctx, WriteCommittedOptions{
@@ -731,8 +703,6 @@ func TestCommittedReader_DoesNotUseIndexFallbackWhenV2Malformed(t *testing.T) {
 		SessionID:    "session-v2",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"from-v2"}]}}` + "\n")),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 	corruptV2MainMetadata(t, repo, cpID)
 

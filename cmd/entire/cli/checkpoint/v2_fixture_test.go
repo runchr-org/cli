@@ -34,8 +34,6 @@ type v2TestCheckpointOptions struct {
 	FilesTouched              []string
 	CheckpointsCount          int
 	CreatedAt                 time.Time
-	AuthorName                string
-	AuthorEmail               string
 	Agent                     types.AgentType
 	Model                     string
 	TurnID                    string

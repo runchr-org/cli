@@ -33,8 +33,6 @@ type v2CheckpointFixtureOptions struct {
 	FilesTouched     []string
 	CheckpointsCount int
 	CreatedAt        time.Time
-	AuthorName       string
-	AuthorEmail      string
 	Agent            types.AgentType
 	Model            string
 	TokenUsage       *agent.TokenUsage

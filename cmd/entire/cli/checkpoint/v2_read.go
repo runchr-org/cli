@@ -356,8 +356,11 @@ func (s *V2GitStore) readTranscriptFromFullRefs(ctx context.Context, checkpointI
 	if err != nil {
 		return nil, err
 	}
+	checkedArchived := make(map[plumbing.ReferenceName]struct{}, len(archived))
 	for i := len(archived) - 1; i >= 0; i-- {
-		transcript, err := s.readTranscriptFromRef(archived[i], sessionPath, agentType)
+		ref := archived[i]
+		checkedArchived[ref] = struct{}{}
+		transcript, err := s.readTranscriptFromRef(ref, sessionPath, agentType)
 		if err == nil && len(transcript) > 0 {
 			return transcript, nil
 		}
@@ -383,7 +386,11 @@ func (s *V2GitStore) readTranscriptFromFullRefs(ctx context.Context, checkpointI
 		return nil, nil //nolint:nilerr // Best-effort: fetch-on-demand failure shouldn't block resume.
 	}
 	for i := len(archived) - 1; i >= 0; i-- {
-		transcript, err := s.readTranscriptFromRef(archived[i], sessionPath, agentType)
+		ref := archived[i]
+		if _, checked := checkedArchived[ref]; checked {
+			continue
+		}
+		transcript, err := s.readTranscriptFromRef(ref, sessionPath, agentType)
 		if err == nil && len(transcript) > 0 {
 			return transcript, nil
 		}

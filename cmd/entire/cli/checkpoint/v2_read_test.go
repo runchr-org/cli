@@ -32,8 +32,6 @@ func TestV2ReadCommitted_ReturnsCheckpointSummary(t *testing.T) {
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"test": true}`)),
 		Prompts:      []string{"hello"},
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	summary, err := store.ReadCommitted(ctx, cpID)
@@ -68,8 +66,6 @@ func TestV2ReadSessionContent_ReturnsMetadataAndTranscript(t *testing.T) {
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"message": "hello world"}`)),
 		Prompts:      []string{"test prompt"},
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	content, err := store.ReadSessionContent(ctx, cpID, 0)
@@ -92,8 +88,6 @@ func TestV2ReadSessionContent_TranscriptFromArchivedGeneration(t *testing.T) {
 		SessionID:    "session-archived",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"archived": true}`)),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	archiveV2FullCurrentRef(t, repo, "0000000000001")
@@ -117,8 +111,6 @@ func TestV2ReadSessionContent_FetchesRemoteArchivedGeneration(t *testing.T) {
 		SessionID:    "session-remote-archive",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"remoteArchived": true}` + "\n")),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 	archiveRefName := archiveV2FullCurrentRef(t, remoteRepo, "0000000000002")
 	resetV2FullCurrentRef(ctx, t, remoteRepo)
@@ -153,8 +145,6 @@ func TestV2ReadSessionContent_MissingTranscript_ReturnsError(t *testing.T) {
 		SessionID:    "session-1",
 		Strategy:     "manual-commit",
 		Prompts:      []string{"prompt"},
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	_, err := store.ReadSessionContent(ctx, cpID, 0)
@@ -174,8 +164,6 @@ func TestV2FetchRemoteFullRefsUsesStoreRepository(t *testing.T) {
 		SessionID:    "session-remote",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"remote":true}` + "\n")),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	localRepo := initTestRepo(t)
@@ -240,8 +228,6 @@ func TestV2ReadSessionMetadataAndPrompts_ReturnsWithoutTranscript(t *testing.T) 
 		SessionID:    "session-meta-only",
 		Strategy:     "manual-commit",
 		Prompts:      []string{"test prompt"},
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	// ReadSessionContent should fail (no transcript).
@@ -298,8 +284,6 @@ func TestV2ReadSessionMetadata_DoesNotRequireRawTranscript(t *testing.T) {
 		Strategy:     "manual-commit",
 		Prompts:      []string{"prompt"},
 		Agent:        "Claude Code",
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	metadata, err := store.ReadSessionMetadata(ctx, cpID, 0)
@@ -336,8 +320,6 @@ func TestV2ReadSessionMetadata_ReturnsMetadata(t *testing.T) {
 		SessionID:    "session-metadata-only",
 		Strategy:     "manual-commit",
 		Prompts:      []string{"test prompt"},
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	meta, err := store.ReadSessionMetadata(ctx, cpID, 0)
@@ -355,8 +337,6 @@ func TestV2ReadSessionMetadata_FetchesMissingMetadataBlob(t *testing.T) {
 		SessionID:    "session-fetch-metadata",
 		Strategy:     "manual-commit",
 		Prompts:      []string{"test prompt"},
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	wt, err := repo.Worktree()
@@ -414,8 +394,6 @@ func TestV2ReadSessionContent_ChunkedTranscript(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-chunked",
 		Strategy:     "manual-commit",
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	// Manually write chunked transcript to /full/current:
@@ -455,8 +433,6 @@ func TestV2ReadSessionCompactTranscript_ReturnsCompactData(t *testing.T) {
 		Strategy:          "manual-commit",
 		Transcript:        redact.AlreadyRedacted([]byte(`{"raw":true}` + "\n")),
 		CompactTranscript: compact,
-		AuthorName:        "Test",
-		AuthorEmail:       "test@test.com",
 	})
 
 	content, err := store.ReadSessionCompactTranscript(ctx, cpID, 0)
@@ -476,8 +452,6 @@ func TestV2ReadSessionCompactTranscript_MissingCompactTranscript(t *testing.T) {
 		SessionID:    "session-no-compact",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"raw":true}` + "\n")),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	_, err := store.ReadSessionCompactTranscript(ctx, cpID, 0)
@@ -499,8 +473,6 @@ func TestV2ReadSessionCompactTranscript_MissingCheckpointOrSession(t *testing.T)
 		SessionID:    "session-0",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"raw":true}` + "\n")),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	_, err = store.ReadSessionCompactTranscript(ctx, cpID, 99)

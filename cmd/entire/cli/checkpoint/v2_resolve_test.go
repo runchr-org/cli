@@ -25,8 +25,6 @@ func TestGetV2MetadataTree_LocalRef(t *testing.T) {
 		SessionID:    "session-1",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"test": true}`)),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	openRepoFn := func(_ context.Context) (*git.Repository, error) {
@@ -72,8 +70,6 @@ func TestGetV2MetadataTree_FetchSucceeds(t *testing.T) {
 		SessionID:    "session-1",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"test": true}`)),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	fetchCalled := false
@@ -103,8 +99,6 @@ func TestGetV2MetadataTree_TreelessFetchFails_FallsBackToFullFetch(t *testing.T)
 		SessionID:    "session-1",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"test": true}`)),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
 	})
 
 	treelessFetchFn := func(_ context.Context) error {

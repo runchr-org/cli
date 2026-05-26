@@ -613,8 +613,6 @@ func TestResolveLatestCheckpointUsesLocalV2WhenSettingsDisabled(t *testing.T) {
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"from v2"}]}}` + "\n")),
 		Prompts:      []string{"Use local v2 data"},
-		AuthorName:   "Test",
-		AuthorEmail:  "test@example.com",
 	})
 
 	latest, err := resolveLatestCheckpoint(context.Background(), repo, v2Store, []id.CheckpointID{cpID})
@@ -639,8 +637,6 @@ func TestResolveLatestCheckpointFallsBackToV1WhenLocalV2MissesCheckpoint(t *test
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"from v2"}]}}` + "\n")),
 		Prompts:      []string{"Use local v2 data"},
-		AuthorName:   "Test",
-		AuthorEmail:  "test@example.com",
 	})
 
 	targetID := createCheckpointOnMetadataBranchFull(
@@ -800,8 +796,6 @@ func TestResumeSingleSession_FallsBackToV1WhenV2FullMissing(t *testing.T) {
 		SessionID:         sessionID,
 		Strategy:          "manual-commit",
 		CompactTranscript: []byte(`{"v":1,"type":"user"}` + "\n"),
-		AuthorName:        "Test",
-		AuthorEmail:       "test@example.com",
 	})
 
 	ag := &recordingResumeAgent{sessionDir: filepath.Join(tmpDir, "sessions")}

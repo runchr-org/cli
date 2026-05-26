@@ -64,12 +64,6 @@ func setupExportRepo(t *testing.T) *git.Repository {
 func writeV2CheckpointForExport(t *testing.T, repo *git.Repository, cpID id.CheckpointID, opts v2CheckpointFixtureOptions) {
 	t.Helper()
 	opts.CheckpointID = cpID
-	if opts.AuthorName == "" {
-		opts.AuthorName = exportTestAuthorName
-	}
-	if opts.AuthorEmail == "" {
-		opts.AuthorEmail = exportTestAuthorEmail
-	}
 	if opts.Strategy == "" {
 		opts.Strategy = "manual-commit"
 	}

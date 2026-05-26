@@ -60,8 +60,6 @@ func TestManualCommitStrategy_ListCheckpointsUsesLocalV2WhenSettingsDisabled(t *
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"from v2"}]}}` + "\n")),
 		Prompts:      []string{"Use local v2 data"},
-		AuthorName:   "Test",
-		AuthorEmail:  "test@example.com",
 	})
 
 	s := NewManualCommitStrategy()

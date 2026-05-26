@@ -307,8 +307,6 @@ func TestGetDescriptionForCheckpointFallsForwardToV2WhenV1MissesCheckpoint(t *te
 		Strategy:     StrategyNameManualCommit,
 		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"test"}` + "\n")),
 		Prompts:      []string{expectedDesc},
-		AuthorName:   "Test",
-		AuthorEmail:  "test@example.com",
 	})
 
 	if got := getDescriptionForCheckpoint(repo, targetCheckpointID); got != expectedDesc {

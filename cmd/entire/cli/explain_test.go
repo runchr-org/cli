@@ -80,8 +80,6 @@ func TestNewCommittedCheckpointReader_UsesLocalV2RefWhenSettingsDisabled(t *test
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"from v2"}]}}` + "\n")),
 		Prompts:      []string{"Use local v2 data"},
-		AuthorName:   "Test",
-		AuthorEmail:  "test@example.com",
 	})
 
 	store, err := checkpoint.NewCommittedReader(context.Background(), repo, checkpoint.CommittedReaderOptions{})
@@ -1987,8 +1985,6 @@ func TestRunExplainCheckpoint_V2OnlyCheckpoint(t *testing.T) {
 		SessionID:    "session-v2",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"hello from v2"}]}}` + "\n")),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@example.com",
 	})
 
 	var buf, errBuf bytes.Buffer
@@ -2049,8 +2045,6 @@ func TestRunExplainCheckpoint_V2OnlyRawTranscript(t *testing.T) {
 		SessionID:    "session-v2",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"raw from v2"}]}}` + "\n")),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@example.com",
 	})
 
 	var buf, errBuf bytes.Buffer
@@ -2114,8 +2108,6 @@ func TestRunExplainCheckpoint_V2UsesCompactTranscriptForIntent(t *testing.T) {
 		Strategy:                  "manual-commit",
 		Transcript:                redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"raw prompt text"}]}}` + "\n")),
 		CompactTranscript:         compactTranscript,
-		AuthorName:                "Test",
-		AuthorEmail:               "test@example.com",
 		CheckpointTranscriptStart: 0,
 	})
 
@@ -2384,8 +2376,6 @@ func TestRunExplainCheckpoint_V2PreferredGenerateWritesV1Store(t *testing.T) {
 		SessionID:    "session-dual",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted(transcript),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@example.com",
 	})
 
 	var buf, errBuf bytes.Buffer
@@ -2441,8 +2431,6 @@ func TestRunExplainCheckpoint_V2FallsBackToFullWhenCompactMissing(t *testing.T) 
 		SessionID:    "session-no-compact",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted(rawTranscript),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@example.com",
 	})
 
 	// Default explain (not --full) should fall back to /full/current transcript
@@ -2502,8 +2490,6 @@ func TestRunExplainCheckpoint_FullFallsBackToV1WhenV2FullMissing(t *testing.T) {
 		SessionID:         "session-v1-fallback",
 		Strategy:          "manual-commit",
 		CompactTranscript: compactTranscript,
-		AuthorName:        "Test",
-		AuthorEmail:       "test@example.com",
 	})
 
 	var buf, errBuf bytes.Buffer
@@ -2563,8 +2549,6 @@ func TestRunExplainCheckpoint_V2CompactTranscriptNotUsedForGenerate(t *testing.T
 		Strategy:          "manual-commit",
 		Transcript:        redact.AlreadyRedacted(rawTranscript),
 		CompactTranscript: compactTranscript,
-		AuthorName:        "Test",
-		AuthorEmail:       "test@example.com",
 	})
 
 	// generate=true — should NOT fail with "no transcript content" which would
@@ -2625,8 +2609,6 @@ func TestListCommittedForExplain_MergesV1AndV2(t *testing.T) {
 		SessionID:    "session-overlap",
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted(transcript),
-		AuthorName:   "T",
-		AuthorEmail:  "t@t.com",
 	})
 
 	store, err := checkpoint.NewCommittedReader(ctx, repo, checkpoint.CommittedReaderOptions{})
@@ -6094,8 +6076,6 @@ func TestGetBranchCheckpoints_V2OnlyCheckpointDiscoverable(t *testing.T) {
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n")),
 		Prompts:      []string{expectedPrompt},
-		AuthorName:   "Test",
-		AuthorEmail:  "test@example.com",
 	})
 
 	// Create a user commit with the Entire-Checkpoint trailer.
@@ -6177,8 +6157,6 @@ func TestGetBranchCheckpoints_V2PromptFallbackWhenV1Deleted(t *testing.T) {
 		Strategy:     "manual-commit",
 		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n")),
 		Prompts:      []string{expectedPrompt},
-		AuthorName:   "Test",
-		AuthorEmail:  "test@example.com",
 	})
 
 	// Create user commit with checkpoint trailer.
