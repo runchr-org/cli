@@ -44,6 +44,17 @@ func geminiAbortedTurn(stderr string) bool {
 	return false
 }
 
+// geminiModel returns the model to use for e2e runs. E2E_GEMINI_MODEL overrides
+// the default so CI can pin a more reliable model than the cheap local default
+// (gemini-2.5-flash, which frequently aborts turns with "Invalid stream") without
+// a code change. Mirrors E2E_CODEX_MODEL / E2E_OPENCODE_MODEL.
+func geminiModel() string {
+	if m := os.Getenv("E2E_GEMINI_MODEL"); m != "" {
+		return m
+	}
+	return geminiDefaultModel
+}
+
 type Gemini struct{}
 
 func (g *Gemini) Name() string               { return "gemini-cli" }
@@ -82,7 +93,7 @@ func (g *Gemini) Bootstrap() error {
 }
 
 func (g *Gemini) RunPrompt(ctx context.Context, dir string, prompt string, opts ...Option) (Output, error) {
-	cfg := &runConfig{Model: geminiDefaultModel}
+	cfg := &runConfig{Model: geminiModel()}
 	for _, o := range opts {
 		o(cfg)
 	}
@@ -155,7 +166,7 @@ func (g *Gemini) StartSession(_ context.Context, dir string) (Session, error) {
 	// Unset CI and GITHUB_ACTIONS so gemini doesn't force headless mode —
 	// it checks both in isHeadlessMode() and skips interactive TUI entirely.
 	args := append([]string{"env"}, envArgs...)
-	args = append(args, g.Binary(), "--model", geminiDefaultModel, "-y")
+	args = append(args, g.Binary(), "--model", geminiModel(), "-y")
 	s, err := NewTmuxSession(name, dir, []string{"CI", "GITHUB_ACTIONS", "ENTIRE_TEST_TTY", "HOME"}, args[0], args[1:]...)
 	if err != nil {
 		return nil, err

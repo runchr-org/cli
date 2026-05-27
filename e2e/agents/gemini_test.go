@@ -68,3 +68,18 @@ func TestGeminiAbortedTurn(t *testing.T) {
 		t.Fatal("did not expect a clean run to be detected as aborted turn")
 	}
 }
+
+func TestGeminiModel(t *testing.T) {
+	t.Run("defaults when unset", func(t *testing.T) {
+		t.Setenv("E2E_GEMINI_MODEL", "")
+		if got := geminiModel(); got != geminiDefaultModel {
+			t.Fatalf("geminiModel() = %q, want default %q", got, geminiDefaultModel)
+		}
+	})
+	t.Run("honors override", func(t *testing.T) {
+		t.Setenv("E2E_GEMINI_MODEL", "gemini-2.5-pro")
+		if got := geminiModel(); got != "gemini-2.5-pro" {
+			t.Fatalf("geminiModel() = %q, want override gemini-2.5-pro", got)
+		}
+	})
+}
