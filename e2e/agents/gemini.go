@@ -23,6 +23,27 @@ const geminiDefaultModel = "gemini-2.5-flash"
 const geminiTrustWorkspaceEnvKey = "GEMINI_CLI_TRUST_WORKSPACE"
 const geminiTrustWorkspaceEnv = geminiTrustWorkspaceEnvKey + "=true"
 
+// geminiAbortSignatures are stderr markers for a server-side turn abort
+// (empty/malformed model response). gemini-cli prints these to stderr but
+// still exits 0 with empty stdout, so RunPrompt must surface them as an error
+// for the transient-retry path (RepoState.RunPrompt -> IsTransientError) to
+// fire. Without this, the turn never completes, the after-agent lifecycle hook
+// never runs, no checkpoint is created, and tests fail with a misleading
+// "checkpoint ref did not advance" instead of retrying.
+var geminiAbortSignatures = []string{
+	"Invalid stream",
+	"empty response or malformed tool call",
+}
+
+func geminiAbortedTurn(stderr string) bool {
+	for _, sig := range geminiAbortSignatures {
+		if strings.Contains(stderr, sig) {
+			return true
+		}
+	}
+	return false
+}
+
 type Gemini struct{}
 
 func (g *Gemini) Name() string               { return "gemini-cli" }
@@ -33,6 +54,9 @@ func (g *Gemini) TimeoutMultiplier() float64 { return 2.5 }
 
 func (g *Gemini) IsTransientError(out Output, err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if geminiAbortedTurn(out.Stderr) {
 		return true
 	}
 	transientPatterns := []string{
@@ -99,6 +123,15 @@ func (g *Gemini) RunPrompt(ctx context.Context, dir string, prompt string, opts 
 		if promptCtx.Err() == context.DeadlineExceeded {
 			err = fmt.Errorf("%w: %w", err, context.DeadlineExceeded)
 		}
+	}
+
+	// gemini-cli can abort a turn server-side (empty/malformed model response)
+	// yet still exit 0 with empty stdout. Surface it as an error so the
+	// transient-retry path restarts the scenario instead of proceeding to fail
+	// on a missing checkpoint. The real abort marker stays in stderr, which
+	// IsTransientError matches via geminiAbortSignatures.
+	if err == nil && geminiAbortedTurn(stderr.String()) {
+		err = errors.New("gemini aborted turn: empty or malformed model response")
 	}
 
 	return Output{
