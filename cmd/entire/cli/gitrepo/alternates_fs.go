@@ -1,4 +1,4 @@
-//nolint:wrapcheck // Preserve osfs errors exactly for billy.Filesystem passthrough methods.
+//nolint:wrapcheck // passthrough methods must preserve osfs errors exactly; wrapping would break go-git's os.IsNotExist fall-through.
 package gitrepo
 
 import (
