@@ -64,13 +64,14 @@ type Deps struct {
 
 // runFlags collects the flag values the run path inspects.
 type runFlags struct {
-	issueLink string
-	agentsCSV string
-	maxTurns  int
-	quorum    int
-	cont      string
-	edit      bool
-	findings  bool
+	issueLink          string
+	agentsCSV          string
+	maxTurns           int
+	quorum             int
+	cont               string
+	edit               bool
+	findings           bool
+	allowUntrustedSeed bool
 }
 
 // NewCommand returns the `entire investigate` cobra command wired with the
@@ -105,6 +106,10 @@ Flags:
   --continue <run-id>     resume an existing run
   --edit                  re-open the investigate config picker
   --findings              browse local investigation manifests
+  --allow-untrusted-seed  required to run a non-interactive --issue-link
+                          investigation (otherwise refused: the seed is
+                          attacker-influenced GitHub content and agents run
+                          with permission/sandbox bypass)
 
 Subcommands:
   fix [run-id]            launch a coding agent with the run's findings as
@@ -133,6 +138,8 @@ Subcommands:
 	cmd.Flags().StringVar(&flags.cont, "continue", "", "resume an existing run by id")
 	cmd.Flags().BoolVar(&flags.edit, "edit", false, "re-open the investigate config picker")
 	cmd.Flags().BoolVar(&flags.findings, "findings", false, "browse local investigation manifests")
+	cmd.Flags().BoolVar(&flags.allowUntrustedSeed, "allow-untrusted-seed", false,
+		"required to seed a non-interactive --issue-link run with attacker-influenced GitHub content")
 
 	cmd.AddCommand(newFixSubcommand(deps))
 	cmd.AddCommand(newShowSubcommand(deps))
@@ -376,6 +383,11 @@ func runInvestigate(ctx context.Context, cmd *cobra.Command, args []string, f ru
 	return runFresh(ctx, cmd, args, f, deps)
 }
 
+// errUntrustedSeedRefused is returned when a non-interactive --issue-link run
+// is blocked because --allow-untrusted-seed was not passed. Surfaced as a
+// SilentError by the caller (a custom message is already printed to stderr).
+var errUntrustedSeedRefused = errors.New("refusing to seed a non-interactive investigation with untrusted issue content without --allow-untrusted-seed")
+
 // confirmUntrustedIssueSeed warns the operator that an --issue-link run
 // feeds external (potentially attacker-controlled) GitHub content into
 // agents that spawn with permission/sandbox bypass, and waits for an
@@ -385,11 +397,12 @@ func runInvestigate(ctx context.Context, cmd *cobra.Command, args []string, f ru
 // the caller exits cleanly. Returns the prompt error wrapped on transport
 // failure (Ctrl+C is treated as decline by uiform.PromptYN).
 //
-// Non-interactive: logs the warning to stderr and proceeds. CI / scripted
-// callers passed --issue-link deliberately and need a way through; a hard
-// block would break automation. The risk surfaces in operator-facing
-// telemetry instead of being silently bypassed.
-func confirmUntrustedIssueSeed(ctx context.Context, cmd *cobra.Command, deps Deps, issueLink string) (bool, error) {
+// Non-interactive: refuses by default — this is the single most dangerous
+// path (CI + remote-attacker issue content + auto-approving agent + no human
+// gate), so silent exploitation must not be possible. Callers that knowingly
+// want it (scripted/CI automation) opt in with --allow-untrusted-seed, which
+// proceeds with the warning logged to stderr.
+func confirmUntrustedIssueSeed(ctx context.Context, cmd *cobra.Command, deps Deps, issueLink string, allowUntrustedSeed bool) (bool, error) {
 	const warning = "Warning: --issue-link seeds the investigation with content fetched from " +
 		"GitHub (issue body + comments). Agents in this run spawn with " +
 		"permission/sandbox bypass and will read that content. A malicious " +
@@ -406,8 +419,15 @@ func confirmUntrustedIssueSeed(ctx context.Context, cmd *cobra.Command, deps Dep
 	// non-interactive paths.
 	safeLink := redactURLUserinfo(issueLink)
 	if !canPrompt {
+		if !allowUntrustedSeed {
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"%s\nRefusing to proceed non-interactively (no TTY to prompt). "+
+					"Re-run with --allow-untrusted-seed to opt in. Source: %s\n",
+				warning, safeLink)
+			return false, errUntrustedSeedRefused
+		}
 		fmt.Fprintf(cmd.ErrOrStderr(),
-			"%s\nProceeding non-interactively (no TTY to prompt). Source: %s\n",
+			"%s\nProceeding non-interactively (--allow-untrusted-seed set). Source: %s\n",
 			warning, safeLink)
 		return true, nil
 	}
@@ -691,7 +711,7 @@ func runFresh(ctx context.Context, cmd *cobra.Command, args []string, f runFlags
 	// agent through content it reads. Make the operator confirm before
 	// running with externally seeded input + unfettered agent permissions.
 	if len(issueSeed) > 0 {
-		ok, cErr := confirmUntrustedIssueSeed(ctx, cmd, deps, f.issueLink)
+		ok, cErr := confirmUntrustedIssueSeed(ctx, cmd, deps, f.issueLink, f.allowUntrustedSeed)
 		if cErr != nil {
 			return wrapSilent(silentErr, cErr)
 		}

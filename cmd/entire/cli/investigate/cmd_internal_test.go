@@ -87,7 +87,7 @@ func TestConfirmUntrustedIssueSeed_DeclinedExitsCleanly(t *testing.T) {
 			return false, nil
 		},
 	}
-	ok, err := confirmUntrustedIssueSeed(context.Background(), cmd, deps, "https://github.com/o/r/issues/1")
+	ok, err := confirmUntrustedIssueSeed(context.Background(), cmd, deps, "https://github.com/o/r/issues/1", false)
 	require.NoError(t, err)
 	require.False(t, ok, "decline must surface as ok=false")
 	require.Contains(t, stderr.String(), "permission/sandbox bypass",
@@ -106,7 +106,7 @@ func TestConfirmUntrustedIssueSeed_AcceptedReturnsOK(t *testing.T) {
 			return true, nil
 		},
 	}
-	ok, err := confirmUntrustedIssueSeed(context.Background(), cmd, deps, "https://github.com/o/r/issues/1")
+	ok, err := confirmUntrustedIssueSeed(context.Background(), cmd, deps, "https://github.com/o/r/issues/1", false)
 	require.NoError(t, err)
 	require.True(t, ok)
 }
@@ -126,7 +126,43 @@ func TestConfirmUntrustedIssueSeed_PromptError(t *testing.T) {
 			return false, wantErr
 		},
 	}
-	ok, err := confirmUntrustedIssueSeed(context.Background(), cmd, deps, "https://github.com/o/r/issues/1")
+	ok, err := confirmUntrustedIssueSeed(context.Background(), cmd, deps, "https://github.com/o/r/issues/1", false)
 	require.False(t, ok)
 	require.ErrorIs(t, err, wantErr)
+}
+
+// TestConfirmUntrustedIssueSeed_NonInteractiveRefusesWithoutOptIn verifies the
+// strict default: with no TTY to prompt and --allow-untrusted-seed unset, the
+// run is refused rather than silently proceeding with attacker-influenced
+// content into a bypass-mode agent. Deps with a nil PromptYN drives the
+// non-interactive branch (CanPromptInteractively is false under test).
+func TestConfirmUntrustedIssueSeed_NonInteractiveRefusesWithoutOptIn(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+	cmd.SetOut(&stderr)
+
+	ok, err := confirmUntrustedIssueSeed(context.Background(), cmd, Deps{}, "https://github.com/o/r/issues/1", false)
+	require.False(t, ok, "must refuse non-interactively without opt-in")
+	require.ErrorIs(t, err, errUntrustedSeedRefused)
+	require.Contains(t, stderr.String(), "--allow-untrusted-seed",
+		"refusal message must name the opt-in flag")
+}
+
+// TestConfirmUntrustedIssueSeed_NonInteractiveProceedsWithOptIn verifies that
+// the explicit opt-in restores automation: --allow-untrusted-seed proceeds
+// non-interactively, with the risk still logged to stderr.
+func TestConfirmUntrustedIssueSeed_NonInteractiveProceedsWithOptIn(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{}
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+	cmd.SetOut(&stderr)
+
+	ok, err := confirmUntrustedIssueSeed(context.Background(), cmd, Deps{}, "https://github.com/o/r/issues/1", true)
+	require.NoError(t, err)
+	require.True(t, ok, "must proceed non-interactively when opted in")
+	require.Contains(t, stderr.String(), "permission/sandbox bypass",
+		"warning must still surface the risk even when proceeding")
 }

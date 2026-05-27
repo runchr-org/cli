@@ -173,6 +173,13 @@ func (s *LocalManifestStore) List(ctx context.Context) ([]LocalManifest, error) 
 			// from a future schema. Listing must keep working.
 			continue
 		}
+		// Skip manifests whose RunID is not a valid 12-hex id. A planted
+		// manifest with e.g. "run_id":"../../.." would otherwise flow
+		// through clean → RunDir → os.RemoveAll as a path-traversal target.
+		// Validate at the source so no downstream consumer can be tricked.
+		if err := validateRunID(m.RunID); err != nil {
+			continue
+		}
 		manifests = append(manifests, m)
 	}
 	sort.SliceStable(manifests, func(i, j int) bool {
@@ -224,12 +231,21 @@ func (s *LocalManifestStore) FindByRunID(ctx context.Context, runID string) (Loc
 // other case produces a user-readable error listing the candidates.
 func ResolveByRunID(manifests []LocalManifest, runID string) ([]LocalManifest, error) {
 	for _, m := range manifests {
+		// Never match (and thus never delete via) a manifest whose RunID is
+		// invalid — defense-in-depth in case a caller passes an unfiltered
+		// list. List() already drops these.
+		if validateRunID(m.RunID) != nil {
+			continue
+		}
 		if m.RunID == runID {
 			return []LocalManifest{m}, nil
 		}
 	}
 	var prefixMatches []LocalManifest
 	for _, m := range manifests {
+		if validateRunID(m.RunID) != nil {
+			continue
+		}
 		if strings.HasPrefix(m.RunID, runID) {
 			prefixMatches = append(prefixMatches, m)
 		}

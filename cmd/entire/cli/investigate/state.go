@@ -123,6 +123,12 @@ func (s *StateStore) Root() string {
 // where findings.md and state.json both live. The directory may or may
 // not exist on disk; callers that need it materialised should MkdirAll
 // before writing.
+//
+// Precondition: runID MUST be a validated 12-hex id. RunDir joins it into a
+// path that callers feed to os.RemoveAll (via clean), so an unvalidated id
+// would be a path-traversal sink. Every path that reaches here enforces this:
+// Save/Load validate before calling; manifest List/ResolveByRunID drop
+// manifests whose RunID fails validateRunID before any RunID reaches clean.
 func (s *StateStore) RunDir(runID string) string {
 	return filepath.Join(s.dir, runID)
 }

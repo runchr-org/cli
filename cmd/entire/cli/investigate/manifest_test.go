@@ -2,6 +2,7 @@ package investigate
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -203,5 +204,65 @@ func TestLocalManifestStore_MissingDirReturnsEmpty(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("List len = %d, want 0", len(got))
+	}
+}
+
+// TestLocalManifestStore_ListSkipsInvalidRunID verifies that a planted
+// manifest whose run_id is a path-traversal payload is dropped by List, so it
+// can never flow through clean → RunDir → os.RemoveAll. Write() rejects such
+// ids, so the malicious manifest is written raw to disk to simulate tampering
+// (precondition: attacker has .git write access).
+func TestLocalManifestStore_ListSkipsInvalidRunID(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewLocalManifestStoreWithDir(dir)
+
+	good := newManifest("abcdef012345", "legit", time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC), "quorum")
+	if err := store.Write(context.Background(), good); err != nil {
+		t.Fatalf("Write good manifest: %v", err)
+	}
+
+	evil := []byte(`{"run_id":"../../../etc","topic":"evil","started_at":"2026-05-08T12:00:00Z"}`)
+	if err := os.WriteFile(filepath.Join(dir, "evil.json"), evil, 0o600); err != nil {
+		t.Fatalf("write evil manifest: %v", err)
+	}
+
+	got, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("List len = %d, want 1 (the invalid run_id must be skipped)", len(got))
+	}
+	if got[0].RunID != "abcdef012345" {
+		t.Errorf("RunID = %q, want %q", got[0].RunID, "abcdef012345")
+	}
+}
+
+// TestResolveByRunID_IgnoresInvalidRunID verifies defense-in-depth: even if a
+// caller passes an unfiltered list, ResolveByRunID never matches (and so never
+// resolves a delete target to) a manifest whose RunID is invalid.
+func TestResolveByRunID_IgnoresInvalidRunID(t *testing.T) {
+	t.Parallel()
+
+	manifests := []LocalManifest{
+		{RunID: "../../../etc"},
+		{RunID: "abcdef012345"},
+	}
+
+	// A prefix query that textually matches the traversal entry must not
+	// resolve to it.
+	if got, err := ResolveByRunID(manifests, ".."); err == nil {
+		t.Errorf("ResolveByRunID(\"..\") resolved to %+v; want error (invalid entry must be ignored)", got)
+	}
+
+	// The valid entry still resolves.
+	got, err := ResolveByRunID(manifests, "abcdef012345")
+	if err != nil {
+		t.Fatalf("ResolveByRunID(valid): %v", err)
+	}
+	if len(got) != 1 || got[0].RunID != "abcdef012345" {
+		t.Errorf("ResolveByRunID(valid) = %+v, want single abcdef012345", got)
 	}
 }
