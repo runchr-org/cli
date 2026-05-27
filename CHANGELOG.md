@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - `entire login` copies the device code to your clipboard, falling back to the printed code if clipboard access fails ([#1093](https://github.com/entireio/cli/pull/1093))
 
-### Fixed 
+### Fixed
 
 - Checkpoint metadata reconciliation (`cherryPickOnto`) is much faster — roughly 66s → 7s for 50 commits ([#1248](https://github.com/entireio/cli/pull/1248))
 - `entire activity` no longer fails with "unexpected end of JSON input" for active accounts — the API response body cap was raised from 1 MiB to 16 MiB ([#1228](https://github.com/entireio/cli/pull/1228))
