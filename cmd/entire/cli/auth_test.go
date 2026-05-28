@@ -9,6 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/auth-go/sts"
+	"github.com/entireio/auth-go/tokenmanager"
+	"github.com/entireio/auth-go/tokens"
+	"github.com/entireio/auth-go/tokenstore"
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 )
@@ -534,6 +538,76 @@ func TestAuthCmd_RegistersExpectedSubcommands(t *testing.T) {
 	}
 }
 
+// --- resolveDataAPIToken ----------------------------------------------------
+//
+// These tests exercise the production path: they install a real
+// tokenmanager.Manager via auth.SetManagerForTest and stub only the
+// STS wire call via SetExchangeForTest. That covers the audience-
+// matching logic the function-injection tests above can't reach
+// (defaultListTokens / defaultRevokeTokenByID call resolveDataAPIToken
+// directly, but unit tests for the surrounding flows inject fakes
+// that bypass it).
+
+// authResolveTestIssuer is intentionally distinct from the default
+// api.BaseURL() ("https://entire.io") so the manager's same-host
+// shortcut is skipped and the STS-exchange path runs.
+const authResolveTestIssuer = "https://auth.resolve-test.example.com"
+
+func TestResolveDataAPIToken_ScopesExchangeToDataAPIOrigin(t *testing.T) {
+	// No t.Parallel: SetManagerForTest mutates package-level state in the
+	// auth package. Concurrent tests in this package don't reach the real
+	// auth.TokenForResource path (they inject lister/revoker fakes), so
+	// serial execution here is purely defensive.
+
+	store := newAuthMemStore()
+	saveCoreToken(t, store, authResolveTestIssuer, "opaque-core-token")
+
+	var capturedResource string
+	mgr := newResolveTestManager(t, store, func(_ context.Context, req sts.ExchangeRequest) (*tokens.TokenSet, error) {
+		capturedResource = req.Resource
+		return &tokens.TokenSet{AccessToken: "exchanged-data-api-tok"}, nil
+	})
+	t.Cleanup(auth.SetManagerForTest(t, mgr))
+
+	got, err := resolveDataAPIToken(t.Context())
+	if err != nil {
+		t.Fatalf("resolveDataAPIToken: %v", err)
+	}
+
+	if got != "exchanged-data-api-tok" {
+		t.Errorf("token = %q, want %q", got, "exchanged-data-api-tok")
+	}
+	// The whole point of the helper: the resource handed to the STS
+	// exchange must be the data API's origin, not the auth host's
+	// origin and not the raw env var value. The default api.BaseURL()
+	// is "https://entire.io" and api.OriginOnly leaves it unchanged.
+	if capturedResource != "https://entire.io" {
+		t.Errorf("STS exchange Resource = %q, want %q (api.OriginOnly(api.BaseURL()))",
+			capturedResource, "https://entire.io")
+	}
+}
+
+func TestResolveDataAPIToken_WrapsManagerError(t *testing.T) {
+	store := newAuthMemStore()
+	saveCoreToken(t, store, authResolveTestIssuer, "opaque-core-token")
+
+	mgr := newResolveTestManager(t, store, func(context.Context, sts.ExchangeRequest) (*tokens.TokenSet, error) {
+		return nil, errors.New("simulated transport failure")
+	})
+	t.Cleanup(auth.SetManagerForTest(t, mgr))
+
+	_, err := resolveDataAPIToken(t.Context())
+	if err == nil {
+		t.Fatal("expected error when exchange fails")
+	}
+	if !strings.Contains(err.Error(), "resolve API token") {
+		t.Errorf("error = %v, want 'resolve API token' wrap prefix", err)
+	}
+	if !strings.Contains(err.Error(), "simulated transport failure") {
+		t.Errorf("error = %v, want underlying message preserved", err)
+	}
+}
+
 // --- isKeychainTokenRejected -----------------------------------------------
 
 func TestIsKeychainTokenRejected_AllShapes(t *testing.T) {
@@ -569,6 +643,58 @@ func TestIsKeychainTokenRejected_AllShapes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- helpers for resolveDataAPIToken tests ----------------------------------
+
+// authMemStore is an in-memory tokenstore.Store for tests that need a
+// real tokenmanager.Manager. Mirrors the private memStore in auth-go's
+// tokenmanager_test.go — that one isn't exported, so we duplicate the
+// trivial implementation rather than pull in a fragile internal package.
+type authMemStore struct {
+	data map[string]tokens.TokenSet
+}
+
+func newAuthMemStore() *authMemStore { return &authMemStore{data: map[string]tokens.TokenSet{}} }
+
+func (s *authMemStore) SaveTokens(profile string, t tokens.TokenSet) error {
+	s.data[profile] = t
+	return nil
+}
+
+func (s *authMemStore) LoadTokens(profile string) (tokens.TokenSet, error) {
+	t, ok := s.data[profile]
+	if !ok {
+		return tokens.TokenSet{}, tokenstore.ErrNotFound
+	}
+	return t, nil
+}
+
+func (s *authMemStore) DeleteTokens(profile string) error {
+	delete(s.data, profile)
+	return nil
+}
+
+func saveCoreToken(t *testing.T, store tokenstore.Store, profile, accessToken string) {
+	t.Helper()
+	if err := store.SaveTokens(profile, tokens.TokenSet{AccessToken: accessToken}); err != nil {
+		t.Fatalf("SaveTokens: %v", err)
+	}
+}
+
+func newResolveTestManager(t *testing.T, store tokenstore.Store, exchange func(context.Context, sts.ExchangeRequest) (*tokens.TokenSet, error)) *tokenmanager.Manager {
+	t.Helper()
+	mgr, err := tokenmanager.New(tokenmanager.Config{
+		Issuer:   authResolveTestIssuer,
+		ClientID: "entire-cli-test",
+		STSPath:  "/sts/token",
+		Store:    store,
+	})
+	if err != nil {
+		t.Fatalf("tokenmanager.New: %v", err)
+	}
+	tokenmanager.SetExchangeForTest(t, mgr, exchange)
+	return mgr
 }
 
 func TestAuthCmd_TopLevelLoginAndLogoutStillRegistered(t *testing.T) {
