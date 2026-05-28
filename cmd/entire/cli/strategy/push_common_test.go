@@ -188,6 +188,7 @@ func TestPushBranchIfNeeded_LocalBareRepo_PushesSuccessfully(t *testing.T) {
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_DivergedBranches(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	// 1. Create bare origin with a metadata branch containing a base checkpoint
@@ -314,6 +315,7 @@ func TestFetchAndRebase_DivergedBranches(t *testing.T) {
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_SharedCloneLocalCommitInAlternate(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	bareDir := t.TempDir()
@@ -392,6 +394,7 @@ func TestFetchAndRebase_SharedCloneLocalCommitInAlternate(t *testing.T) {
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_LocalBehind(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	bareDir := t.TempDir()
@@ -472,6 +475,7 @@ func TestFetchAndRebase_LocalBehind(t *testing.T) {
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_MergeBaseOnSecondParent_DoesNotReplayAncestors(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	bareDir := t.TempDir()
@@ -603,6 +607,7 @@ func TestFetchAndRebase_MergeBaseOnSecondParent_DoesNotReplayAncestors(t *testin
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_DoesNotResurrectRemoteOnlyCheckpointFromMerge(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	bareDir := t.TempDir()
@@ -718,6 +723,7 @@ func TestFetchAndRebase_DoesNotResurrectRemoteOnlyCheckpointFromMerge(t *testing
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_NonOriginRemote_ReconcilesFetchedRef(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	bareDir := t.TempDir()
@@ -818,6 +824,7 @@ func TestFetchAndRebase_NonOriginRemote_ReconcilesFetchedRef(t *testing.T) {
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_URLTarget_ReconcilesFetchedTempRef(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	bareDir := t.TempDir()
@@ -915,6 +922,7 @@ func TestFetchAndRebase_URLTarget_ReconcilesFetchedTempRef(t *testing.T) {
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_FlaggedOriginTarget_UsesTempRef(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	bareDir := t.TempDir()
