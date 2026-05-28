@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/api"
-	"github.com/entireio/cli/cmd/entire/cli/gitremote"
 
 	"github.com/spf13/cobra"
 )
@@ -173,9 +172,9 @@ func resolveTrailWatchTarget(ctx context.Context, client *api.Client, number int
 		return resolveTrailWatchNumber(ctx, client, number)
 	}
 
-	forge, owner, repo, err := gitremote.ResolveRemoteRepo(ctx, "origin")
+	forge, owner, repo, err := resolveTrailRemote(ctx)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to resolve repository: %w", err)
+		return "", "", err
 	}
 	branch, err := GetCurrentBranch(ctx)
 	if err != nil {
@@ -195,9 +194,9 @@ func resolveTrailWatchTarget(ctx context.Context, client *api.Client, number int
 }
 
 func resolveTrailWatchNumber(ctx context.Context, client *api.Client, number int) (trailID, description string, err error) {
-	forge, owner, repo, err := gitremote.ResolveRemoteRepo(ctx, "origin")
+	forge, owner, repo, err := resolveTrailRemote(ctx)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to resolve repository: %w", err)
+		return "", "", err
 	}
 	found, err := findTrailByNumber(ctx, client, forge, owner, repo, number)
 	if err != nil {

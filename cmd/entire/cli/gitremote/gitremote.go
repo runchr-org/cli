@@ -27,7 +27,8 @@ const (
 // Forge is the short identifier of the upstream forge ("gh", "et", ...) used
 // by the Entire trails API. It is populated from the path prefix on entire://
 // URLs (entire://host/<forge>/owner/repo) and from a hostname lookup on
-// direct git URLs (github.com → "gh"). It is empty for unrecognized hosts.
+// direct git URLs (github.com → "gh"). It is empty for direct git URLs to
+// unrecognized hosts, and for entire:// URLs without a forge segment.
 type Info struct {
 	Protocol string
 	Host     string

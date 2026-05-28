@@ -76,6 +76,11 @@ func TestParseURL(t *testing.T) {
 			wantInfo: &Info{Protocol: ProtocolEntire, Host: "aws-us-east-2.entire.io", Forge: "gh", Owner: "entirehq", Repo: "entiredb"},
 		},
 		{
+			name:     "entire:// with .git suffix",
+			url:      "entire://entirehost/gh/entireio/cli.git",
+			wantInfo: &Info{Protocol: ProtocolEntire, Host: "entirehost", Forge: "gh", Owner: "entireio", Repo: "cli"},
+		},
+		{
 			name:     "unmapped host has empty forge",
 			url:      "git@gitlab.com:org/repo.git",
 			wantInfo: &Info{Protocol: ProtocolSSH, Host: "gitlab.com", Owner: "org", Repo: "repo"},

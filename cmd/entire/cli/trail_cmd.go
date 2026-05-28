@@ -99,9 +99,9 @@ func runTrailShow(ctx context.Context, w io.Writer, insecureHTTP bool) error {
 		return fmt.Errorf("authentication required: %w", err)
 	}
 
-	forge, owner, repo, err := gitremote.ResolveRemoteRepo(ctx, "origin")
+	forge, owner, repo, err := resolveTrailRemote(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to resolve repository: %w", err)
+		return err
 	}
 
 	found, err := findTrailByBranch(ctx, client, forge, owner, repo, branch)
@@ -176,9 +176,9 @@ func runTrailListAll(ctx context.Context, w io.Writer, opts trailListOptions) er
 		return fmt.Errorf("authentication required: %w", err)
 	}
 
-	forge, owner, repo, err := gitremote.ResolveRemoteRepo(ctx, "origin")
+	forge, owner, repo, err := resolveTrailRemote(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to resolve repository: %w", err)
+		return err
 	}
 
 	resp, err := client.Get(ctx, trailsBasePath(forge, owner, repo))
@@ -585,9 +585,9 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 		return fmt.Errorf("authentication required: %w", err)
 	}
 
-	forge, owner, repoName, err := gitremote.ResolveRemoteRepo(ctx, "origin")
+	forge, owner, repoName, err := resolveTrailRemote(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to resolve repository: %w", err)
+		return err
 	}
 
 	createReq := api.TrailCreateRequest{
@@ -672,9 +672,9 @@ func runTrailUpdate(ctx context.Context, w, errW io.Writer, insecureHTTP bool, s
 		return fmt.Errorf("authentication required: %w", err)
 	}
 
-	forge, owner, repoName, err := gitremote.ResolveRemoteRepo(ctx, "origin")
+	forge, owner, repoName, err := resolveTrailRemote(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to resolve repository: %w", err)
+		return err
 	}
 
 	// Determine branch
@@ -923,10 +923,25 @@ func findTrail(ctx context.Context, client *api.Client, forge, owner, repo strin
 }
 
 // trailsBasePath returns the API path prefix for trails endpoints
-// (e.g., "/api/v1/trails/gh/org/repo"). The forge identifier comes from
-// gitremote.Info.Forge; mapping from git remote to forge lives there.
+// (e.g., "/api/v1/trails/gh/org/repo").
 func trailsBasePath(forge, owner, repo string) string {
 	return fmt.Sprintf("/api/v1/trails/%s/%s/%s", forge, owner, repo)
+}
+
+// resolveTrailRemote resolves the origin remote and ensures the forge is
+// known to the trails API. Without this guard, an unmapped host (e.g.
+// gitlab.com, or a misconfigured entire:// URL with no forge prefix)
+// produces a malformed `/api/v1/trails//owner/repo` path that the server
+// rejects with an opaque error instead of a clear "unsupported forge" one.
+func resolveTrailRemote(ctx context.Context) (forge, owner, repo string, err error) {
+	forge, owner, repo, err = gitremote.ResolveRemoteRepo(ctx, "origin")
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to resolve repository: %w", err)
+	}
+	if forge == "" {
+		return "", "", "", errors.New("origin remote is not on a forge supported by Entire trails (supported: github.com)")
+	}
+	return forge, owner, repo, nil
 }
 
 // checkTrailResponse checks the API response and returns user-friendly errors.
