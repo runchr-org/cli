@@ -60,6 +60,14 @@ func newActivityCmd() *cobra.Command {
 func runActivity(ctx context.Context, w, errW io.Writer) error {
 	client, err := NewAuthenticatedAPIClient(ctx, false)
 	if err != nil {
+		// Ctrl+C during the keyring read or STS exchange surfaces as
+		// context.Canceled / DeadlineExceeded. Silence it to match the
+		// codebase convention (clean.go, explain.go, explain_export.go) —
+		// printing "context canceled" at a user who just hit Ctrl+C is
+		// noise, not diagnostic.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return NewSilentError(err)
+		}
 		// Only the "no core token in keyring" sentinel gets the friendly
 		// login hint. Other failures (STS exchange rejected, network
 		// error, malformed env config) used to be swallowed under the
