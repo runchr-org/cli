@@ -17,6 +17,7 @@ import (
 const (
 	baseSettingsClaudeSonnet = `{"enabled": true, "summary_generation": {"provider": "claude-code", "model": "sonnet"}}`
 	providerCodex            = "codex"
+	agentClaudeCode          = "claude-code"
 )
 
 // setupSettingsDir creates a temp repo directory with the provided settings
@@ -934,63 +935,6 @@ func captureSettingsStderr(t *testing.T, fn func()) string {
 	return string(buf)
 }
 
-func TestGetFullTranscriptGenerationRetentionDays(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		opts map[string]any
-		want int
-	}{
-		{
-			name: "defaults to fourteen when missing",
-			opts: nil,
-			want: 14,
-		},
-		{
-			name: "returns configured integer",
-			opts: map[string]any{"full_transcript_generation_retention_days": 30},
-			want: 30,
-		},
-		{
-			name: "returns configured float from json decode",
-			opts: map[string]any{"full_transcript_generation_retention_days": float64(21)},
-			want: 21,
-		},
-		{
-			name: "returns default for wrong type",
-			opts: map[string]any{"full_transcript_generation_retention_days": "30"},
-			want: 14,
-		},
-		{
-			name: "returns default for zero",
-			opts: map[string]any{"full_transcript_generation_retention_days": 0},
-			want: 14,
-		},
-		{
-			name: "returns default for negative",
-			opts: map[string]any{"full_transcript_generation_retention_days": -5},
-			want: 14,
-		},
-		{
-			name: "returns default for non integral float",
-			opts: map[string]any{"full_transcript_generation_retention_days": 1.5},
-			want: 14,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			s := &EntireSettings{StrategyOptions: tt.opts}
-			if got := s.GetFullTranscriptGenerationRetentionDays(); got != tt.want {
-				t.Fatalf("GetFullTranscriptGenerationRetentionDays() = %d, want %d", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestIsFilteredFetchesEnabled_DefaultsFalse(t *testing.T) {
 	t.Parallel()
 	s := &EntireSettings{Enabled: true}
@@ -1269,5 +1213,141 @@ func TestReviewConfig_IsZero(t *testing.T) {
 				t.Errorf("IsZero() = %v, want %v (cfg=%+v)", got, tc.want, tc.cfg)
 			}
 		})
+	}
+}
+
+// TestEntireSettings_InvestigateRoundTrip pins the JSON wire format for the
+// investigate config: all four fields must round-trip through Unmarshal.
+func TestEntireSettings_InvestigateRoundTrip(t *testing.T) {
+	t.Parallel()
+	raw := []byte(`{
+      "enabled": true,
+      "investigate": {
+        "agents": ["` + agentClaudeCode + `", "` + providerCodex + `"],
+        "max_turns": 5,
+        "quorum": 2,
+        "always_prompt": "Be terse."
+      }
+    }`)
+	var s EntireSettings
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if s.Investigate == nil {
+		t.Fatalf("expected investigate config, got nil")
+	}
+	if len(s.Investigate.Agents) != 2 || s.Investigate.Agents[0] != agentClaudeCode || s.Investigate.Agents[1] != providerCodex {
+		t.Errorf("Agents = %v", s.Investigate.Agents)
+	}
+	if s.Investigate.MaxTurns != 5 {
+		t.Errorf("MaxTurns = %d, want 5", s.Investigate.MaxTurns)
+	}
+	if s.Investigate.Quorum != 2 {
+		t.Errorf("Quorum = %d, want 2", s.Investigate.Quorum)
+	}
+	if s.Investigate.AlwaysPrompt != "Be terse." {
+		t.Errorf("AlwaysPrompt = %q", s.Investigate.AlwaysPrompt)
+	}
+}
+
+// TestInvestigateConfig_IsZero pins the truth table for IsZero, including the
+// nil-receiver case (callers can ask "do we have any config?" without
+// nil-checking first).
+func TestInvestigateConfig_IsZero(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		cfg  *InvestigateConfig
+		want bool
+	}{
+		{"nil", nil, true},
+		{"empty", &InvestigateConfig{}, true},
+		{"agents", &InvestigateConfig{Agents: []string{"x"}}, false},
+		{"max_turns", &InvestigateConfig{MaxTurns: 1}, false},
+		{"quorum", &InvestigateConfig{Quorum: 1}, false},
+		{"always_prompt", &InvestigateConfig{AlwaysPrompt: "hello"}, false},
+		{"empty-slice", &InvestigateConfig{Agents: []string{}}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.cfg.IsZero(); got != tc.want {
+				t.Errorf("IsZero() = %v, want %v (cfg=%+v)", got, tc.want, tc.cfg)
+			}
+		})
+	}
+}
+
+// TestEntireSettings_InvestigateConfig pins the receiver helper, including
+// the nil-receiver case used by callers that don't want to nil-check first.
+func TestEntireSettings_InvestigateConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil_receiver", func(t *testing.T) {
+		t.Parallel()
+		var s *EntireSettings
+		if got := s.InvestigateConfig(); got != nil {
+			t.Errorf("nil receiver: got %+v, want nil", got)
+		}
+	})
+
+	t.Run("unset", func(t *testing.T) {
+		t.Parallel()
+		s := &EntireSettings{}
+		if got := s.InvestigateConfig(); got != nil {
+			t.Errorf("unset: got %+v, want nil", got)
+		}
+	})
+
+	t.Run("set", func(t *testing.T) {
+		t.Parallel()
+		s := &EntireSettings{Investigate: &InvestigateConfig{Agents: []string{agentClaudeCode}}}
+		got := s.InvestigateConfig()
+		if got == nil || len(got.Agents) != 1 || got.Agents[0] != agentClaudeCode {
+			t.Errorf("set: got %+v", got)
+		}
+	})
+}
+
+// TestLoad_MergesInvestigateLocalOverride pins that a local settings file
+// overrides the base file's investigate config wholesale (whole-object
+// replacement, parallel to mergeSummaryGeneration but simpler).
+func TestLoad_MergesInvestigateLocalOverride(t *testing.T) {
+	base := `{
+      "enabled": true,
+      "investigate": {
+        "agents": ["` + agentClaudeCode + `"],
+        "max_turns": 3
+      }
+    }`
+	local := `{
+      "investigate": {
+        "agents": ["` + providerCodex + `"],
+        "max_turns": 5,
+        "quorum": 1,
+        "always_prompt": "Be brief."
+      }
+    }`
+	setupSettingsDir(t, base, local)
+
+	s, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	cfg := s.InvestigateConfig()
+	if cfg == nil {
+		t.Fatalf("expected investigate config after merge")
+	}
+	if len(cfg.Agents) != 1 || cfg.Agents[0] != providerCodex {
+		t.Errorf("Agents = %v, want [%s]", cfg.Agents, providerCodex)
+	}
+	if cfg.MaxTurns != 5 {
+		t.Errorf("MaxTurns = %d, want 5", cfg.MaxTurns)
+	}
+	if cfg.Quorum != 1 {
+		t.Errorf("Quorum = %d, want 1", cfg.Quorum)
+	}
+	if cfg.AlwaysPrompt != "Be brief." {
+		t.Errorf("AlwaysPrompt = %q, want %q", cfg.AlwaysPrompt, "Be brief.")
 	}
 }

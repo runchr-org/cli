@@ -95,7 +95,7 @@ func runTrailShow(ctx context.Context, w io.Writer, insecureHTTP bool) error {
 		return runTrailListAll(ctx, w, defaultTrailListOptions(insecureHTTP))
 	}
 
-	client, err := NewAuthenticatedAPIClient(insecureHTTP)
+	client, err := NewAuthenticatedAPIClient(ctx, insecureHTTP)
 	if err != nil {
 		return fmt.Errorf("authentication required: %w", err)
 	}
@@ -172,7 +172,7 @@ func runTrailListAll(ctx context.Context, w io.Writer, opts trailListOptions) er
 	if err != nil {
 		return err
 	}
-	client, err := NewAuthenticatedAPIClient(opts.InsecureHTTP)
+	client, err := NewAuthenticatedAPIClient(ctx, opts.InsecureHTTP)
 	if err != nil {
 		return fmt.Errorf("authentication required: %w", err)
 	}
@@ -524,6 +524,7 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
+	defer repo.Close()
 
 	// Determine base branch
 	if base == "" {
@@ -580,7 +581,7 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 
 	// --- Phase 2: API operations ---
 
-	client, err := NewAuthenticatedAPIClient(trailInsecureHTTP(cmd))
+	client, err := NewAuthenticatedAPIClient(ctx, trailInsecureHTTP(cmd))
 	if err != nil {
 		return fmt.Errorf("authentication required: %w", err)
 	}
@@ -667,7 +668,7 @@ func newTrailUpdateCmd() *cobra.Command {
 func runTrailUpdate(ctx context.Context, w, errW io.Writer, insecureHTTP bool, statusStr, title, body, branch string, labelAdd, labelRemove []string) error {
 	_ = errW // reserved for future warnings
 
-	client, err := NewAuthenticatedAPIClient(insecureHTTP)
+	client, err := NewAuthenticatedAPIClient(ctx, insecureHTTP)
 	if err != nil {
 		return fmt.Errorf("authentication required: %w", err)
 	}

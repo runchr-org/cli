@@ -415,7 +415,7 @@ func runTrailReviewSubmit(cmd *cobra.Command, number int, event, body string) er
 }
 
 func authenticatedTrailReviewTarget(cmd *cobra.Command, number int) (*api.Client, trailReviewTarget, error) {
-	client, err := NewAuthenticatedAPIClient(trailInsecureHTTP(cmd))
+	client, err := NewAuthenticatedAPIClient(cmd.Context(), trailInsecureHTTP(cmd))
 	if err != nil {
 		return nil, trailReviewTarget{}, fmt.Errorf("authentication required: %w", err)
 	}
