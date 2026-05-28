@@ -1135,8 +1135,11 @@ func appendEventSkillEventsToState(event *agent.Event, state *strategy.SessionSt
 
 func skillEventExists(events []agent.SkillEvent, candidate agent.SkillEvent) bool {
 	for _, existing := range events {
-		if existing.ID != "" && candidate.ID != "" && existing.ID == candidate.ID {
-			return true
+		if existing.ID != "" && candidate.ID != "" {
+			if existing.ID == candidate.ID {
+				return true
+			}
+			continue
 		}
 		if existing.EventType == candidate.EventType &&
 			existing.Skill.Name == candidate.Skill.Name &&
