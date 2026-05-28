@@ -77,9 +77,9 @@ func displayPushTarget(target string) string {
 // checkpointPushBudget is one shared deadline for a whole checkpoint push: the
 // initial push, the fetch+rebase recovery, and the retry all draw from it. A
 // per-attempt timeout instead let a stuck transport be re-charged a fresh timeout
-// per attempt, blocking the user's `git push` for ~2x the timeout. A var so tests
-// can shrink it.
-var checkpointPushBudget = 60 * time.Second
+// per attempt, blocking the user's `git push` for ~3x the timeout. Sized to
+// tolerate a slow network across all three phases. A var so tests can shrink it.
+var checkpointPushBudget = 2 * time.Minute
 
 // doPushBranch pushes the given branch to the target with fetch+merge recovery.
 // The target can be a remote name or a URL.

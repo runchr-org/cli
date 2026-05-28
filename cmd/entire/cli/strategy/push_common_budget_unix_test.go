@@ -24,7 +24,7 @@ import (
 //
 // Not parallel: uses t.Setenv and overrides checkpointPushBudget.
 func TestDoPushBranch_SharedBudget_BoundsTotalWallClock(t *testing.T) {
-	// Shrink the production 60s budget so the test runs in seconds.
+	// Shrink the production budget so the test runs in seconds.
 	const budget = 2 * time.Second
 	restoreBudget := checkpointPushBudget
 	checkpointPushBudget = budget
