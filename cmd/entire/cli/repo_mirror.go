@@ -188,12 +188,17 @@ func newRepoMirrorRemoveCmd() *cobra.Command {
 			clusterHost := clusterArg(args, 1)
 			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
 				// Resolve the mirror's ULID from its GitHub coords, then
-				// delete by that id. The by-mirror lookup's repoId IS the
-				// mirror id: server-side both come from the same
-				// mirror_repos row (FindMirrorByCoords returns MirrorRepoID,
-				// which create echoes as mirrorId and DELETE /mirrors/{id}
-				// resolves), so feeding repoId to DeleteMirror is correct
-				// despite the field-name difference.
+				// delete by that id. The generated API offers no delete-by-
+				// coords route, so the by-mirror lookup is the only way to
+				// get an id — and its repoId IS the mirror id: server-side
+				// both come from the same mirror_repos row
+				// (FindMirrorByCoords returns MirrorRepoID, which create
+				// echoes as mirrorId and DELETE /mirrors/{id} resolves).
+				// Feeding repoId to DeleteMirror is therefore correct despite
+				// the field-name difference; verified live (by-mirror repoId
+				// == list mirrorId for the same repo). The client-contract
+				// ambiguity goes away upstream if the lookup response names
+				// the field mirrorId (or a delete-by-coords route is added).
 				resolved, err := c.LookupRepoByMirror(ctx, coreapi.LookupRepoByMirrorParams{
 					Provider:    "github",
 					Owner:       owner,
