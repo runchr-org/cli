@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -38,28 +39,21 @@ func newProjectCreateCmd() *cobra.Command {
 			"  entire project create widgets --owner 01J0... --owner-type account",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cmd.SilenceUsage = true
 			ot, err := parseProjectOwnerType(ownerType)
 			if err != nil {
 				return err
 			}
-			client, err := newCoreClient()
-			if err != nil {
-				return err
-			}
-			body := &coreapi.CreateProjectInputBody{
-				Name:      args[0],
-				OwnerId:   ownerID,
-				OwnerType: ot,
-			}
-			if region != "" {
-				body.Region = coreapi.NewOptString(region)
-			}
-			project, err := client.CreateProject(cmd.Context(), body)
-			if err != nil {
-				return renderCoreError(err)
-			}
-			return printJSON(cmd.OutOrStdout(), project)
+			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+				body := &coreapi.CreateProjectInputBody{
+					Name:      args[0],
+					OwnerId:   ownerID,
+					OwnerType: ot,
+				}
+				if region != "" {
+					body.Region = coreapi.NewOptString(region)
+				}
+				return c.CreateProject(ctx, body)
+			})
 		},
 	}
 	cmd.Flags().StringVar(&ownerID, "owner", "", "owning org or account ULID (required)")
@@ -76,20 +70,17 @@ func newProjectListCmd() *cobra.Command {
 		Short: "List projects you can see",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cmd.SilenceUsage = true
-			client, err := newCoreClient()
-			if err != nil {
-				return err
-			}
-			var params coreapi.ListProjectsParams
-			if name != "" {
-				params.Name = coreapi.NewOptString(name)
-			}
-			out, err := client.ListProjects(cmd.Context(), params)
-			if err != nil {
-				return renderCoreError(err)
-			}
-			return printJSON(cmd.OutOrStdout(), out.Projects)
+			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+				var params coreapi.ListProjectsParams
+				if name != "" {
+					params.Name = coreapi.NewOptString(name)
+				}
+				out, err := c.ListProjects(ctx, params)
+				if err != nil {
+					return nil, err
+				}
+				return out.Projects, nil
+			})
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "filter by exact project name")

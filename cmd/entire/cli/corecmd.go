@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,15 +12,35 @@ import (
 	"github.com/entireio/cli/internal/coreapi"
 )
 
-// newCoreClient builds an authenticated Core API (control-plane) client
-// for the logged-in user. Wraps coreapi.New so the command files share one
-// construction site and a single error context.
-func newCoreClient() (*coreapi.Client, error) {
+// runCoreJSON runs fn against an authenticated control-plane client and
+// prints its result as indented JSON. It owns the preamble every
+// control-plane command shares: silence usage so input errors don't spam
+// the usage block, build the client, and map an API error to a
+// problem-detail SilentError. Commands supply only the call + the value to
+// render.
+func runCoreJSON(cmd *cobra.Command, fn func(ctx context.Context, c *coreapi.Client) (any, error)) error {
+	return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
+		out, err := fn(ctx, c)
+		if err != nil {
+			return err
+		}
+		return printJSON(cmd.OutOrStdout(), out)
+	})
+}
+
+// runCore is the variant for commands that don't render JSON (delete,
+// revoke, remove): it runs the same preamble — silence usage, build
+// client, map API errors — and leaves any success output to fn.
+func runCore(cmd *cobra.Command, fn func(ctx context.Context, c *coreapi.Client) error) error {
+	cmd.SilenceUsage = true
 	client, err := coreapi.New()
 	if err != nil {
-		return nil, fmt.Errorf("connect to Entire control plane: %w", err)
+		return fmt.Errorf("connect to Entire control plane: %w", err)
 	}
-	return client, nil
+	if err := fn(cmd.Context(), client); err != nil {
+		return renderCoreError(err)
+	}
+	return nil
 }
 
 // markRequired marks one or more flags required, panicking if a name

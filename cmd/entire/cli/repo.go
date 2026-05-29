@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+
 	"github.com/spf13/cobra"
 
 	"github.com/entireio/cli/internal/coreapi"
@@ -33,23 +35,16 @@ func newRepoCreateCmd() *cobra.Command {
 		Short: "Create a repository in a project",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cmd.SilenceUsage = true
-			client, err := newCoreClient()
-			if err != nil {
-				return err
-			}
-			body := &coreapi.CreateRepoInputBody{
-				Name:      args[0],
-				ProjectId: projectID,
-			}
-			if clusterHost != "" {
-				body.ClusterHost = coreapi.NewOptString(clusterHost)
-			}
-			repo, err := client.CreateRepo(cmd.Context(), body)
-			if err != nil {
-				return renderCoreError(err)
-			}
-			return printJSON(cmd.OutOrStdout(), repo)
+			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+				body := &coreapi.CreateRepoInputBody{
+					Name:      args[0],
+					ProjectId: projectID,
+				}
+				if clusterHost != "" {
+					body.ClusterHost = coreapi.NewOptString(clusterHost)
+				}
+				return c.CreateRepo(ctx, body)
+			})
 		},
 	}
 	cmd.Flags().StringVar(&projectID, "project", "", "owning project ULID (required)")
@@ -64,16 +59,13 @@ func newRepoListCmd() *cobra.Command {
 		Short: "List repositories in a project",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cmd.SilenceUsage = true
-			client, err := newCoreClient()
-			if err != nil {
-				return err
-			}
-			out, err := client.ListProjectRepos(cmd.Context(), coreapi.ListProjectReposParams{ProjectId: args[0]})
-			if err != nil {
-				return renderCoreError(err)
-			}
-			return printJSON(cmd.OutOrStdout(), out.Repos)
+			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+				out, err := c.ListProjectRepos(ctx, coreapi.ListProjectReposParams{ProjectId: args[0]})
+				if err != nil {
+					return nil, err
+				}
+				return out.Repos, nil
+			})
 		},
 	}
 }
@@ -84,16 +76,9 @@ func newRepoGetCmd() *cobra.Command {
 		Short: "Show a repository by ULID",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cmd.SilenceUsage = true
-			client, err := newCoreClient()
-			if err != nil {
-				return err
-			}
-			repo, err := client.GetRepo(cmd.Context(), coreapi.GetRepoParams{RepoId: args[0]})
-			if err != nil {
-				return renderCoreError(err)
-			}
-			return printJSON(cmd.OutOrStdout(), repo)
+			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+				return c.GetRepo(ctx, coreapi.GetRepoParams{RepoId: args[0]})
+			})
 		},
 	}
 }
@@ -104,16 +89,13 @@ func newRepoDeleteCmd() *cobra.Command {
 		Short: "Delete a repository by ULID",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cmd.SilenceUsage = true
-			client, err := newCoreClient()
-			if err != nil {
-				return err
-			}
-			if err := client.DeleteRepo(cmd.Context(), coreapi.DeleteRepoParams{RepoId: args[0]}); err != nil {
-				return renderCoreError(err)
-			}
-			cmd.Printf("Deleted repo %s\n", args[0])
-			return nil
+			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
+				if err := c.DeleteRepo(ctx, coreapi.DeleteRepoParams{RepoId: args[0]}); err != nil {
+					return err
+				}
+				cmd.Printf("Deleted repo %s\n", args[0])
+				return nil
+			})
 		},
 	}
 }

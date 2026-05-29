@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+
 	"github.com/spf13/cobra"
 
 	"github.com/entireio/cli/internal/coreapi"
@@ -27,20 +29,13 @@ func newOrgCreateCmd() *cobra.Command {
 		Short: "Create an organization",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cmd.SilenceUsage = true
-			client, err := newCoreClient()
-			if err != nil {
-				return err
-			}
-			body := &coreapi.CreateOrgInputBody{Name: args[0]}
-			if region != "" {
-				body.Region = coreapi.NewOptString(region)
-			}
-			org, err := client.CreateOrg(cmd.Context(), body)
-			if err != nil {
-				return renderCoreError(err)
-			}
-			return printJSON(cmd.OutOrStdout(), org)
+			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+				body := &coreapi.CreateOrgInputBody{Name: args[0]}
+				if region != "" {
+					body.Region = coreapi.NewOptString(region)
+				}
+				return c.CreateOrg(ctx, body)
+			})
 		},
 	}
 	cmd.Flags().StringVar(&region, "region", "", "jurisdiction slug (defaults to the server's home jurisdiction)")
@@ -53,16 +48,13 @@ func newOrgListCmd() *cobra.Command {
 		Short: "List organizations you can see",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cmd.SilenceUsage = true
-			client, err := newCoreClient()
-			if err != nil {
-				return err
-			}
-			out, err := client.ListOrgs(cmd.Context())
-			if err != nil {
-				return renderCoreError(err)
-			}
-			return printJSON(cmd.OutOrStdout(), out.Orgs)
+			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+				out, err := c.ListOrgs(ctx)
+				if err != nil {
+					return nil, err
+				}
+				return out.Orgs, nil
+			})
 		},
 	}
 }
