@@ -22,10 +22,26 @@ func newGrantCmd() *cobra.Command {
 		Short:  "Manage Entire access grants and org membership",
 		Hidden: true,
 	}
+	addJSONFlag(cmd)
 	cmd.AddCommand(newGrantOrgCmd())
 	cmd.AddCommand(newGrantProjectCmd())
 	cmd.AddCommand(newGrantRepoCmd())
 	return cmd
+}
+
+// orgMemberColumns / projectGrantColumns are the human table views of the
+// two membership/grant listings.
+var (
+	orgMemberColumns    = []string{"ACCOUNT", "ROLE", "STATUS"}
+	projectGrantColumns = []string{"GRANTEE-TYPE", "GRANTEE", "ROLE"}
+)
+
+func orgMemberRow(m coreapi.Membership) []string {
+	return []string{m.AccountId, m.Role, m.Status}
+}
+
+func projectGrantRow(g coreapi.ProjectGrant) []string {
+	return []string{g.GranteeType, g.GranteeId, g.Role}
 }
 
 // --- org membership -------------------------------------------------------
@@ -71,7 +87,7 @@ func newGrantOrgListCmd() *cobra.Command {
 		Short: "List org members",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+			return runCoreList(cmd, orgMemberColumns, orgMemberRow, func(ctx context.Context, c *coreapi.Client) ([]coreapi.Membership, error) {
 				out, err := c.ListOrgMembers(ctx, coreapi.ListOrgMembersParams{OrgId: args[0]})
 				if err != nil {
 					return nil, err
@@ -152,7 +168,7 @@ func newGrantProjectListCmd() *cobra.Command {
 		Short: "List project members",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+			return runCoreList(cmd, projectGrantColumns, projectGrantRow, func(ctx context.Context, c *coreapi.Client) ([]coreapi.ProjectGrant, error) {
 				out, err := c.ListProjectMembers(ctx, coreapi.ListProjectMembersParams{ProjectId: args[0]})
 				if err != nil {
 					return nil, err

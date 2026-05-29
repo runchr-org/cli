@@ -17,9 +17,18 @@ func newOrgCmd() *cobra.Command {
 		Short:  "Manage Entire organizations",
 		Hidden: true,
 	}
+	addJSONFlag(cmd)
 	cmd.AddCommand(newOrgCreateCmd())
 	cmd.AddCommand(newOrgListCmd())
 	return cmd
+}
+
+// orgColumns is the human table/field view of an org, shared by list and
+// any future `org get`.
+var orgColumns = []string{"ID", "NAME", "REGION", "CREATED"}
+
+func orgRow(o coreapi.Org) []string {
+	return []string{o.ID, o.Name, o.Region, o.CreatedAt.Format("2006-01-02")}
 }
 
 func newOrgCreateCmd() *cobra.Command {
@@ -48,7 +57,7 @@ func newOrgListCmd() *cobra.Command {
 		Short: "List organizations you can see",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+			return runCoreList(cmd, orgColumns, orgRow, func(ctx context.Context, c *coreapi.Client) ([]coreapi.Org, error) {
 				out, err := c.ListOrgs(ctx)
 				if err != nil {
 					return nil, err

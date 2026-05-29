@@ -17,9 +17,17 @@ func newProjectCmd() *cobra.Command {
 		Short:  "Manage Entire projects",
 		Hidden: true,
 	}
+	addJSONFlag(cmd)
 	cmd.AddCommand(newProjectCreateCmd())
 	cmd.AddCommand(newProjectListCmd())
 	return cmd
+}
+
+// projectColumns is the human table/field view of a project.
+var projectColumns = []string{"ID", "NAME", "OWNER-TYPE", "OWNER", "REGION"}
+
+func projectRow(p coreapi.Project) []string {
+	return []string{p.ID, p.Name, string(p.OwnerType), p.OwnerId, p.Region}
 }
 
 func newProjectCreateCmd() *cobra.Command {
@@ -70,7 +78,7 @@ func newProjectListCmd() *cobra.Command {
 		Short: "List projects you can see",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+			return runCoreList(cmd, projectColumns, projectRow, func(ctx context.Context, c *coreapi.Client) ([]coreapi.Project, error) {
 				var params coreapi.ListProjectsParams
 				if name != "" {
 					params.Name = coreapi.NewOptString(name)

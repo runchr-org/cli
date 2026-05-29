@@ -18,12 +18,25 @@ func newRepoCmd() *cobra.Command {
 		Short:  "Manage Entire repositories",
 		Hidden: true,
 	}
+	addJSONFlag(cmd)
 	cmd.AddCommand(newRepoCreateCmd())
 	cmd.AddCommand(newRepoListCmd())
 	cmd.AddCommand(newRepoGetCmd())
 	cmd.AddCommand(newRepoDeleteCmd())
 	cmd.AddCommand(newRepoMirrorCmd())
 	return cmd
+}
+
+// repoColumns is the human table/field view of a repo, shared by list and
+// get. CLUSTER/STATE come from optional fields, shown as "-" when unset.
+var repoColumns = []string{"ID", "NAME", "PROJECT", "CLUSTER", "STATE"}
+
+func repoRow(r coreapi.Repo) []string {
+	state := ""
+	if v, ok := r.State.Get(); ok {
+		state = string(v)
+	}
+	return []string{r.ID, r.Name, r.OwningProjectId, r.ClusterHost.Or("-"), state}
 }
 
 func newRepoCreateCmd() *cobra.Command {
@@ -60,7 +73,7 @@ func newRepoListCmd() *cobra.Command {
 		Short: "List repositories in a project",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+			return runCoreList(cmd, repoColumns, repoRow, func(ctx context.Context, c *coreapi.Client) ([]coreapi.Repo, error) {
 				out, err := c.ListProjectRepos(ctx, coreapi.ListProjectReposParams{ProjectId: args[0]})
 				if err != nil {
 					return nil, err
@@ -77,7 +90,7 @@ func newRepoGetCmd() *cobra.Command {
 		Short: "Show a repository by ULID",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+			return runCoreObject(cmd, repoColumns, repoRow, func(ctx context.Context, c *coreapi.Client) (*coreapi.Repo, error) {
 				return c.GetRepo(ctx, coreapi.GetRepoParams{RepoId: args[0]})
 			})
 		},

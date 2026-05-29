@@ -10,6 +10,23 @@ import (
 	"github.com/entireio/cli/internal/coreapi"
 )
 
+// mirrorColumns is the human table/field view of a mirror. It leads with
+// the actionable bits — which repo, which cluster, and the clone URL —
+// rather than the wire model's internal ids. The clone URL is synthesised
+// from the mirror's coords (the form `git clone` accepts), since the list
+// API doesn't return it.
+var mirrorColumns = []string{"REPO", "CLUSTER", "CLONE URL", "PRIVATE"}
+
+func mirrorRow(m coreapi.Mirror) []string {
+	repo := m.Owner + "/" + m.Repo
+	cloneURL := fmt.Sprintf("entire://%s/gh/%s/%s", m.ClusterHost, m.Owner, m.Repo)
+	private := "no"
+	if m.IsPrivate.Or(false) {
+		private = "yes"
+	}
+	return []string{repo, m.ClusterHost, cloneURL, private}
+}
+
 // newRepoMirrorCmd is the `entire repo mirror` subtree: manage EntireDB
 // GitHub-mirror placements on a cluster. Mirrors the standalone entiredb
 // CLI's `entire repo mirror` surface for the server-side half (create /
@@ -91,7 +108,7 @@ func newRepoMirrorListCmd() *cobra.Command {
 		Short: "List mirrors you can see",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+			return runCoreList(cmd, mirrorColumns, mirrorRow, func(ctx context.Context, c *coreapi.Client) ([]coreapi.Mirror, error) {
 				var params coreapi.ListMirrorsParams
 				if cluster != "" {
 					params.Cluster = coreapi.NewOptString(cluster)
@@ -122,7 +139,7 @@ func newRepoMirrorGetCmd() *cobra.Command {
 		Short: "Show a mirror by ULID",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCoreJSON(cmd, func(ctx context.Context, c *coreapi.Client) (any, error) {
+			return runCoreObject(cmd, mirrorColumns, mirrorRow, func(ctx context.Context, c *coreapi.Client) (*coreapi.Mirror, error) {
 				return c.GetMirror(ctx, coreapi.GetMirrorParams{MirrorId: args[0]})
 			})
 		},
