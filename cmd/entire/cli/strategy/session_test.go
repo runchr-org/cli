@@ -123,46 +123,6 @@ func TestCheckpointStruct(t *testing.T) {
 	}
 }
 
-func TestSessionCheckpointCount(t *testing.T) {
-	session := Session{
-		ID:          "test-session",
-		Description: "Test",
-		Checkpoints: []Checkpoint{
-			{CheckpointID: "a"},
-			{CheckpointID: "b"},
-			{CheckpointID: "c"},
-		},
-	}
-
-	if session.ID != "test-session" {
-		t.Errorf("expected ID to match, got %s", session.ID)
-	}
-	if session.Description != "Test" {
-		t.Errorf("expected Description to match, got %s", session.Description)
-	}
-	if len(session.Checkpoints) != 3 {
-		t.Errorf("expected 3 checkpoints, got %d", len(session.Checkpoints))
-	}
-	// Verify checkpoint IDs are accessible
-	if session.Checkpoints[0].CheckpointID != "a" {
-		t.Errorf("expected first checkpoint ID to be 'a', got %s", session.Checkpoints[0].CheckpointID)
-	}
-}
-
-func TestEmptySession(t *testing.T) {
-	session := Session{}
-
-	if session.ID != "" {
-		t.Error("expected empty session to have empty ID")
-	}
-	if session.Description != "" {
-		t.Error("expected empty session to have empty Description")
-	}
-	if session.Checkpoints != nil {
-		t.Error("expected empty session to have nil Checkpoints")
-	}
-}
-
 // TestManualCommitStrategyGetAdditionalSessions verifies that GetAdditionalSessions is callable
 func TestManualCommitStrategyGetAdditionalSessions(t *testing.T) {
 	strat := NewManualCommitStrategy()

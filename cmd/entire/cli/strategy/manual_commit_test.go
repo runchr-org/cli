@@ -4255,81 +4255,77 @@ func TestCommittedFilesExcludingMetadata(t *testing.T) {
 	require.NotContains(t, resultSet, ".cursor/hooks.json", ".cursor/ should be excluded (cursor ProtectedDirs)")
 	require.NotContains(t, resultSet, "opencode.json", "opencode.json should be excluded (opencode ProtectedFiles)")
 	require.Len(t, result, 2)
-}
 
-func TestMarshalPromptAttributionsIncludingPending_IncludesPending(t *testing.T) {
-	t.Parallel()
-
-	state := &SessionState{
-		PromptAttributions: []PromptAttribution{
-			{CheckpointNumber: 1, UserLinesAdded: 3},
-		},
-		PendingPromptAttribution: &PromptAttribution{
-			CheckpointNumber: 2, UserLinesAdded: 5,
-		},
-	}
-
-	raw := marshalPromptAttributionsIncludingPending(state)
-	require.NotNil(t, raw)
-
-	var result []PromptAttribution
-	require.NoError(t, json.Unmarshal(raw, &result))
-	require.Len(t, result, 2, "should include both committed and pending attributions")
-	require.Equal(t, 1, result[0].CheckpointNumber)
-	require.Equal(t, 3, result[0].UserLinesAdded)
-	require.Equal(t, 2, result[1].CheckpointNumber)
-	require.Equal(t, 5, result[1].UserLinesAdded)
-}
-
-func TestMarshalPromptAttributionsIncludingPending_NoPending(t *testing.T) {
-	t.Parallel()
-
-	state := &SessionState{
-		PromptAttributions: []PromptAttribution{
-			{CheckpointNumber: 1, UserLinesAdded: 3},
-		},
-	}
-
-	raw := marshalPromptAttributionsIncludingPending(state)
-	require.NotNil(t, raw)
-
-	var result []PromptAttribution
-	require.NoError(t, json.Unmarshal(raw, &result))
-	require.Len(t, result, 1)
-}
-
-func TestMarshalPromptAttributionsIncludingPending_Empty(t *testing.T) {
-	t.Parallel()
-
-	state := &SessionState{}
-	raw := marshalPromptAttributionsIncludingPending(state)
-	require.Nil(t, raw, "empty state should return nil")
-}
-
-func TestMarshalPromptAttributionsIncludingPending_OnlyPending(t *testing.T) {
-	t.Parallel()
-
-	state := &SessionState{
-		PendingPromptAttribution: &PromptAttribution{
-			CheckpointNumber: 1, UserLinesAdded: 7,
-		},
-	}
-
-	raw := marshalPromptAttributionsIncludingPending(state)
-	require.NotNil(t, raw, "pending-only should still produce output")
-
-	var result []PromptAttribution
-	require.NoError(t, json.Unmarshal(raw, &result))
-	require.Len(t, result, 1)
-	require.Equal(t, 7, result[0].UserLinesAdded)
-}
-
-func TestCommittedFilesExcludingMetadata_AllMetadata(t *testing.T) {
-	t.Parallel()
-
-	result := committedFilesExcludingMetadata(map[string]struct{}{
+	// All-metadata input excludes everything, yielding an empty result.
+	allMetadata := committedFilesExcludingMetadata(map[string]struct{}{
 		".entire/settings.json": {},
 		".entire/.gitignore":    {},
 	})
-	require.Empty(t, result, "all metadata files should be excluded")
+	require.Empty(t, allMetadata, "all metadata files should be excluded")
+}
+
+func TestMarshalPromptAttributionsIncludingPending(t *testing.T) {
+	t.Parallel()
+
+	committed := []PromptAttribution{{CheckpointNumber: 1, UserLinesAdded: 3}}
+	pending := &PromptAttribution{CheckpointNumber: 2, UserLinesAdded: 5}
+
+	tests := []struct {
+		name      string
+		state     *SessionState
+		wantNil   bool
+		wantCount int
+		// verify is an optional extra check on the unmarshalled attributions.
+		verify func(t *testing.T, result []PromptAttribution)
+	}{
+		{
+			name:      "includes both committed and pending",
+			state:     &SessionState{PromptAttributions: committed, PendingPromptAttribution: pending},
+			wantCount: 2,
+			verify: func(t *testing.T, result []PromptAttribution) {
+				require.Equal(t, 1, result[0].CheckpointNumber)
+				require.Equal(t, 3, result[0].UserLinesAdded)
+				require.Equal(t, 2, result[1].CheckpointNumber)
+				require.Equal(t, 5, result[1].UserLinesAdded)
+			},
+		},
+		{
+			name:      "committed only, no pending",
+			state:     &SessionState{PromptAttributions: committed},
+			wantCount: 1,
+		},
+		{
+			name:    "empty state returns nil",
+			state:   &SessionState{},
+			wantNil: true,
+		},
+		{
+			name:      "pending only still produces output",
+			state:     &SessionState{PendingPromptAttribution: &PromptAttribution{CheckpointNumber: 1, UserLinesAdded: 7}},
+			wantCount: 1,
+			verify: func(t *testing.T, result []PromptAttribution) {
+				require.Equal(t, 7, result[0].UserLinesAdded)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			raw := marshalPromptAttributionsIncludingPending(tt.state)
+			if tt.wantNil {
+				require.Nil(t, raw)
+				return
+			}
+			require.NotNil(t, raw)
+
+			var result []PromptAttribution
+			require.NoError(t, json.Unmarshal(raw, &result))
+			require.Len(t, result, tt.wantCount)
+			if tt.verify != nil {
+				tt.verify(t, result)
+			}
+		})
+	}
 }

@@ -64,20 +64,35 @@ esac
 	}
 }
 
-func TestCalculateTokenUsage_CursorReturnsNil(t *testing.T) {
+func TestCalculateTokenUsage_CursorAlwaysNil(t *testing.T) {
 	t.Parallel()
 
 	// Cursor transcripts don't contain token usage data, so CalculateTokenUsage
-	// should return nil (not an empty struct) to signal "no data available".
-	transcript := []byte(`{"role":"user","message":{"content":[{"type":"text","text":"hello"}]}}`)
-
-	ag, err := agent.GetByAgentType(agent.AgentTypeCursor)
-	if err != nil {
-		t.Fatalf("GetByAgentType(Cursor) error: %v", err)
+	// should always return nil (not an empty struct) to signal "no data
+	// available" — regardless of transcript shape or offset.
+	tests := []struct {
+		name       string
+		transcript []byte
+		offset     int
+	}{
+		{"single-line transcript", []byte(`{"role":"user","message":{"content":[{"type":"text","text":"hello"}]}}`), 0},
+		{"multi-line real transcript", []byte(cursorSampleTranscript), 0},
+		{"real transcript with offset", []byte(cursorSampleTranscript), 3},
 	}
-	result := agent.CalculateTokenUsage(context.Background(), ag, transcript, 0, "")
-	if result != nil {
-		t.Errorf("CalculateTokenUsage(Cursor) = %+v, want nil", result)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ag, err := agent.GetByAgentType(agent.AgentTypeCursor)
+			if err != nil {
+				t.Fatalf("GetByAgentType(Cursor) error: %v", err)
+			}
+			result := agent.CalculateTokenUsage(context.Background(), ag, tt.transcript, tt.offset, "")
+			if result != nil {
+				t.Errorf("CalculateTokenUsage(Cursor) = %+v, want nil", result)
+			}
+		})
 	}
 }
 
@@ -263,34 +278,6 @@ func TestExtractUserPrompts_CursorEmpty(t *testing.T) {
 	prompts := extractUserPrompts(agent.AgentTypeCursor, "")
 	if len(prompts) != 0 {
 		t.Errorf("extractUserPrompts(Cursor, empty) = %v, want empty", prompts)
-	}
-}
-
-func TestCalculateTokenUsage_CursorRealTranscript(t *testing.T) {
-	t.Parallel()
-
-	// Even with a multi-line real transcript, Cursor should return nil
-	ag, err := agent.GetByAgentType(agent.AgentTypeCursor)
-	if err != nil {
-		t.Fatalf("GetByAgentType(Cursor) error: %v", err)
-	}
-	result := agent.CalculateTokenUsage(context.Background(), ag, []byte(cursorSampleTranscript), 0, "")
-	if result != nil {
-		t.Errorf("CalculateTokenUsage(Cursor, real transcript) = %+v, want nil", result)
-	}
-}
-
-func TestCalculateTokenUsage_CursorWithOffset(t *testing.T) {
-	t.Parallel()
-
-	// Offset should not matter — Cursor always returns nil
-	ag, err := agent.GetByAgentType(agent.AgentTypeCursor)
-	if err != nil {
-		t.Fatalf("GetByAgentType(Cursor) error: %v", err)
-	}
-	result := agent.CalculateTokenUsage(context.Background(), ag, []byte(cursorSampleTranscript), 3, "")
-	if result != nil {
-		t.Errorf("CalculateTokenUsage(Cursor, offset=3) = %+v, want nil", result)
 	}
 }
 

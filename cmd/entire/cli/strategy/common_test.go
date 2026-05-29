@@ -12,6 +12,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
@@ -1642,120 +1643,41 @@ func openRepoHeadTree(t *testing.T, dir string) *object.Tree {
 	return tree
 }
 
-func TestReadAgentTypeFromTree_OnlyClaude(t *testing.T) {
+func TestReadAgentTypeFromTree(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, ".claude/settings.json", `{}`)
-	testutil.GitAdd(t, dir, ".claude/settings.json")
-	testutil.GitCommit(t, dir, "init")
+	tests := []struct {
+		name  string
+		files []string // committed before resolution
+		want  types.AgentType
+	}{
+		{"only claude", []string{".claude/settings.json"}, agent.AgentTypeClaudeCode},
+		{"only gemini", []string{".gemini/settings.json"}, agent.AgentTypeGemini},
+		{"only codex", []string{".codex/config.json"}, agent.AgentTypeCodex},
+		{"only cursor", []string{".cursor/settings.json"}, agent.AgentTypeCursor},
+		{"only factory", []string{".factory/settings.json"}, agent.AgentTypeFactoryAIDroid},
+		{"claude and codex is ambiguous", []string{".claude/settings.json", ".codex/config.json"}, agent.AgentTypeUnknown},
+		{"claude and gemini is ambiguous", []string{".claude/settings.json", ".gemini/settings.json"}, agent.AgentTypeUnknown},
+		{"no agent dirs", []string{"f.txt"}, agent.AgentTypeUnknown},
+	}
 
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeClaudeCode, result)
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-func TestReadAgentTypeFromTree_OnlyGemini(t *testing.T) {
-	t.Parallel()
+			dir := t.TempDir()
+			testutil.InitRepo(t, dir)
+			for _, f := range tt.files {
+				testutil.WriteFile(t, dir, f, `{}`)
+				testutil.GitAdd(t, dir, f)
+			}
+			testutil.GitCommit(t, dir, "init")
 
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, ".gemini/settings.json", `{}`)
-	testutil.GitAdd(t, dir, ".gemini/settings.json")
-	testutil.GitCommit(t, dir, "init")
-
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeGemini, result)
-}
-
-func TestReadAgentTypeFromTree_OnlyCodex(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, ".codex/config.json", `{}`)
-	testutil.GitAdd(t, dir, ".codex/config.json")
-	testutil.GitCommit(t, dir, "init")
-
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeCodex, result)
-}
-
-func TestReadAgentTypeFromTree_OnlyCursor(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, ".cursor/settings.json", `{}`)
-	testutil.GitAdd(t, dir, ".cursor/settings.json")
-	testutil.GitCommit(t, dir, "init")
-
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeCursor, result)
-}
-
-func TestReadAgentTypeFromTree_OnlyFactory(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, ".factory/settings.json", `{}`)
-	testutil.GitAdd(t, dir, ".factory/settings.json")
-	testutil.GitCommit(t, dir, "init")
-
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeFactoryAIDroid, result)
-}
-
-func TestReadAgentTypeFromTree_ClaudeAndCodex_ReturnsUnknown(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, ".claude/settings.json", `{}`)
-	testutil.GitAdd(t, dir, ".claude/settings.json")
-	testutil.WriteFile(t, dir, ".codex/config.json", `{}`)
-	testutil.GitAdd(t, dir, ".codex/config.json")
-	testutil.GitCommit(t, dir, "init")
-
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeUnknown, result)
-}
-
-func TestReadAgentTypeFromTree_ClaudeAndGemini_ReturnsUnknown(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, ".claude/settings.json", `{}`)
-	testutil.GitAdd(t, dir, ".claude/settings.json")
-	testutil.WriteFile(t, dir, ".gemini/settings.json", `{}`)
-	testutil.GitAdd(t, dir, ".gemini/settings.json")
-	testutil.GitCommit(t, dir, "init")
-
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeUnknown, result)
-}
-
-func TestReadAgentTypeFromTree_NoAgentDirs_ReturnsUnknown(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, "f.txt", "init")
-	testutil.GitAdd(t, dir, "f.txt")
-	testutil.GitCommit(t, dir, "init")
-
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeUnknown, result)
+			tree := openRepoHeadTree(t, dir)
+			result := ReadAgentTypeFromTree(tree, "nonexistent-path")
+			assert.Equal(t, tt.want, result)
+		})
+	}
 }
 
 func TestReadAgentTypeFromTree_MetadataJSON_OverridesDir(t *testing.T) {
