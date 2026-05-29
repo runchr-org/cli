@@ -1212,15 +1212,11 @@ func warnCheckpointsV2Disallowed(val any) {
 }
 
 // isV1CustomRefValue reports whether a checkpoints_version value selects the v1
-// custom ref. Accepts the JSON string "1.1" and the number 1.1 (float64).
+// custom ref. Only the JSON string "1.1" opts in; the numeric form falls back
+// to v1 (and logs as unsupported, like any other unrecognized value).
 func isV1CustomRefValue(val any) bool {
-	switch v := val.(type) {
-	case string:
-		return v == "1.1"
-	case float64:
-		return v == 1.1
-	}
-	return false
+	s, ok := val.(string)
+	return ok && s == "1.1"
 }
 
 func parseCheckpointsVersion(val any) (int, bool) {
