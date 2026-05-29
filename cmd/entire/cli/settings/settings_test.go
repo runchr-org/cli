@@ -856,6 +856,47 @@ func TestCheckpointsVersion(t *testing.T) {
 	}
 }
 
+func TestMirrorsToV1CustomRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opts map[string]any
+		want bool
+	}{
+		{"unset", nil, false},
+		{"empty options", map[string]any{}, false},
+		{"string 1.1 opts in", map[string]any{"checkpoints_version": "1.1"}, true},
+		{"float 1.1 opts in", map[string]any{"checkpoints_version": 1.1}, true},
+		{"integer 1 does not mirror", map[string]any{"checkpoints_version": 1}, false},
+		{"string 1 does not mirror", map[string]any{"checkpoints_version": "1"}, false},
+		{"integer 2 does not mirror", map[string]any{"checkpoints_version": 2}, false},
+		{"unrelated string does not mirror", map[string]any{"checkpoints_version": "abc"}, false},
+		{"bool does not mirror", map[string]any{"checkpoints_version": true}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := &EntireSettings{StrategyOptions: tt.opts}
+			if got := s.MirrorsToV1CustomRef(); got != tt.want {
+				t.Errorf("MirrorsToV1CustomRef() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestV1CustomRefValueIsRecognized verifies the v1 custom-ref opt-in is not
+// treated as an unsupported checkpoints_version (which would trip the warning).
+func TestV1CustomRefValueIsRecognized(t *testing.T) {
+	t.Parallel()
+	for _, val := range []any{"1.1", 1.1} {
+		if _, supported := parseCheckpointsVersion(val); !supported {
+			t.Errorf("parseCheckpointsVersion(%v) reported unsupported, want recognized", val)
+		}
+	}
+}
+
 func TestWarnIfCheckpointsV2Disallowed(t *testing.T) {
 	tests := []struct {
 		name     string
