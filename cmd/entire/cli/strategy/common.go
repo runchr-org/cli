@@ -1440,12 +1440,6 @@ func getTaskTranscriptFromTree(ctx context.Context, point RewindPoint) ([]byte, 
 // ErrBranchNotFound is returned by DeleteBranchCLI when the branch does not exist.
 var ErrBranchNotFound = errors.New("branch not found")
 
-// ErrRefNotFound is returned by DeleteRefCLI when the ref does not exist.
-var ErrRefNotFound = errors.New("ref not found")
-
-// ErrRefChanged is returned by DeleteRefCLI when the ref no longer points to the expected OID.
-var ErrRefChanged = errors.New("ref changed since inspection")
-
 // DeleteBranchCLI deletes a git branch using the git CLI.
 // Uses `git branch -D` instead of go-git's RemoveReference because go-git v5
 // doesn't properly persist deletions when refs are packed (.git/packed-refs)
