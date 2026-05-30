@@ -23,7 +23,14 @@ func newAuthUseCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "use <context>",
 		Short: "Switch the active login context",
-		Args:  cobra.ExactArgs(1),
+		Long: "Switch the active login context.\n\n" +
+			"For `git clone entire://…` the active context is only a fallback: a cluster\n" +
+			"already bound to a context keeps using that binding, so switching here affects\n" +
+			"only clusters not yet bound (and same-core tie-breaking on first resolve).\n\n" +
+			"Control-plane commands (auth status/list/revoke, org/project/repo/grant) still\n" +
+			"target the configured auth host (ENTIRE_AUTH_BASE_URL / the default), so\n" +
+			"switching to a context on a different core does not retarget them yet.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := auth.SetCurrentContext(args[0]); err != nil {
 				return err //nolint:wrapcheck // already a user-facing message
