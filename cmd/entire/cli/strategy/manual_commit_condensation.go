@@ -844,10 +844,13 @@ func (s *ManualCommitStrategy) extractSessionData(ctx context.Context, repo *git
 	// Use tracked files from session state (not all files in tree)
 	data.FilesTouched = filesTouched
 
-	// Calculate token usage and skill events from the extracted transcript portion
+	// Calculate token usage from the checkpoint-scoped transcript portion.
+	// Skill events annotate the stored raw transcript, which is full-session, so
+	// extract them from offset 0; consumers can filter by checkpoint_transcript_start
+	// if they only render the checkpoint-scoped slice.
 	if len(data.Transcript) > 0 {
 		data.TokenUsage = agent.CalculateTokenUsage(ctx, ag, data.Transcript, checkpointTranscriptStart, "") //TODO: why do we not use here subagents dir?
-		data.SkillEvents = agent.ExtractSkillEvents(ctx, ag, data.Transcript, checkpointTranscriptStart)
+		data.SkillEvents = agent.ExtractSkillEvents(ctx, ag, data.Transcript, 0)
 	}
 
 	return data, nil
@@ -883,10 +886,13 @@ func (s *ManualCommitStrategy) extractSessionDataFromLiveTranscript(ctx context.
 	// Resolve files touched: prefers hook-populated state, falls back to transcript extraction
 	data.FilesTouched = s.resolveFilesTouched(ctx, state)
 
-	// Calculate token usage and skill events from the extracted transcript portion
+	// Calculate token usage from the checkpoint-scoped transcript portion.
+	// Skill events annotate the stored raw transcript, which is full-session, so
+	// extract them from offset 0; consumers can filter by checkpoint_transcript_start
+	// if they only render the checkpoint-scoped slice.
 	if len(data.Transcript) > 0 {
 		data.TokenUsage = agent.CalculateTokenUsage(ctx, ag, data.Transcript, state.CheckpointTranscriptStart, "") //TODO: why do we not use here subagents dir?
-		data.SkillEvents = agent.ExtractSkillEvents(ctx, ag, data.Transcript, state.CheckpointTranscriptStart)
+		data.SkillEvents = agent.ExtractSkillEvents(ctx, ag, data.Transcript, 0)
 	}
 
 	return data, nil
