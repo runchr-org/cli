@@ -678,7 +678,7 @@ func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, chec
 	// Handle summary generation — uses raw transcript.
 	if generate {
 		stopLoad(false) // generation prints its own progress to w/errW
-		if err := generateCheckpointSummary(ctx, w, errW, lookup.store, fullCheckpointID, summary, content, force, summaryTimeoutSeconds); err != nil {
+		if err := generateCheckpointSummary(ctx, w, errW, lookup.repo, lookup.store, fullCheckpointID, summary, content, force, summaryTimeoutSeconds); err != nil {
 			return err
 		}
 		// Reload to get the updated summary.
@@ -869,7 +869,7 @@ func newExplainCheckpointLookup(ctx context.Context) (*explainCheckpointLookup, 
 // summaryTimeoutSeconds is the per-invocation --summary-timeout-seconds flag
 // value (0 = unset). Effective precedence for the deadline: flag > settings >
 // package default. See resolveSummaryTimeout for the resolution.
-func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, store *checkpoint.GitStore, checkpointID id.CheckpointID, cpSummary *checkpoint.CheckpointSummary, content *checkpoint.SessionContent, force bool, summaryTimeoutSeconds int) error {
+func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, repo *git.Repository, store *checkpoint.GitStore, checkpointID id.CheckpointID, cpSummary *checkpoint.CheckpointSummary, content *checkpoint.SessionContent, force bool, summaryTimeoutSeconds int) error {
 	// Check if summary already exists
 	if content.Metadata.Summary != nil && !force {
 		return renderExplainFailure(errW, "Summary already exists", []explainRow{
@@ -918,6 +918,10 @@ func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, store *ch
 
 	if err := store.UpdateSummary(ctx, checkpointID, summary); err != nil {
 		return fmt.Errorf("failed to save summary: %w", err)
+	}
+
+	if err := mirrorToV1CustomRef(ctx, repo); err != nil {
+		return fmt.Errorf("summary was written to %s, but failed to mirror to %s: %w", paths.MetadataBranchName, paths.MetadataRefName, err)
 	}
 
 	styles := newStatusStyles(w)
