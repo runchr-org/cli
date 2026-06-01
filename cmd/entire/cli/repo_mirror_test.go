@@ -124,6 +124,10 @@ func TestValidateClusterHost(t *testing.T) {
 		{name: "host with port", host: "localhost:8080"},
 		{name: "ipv4", host: "10.0.0.1"},
 		{name: "ipv4 with port", host: "10.0.0.1:8080"},
+		// IPv6 takes a different path through validateClusterHost: the
+		// host must be bracketed for url.Parse to round-trip, and
+		// u.Hostname() strips the brackets before net.ParseIP sees it.
+		{name: "ipv6 with port", host: "[::1]:8080"},
 		// The token-leak primitive: userinfo demotes the real cluster so the
 		// request (and basic-auth token) targets evil.com.
 		{name: "userinfo smuggle", host: "aws-us-east-2.entire.io@evil.com", wantErr: true},
