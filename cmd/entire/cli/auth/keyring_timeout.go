@@ -5,15 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 )
 
 // defaultKeyringTimeout caps how long every OS keyring call may take.
-// On Linux the keyring talks D-Bus to the Secret Service; in headless
-// environments (SSH without a graphical session, containers, WSL) no
-// provider is running and the call blocks indefinitely, freezing the
-// CLI. 5s is comfortably longer than any healthy round-trip while still
-// surfacing the hang to the user quickly.
+// The underlying keyring API (Secret Service on Linux, Keychain on
+// macOS, Credential Manager on Windows) can block indefinitely when no
+// provider is reachable — a headless SSH/container/WSL session, a
+// suppressed Keychain prompt, a stuck Credential Manager — and that
+// freezes the CLI. 5s is comfortably longer than any healthy
+// round-trip while still surfacing the hang to the user quickly.
 const defaultKeyringTimeout = 5 * time.Second
 
 // keyringTimeoutEnvVar overrides defaultKeyringTimeout. Accepts any
@@ -64,10 +66,28 @@ func callKeyringWithContext(ctx context.Context, op string, fn func() (string, e
 	case <-ctx.Done():
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return "", fmt.Errorf(
-				"%s timed out: OS keyring (Secret Service) appears unavailable; set %s to a longer duration to wait further: %w",
-				op, keyringTimeoutEnvVar, ctx.Err(),
+				"%s timed out: OS keyring (%s) appears unavailable; set %s to a longer duration to wait further: %w",
+				op, keyringProviderName(), keyringTimeoutEnvVar, ctx.Err(),
 			)
 		}
 		return "", fmt.Errorf("%s cancelled: %w", op, ctx.Err())
+	}
+}
+
+// keyringProviderName returns the human name of the OS keyring backend
+// for the current platform, so the timeout error can point the user at
+// the specific service that's likely stuck (Keychain on macOS,
+// Credential Manager on Windows, Secret Service on Linux/BSD). The
+// fallback for unrecognised GOOS is the generic "OS keyring".
+func keyringProviderName() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "macOS Keychain"
+	case "windows":
+		return "Windows Credential Manager"
+	case "linux", "freebsd", "openbsd", "netbsd", "dragonfly":
+		return "Secret Service (D-Bus)"
+	default:
+		return "OS keyring"
 	}
 }
