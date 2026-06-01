@@ -26,10 +26,21 @@ func TestParseGitHubURL(t *testing.T) {
 		{name: "bare github.com prefix with .git", url: "github.com/octocat/hello-world.git", wantOwner: "octocat", wantRepo: "hello-world"},
 		{name: "bare owner/repo", url: "octocat/hello-world", wantOwner: "octocat", wantRepo: "hello-world"},
 		{name: "bare lowercased", url: "OctoCat/Hello-World", wantOwner: "octocat", wantRepo: "hello-world"},
+		{name: "repo with dot", url: "github.com/octocat/hello.world", wantOwner: "octocat", wantRepo: "hello.world"},
+		{name: "repo with underscore", url: "octocat/hello_world", wantOwner: "octocat", wantRepo: "hello_world"},
 		{name: "GitLab", url: "https://gitlab.com/owner/repo", wantErr: true},
 		{name: "missing repo", url: "https://github.com/owner", wantErr: true},
 		{name: "not a URL", url: "not-a-url", wantErr: true},
 		{name: "entire URL", url: "entire://host/git/owner/repo", wantErr: true},
+		// Parameter-smuggling shapes the tightened owner/repo charset rejects:
+		// these would otherwise mutate the audience / probe URL built from
+		// owner/repo.
+		{name: "repo with query smuggle", url: "octocat/repo?bypass=1", wantErr: true},
+		{name: "repo with fragment", url: "octocat/repo#anchor", wantErr: true},
+		{name: "owner with at-sign", url: "a@b/repo", wantErr: true},
+		{name: "repo with encoded slash", url: "octocat/repo%2fevil", wantErr: true},
+		{name: "owner with dot-dot", url: "../repo", wantErr: true},
+		{name: "owner with underscore (not a GitHub login)", url: "oct_cat/repo", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -24,10 +24,24 @@ import (
 //
 // owner/repo are lowercased so the synthesised /gh/<owner>/<repo> slug
 // matches what the server persists.
+//
+// The owner/repo capture groups are restricted to GitHub's real identifier
+// charset rather than a permissive "anything but slash". owner/repo flow
+// unescaped into the STS audience (auth.RepoScopedToken) and the smart-HTTP
+// probe URL (waitForMirrorClone); a loose pattern would admit ?, #, %, .. and
+// control chars, letting a name like `repo?bypass=1` smuggle a query string
+// or `repo#x` truncate the path. GitHub owners are [A-Za-z0-9-] and repos are
+// [A-Za-z0-9._-], so matching upstream reality closes those vectors at the
+// boundary instead of relying on whatever the server does with weird strings.
+const (
+	gitHubOwnerPat = `([A-Za-z0-9-]+)`
+	gitHubRepoPat  = `([A-Za-z0-9._-]+?)`
+)
+
 var (
-	gitHubHTTPSRe = regexp.MustCompile(`^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?$`)
-	gitHubSSHRe   = regexp.MustCompile(`^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$`)
-	gitHubBareRe  = regexp.MustCompile(`^(?:github\.com/)?([^/\s]+)/([^/\s]+?)(?:\.git)?$`)
+	gitHubHTTPSRe = regexp.MustCompile(`^https?://github\.com/` + gitHubOwnerPat + `/` + gitHubRepoPat + `(?:\.git)?$`)
+	gitHubSSHRe   = regexp.MustCompile(`^git@github\.com:` + gitHubOwnerPat + `/` + gitHubRepoPat + `(?:\.git)?$`)
+	gitHubBareRe  = regexp.MustCompile(`^(?:github\.com/)?` + gitHubOwnerPat + `/` + gitHubRepoPat + `(?:\.git)?$`)
 )
 
 func parseGitHubURL(rawURL string) (owner, repo string, err error) {
