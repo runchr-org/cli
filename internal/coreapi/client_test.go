@@ -97,14 +97,20 @@ func (bearerOnlySource) SessionAuth(context.Context, OperationName) (SessionAuth
 func TestBearerOnlySource_NoCookieOnTheWire(t *testing.T) {
 	t.Parallel()
 
-	var cookieHeader string
+	// The handler runs on httptest's goroutine and the assertion runs
+	// on the test goroutine; HTTP completion isn't a happens-before
+	// edge the race detector recognises. Pass the captured header
+	// across through a buffered channel so -race stays happy.
+	cookieCh := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookieHeader = r.Header.Get("Cookie")
+		cookieCh <- r.Header.Get("Cookie")
 		w.Header().Set("Content-Type", "application/json")
 		// Minimal valid ListOrgMembersOutputBody payload so the response
 		// decoder doesn't blow up; we only care about the inbound headers.
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"members":[]}`))
+		if _, err := w.Write([]byte(`{"members":[]}`)); err != nil {
+			t.Errorf("writing test response: %v", err)
+		}
 	}))
 	t.Cleanup(srv.Close)
 
@@ -119,6 +125,7 @@ func TestBearerOnlySource_NoCookieOnTheWire(t *testing.T) {
 		t.Fatalf("ListOrgMembers: %v", err)
 	}
 
+	cookieHeader := <-cookieCh
 	if cookieHeader != "" {
 		t.Errorf("outbound Cookie header = %q, want empty (bearer-only contract)", cookieHeader)
 	}
