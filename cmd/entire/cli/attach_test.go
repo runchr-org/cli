@@ -544,18 +544,19 @@ func TestAttach_MirrorsToV1CustomRefWhenOptedIn(t *testing.T) {
 	setupAttachTestRepo(t)
 
 	repoRoot := mustGetwd(t)
-	settingsPath := filepath.Join(repoRoot, ".entire", paths.SettingsFileName)
-	if err := os.WriteFile(settingsPath, []byte(`{"enabled":true,"strategy_options":{"checkpoints_version":"1.1"}}`), 0o600); err != nil {
-		t.Fatalf("write settings: %v", err)
-	}
-
 	sessionID := "test-attach-v1-1-mirror"
 	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"hello"},"uuid":"u1"}
 {"type":"assistant","message":{"role":"assistant","content":"hi"},"uuid":"a1"}
 `)
 
 	var out bytes.Buffer
-	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{Force: true}); err != nil {
+	opts := attachOptions{
+		Force: true,
+		entireSettings: &settings.EntireSettings{
+			StrategyOptions: map[string]any{"checkpoints_version": "1.1"},
+		},
+	}
+	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, opts); err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
 

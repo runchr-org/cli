@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
 
@@ -9,19 +8,14 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
 
 // mirrorToV1CustomRef sets refs/entire/checkpoints/v1.1 to the v1 metadata
-// branch tip when opted in, returning errors so callers can surface them. v1
-// is the source of truth; the v1.1 ref is a strict local mirror, so this
-// force-overwrites rather than safely advancing. The hook-side equivalent
-// (strategy.mirrorMetadataToV1CustomRef) logs errors instead of returning
-// them.
-func mirrorToV1CustomRef(ctx context.Context, repo *git.Repository) error {
-	if !settings.MirrorsToV1CustomRef(ctx) {
-		return nil
-	}
+// branch tip, returning errors so callers can surface them. v1 is the source
+// of truth; the v1.1 ref is a strict local mirror, so this force-overwrites
+// rather than safely advancing. The hook-side equivalent
+// (strategy.mirrorMetadataToV1CustomRef) logs errors instead of returning them.
+func mirrorToV1CustomRef(repo *git.Repository) error {
 	v1Ref, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
 	if err != nil {
 		if errors.Is(err, plumbing.ErrReferenceNotFound) {

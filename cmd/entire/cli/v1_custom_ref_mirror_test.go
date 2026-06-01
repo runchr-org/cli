@@ -2,7 +2,6 @@ package cli
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 
 	git "github.com/go-git/go-git/v6"
@@ -14,21 +13,13 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
-func setupCustomRefRepo(t *testing.T, version string) *git.Repository {
+func setupCustomRefRepo(t *testing.T) *git.Repository {
 	t.Helper()
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
 	testutil.WriteFile(t, tmpDir, "f.txt", "init")
 	testutil.GitAdd(t, tmpDir, "f.txt")
 	testutil.GitCommit(t, tmpDir, "init")
-
-	body := `{"enabled": true}`
-	if version != "" {
-		body = `{"enabled": true, "strategy_options": {"checkpoints_version": ` + version + `}}`
-	}
-	entireDir := filepath.Join(tmpDir, ".entire")
-	require.NoError(t, os.MkdirAll(entireDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(entireDir, paths.SettingsFileName), []byte(body), 0o644))
 
 	t.Chdir(tmpDir)
 	repo, err := git.PlainOpen(tmpDir)
@@ -55,11 +46,11 @@ func readCustomRefHash(t *testing.T, repo *git.Repository) (plumbing.Hash, bool)
 }
 
 // Not parallel: uses t.Chdir().
-func TestMirrorToV1CustomRef_CreatesRefWhenEnabled(t *testing.T) {
-	repo := setupCustomRefRepo(t, `"1.1"`)
+func TestMirrorToV1CustomRef_CreatesRef(t *testing.T) {
+	repo := setupCustomRefRepo(t)
 	v1Hash := pointV1MetadataBranchAtHead(t, repo)
 
-	require.NoError(t, mirrorToV1CustomRef(t.Context(), repo))
+	require.NoError(t, mirrorToV1CustomRef(repo))
 
 	got, ok := readCustomRefHash(t, repo)
 	require.True(t, ok, "expected %s to exist", paths.MetadataRefName)
@@ -67,19 +58,8 @@ func TestMirrorToV1CustomRef_CreatesRefWhenEnabled(t *testing.T) {
 }
 
 // Not parallel: uses t.Chdir().
-func TestMirrorToV1CustomRef_DisabledNoOp(t *testing.T) {
-	repo := setupCustomRefRepo(t, "") // v1 only
-	pointV1MetadataBranchAtHead(t, repo)
-
-	require.NoError(t, mirrorToV1CustomRef(t.Context(), repo))
-
-	_, ok := readCustomRefHash(t, repo)
-	assert.False(t, ok, "v1 custom ref must not be created when not opted in")
-}
-
-// Not parallel: uses t.Chdir().
 func TestMirrorToV1CustomRef_AdvancesExistingRef(t *testing.T) {
-	repo := setupCustomRefRepo(t, `"1.1"`)
+	repo := setupCustomRefRepo(t)
 	oldHash := pointV1MetadataBranchAtHead(t, repo)
 	require.NoError(t, repo.Storer.SetReference(
 		plumbing.NewHashReference(plumbing.ReferenceName(paths.MetadataRefName), oldHash)))
@@ -92,7 +72,7 @@ func TestMirrorToV1CustomRef_AdvancesExistingRef(t *testing.T) {
 	newHash := pointV1MetadataBranchAtHead(t, repo)
 	require.NotEqual(t, oldHash, newHash)
 
-	require.NoError(t, mirrorToV1CustomRef(t.Context(), repo))
+	require.NoError(t, mirrorToV1CustomRef(repo))
 
 	got, ok := readCustomRefHash(t, repo)
 	require.True(t, ok)
@@ -101,7 +81,7 @@ func TestMirrorToV1CustomRef_AdvancesExistingRef(t *testing.T) {
 
 // Not parallel: uses t.Chdir().
 func TestMirrorToV1CustomRef_ReplacesLocallyAheadRef(t *testing.T) {
-	repo := setupCustomRefRepo(t, `"1.1"`)
+	repo := setupCustomRefRepo(t)
 	v1Hash := pointV1MetadataBranchAtHead(t, repo)
 
 	cwd, err := os.Getwd()
@@ -115,7 +95,7 @@ func TestMirrorToV1CustomRef_ReplacesLocallyAheadRef(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(
 		plumbing.NewHashReference(plumbing.ReferenceName(paths.MetadataRefName), head.Hash())))
 
-	require.NoError(t, mirrorToV1CustomRef(t.Context(), repo))
+	require.NoError(t, mirrorToV1CustomRef(repo))
 
 	got, ok := readCustomRefHash(t, repo)
 	require.True(t, ok)
@@ -124,22 +104,12 @@ func TestMirrorToV1CustomRef_ReplacesLocallyAheadRef(t *testing.T) {
 
 // Not parallel: uses t.Chdir().
 func TestMirrorToV1CustomRef_V1MissingErrors(t *testing.T) {
-	repo := setupCustomRefRepo(t, `"1.1"`) // no v1 metadata branch created
+	repo := setupCustomRefRepo(t) // no v1 metadata branch created
 
-	err := mirrorToV1CustomRef(t.Context(), repo)
+	err := mirrorToV1CustomRef(repo)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), paths.MetadataBranchName)
 
 	_, ok := readCustomRefHash(t, repo)
 	assert.False(t, ok, "v1 custom ref must not be created when v1 metadata branch is absent")
-}
-
-// Not parallel: uses t.Chdir().
-func TestMirrorToV1CustomRef_DisabledTakesPrecedenceOverV1Missing(t *testing.T) {
-	repo := setupCustomRefRepo(t, "")
-
-	require.NoError(t, mirrorToV1CustomRef(t.Context(), repo))
-
-	_, ok := readCustomRefHash(t, repo)
-	assert.False(t, ok)
 }
