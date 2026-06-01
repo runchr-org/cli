@@ -16,12 +16,9 @@ import (
 // (refs/entire/checkpoints/v1.1) to the v1 metadata branch's current commit
 // when checkpoints_version "1.1" is opted in.
 //
-// v1 stays the source of truth; the v1 custom ref is a local-only mirror
-// sharing v1's exact commit. When v1.1 is enabled, the `entire explain` command
-// reads from this ref after re-syncing it from v1, and falls back to v1 if sync
-// cannot establish a trustworthy mirror; it is never pushed. Call only after a
-// successful v1 committed write; a mirror failure must not affect that write, so
-// problems are logged, not returned.
+// sharing v1's exact commit — it is never pushed. Call
+// only after a successful v1 committed write; a mirror failure must not affect
+// that write, so problems are logged, not returned.
 func mirrorMetadataToV1CustomRef(ctx context.Context, repo *git.Repository) {
 	if !settings.MirrorsToV1CustomRef(ctx) {
 		return
