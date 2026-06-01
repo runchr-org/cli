@@ -10,7 +10,6 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
-	"github.com/entireio/cli/cmd/entire/cli/strategy"
 )
 
 // mirrorToV1CustomRef advances refs/entire/checkpoints/v1.1 to the v1 metadata
@@ -27,7 +26,8 @@ func mirrorToV1CustomRef(ctx context.Context, repo *git.Repository) error {
 		}
 		return fmt.Errorf("read v1 metadata branch %s: %w", paths.MetadataBranchName, err)
 	}
-	if err := strategy.SafelyAdvanceLocalRef(ctx, repo, plumbing.ReferenceName(paths.MetadataRefName), v1Ref.Hash()); err != nil {
+	customRef := plumbing.NewHashReference(plumbing.ReferenceName(paths.MetadataRefName), v1Ref.Hash())
+	if err := repo.Storer.SetReference(customRef); err != nil {
 		return fmt.Errorf("advance v1 custom ref %s: %w", paths.MetadataRefName, err)
 	}
 	return nil

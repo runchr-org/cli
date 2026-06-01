@@ -100,6 +100,29 @@ func TestMirrorToV1CustomRef_AdvancesExistingRef(t *testing.T) {
 }
 
 // Not parallel: uses t.Chdir().
+func TestMirrorToV1CustomRef_ReplacesLocallyAheadRef(t *testing.T) {
+	repo := setupCustomRefRepo(t, `"1.1"`)
+	v1Hash := pointV1MetadataBranchAtHead(t, repo)
+
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	testutil.WriteFile(t, cwd, "f2.txt", "more")
+	testutil.GitAdd(t, cwd, "f2.txt")
+	testutil.GitCommit(t, cwd, "second")
+	head, err := repo.Head()
+	require.NoError(t, err)
+	require.NotEqual(t, v1Hash, head.Hash())
+	require.NoError(t, repo.Storer.SetReference(
+		plumbing.NewHashReference(plumbing.ReferenceName(paths.MetadataRefName), head.Hash())))
+
+	require.NoError(t, mirrorToV1CustomRef(t.Context(), repo))
+
+	got, ok := readCustomRefHash(t, repo)
+	require.True(t, ok)
+	assert.Equal(t, v1Hash, got)
+}
+
+// Not parallel: uses t.Chdir().
 func TestMirrorToV1CustomRef_V1MissingErrors(t *testing.T) {
 	repo := setupCustomRefRepo(t, `"1.1"`) // no v1 metadata branch created
 

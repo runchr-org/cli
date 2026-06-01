@@ -1060,7 +1060,7 @@ func TestGenerateCheckpointSummary_MirrorsToV1CustomRefWhenOptedIn(t *testing.T)
 	}
 
 	var stdout, stderr bytes.Buffer
-	require.NoError(t, generateCheckpointSummary(ctx, &stdout, &stderr, repo, store, cpID, cpSummary, content, false, 0))
+	require.NoError(t, generateCheckpointSummary(ctx, &stdout, &stderr, store, cpID, cpSummary, content, false, 0))
 
 	v1After, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
 	require.NoError(t, err)
