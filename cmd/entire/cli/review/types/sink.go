@@ -48,9 +48,20 @@ type RunSummary struct {
 	AgentRuns []AgentRun
 }
 
-// AgentRun is per-agent post-run data.
+// AgentRun is per-worker post-run data.
 type AgentRun struct {
-	Name   string
+	// Name is the display/worker name shown in review output. It may be an alias
+	// such as "claude-code:sonnet" when the same underlying agent runs more than
+	// once with different models.
+	Name string
+
+	// AgentName is the underlying agent registry key used for lifecycle/session
+	// matching. Empty means Name is also the agent name.
+	AgentName string
+
+	// Model is the optional model hint used for this worker.
+	Model string
+
 	Status AgentStatus
 	Tokens Tokens
 

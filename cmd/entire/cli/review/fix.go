@@ -498,13 +498,19 @@ func reviewFixAgentFromSelectedSources(sources []reviewFixSource) (string, bool)
 }
 
 func reviewFixAgentChoices(configured map[string]settings.ReviewConfig) []AgentChoice {
+	seen := map[string]struct{}{}
 	choices := make([]AgentChoice, 0, len(configured))
 	for name, cfg := range configured {
 		if cfg.IsZero() {
 			continue
 		}
-		choice, ok := reviewFixAgentChoice(name)
+		agentName := reviewAgentName(name, cfg)
+		if _, exists := seen[agentName]; exists {
+			continue
+		}
+		choice, ok := reviewFixAgentChoice(agentName)
 		if ok {
+			seen[agentName] = struct{}{}
 			choices = append(choices, choice)
 		}
 	}
@@ -519,7 +525,8 @@ func reviewFixAgentChoicesFromProfiles(profiles map[string]settings.ReviewProfil
 	var choices []AgentChoice
 	for _, profile := range profiles {
 		if profile.Master != "" {
-			if choice, ok := reviewFixAgentChoice(profile.Master); ok {
+			masterAgent, _ := resolveProfileMaster(profile)
+			if choice, ok := reviewFixAgentChoice(masterAgent); ok {
 				if _, exists := seen[choice.Name]; !exists {
 					seen[choice.Name] = struct{}{}
 					choices = append(choices, choice)

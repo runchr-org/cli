@@ -258,10 +258,11 @@ func (s *EntireSettings) SummaryTimeoutValue() time.Duration {
 //	  "security": {
 //	    "task": "Review this change for auth, injection, secrets, and privilege-boundary bugs.",
 //	    "agents": {
-//	      "claude-code": {"skills": ["/security-review"]},
-//	      "codex": {"skills": ["/review"], "prompt": "Focus on security."}
+//	      "claude-sonnet": {"agent": "claude-code", "model": "sonnet", "skills": ["/security-review"]},
+//	      "claude-opus": {"agent": "claude-code", "model": "opus", "skills": ["/security-review"]},
+//	      "codex": {"model": "gpt-5-codex", "skills": ["/review"], "prompt": "Focus on security."}
 //	    },
-//	    "master": "claude-code"
+//	    "master": "claude-sonnet"
 //	  }
 //	}
 //
@@ -281,14 +282,25 @@ func (c ReviewProfileConfig) IsZero() bool {
 	return c.Task == "" && len(c.Agents) == 0 && c.Master == "" && c.MasterModel == ""
 }
 
-// ReviewConfig holds the per-agent configuration within a review profile.
-// Both fields are optional; together they describe how that specific agent
-// should execute the profile's canonical task.
+// ReviewConfig holds one worker's configuration within a review profile.
+// The profile's agents map is keyed by worker id. For simple configs the worker
+// id is also the agent registry name (for example "claude-code"). To run the
+// same agent more than once with different models, use stable worker ids and set
+// Agent to the underlying registry name.
 //
 // Skills are agent-specific invocations passed before the task. Prompt is
 // additional agent-specific instruction appended after the profile task; it is
 // no longer a verbatim replacement for the whole review prompt.
 type ReviewConfig struct {
+	// Agent is the underlying agent registry key for this worker. Empty means
+	// the profile map key is the agent name. Set this when the map key is an
+	// alias such as "claude-sonnet" or "claude-opus".
+	Agent string `json:"agent,omitempty"`
+
+	// Model is an optional model hint passed to the agent CLI for this worker.
+	// Empty means use the agent's own default.
+	Model string `json:"model,omitempty"`
+
 	// Skills is the list of slash-prefixed skill invocations configured
 	// for this agent. May be empty when Prompt carries the full request.
 	Skills []string `json:"skills,omitempty"`
@@ -300,7 +312,7 @@ type ReviewConfig struct {
 
 // IsZero reports whether the config is effectively unset.
 func (c ReviewConfig) IsZero() bool {
-	return len(c.Skills) == 0 && c.Prompt == ""
+	return c.Agent == "" && c.Model == "" && len(c.Skills) == 0 && c.Prompt == ""
 }
 
 // ReviewConfigFor returns the configured review config for the given agent.

@@ -127,6 +127,9 @@ func RunReviewGuidedSetup(
 	if err != nil {
 		return "", settings.ReviewProfileConfig{}, err
 	}
+	if err := promptForSimpleReviewModels(ctx, profileName, &profile, selected); err != nil {
+		return "", settings.ReviewProfileConfig{}, err
+	}
 	if len(profile.Agents) > 1 {
 		master, err := promptForSimpleReviewMaster(ctx, profile)
 		if err != nil {
@@ -206,6 +209,92 @@ func promptForSimpleReviewAgents(ctx context.Context, launchable []string) ([]st
 	}
 	sort.Strings(picked)
 	return picked, nil
+}
+
+func promptForSimpleReviewModels(ctx context.Context, profileName string, profile *settings.ReviewProfileConfig, selectedAgents []string) error {
+	customize := false
+	form := newAccessibleForm(huh.NewGroup(
+		huh.NewConfirm().
+			Title("Choose models?").
+			Description("Optional. Leave this off to use each agent's default model.").
+			Affirmative("Choose models").
+			Negative("Use defaults").
+			Value(&customize),
+	))
+	if err := form.RunWithContext(ctx); err != nil {
+		return fmt.Errorf("review model setup: %w", err)
+	}
+	if !customize {
+		return nil
+	}
+
+	for _, workerName := range sortedProfileAgentNames(*profile) {
+		cfg := profile.Agents[workerName]
+		model := strings.TrimSpace(cfg.Model)
+		modelForm := newAccessibleForm(huh.NewGroup(
+			huh.NewInput().
+				Title(fmt.Sprintf("Model for %s", labelForSimpleAgent(reviewAgentName(workerName, cfg)))).
+				Description("Optional; any value accepted by the agent CLI.").
+				Value(&model),
+		))
+		if err := modelForm.RunWithContext(ctx); err != nil {
+			return fmt.Errorf("review model picker for %s: %w", workerName, err)
+		}
+		cfg.Model = strings.TrimSpace(model)
+		profile.Agents[workerName] = cfg
+	}
+
+	for {
+		addVariant := false
+		variantForm := newAccessibleForm(huh.NewGroup(
+			huh.NewConfirm().
+				Title("Add another model variant?").
+				Description("Use this to run the same agent more than once with different models.").
+				Affirmative("Add variant").
+				Negative("Done").
+				Value(&addVariant),
+		))
+		if err := variantForm.RunWithContext(ctx); err != nil {
+			return fmt.Errorf("review model variant picker: %w", err)
+		}
+		if !addVariant {
+			return nil
+		}
+		agentName := selectedAgents[0]
+		if len(selectedAgents) > 1 {
+			options := make([]huh.Option[string], 0, len(selectedAgents))
+			for _, name := range selectedAgents {
+				options = append(options, huh.NewOption(labelForSimpleAgent(name), name))
+			}
+			selectForm := newAccessibleForm(huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Which agent should get another model?").
+					Options(options...).Value(&agentName),
+			))
+			if err := selectForm.RunWithContext(ctx); err != nil {
+				return fmt.Errorf("review model variant agent picker: %w", err)
+			}
+		}
+		model := ""
+		modelForm := newAccessibleForm(huh.NewGroup(
+			huh.NewInput().
+				Title(fmt.Sprintf("Additional model for %s", labelForSimpleAgent(agentName))).
+				Description("Example: sonnet, opus, gpt-5-codex, gemini-2.5-pro").
+				Value(&model),
+		))
+		if err := modelForm.RunWithContext(ctx); err != nil {
+			return fmt.Errorf("review model variant value: %w", err)
+		}
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		cfg := defaultReviewAgentConfig(profileName, agentName)
+		cfg.Agent = agentName
+		cfg.Model = model
+		workerName := workerIDForAgentModel(agentName, model, profile.Agents)
+		profile.Agents[workerName] = cfg
+	}
 }
 
 func labelForSimpleAgent(name string) string {
@@ -355,11 +444,16 @@ func RunReviewProfileConfigPicker(ctx context.Context, out io.Writer, getInstall
 			existing[string(c.name)].Skills, curated, discovered,
 		)
 		prompt := existing[string(c.name)].Prompt
+		model := existing[string(c.name)].Model
 
 		fields := BuildReviewPickerFields(
 			string(c.name), curated, discovered, activeHints, prompt,
 			&builtinPicks, &discoveredPicks, &prompt,
 		)
+		fields = append(fields, huh.NewInput().
+			Title("Model (optional)").
+			Description("Leave blank to use the agent default; pass any model string accepted by the agent CLI.").
+			Value(&model))
 
 		// Prepend a non-blocking header Note so the agent being configured
 		// is always clearly visible.
@@ -374,6 +468,7 @@ func RunReviewProfileConfigPicker(ctx context.Context, out io.Writer, getInstall
 		}
 
 		cfg := settings.ReviewConfig{
+			Model:  strings.TrimSpace(model),
 			Skills: dedupeStrings(append(builtinPicks, discoveredPicks...)),
 			Prompt: strings.TrimSpace(prompt),
 		}
@@ -514,14 +609,19 @@ func reviewMasterAgentChoices(configured map[string]settings.ReviewConfig) []Age
 		if cfg.IsZero() {
 			continue
 		}
-		ag, err := agent.Get(types.AgentName(name))
+		agentName := reviewAgentName(name, cfg)
+		ag, err := agent.Get(types.AgentName(agentName))
 		if err != nil {
 			continue
 		}
 		if _, ok := agent.AsTextGenerator(ag); !ok {
 			continue
 		}
-		choices = append(choices, AgentChoice{Name: name, Label: string(ag.Type())})
+		label := string(ag.Type())
+		if name != agentName || strings.TrimSpace(cfg.Model) != "" {
+			label = reviewWorkerLabel(name, cfg)
+		}
+		choices = append(choices, AgentChoice{Name: name, Label: label})
 	}
 	sort.Slice(choices, func(i, j int) bool { return choices[i].Name < choices[j].Name })
 	return choices
@@ -574,7 +674,7 @@ func eligibleAgentChoices(configured map[string]settings.ReviewConfig, installed
 		if cfg.IsZero() {
 			continue
 		}
-		if _, ok := installedSet[types.AgentName(name)]; !ok {
+		if _, ok := installedSet[types.AgentName(reviewAgentName(name, cfg))]; !ok {
 			continue
 		}
 		out = append(out, AgentChoice{Name: name, Label: labelForAgentChoice(name, cfg)})
@@ -585,13 +685,14 @@ func eligibleAgentChoices(configured map[string]settings.ReviewConfig, installed
 
 // labelForAgentChoice builds the picker-visible label for an agent row.
 func labelForAgentChoice(name string, cfg settings.ReviewConfig) string {
+	label := reviewWorkerLabel(name, cfg)
 	switch {
 	case len(cfg.Skills) > 0:
-		return fmt.Sprintf("%s   (%d skills configured)", name, len(cfg.Skills))
+		return fmt.Sprintf("%s   (%d skills configured)", label, len(cfg.Skills))
 	case cfg.Prompt != "":
-		return name + "   (prompt-only)"
+		return label + "   (prompt-only)"
 	default:
-		return name
+		return label
 	}
 }
 
@@ -617,7 +718,18 @@ func computeLaunchableEligibleForProfile(
 	reviewerFor func(string) reviewtypes.AgentReviewer,
 ) []AgentChoice {
 	eligible := ComputeEligibleConfiguredForProfile(profile, installed)
-	return filterLaunchableEligible(eligible, reviewerFor)
+	return filterLaunchableEligibleForProfile(profile, eligible, reviewerFor)
+}
+
+func filterLaunchableEligibleForProfile(profile settings.ReviewProfileConfig, eligible []AgentChoice, reviewerFor func(string) reviewtypes.AgentReviewer) []AgentChoice {
+	out := make([]AgentChoice, 0, len(eligible))
+	for _, c := range eligible {
+		cfg := profile.Agents[c.Name]
+		if reviewerFor(reviewAgentName(c.Name, cfg)) != nil {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func filterLaunchableEligible(eligible []AgentChoice, reviewerFor func(string) reviewtypes.AgentReviewer) []AgentChoice {

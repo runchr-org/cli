@@ -85,6 +85,10 @@ type RunConfig struct {
 	// execution mechanics without changing the task identity.
 	Task string
 
+	// Model is an optional model hint passed to the agent CLI. Empty means use
+	// the agent's default model.
+	Model string
+
 	// Skills are skill invocation strings passed to the agent verbatim.
 	Skills []string
 

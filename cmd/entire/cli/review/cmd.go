@@ -302,14 +302,14 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride, baseOverr
 	profile.Agents = nonZeroAgentConfigs(profile.Agents)
 
 	if agentOverride != "" {
-		cfg, ok := profile.Agents[agentOverride]
-		if !ok || cfg.IsZero() {
+		workerName, cfg, selectErr := selectProfileWorker(profile, agentOverride)
+		if selectErr != nil {
 			cmd.SilenceUsage = true
-			err := fmt.Errorf("agent %q is not configured in review profile %q", agentOverride, profileName)
+			err := fmt.Errorf("%w in review profile %q", selectErr, profileName)
 			fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
 			return silentErr(err)
 		}
-		return runSingleAgentPath(ctx, cmd, profileName, agentOverride, baseOverride, perRunPrompt, profile.Task, cfg, installed, deps, out)
+		return runSingleAgentPath(ctx, cmd, profileName, workerName, baseOverride, perRunPrompt, profile.Task, cfg, installed, deps, out)
 	}
 
 	if missing := missingInstalledProfileAgents(profile.Agents, installed); len(missing) > 0 {
@@ -332,7 +332,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride, baseOverr
 	default:
 		launchableEligible := computeLaunchableEligibleForProfile(profile, installed, deps.ReviewerFor)
 		if len(launchableEligible) != len(eligible) {
-			nonLaunchable := nonLaunchableEligibleNames(eligible, deps.ReviewerFor)
+			nonLaunchable := nonLaunchableEligibleNames(profile, eligible, deps.ReviewerFor)
 			cmd.SilenceUsage = true
 			err := fmt.Errorf("review profile %q includes non-launchable agent(s) in a fan-out run: %s. Use --agent for a single manual fallback, or remove them from the profile", profileName, strings.Join(nonLaunchable, ", "))
 			fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
@@ -341,6 +341,12 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride, baseOverr
 		if strings.TrimSpace(profile.Master) == "" {
 			cmd.SilenceUsage = true
 			err := fmt.Errorf("review profile %q has multiple workers but no master; set review_profiles.%s.master", profileName, profileName)
+			fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
+			return silentErr(err)
+		}
+		if _, _, masterErr := selectProfileWorker(profile, profile.Master); masterErr != nil {
+			cmd.SilenceUsage = true
+			err := fmt.Errorf("review profile %q master is invalid: %w", profileName, masterErr)
 			fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
 			return silentErr(err)
 		}
@@ -358,19 +364,21 @@ func missingInstalledProfileAgents(configured map[string]settings.ReviewConfig, 
 		if cfg.IsZero() {
 			continue
 		}
-		if _, ok := installedSet[name]; !ok {
-			missing = append(missing, name)
+		agentName := reviewAgentName(name, cfg)
+		if _, ok := installedSet[agentName]; !ok {
+			missing = append(missing, reviewWorkerLabel(name, cfg))
 		}
 	}
 	sort.Strings(missing)
 	return missing
 }
 
-func nonLaunchableEligibleNames(eligible []AgentChoice, reviewerFor func(string) reviewtypes.AgentReviewer) []string {
+func nonLaunchableEligibleNames(profile settings.ReviewProfileConfig, eligible []AgentChoice, reviewerFor func(string) reviewtypes.AgentReviewer) []string {
 	var out []string
 	for _, c := range eligible {
-		if reviewerFor(c.Name) == nil {
-			out = append(out, c.Name)
+		cfg := profile.Agents[c.Name]
+		if reviewerFor(reviewAgentName(c.Name, cfg)) == nil {
+			out = append(out, reviewWorkerLabel(c.Name, cfg))
 		}
 	}
 	sort.Strings(out)
@@ -383,13 +391,15 @@ func nonLaunchableEligibleNames(eligible []AgentChoice, reviewerFor func(string)
 func runSingleAgentPath(
 	ctx context.Context,
 	cmd *cobra.Command,
-	profileName, agentName, baseOverride, perRunPrompt, task string,
+	profileName, workerName, baseOverride, perRunPrompt, task string,
 	cfg settings.ReviewConfig,
 	installed []types.AgentName,
 	deps Deps,
 	out io.Writer,
 ) error {
 	silentErr := deps.NewSilentError
+	agentName := reviewAgentName(workerName, cfg)
+	displayName := reviewWorkerLabel(workerName, cfg)
 
 	// 3.5. Verify hooks are installed for the selected agent.
 	found := false
@@ -404,7 +414,7 @@ func runSingleAgentPath(
 		fmt.Fprintf(cmd.ErrOrStderr(),
 			"Hooks are not installed for %q. Run `entire configure --agent %s` first, "+
 				"or remove %q from review settings.\n",
-			agentName, agentName, agentName)
+			agentName, agentName, displayName)
 		return silentErr(fmt.Errorf("hooks not installed for %s", agentName))
 	}
 
@@ -476,6 +486,7 @@ func runSingleAgentPath(
 		// Non-launchable: write marker (with scope-aware prompt) and print guidance.
 		return RunMarkerFallback(ctx, agentName, runCfg, worktreeRoot, out)
 	}
+	reviewer = &perAgentConfiguredReviewer{name: displayName, inner: reviewer, cfg: runCfg}
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
@@ -486,7 +497,7 @@ func runSingleAgentPath(
 		out:       out,
 		isTTY:     interactive.IsTerminalWriter(out) && canPrompt,
 		canPrompt: canPrompt,
-		agentName: agentName,
+		agentName: displayName,
 		cancelRun: cancelRun,
 	})
 	if tuiSink, ok := findTUISink(sinks); ok {
@@ -594,11 +605,13 @@ func runMultiAgentPath(
 	}
 	reviewers := make([]reviewtypes.AgentReviewer, 0, len(launchableEligible))
 	for _, choice := range launchableEligible {
-		agentCfg := profile.Agents[choice.Name]
+		workerName := choice.Name
+		agentCfg := profile.Agents[workerName]
+		agentName := reviewAgentName(workerName, agentCfg)
 		if len(agentCfg.Skills) > 0 {
-			ag, agErr := agent.Get(types.AgentName(choice.Name))
+			ag, agErr := agent.Get(types.AgentName(agentName))
 			if agErr != nil {
-				return fmt.Errorf("resolve agent %s: %w", choice.Name, agErr)
+				return fmt.Errorf("resolve agent %s: %w", agentName, agErr)
 			}
 			if err := VerifyConfiguredSkillsInstalled(ctx, ag, agentCfg); err != nil {
 				cmd.SilenceUsage = true
@@ -606,12 +619,13 @@ func runMultiAgentPath(
 				return deps.NewSilentError(err)
 			}
 		}
-		reviewer := deps.ReviewerFor(choice.Name)
+		reviewer := deps.ReviewerFor(agentName)
 		if reviewer == nil {
 			cmd.SilenceUsage = true
-			return deps.NewSilentError(fmt.Errorf("agent %q is not launchable but appeared in eligible list", choice.Name))
+			return deps.NewSilentError(fmt.Errorf("agent %q is not launchable but appeared in eligible list", agentName))
 		}
 		reviewers = append(reviewers, &perAgentConfiguredReviewer{
+			name:  reviewWorkerLabel(workerName, agentCfg),
 			inner: reviewer,
 			cfg: runConfigWithReviewConfig(reviewtypes.RunConfig{
 				ProfileName:       profileName,
@@ -633,7 +647,9 @@ func runMultiAgentPath(
 	}
 	aggregateOutput := ""
 
-	masterProvider := AgentSynthesisProvider{AgentName: profile.Master, Model: profile.MasterModel}
+	masterWorkerName, masterCfg, _ := selectProfileWorker(profile, profile.Master)
+	masterAgentName, masterModel := resolveProfileMaster(profile)
+	masterProvider := AgentSynthesisProvider{AgentName: masterAgentName, Model: masterModel}
 	sinks := composeMultiAgentSinks(multiAgentSinkInputs{
 		out:               out,
 		isTTY:             interactive.IsTerminalWriter(out) && interactive.CanPromptInteractively(),
@@ -645,7 +661,7 @@ func runMultiAgentPath(
 		perRunPrompt:      perRunPrompt,
 		profileName:       profileName,
 		task:              profile.Task,
-		masterName:        profile.Master,
+		masterName:        reviewWorkerLabel(masterWorkerName, masterCfg),
 		autoSynthesis:     true,
 		onSynthesisResult: func(result string) {
 			aggregateOutput = result
@@ -845,6 +861,7 @@ func runConfigWithReviewConfig(base reviewtypes.RunConfig, cfg settings.ReviewCo
 }
 
 func applyReviewConfig(runCfg *reviewtypes.RunConfig, cfg settings.ReviewConfig) {
+	runCfg.Model = strings.TrimSpace(cfg.Model)
 	runCfg.Skills = cfg.Skills
 	runCfg.AlwaysPrompt = cfg.Prompt
 }
@@ -865,11 +882,19 @@ func findTUISink(sinks []reviewtypes.Sink) (*TUISink, bool) {
 // RunMulti pass a single shared RunConfig at the API boundary while each
 // agent in a multi-agent run still sees its own skills and always-prompt.
 type perAgentConfiguredReviewer struct {
+	name  string
 	inner reviewtypes.AgentReviewer
 	cfg   reviewtypes.RunConfig
 }
 
-func (r *perAgentConfiguredReviewer) Name() string { return r.inner.Name() }
+func (r *perAgentConfiguredReviewer) Name() string {
+	if strings.TrimSpace(r.name) != "" {
+		return strings.TrimSpace(r.name)
+	}
+	return r.inner.Name()
+}
+func (r *perAgentConfiguredReviewer) ActualAgentName() string { return r.inner.Name() }
+func (r *perAgentConfiguredReviewer) ModelName() string       { return strings.TrimSpace(r.cfg.Model) }
 func (r *perAgentConfiguredReviewer) Start(ctx context.Context, _ reviewtypes.RunConfig) (reviewtypes.Process, error) {
 	return r.inner.Start(ctx, r.cfg) //nolint:wrapcheck // transparent adapter; callers see inner's error type directly
 }

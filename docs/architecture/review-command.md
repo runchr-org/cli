@@ -18,7 +18,7 @@ entire review attach --agent <name>    # Agent that created the session
 entire review attach --skills <s,...>  # Declare which skills were run
 ```
 
-When no profiles are configured, `entire review` uses a simple guided setup: choose review type, choose worker agents, save the profile, then explicitly confirm whether to start agents. `entire review --configure` reopens that simple config mode without starting agents. In non-interactive output, first run falls back to the default `general` profile automatically. Defaults are intentionally simple: Claude/Codex use `/review`, Gemini uses the profile task directly, and Claude is preferred as master when available.
+When no profiles are configured, `entire review` uses a simple guided setup: choose review type, choose worker agents, optionally choose models/model variants, save the profile, then explicitly confirm whether to start agents. `entire review --configure` reopens that simple config mode without starting agents. In non-interactive output, first run falls back to the default `general` profile automatically. Defaults are intentionally simple: Claude/Codex use `/review`, Gemini uses the profile task directly, and Claude is preferred as master when available.
 
 When two or more launchable agents are configured in the selected profile and `--agent` is not set, `entire review` fans out to all configured workers. There is no per-run multi-picker: the profile is the fan-out contract. Profiles with multiple workers must set `master`; the master runs after workers finish and produces the canonical final report.
 
@@ -41,16 +41,17 @@ Review profiles are configured in clone-local preferences (or settings) under `r
     "security": {
       "task": "Review this change for auth, injection, secrets, and privilege-boundary bugs.",
       "agents": {
-        "claude-code": {"skills": ["/security-review"]},
-        "codex": {"skills": ["/review"], "prompt": "Focus on security."}
+        "claude-sonnet": {"agent": "claude-code", "model": "sonnet", "skills": ["/security-review"]},
+        "claude-opus": {"agent": "claude-code", "model": "opus", "skills": ["/security-review"]},
+        "codex": {"model": "gpt-5-codex", "skills": ["/review"], "prompt": "Focus on security."}
       },
-      "master": "claude-code"
+      "master": "claude-sonnet"
     }
   }
 }
 ```
 
-The profile-level `task` is the shared work item. Per-agent `skills` and `prompt` adapt that task to agent-specific mechanics. Settings fields: `EntireSettings.ReviewProfiles` and `EntireSettings.ReviewDefaultProfile` in `cmd/entire/cli/settings/settings.go`. The old top-level `review` map is no longer used by `entire review`.
+The profile-level `task` is the shared work item. Each `agents` map entry is a worker id. For simple entries the worker id is also the agent name; to run the same agent more than once, use aliases and set `agent` plus `model`. Per-worker `skills`, `prompt`, and `model` adapt that task to agent-specific mechanics. Settings fields: `EntireSettings.ReviewProfiles` and `EntireSettings.ReviewDefaultProfile` in `cmd/entire/cli/settings/settings.go`. The old top-level `review` map is no longer used by `entire review`.
 
 ## How It Works (env-var handshake)
 

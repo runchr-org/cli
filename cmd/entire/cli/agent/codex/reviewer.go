@@ -35,7 +35,11 @@ func NewReviewer() *reviewtypes.ReviewerTemplate {
 func buildCodexReviewCmd(ctx context.Context, cfg reviewtypes.RunConfig) *exec.Cmd {
 	promptCfg := cfg
 	promptCfg.Skills = expandCodexBuiltinReview(cfg.Skills)
-	args := []string{codexExecCommand, "--skip-git-repo-check", "--json", "-"}
+	args := []string{codexExecCommand, "--skip-git-repo-check", "--json"}
+	if cfg.Model != "" {
+		args = append(args, "--model", cfg.Model)
+	}
+	args = append(args, "-")
 	prompt := review.ComposeReviewPrompt(promptCfg)
 	cmd := exec.CommandContext(ctx, "codex", args...)
 	cmd.Stdin = strings.NewReader(prompt)

@@ -70,15 +70,16 @@ func buildLocalReviewManifestFromSummary(
 	}
 	usedSessions := map[string]bool{}
 	for _, run := range summary.AgentRuns {
-		st := matchReviewSessionState(worktreeRoot, headSHA, summary.StartedAt, run.Name, states, usedSessions)
+		agentName := agentNameForRun(run)
+		st := matchReviewSessionState(worktreeRoot, headSHA, summary.StartedAt, agentName, run.Model, states, usedSessions)
 		if st == nil || st.SessionID == "" {
 			continue
 		}
 		usedSessions[st.SessionID] = true
 		manifest.Sources = append(manifest.Sources, ManifestSource{
 			SessionID: st.SessionID,
-			Agent:     run.Name,
-			Label:     labelForReviewAgent(run.Name),
+			Agent:     agentName,
+			Label:     labelForReviewRun(run),
 			Status:    run.Status.String(),
 			Output:    agentRunOutput(run),
 		})
@@ -189,7 +190,8 @@ func explainEmptyManifest(
 	// across store.List orderings and faithfully represents the full set of
 	// mismatched types rather than whichever happened to be iterated last.
 	for _, run := range summary.AgentRuns {
-		wantType := agentTypeForReviewAgent(run.Name)
+		agentName := agentNameForRun(run)
+		wantType := agentTypeForReviewAgent(agentName)
 		if wantType == "" {
 			continue
 		}
@@ -209,7 +211,7 @@ func explainEmptyManifest(
 		}
 		if !anyMatch {
 			sort.Strings(observedTypes)
-			return fmt.Sprintf("found %d tagged review session(s) but AgentType mismatch for agent %q: state=%q, run=%q", len(tagged), run.Name, strings.Join(observedTypes, ", "), wantType), false
+			return fmt.Sprintf("found %d tagged review session(s) but AgentType mismatch for agent %q: state=%q, run=%q", len(tagged), agentName, strings.Join(observedTypes, ", "), wantType), false
 		}
 	}
 
@@ -277,7 +279,7 @@ func hydrateReviewAgentRunTokensFromStates(
 	states []*session.State,
 	lookup agentTypeLookup,
 ) reviewtypes.AgentRun {
-	st := matchReviewSessionState(worktreeRoot, headSHA, run.StartedAt, run.Name, states, map[string]bool{})
+	st := matchReviewSessionState(worktreeRoot, headSHA, run.StartedAt, agentNameForRun(run), run.Model, states, map[string]bool{})
 	if st == nil || st.SessionID == "" {
 		return run
 	}
@@ -299,7 +301,7 @@ func hydrateReviewSummaryTokensFromStates(
 ) reviewtypes.RunSummary {
 	usedSessions := map[string]bool{}
 	for i, run := range summary.AgentRuns {
-		st := matchReviewSessionState(worktreeRoot, headSHA, summary.StartedAt, run.Name, states, usedSessions)
+		st := matchReviewSessionState(worktreeRoot, headSHA, summary.StartedAt, agentNameForRun(run), run.Model, states, usedSessions)
 		if st == nil || st.SessionID == "" {
 			continue
 		}
@@ -392,6 +394,7 @@ func matchReviewSessionState(
 	headSHA string,
 	runStartedAt time.Time,
 	agentName string,
+	modelName string,
 	states []*session.State,
 	used map[string]bool,
 ) *session.State {
@@ -413,11 +416,28 @@ func matchReviewSessionState(
 		if wantAgentType != "" && st.AgentType != "" && st.AgentType != wantAgentType {
 			continue
 		}
+		if !reviewRunModelMatches(modelName, st.ModelName) {
+			continue
+		}
 		if best == nil || st.StartedAt.After(best.StartedAt) {
 			best = st
 		}
 	}
 	return best
+}
+
+func reviewRunModelMatches(want, got string) bool {
+	want = strings.ToLower(strings.TrimSpace(want))
+	got = strings.ToLower(strings.TrimSpace(got))
+	if want == "" || got == "" {
+		return true
+	}
+	if want == got {
+		return true
+	}
+	wantCompact := strings.ReplaceAll(want, "-", "")
+	gotCompact := strings.ReplaceAll(got, "-", "")
+	return strings.Contains(gotCompact, wantCompact)
 }
 
 func agentTypeForReviewAgent(agentName string) agenttypes.AgentType {
@@ -426,6 +446,20 @@ func agentTypeForReviewAgent(agentName string) agenttypes.AgentType {
 		return ""
 	}
 	return ag.Type()
+}
+
+func agentNameForRun(run reviewtypes.AgentRun) string {
+	if strings.TrimSpace(run.AgentName) != "" {
+		return strings.TrimSpace(run.AgentName)
+	}
+	return run.Name
+}
+
+func labelForReviewRun(run reviewtypes.AgentRun) string {
+	if strings.TrimSpace(run.Name) != "" && run.Name != agentNameForRun(run) {
+		return run.Name
+	}
+	return labelForReviewAgent(agentNameForRun(run))
 }
 
 func labelForReviewAgent(agentName string) string {

@@ -123,6 +123,109 @@ func sortedProfileAgentNames(profile settings.ReviewProfileConfig) []string {
 	return names
 }
 
+func reviewAgentName(workerName string, cfg settings.ReviewConfig) string {
+	if strings.TrimSpace(cfg.Agent) != "" {
+		return strings.TrimSpace(cfg.Agent)
+	}
+	return strings.TrimSpace(workerName)
+}
+
+func reviewWorkerLabel(workerName string, cfg settings.ReviewConfig) string {
+	agentName := reviewAgentName(workerName, cfg)
+	parts := []string{workerName}
+	var details []string
+	if agentName != "" && agentName != workerName {
+		details = append(details, agentName)
+	}
+	if strings.TrimSpace(cfg.Model) != "" {
+		details = append(details, "model "+strings.TrimSpace(cfg.Model))
+	}
+	if len(details) > 0 {
+		parts = append(parts, "  ("+strings.Join(details, ", ")+")")
+	}
+	return strings.Join(parts, "")
+}
+
+func resolveProfileMaster(profile settings.ReviewProfileConfig) (string, string) {
+	workerName, cfg, err := selectProfileWorker(profile, profile.Master)
+	if err != nil {
+		return profile.Master, strings.TrimSpace(profile.MasterModel)
+	}
+	model := strings.TrimSpace(profile.MasterModel)
+	if model == "" {
+		model = strings.TrimSpace(cfg.Model)
+	}
+	return reviewAgentName(workerName, cfg), model
+}
+
+func selectProfileWorker(profile settings.ReviewProfileConfig, selector string) (string, settings.ReviewConfig, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return "", settings.ReviewConfig{}, errors.New("empty review worker selector")
+	}
+	if cfg, ok := profile.Agents[selector]; ok && !cfg.IsZero() {
+		return selector, cfg, nil
+	}
+	var matches []string
+	for workerName, cfg := range profile.Agents {
+		if cfg.IsZero() {
+			continue
+		}
+		if reviewAgentName(workerName, cfg) == selector {
+			matches = append(matches, workerName)
+		}
+	}
+	sort.Strings(matches)
+	switch len(matches) {
+	case 1:
+		return matches[0], profile.Agents[matches[0]], nil
+	case 0:
+		return "", settings.ReviewConfig{}, fmt.Errorf("review worker or agent %q is not configured", selector)
+	default:
+		return "", settings.ReviewConfig{}, fmt.Errorf("agent %q has multiple review workers (%s); choose one by worker name", selector, strings.Join(matches, ", "))
+	}
+}
+
+func workerIDForAgentModel(agentName, model string, existing map[string]settings.ReviewConfig) string {
+	base := strings.TrimSpace(agentName)
+	if strings.TrimSpace(model) != "" {
+		base += ":" + sanitizeWorkerIDPart(model)
+	}
+	if base == "" {
+		base = "worker"
+	}
+	candidate := base
+	for i := 2; ; i++ {
+		if _, exists := existing[candidate]; !exists {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s-%d", base, i)
+	}
+}
+
+func sanitizeWorkerIDPart(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range s {
+		keep := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if keep {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "model"
+	}
+	return out
+}
+
 func defaultReviewProfileForInstalledAgents(
 	ctx context.Context,
 	profileName string,
@@ -194,21 +297,28 @@ func defaultProfileFocus(profileName string) string {
 
 func defaultReviewMaster(ctx context.Context, configured map[string]settings.ReviewConfig) string {
 	for _, preferred := range []string{string(agent.AgentNameClaudeCode), string(agent.AgentNameCodex), string(agent.AgentNameGemini)} {
-		if _, ok := configured[preferred]; ok && agentSupportsTextGeneration(ctx, preferred) {
-			return preferred
+		for _, workerName := range sortedReviewConfigKeys(configured) {
+			cfg := configured[workerName]
+			if reviewAgentName(workerName, cfg) == preferred && agentSupportsTextGeneration(ctx, preferred) {
+				return workerName
+			}
 		}
 	}
+	for _, workerName := range sortedReviewConfigKeys(configured) {
+		if agentSupportsTextGeneration(ctx, reviewAgentName(workerName, configured[workerName])) {
+			return workerName
+		}
+	}
+	return ""
+}
+
+func sortedReviewConfigKeys(configured map[string]settings.ReviewConfig) []string {
 	names := make([]string, 0, len(configured))
 	for name := range configured {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	for _, name := range names {
-		if agentSupportsTextGeneration(ctx, name) {
-			return name
-		}
-	}
-	return ""
+	return names
 }
 
 func agentSupportsTextGeneration(_ context.Context, name string) bool {

@@ -55,6 +55,8 @@ import (
 // a third write path would require a mutex (or a redesign).
 type perAgentState struct {
 	name         string
+	agentName    string
+	model        string
 	proc         reviewtypes.Process
 	startErr     error
 	startedAt    time.Time
@@ -110,6 +112,8 @@ func RunMulti(
 	for i, r := range reviewers {
 		states[i] = &perAgentState{
 			name:      r.Name(),
+			agentName: reviewerActualAgentName(r),
+			model:     reviewerModelName(r),
 			startedAt: time.Now(),
 		}
 	}
@@ -143,6 +147,8 @@ func RunMulti(
 			}
 			emitEnrichedAgentTokens(ctx, cfg, fanIn, idx, reviewtypes.AgentRun{
 				Name:      states[idx].name,
+				AgentName: states[idx].agentName,
+				Model:     states[idx].model,
 				StartedAt: states[idx].startedAt,
 				Duration:  finishedAt.Sub(states[idx].startedAt),
 				Err:       waitErr,
@@ -204,6 +210,8 @@ func RunMulti(
 		}
 		agentRuns[i] = reviewtypes.AgentRun{
 			Name:      st.name,
+			AgentName: st.agentName,
+			Model:     st.model,
 			Status:    status,
 			Tokens:    st.tokens,
 			Buffer:    st.buffer,

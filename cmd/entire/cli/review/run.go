@@ -14,6 +14,25 @@ import (
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
 )
 
+type reviewerRunMetadata interface {
+	ActualAgentName() string
+	ModelName() string
+}
+
+func reviewerActualAgentName(r reviewtypes.AgentReviewer) string {
+	if meta, ok := r.(reviewerRunMetadata); ok && meta.ActualAgentName() != "" {
+		return meta.ActualAgentName()
+	}
+	return r.Name()
+}
+
+func reviewerModelName(r reviewtypes.AgentReviewer) string {
+	if meta, ok := r.(reviewerRunMetadata); ok {
+		return meta.ModelName()
+	}
+	return ""
+}
+
 // Run executes a single-agent review. Events from the agent are forwarded
 // to all sinks via AgentEvent as they arrive; on completion, RunFinished
 // is called on each sink with the populated RunSummary.
@@ -29,6 +48,12 @@ func Run(
 	sinks []reviewtypes.Sink,
 ) (reviewtypes.RunSummary, error) {
 	started := time.Now()
+	displayName := reviewer.Name()
+	agentName := reviewerActualAgentName(reviewer)
+	modelName := reviewerModelName(reviewer)
+	if modelName == "" {
+		modelName = cfg.Model
+	}
 
 	proc, err := reviewer.Start(ctx, cfg)
 	if err != nil {
@@ -41,7 +66,9 @@ func Run(
 			FinishedAt: finished,
 			Cancelled:  status == reviewtypes.AgentStatusCancelled,
 			AgentRuns: []reviewtypes.AgentRun{{
-				Name:      reviewer.Name(),
+				Name:      displayName,
+				AgentName: agentName,
+				Model:     modelName,
 				Status:    status,
 				Err:       err,
 				StartedAt: started,
@@ -77,7 +104,7 @@ func Run(
 			}
 		}
 		for _, sink := range sinks {
-			sink.AgentEvent(reviewer.Name(), ev)
+			sink.AgentEvent(displayName, ev)
 		}
 	}
 
@@ -91,13 +118,13 @@ func Run(
 			firstRunErr = waitErr
 		}
 		for _, sink := range sinks {
-			sink.AgentEvent(reviewer.Name(), synthEvent)
+			sink.AgentEvent(displayName, synthEvent)
 		}
 	}
 	status := classifyStatus(ctx, waitErr, eventOutcome{finishedSeen: finishedSeen, finishedOk: finishedOk, sawRunError: sawRunError})
 	runErr := waitErr
 	if runErr == nil && status == reviewtypes.AgentStatusFailed {
-		runErr = agentRunFailureError(reviewer.Name(), firstRunErr)
+		runErr = agentRunFailureError(displayName, firstRunErr)
 	}
 
 	summary := reviewtypes.RunSummary{
@@ -105,7 +132,9 @@ func Run(
 		FinishedAt: finished,
 		Cancelled:  status == reviewtypes.AgentStatusCancelled,
 		AgentRuns: []reviewtypes.AgentRun{{
-			Name:      reviewer.Name(),
+			Name:      displayName,
+			AgentName: agentName,
+			Model:     modelName,
 			Status:    status,
 			Tokens:    tokens,
 			Buffer:    buffer,

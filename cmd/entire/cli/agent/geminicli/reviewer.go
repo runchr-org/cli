@@ -35,7 +35,11 @@ func buildGeminiReviewCmd(ctx context.Context, cfg reviewtypes.RunConfig) *exec.
 	// Per the existing GenerateText implementation: pass "-p " " " as the
 	// argv placeholder to trigger headless (non-interactive) mode, and pipe
 	// the actual prompt via stdin to avoid argv size limits.
-	cmd := exec.CommandContext(ctx, "gemini", "-p", " ")
+	args := []string{"-p", " "}
+	if cfg.Model != "" {
+		args = append(args, "--model", cfg.Model)
+	}
+	cmd := exec.CommandContext(ctx, "gemini", args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	// Agent name must equal string(ag.Name()) — adoptReviewEnv compares
 	// ENTIRE_REVIEW_AGENT against it; any drift silently skips adoption.
