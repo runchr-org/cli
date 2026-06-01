@@ -25,7 +25,7 @@ func mirrorToV1CustomRef(repo *git.Repository) error {
 	}
 	customRef := plumbing.NewHashReference(plumbing.ReferenceName(paths.MetadataRefName), v1Ref.Hash())
 	if err := repo.Storer.SetReference(customRef); err != nil {
-		return fmt.Errorf("set ref: %w", err)
+		return fmt.Errorf("set ref %s to %s: %w", paths.MetadataRefName, v1Ref.Hash(), err)
 	}
 	return nil
 }

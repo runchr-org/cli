@@ -1,17 +1,29 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"testing"
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
+
+type setReferenceErrorStorer struct {
+	storage.Storer
+
+	err error
+}
+
+func (s setReferenceErrorStorer) SetReference(*plumbing.Reference) error {
+	return s.err
+}
 
 func setupCustomRefRepo(t *testing.T) *git.Repository {
 	t.Helper()
@@ -112,4 +124,17 @@ func TestMirrorToV1CustomRef_V1MissingErrors(t *testing.T) {
 
 	_, ok := readCustomRefHash(t, repo)
 	assert.False(t, ok, "v1 custom ref must not be created when v1 metadata branch is absent")
+}
+
+// Not parallel: uses t.Chdir().
+func TestMirrorToV1CustomRef_SetReferenceErrorNamesTarget(t *testing.T) {
+	repo := setupCustomRefRepo(t)
+	v1Hash := pointV1MetadataBranchAtHead(t, repo)
+	storerErr := errors.New("set failed")
+	repo.Storer = setReferenceErrorStorer{Storer: repo.Storer, err: storerErr}
+
+	err := mirrorToV1CustomRef(repo)
+	require.ErrorIs(t, err, storerErr)
+	assert.Contains(t, err.Error(), paths.MetadataRefName)
+	assert.Contains(t, err.Error(), v1Hash.String())
 }
