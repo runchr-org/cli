@@ -66,6 +66,41 @@ func parseGitHubURL(rawURL string) (owner, repo string, err error) {
 	return "", "", fmt.Errorf("not a recognized GitHub URL: %s", rawURL)
 }
 
+// probeInterval is the cadence between info/refs probes during the
+// clone wait.
+const probeInterval = 2 * time.Second
+
+// maxProbeBytes bounds the smart-HTTP info/refs body read so a
+// pathological or misbehaving server can't make us allocate without
+// limit. Real ref advertisements for the largest repos sit well under
+// this; the cap is sized for headroom, not snugness.
+const maxProbeBytes = 8 << 20 // 8 MiB
+
+// probeClient is the HTTP client used for the clone-readiness loop. It is
+// purpose-built (own Transport, explicit timeouts, no redirect surprises)
+// instead of http.DefaultClient: DefaultClient is process-global and can
+// be poisoned by other code, and its zero-Timeout default would let a
+// stuck connection consume one ticker slot indefinitely. Each probe is
+// already context-bound by the loop's deadline, but Timeout is a belt to
+// the context's braces for the connection/TLS phase.
+var probeClient = &http.Client{
+	Timeout: 15 * time.Second,
+	Transport: &http.Transport{
+		// One mirror, repeated probes — a tiny idle pool is enough to
+		// reuse the TLS session between ticks without leaking conns.
+		MaxIdleConns:        2,
+		MaxIdleConnsPerHost: 2,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	},
+	// info/refs is a single GET; a redirect would indicate misconfiguration
+	// (e.g. cluster host fronted by something that 30x's to a login page).
+	// Surface it as an error rather than silently following.
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 // waitForMirrorClone blocks until the mirror at /gh/<owner>/<repo> on
 // clusterHost advertises a resolvable HEAD (the initial GitHub→EntireDB
 // clone has landed) or the deadline expires. It probes the data plane's
@@ -94,7 +129,7 @@ func waitForMirrorClone(ctx context.Context, out io.Writer, clusterHost, owner, 
 		defer cancel()
 	}
 
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(probeInterval)
 	defer ticker.Stop()
 
 	cloning := false
@@ -153,7 +188,7 @@ func mirrorAdvertisesHead(ctx context.Context, checkURL, token string) (ready bo
 		return false, 0
 	}
 	req.SetBasicAuth("entire-cli", token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := probeClient.Do(req)
 	if err != nil {
 		return false, 0
 	}
@@ -161,15 +196,17 @@ func mirrorAdvertisesHead(ctx context.Context, checkURL, token string) (ready bo
 	if resp.StatusCode != http.StatusOK {
 		return false, resp.StatusCode
 	}
-	// Smart-HTTP wraps the advertisement in a "# service=..." pkt-line
-	// header + flush; AdvRefs.Decode expects to start at the first ref
-	// line, so strip the wrapper first.
+	// Cap the body to prevent unbounded reads; ogen's api/client.go does
+	// the same for JSON. Smart-HTTP wraps the advertisement in a "#
+	// service=..." pkt-line header + flush; AdvRefs.Decode expects to
+	// start at the first ref line, so strip the wrapper first.
+	body := io.LimitReader(resp.Body, maxProbeBytes)
 	var sr packp.SmartReply
-	if err := sr.Decode(resp.Body); err != nil {
+	if err := sr.Decode(body); err != nil {
 		return false, 0
 	}
 	var adv packp.AdvRefs
-	if err := adv.Decode(resp.Body); err != nil {
+	if err := adv.Decode(body); err != nil {
 		return false, 0
 	}
 	if _, err := adv.ResolvedHead(); err != nil {
