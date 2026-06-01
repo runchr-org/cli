@@ -363,3 +363,43 @@ func TestAttach_InvalidSessionID(t *testing.T) {
 		t.Error("expected error for invalid session ID")
 	}
 }
+
+// TestAttach_MirrorsToV1CustomRefWhenOptedIn verifies that running attach
+// through the real entire binary with checkpoints_version "1.1" leaves
+// refs/entire/checkpoints/v1.1 at the same hash as entire/checkpoints/v1.
+func TestAttach_MirrorsToV1CustomRefWhenOptedIn(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+
+	env.PatchSettings(map[string]any{
+		"strategy_options": map[string]any{"checkpoints_version": "1.1"},
+	})
+
+	sessionID := "attach-v1-1-mirror"
+	tb := NewTranscriptBuilder()
+	tb.AddUserMessage("hello")
+	tb.AddAssistantMessage("hi")
+	transcriptPath := filepath.Join(env.ClaudeProjectDir, sessionID+".jsonl")
+	if err := tb.WriteToFile(transcriptPath); err != nil {
+		t.Fatalf("failed to write transcript: %v", err)
+	}
+
+	env.RunCLI("session", "attach", sessionID, "-a", "claude-code", "-f")
+
+	v1 := revParse(t, env.RepoDir, "entire/checkpoints/v1")
+	custom := revParse(t, env.RepoDir, "refs/entire/checkpoints/v1.1")
+	if v1 != custom {
+		t.Errorf("refs/entire/checkpoints/v1.1 = %s, want %s (entire/checkpoints/v1)", custom, v1)
+	}
+}
+
+func revParse(t *testing.T, dir, ref string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", "rev-parse", "--verify", ref)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git rev-parse %s in %s failed: %v\n%s", ref, dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
