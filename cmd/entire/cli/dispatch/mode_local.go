@@ -171,7 +171,7 @@ func enumerateRepoCandidates(ctx context.Context, repoRoot string, opts Options,
 		return nil, err
 	}
 
-	store := checkpoint.NewGitStore(repo)
+	store := checkpoint.NewCommittedReadStore(ctx, repo)
 	infos, err := store.ListCommitted(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list committed checkpoints: %w", err)
