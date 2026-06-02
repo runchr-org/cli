@@ -468,6 +468,7 @@ func fetchMetadataFromOrigin(ctx context.Context, fopts fetchMetadataOpts) error
 	if err := strategy.SafelyAdvanceLocalRef(ctx, repo, plumbing.NewBranchReferenceName(branchName), remoteRef.Hash()); err != nil {
 		return fmt.Errorf("failed to advance local %s branch: %w", branchName, err)
 	}
+	strategy.MirrorCommittedMetadataRefBestEffort(ctx, repo)
 	return nil
 }
 

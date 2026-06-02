@@ -110,7 +110,19 @@ func FetchMetadataBranch(ctx context.Context, remoteURL string) error {
 	if err := fetchURLIntoTmpRef(ctx, remoteURL, srcRef, tmpRef, "metadata branch", true); err != nil {
 		return err
 	}
-	return PromoteTmpRefSafely(ctx, plumbing.ReferenceName(tmpRef), plumbing.NewBranchReferenceName(branchName), branchName)
+	if err := PromoteTmpRefSafely(ctx, plumbing.ReferenceName(tmpRef), plumbing.NewBranchReferenceName(branchName), branchName); err != nil {
+		return err
+	}
+
+	repo, err := OpenRepository(ctx)
+	if err != nil {
+		logging.Warn(ctx, "committed-ref mirror skipped after metadata fetch",
+			slog.String("error", err.Error()))
+		return nil
+	}
+	defer repo.Close()
+	MirrorCommittedMetadataRefBestEffort(ctx, repo)
+	return nil
 }
 
 // fetchURLIntoTmpRef runs `git fetch <remoteURL> +<srcRef>:<tmpRef>` via the
