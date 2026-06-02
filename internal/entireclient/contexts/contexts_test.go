@@ -140,7 +140,7 @@ func TestDelete_DropsContext(t *testing.T) {
 	}
 }
 
-func TestDelete_OfCurrentAdvancesPointer(t *testing.T) {
+func TestDelete_OfCurrentClearsCurrent(t *testing.T) {
 	f := &contexts.File{
 		CurrentContext: "first",
 		Contexts: []*contexts.Context{
@@ -149,8 +149,11 @@ func TestDelete_OfCurrentAdvancesPointer(t *testing.T) {
 		},
 	}
 	f.Delete("first")
-	if f.CurrentContext != "second" {
-		t.Errorf("after deleting current, CurrentContext = %q, want next remaining (%q)", f.CurrentContext, "second")
+	if f.CurrentContext != "" {
+		t.Errorf("after deleting current, CurrentContext = %q, want empty (no fallback to another identity)", f.CurrentContext)
+	}
+	if f.Find("second") == nil {
+		t.Error("Delete dropped the unrelated remaining context")
 	}
 }
 

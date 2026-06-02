@@ -30,8 +30,8 @@ func CurrentContextToken() (string, bool) {
 }
 
 // RemoveCurrentContext deletes the active context from contexts.json and
-// its keyring token, advancing current_context to whatever remains. It is
-// a no-op (returns nil) when there is no current context. Used by logout.
+// its keyring token, clearing current_context. It is a no-op (returns nil)
+// when there is no current context. Used by logout.
 func RemoveCurrentContext() error {
 	// Read-modify-write in a single locked Modify so the context we delete
 	// is exactly the one we capture the keychain slot from (separate Load +
@@ -43,11 +43,9 @@ func RemoveCurrentContext() error {
 			return false, nil
 		}
 		svc, handle = current.KeychainService, current.Handle
+		// Delete clears current_context because we're deleting the active
+		// one — logged out means logged out, no switch to another identity.
 		f.Delete(current.Name)
-		// Delete advances current_context to a surviving context; for logout
-		// that would silently re-authenticate as another account. Leave no
-		// active context — logged out means logged out.
-		f.CurrentContext = ""
 		return true, nil
 	}); err != nil {
 		return fmt.Errorf("remove current context: %w", err)

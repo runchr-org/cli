@@ -52,12 +52,6 @@ type File struct {
 	// Contexts is the list of stored credentials. Order is preserved on
 	// disk so list output stays stable across saves.
 	Contexts []*Context `json:"contexts,omitempty"`
-
-	// NOTE: a legacy "cluster_contexts" map used to live here, binding a
-	// cluster host to one context name. It's gone — cluster cores are cached
-	// in discovery.ClusterCoresCache and the account is chosen fresh per
-	// operation. json.Unmarshal ignores the obsolete key, so an old file
-	// loads cleanly; the key drops out on the next write.
 }
 
 // FilePath returns $configDir/contexts.json after ensuring the directory
@@ -172,8 +166,10 @@ func (f *File) Upsert(c *Context) {
 	}
 }
 
-// Delete drops the context with the given name. If the deleted context
-// was current, the current pointer advances to whatever remains (or empty).
+// Delete drops the context with the given name. If it was the current
+// context, current_context is cleared — never reassigned to another
+// context, so deleting your active login never silently switches you to a
+// different identity.
 func (f *File) Delete(name string) {
 	if f == nil || name == "" {
 		return
@@ -184,9 +180,6 @@ func (f *File) Delete(name string) {
 	}
 	if f.CurrentContext == name {
 		f.CurrentContext = ""
-		if len(f.Contexts) > 0 {
-			f.CurrentContext = f.Contexts[0].Name
-		}
 	}
 }
 
