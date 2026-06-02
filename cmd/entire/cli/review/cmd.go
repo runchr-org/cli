@@ -81,6 +81,7 @@ func NewCommand(deps Deps) *cobra.Command {
 	var perRunPrompt string
 	var findings bool
 	var listModels bool
+	var listAgents bool
 	var setAgents []string
 	var setMaster string
 	var setTask string
@@ -115,6 +116,7 @@ Flags:
   --edit         re-open the advanced review profile skill picker
   --findings     browse local review findings
   --agent NAME   run only one worker from the selected profile
+  --agents       list the worker agents you can pass to --agent for the profile
   --model NAME   override the model for the --agent worker (requires --agent)
   --models       list the models each review agent advertises (optionally --agent NAME)
   --profile NAME select a review profile (also accepted as positional arg)
@@ -145,6 +147,13 @@ Subcommands:
 
 			if listModels {
 				return runReviewListModels(ctx, cmd, agentOverride, deps)
+			}
+			if listAgents {
+				listProfile := profileOverride
+				if len(args) == 1 {
+					listProfile = args[0]
+				}
+				return runReviewListAgents(ctx, cmd, listProfile, deps)
 			}
 
 			modes := 0
@@ -188,6 +197,7 @@ Subcommands:
 	cmd.Flags().StringArrayVar(&setModels, "set-model", nil, "with --configure: per-worker model as agent=model (repeatable)")
 	cmd.Flags().BoolVar(&edit, "edit", false, "re-open the advanced review profile skill picker")
 	cmd.Flags().BoolVar(&findings, "findings", false, "browse local review findings")
+	cmd.Flags().BoolVar(&listAgents, "agents", false, "list the worker agents you can pass to --agent for the selected profile")
 	cmd.Flags().BoolVar(&listModels, "models", false, "list the models each review agent advertises (optionally filtered by --agent)")
 	cmd.Flags().StringVar(&agentOverride, "agent", "", "run one configured worker from the selected profile")
 	cmd.Flags().StringVar(&modelOverride, "model", "", "override the model for the --agent worker (requires --agent)")
@@ -331,6 +341,57 @@ func runReviewListModels(ctx context.Context, cmd *cobra.Command, agentFilter st
 	return nil
 }
 
+const reviewHooksInstalledStatus = "hooks installed"
+
+// runReviewListAgents lists the worker agents valid for `--agent` in the
+// resolved profile (with hook-install status and the master marked). With no
+// usable profile it falls back to the available review-agent catalog.
+func runReviewListAgents(ctx context.Context, cmd *cobra.Command, profileOverride string, deps Deps) error {
+	out := cmd.OutOrStdout()
+	installed := deps.GetAgentsWithHooksInstalled(ctx)
+	installedSet := make(map[string]struct{}, len(installed))
+	for _, n := range installed {
+		installedSet[string(n)] = struct{}{}
+	}
+
+	s, err := settings.Load(ctx)
+	if err == nil && s != nil {
+		if name, profile, selErr := selectReviewProfile(s, profileOverride); selErr == nil {
+			profile.Agents = nonZeroAgentConfigs(profile.Agents)
+			fmt.Fprintf(out, "Workers in review profile %q (pass one to --agent):\n", name)
+			for _, worker := range sortedProfileAgentNames(profile) {
+				cfg := profile.Agents[worker]
+				status := reviewHooksInstalledStatus
+				if _, ok := installedSet[reviewAgentName(worker, cfg)]; !ok {
+					status = "hooks NOT installed — run `entire configure --agent " + reviewAgentName(worker, cfg) + "`"
+				}
+				marker := ""
+				if worker == profile.Master {
+					marker = "  [master]"
+				}
+				fmt.Fprintf(out, "  %s — %s%s\n", reviewWorkerLabel(worker, cfg), status, marker)
+			}
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, "See all available agents and profiles with `entire review --configure`.")
+			return nil
+		}
+	}
+
+	// No usable profile: show the catalog of available review agents instead.
+	catalog := availableReviewAgents(installed, deps.ReviewerFor)
+	fmt.Fprintln(out, "No review profile configured yet. Available review agents:")
+	for _, e := range catalog {
+		status := "not installed — run `entire configure --agent " + e.Name + "`"
+		if e.Installed {
+			status = reviewHooksInstalledStatus
+		}
+		fmt.Fprintf(out, "  %-14s %s\n", e.Name, status)
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Configure a profile with `entire review --configure`.")
+	return nil
+}
+
 // reviewAgentCatalogEntry is one row in the `--configure` discovery listing.
 type reviewAgentCatalogEntry struct {
 	Name      string
@@ -366,7 +427,7 @@ func printReviewConfigCatalog(out io.Writer, profileName string, catalog []revie
 	for _, e := range catalog {
 		status := "not installed — run `entire configure --agent " + e.Name + "`"
 		if e.Installed {
-			status = "hooks installed"
+			status = reviewHooksInstalledStatus
 		}
 		fmt.Fprintf(out, "  %-14s %s\n", e.Name, status)
 	}

@@ -74,6 +74,33 @@ func defaultTestMaster(cfg map[string]settings.ReviewConfig) string {
 	return ""
 }
 
+// TestReviewCmd_ListAgents verifies `entire review --agents` lists the
+// configured profile workers (the valid --agent values) with the master marked.
+func TestReviewCmd_ListAgents(t *testing.T) {
+	setupCmdTestRepo(t)
+	ctx := context.Background()
+	if err := seedReviewConfig(ctx, map[string]settings.ReviewConfig{
+		string(agent.AgentNameClaudeCode): {Skills: []string{"/review"}},
+		string(agent.AgentNameCodex):      {Skills: []string{"/review"}},
+	}); err != nil {
+		t.Fatalf("seedReviewConfig: %v", err)
+	}
+
+	rootCmd := cli.NewRootCmd()
+	buf := &bytes.Buffer{}
+	rootCmd.SetOut(buf)
+	rootCmd.SetArgs([]string{"review", "--agents"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"claude-code", "codex", "[master]", "--agent"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("--agents output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 // TestReviewCmd_Help verifies `entire review --help` contains the expected
 // flags and subcommands without panicking.
 func TestReviewCmd_Help(t *testing.T) {
@@ -86,7 +113,7 @@ func TestReviewCmd_Help(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"review", "--configure", "--edit", "--findings", "--agent", "--model", "--models", "attach", "Labs entry"} {
+	for _, want := range []string{"review", "--configure", "--edit", "--findings", "--agent", "--agents", "--model", "--models", "attach", "Labs entry"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("--help output missing %q: %s", want, out)
 		}

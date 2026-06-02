@@ -15,6 +15,7 @@ entire review --configure --profile general --set-model codex=gpt-5-codex --set-
 entire review --edit --profile general       # Advanced skill-level config (skill picker)
 entire review --agent <name>           # Run one worker from the selected profile
 entire review --agent <name> --model <model>  # Override that worker's model for this run
+entire review --agents                  # List the profile's workers (valid --agent values)
 entire review --models                  # List models each review agent advertises
 entire review --models --agent codex    # ...filtered to one agent
 entire review --prompt "focus on auth" # Add one-off instructions
