@@ -49,7 +49,9 @@ func ModifyClusterCores(cacheDir string, fn func(ClusterCoresCache) error) error
 }
 
 func readClusterCoresNoLock(path string) (ClusterCoresCache, error) {
-	return readCacheFile(path, func() ClusterCoresCache { return make(ClusterCoresCache) })
+	cache := make(ClusterCoresCache)
+	err := loadCacheFile(path, &cache, func() ClusterCoresCache { return make(ClusterCoresCache) })
+	return cache, err
 }
 
 func writeClusterCoresNoLock(path string, cache ClusterCoresCache) error {

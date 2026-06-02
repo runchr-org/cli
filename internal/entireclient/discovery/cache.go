@@ -71,7 +71,9 @@ func ModifyCache(cacheDir string, fn func(ClusterCache) error) error {
 }
 
 func readCacheNoLock(path string) (ClusterCache, error) {
-	return readCacheFile(path, func() ClusterCache { return make(ClusterCache) })
+	cache := make(ClusterCache)
+	err := loadCacheFile(path, &cache, func() ClusterCache { return make(ClusterCache) })
+	return cache, err
 }
 
 func writeCacheNoLock(path string, cache ClusterCache) error {
@@ -127,23 +129,24 @@ func lockCache(path string) (func(), error) {
 	return func() { _ = fl.Unlock() }, nil //nolint:errcheck // unlock failure is non-fatal
 }
 
-// readCacheFile reads and unmarshals a JSON cache file. A missing file or a
-// corrupt one both yield a fresh empty value (newEmpty), so a damaged cache
-// self-heals on the next write instead of wedging callers.
-func readCacheFile[T any](path string, newEmpty func() T) (T, error) {
+// loadCacheFile reads path and unmarshals it into dst. A missing file leaves
+// dst at its caller-initialized (empty) value; a corrupt file resets dst via
+// newEmpty so a damaged cache self-heals on the next write instead of wedging
+// callers. Returns an error only on a genuine read failure. Returning error
+// (rather than the cache value itself) keeps this generic helper off the
+// ireturn linter while still sharing the read/unmarshal logic across caches.
+func loadCacheFile[T any](path string, dst *T, newEmpty func() T) error {
 	data, exists, err := readCacheBytes(path)
 	if err != nil {
-		var zero T
-		return zero, err
+		return err
 	}
-	c := newEmpty()
 	if !exists {
-		return c, nil
+		return nil
 	}
-	if err := json.Unmarshal(data, &c); err != nil {
-		return newEmpty(), nil //nolint:nilerr // intentional: treat corrupt cache as empty
+	if json.Unmarshal(data, dst) != nil {
+		*dst = newEmpty() // corrupt → start fresh
 	}
-	return c, nil
+	return nil
 }
 
 // writeCacheFile marshals v and writes it atomically (tmp + rename).
