@@ -926,7 +926,7 @@ func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, store *ch
 	}
 
 	if refs := checkpoint.ResolveCommittedRefs(ctx); refs.HasMirror() {
-		if err := mirrorToV1CustomRef(refs, store.Repository()); err != nil {
+		if err := strategy.MirrorCommittedMetadataRef(ctx, store.Repository(), refs); err != nil {
 			return fmt.Errorf("summary was written to %s, but failed to mirror to %s: %w", refs.Primary, refs.Mirror, err)
 		}
 	}

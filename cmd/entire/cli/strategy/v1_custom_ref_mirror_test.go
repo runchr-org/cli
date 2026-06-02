@@ -1,6 +1,7 @@
 package strategy
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,14 +9,26 @@ import (
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
+
+type setReferenceErrorStorer struct {
+	storage.Storer
+
+	err error
+}
+
+func (s setReferenceErrorStorer) SetReference(*plumbing.Reference) error {
+	return s.err
+}
 
 // setupV1CustomRefRepo creates an isolated repo with one commit, writes settings
 // with the given checkpoints_version (empty string omits the option), chdirs
@@ -87,12 +100,20 @@ func enableV1CustomRefMirror(t *testing.T, dir string) {
 	))
 }
 
+func v1CustomRefsForTest() checkpoint.CommittedRefs {
+	return checkpoint.CommittedRefs{
+		Primary: plumbing.NewBranchReferenceName(paths.MetadataBranchName),
+		Read:    plumbing.ReferenceName(paths.MetadataRefName),
+		Mirror:  plumbing.ReferenceName(paths.MetadataRefName),
+	}
+}
+
 // Not parallel: uses t.Chdir().
-func TestMirrorMetadataToV1CustomRef_CreatesRefWhenEnabled(t *testing.T) {
+func TestMirrorCommittedMetadataRef_CreatesRef(t *testing.T) {
 	repo := setupV1CustomRefRepo(t, `"1.1"`)
 	v1Hash := setV1MetadataBranch(t, repo)
 
-	mirrorMetadataToV1CustomRef(t.Context(), repo)
+	require.NoError(t, MirrorCommittedMetadataRef(t.Context(), repo, v1CustomRefsForTest()))
 
 	got, ok := v1CustomRefHash(t, repo)
 	require.True(t, ok, "expected %s to exist", paths.MetadataRefName)
@@ -100,18 +121,21 @@ func TestMirrorMetadataToV1CustomRef_CreatesRefWhenEnabled(t *testing.T) {
 }
 
 // Not parallel: uses t.Chdir().
-func TestMirrorMetadataToV1CustomRef_DisabledNoOp(t *testing.T) {
+func TestMirrorCommittedMetadataRef_DisabledNoOp(t *testing.T) {
 	repo := setupV1CustomRefRepo(t, "") // v1 only
 	setV1MetadataBranch(t, repo)
 
-	mirrorMetadataToV1CustomRef(t.Context(), repo)
+	require.NoError(t, MirrorCommittedMetadataRef(t.Context(), repo, checkpoint.CommittedRefs{
+		Primary: plumbing.NewBranchReferenceName(paths.MetadataBranchName),
+		Read:    plumbing.NewBranchReferenceName(paths.MetadataBranchName),
+	}))
 
 	_, ok := v1CustomRefHash(t, repo)
 	assert.False(t, ok, "v1 custom ref must not be created when not opted in")
 }
 
 // Not parallel: uses t.Chdir().
-func TestMirrorMetadataToV1CustomRef_AdvancesExistingRef(t *testing.T) {
+func TestMirrorCommittedMetadataRef_AdvancesExistingRef(t *testing.T) {
 	repo := setupV1CustomRefRepo(t, `"1.1"`)
 	oldHash := setV1MetadataBranch(t, repo)
 	require.NoError(t, repo.Storer.SetReference(
@@ -125,11 +149,34 @@ func TestMirrorMetadataToV1CustomRef_AdvancesExistingRef(t *testing.T) {
 	newHash := setV1MetadataBranch(t, repo)
 	require.NotEqual(t, oldHash, newHash)
 
-	mirrorMetadataToV1CustomRef(t.Context(), repo)
+	require.NoError(t, MirrorCommittedMetadataRef(t.Context(), repo, v1CustomRefsForTest()))
 
 	got, ok := v1CustomRefHash(t, repo)
 	require.True(t, ok)
 	assert.Equal(t, newHash, got)
+}
+
+// Not parallel: uses t.Chdir().
+func TestMirrorCommittedMetadataRef_ReplacesLocallyAheadMirror(t *testing.T) {
+	repo := setupV1CustomRefRepo(t, `"1.1"`)
+	v1Hash := setV1MetadataBranch(t, repo)
+
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	testutil.WriteFile(t, cwd, "f2.txt", "more")
+	testutil.GitAdd(t, cwd, "f2.txt")
+	testutil.GitCommit(t, cwd, "second")
+	head, err := repo.Head()
+	require.NoError(t, err)
+	require.NotEqual(t, v1Hash, head.Hash())
+	require.NoError(t, repo.Storer.SetReference(
+		plumbing.NewHashReference(plumbing.ReferenceName(paths.MetadataRefName), head.Hash())))
+
+	require.NoError(t, MirrorCommittedMetadataRef(t.Context(), repo, v1CustomRefsForTest()))
+
+	got, ok := v1CustomRefHash(t, repo)
+	require.True(t, ok)
+	assert.Equal(t, v1Hash, got)
 }
 
 // Not parallel: uses t.Chdir().
@@ -207,10 +254,35 @@ func TestFinalizeAllTurnCheckpoints_MirrorsV1CustomRefWhenEnabled(t *testing.T) 
 }
 
 // Not parallel: uses t.Chdir().
-func TestMirrorMetadataToV1CustomRef_V1MissingNoOp(t *testing.T) {
+func TestMirrorCommittedMetadataRef_V1MissingErrors(t *testing.T) {
 	repo := setupV1CustomRefRepo(t, `"1.1"`) // no v1 metadata branch created
 
-	mirrorMetadataToV1CustomRef(t.Context(), repo)
+	err := MirrorCommittedMetadataRef(t.Context(), repo, v1CustomRefsForTest())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), paths.MetadataBranchName)
+
+	_, ok := v1CustomRefHash(t, repo)
+	assert.False(t, ok, "v1 custom ref must not be created when v1 metadata branch is absent")
+}
+
+// Not parallel: uses t.Chdir().
+func TestMirrorCommittedMetadataRef_SetReferenceErrorNamesTarget(t *testing.T) {
+	repo := setupV1CustomRefRepo(t, `"1.1"`)
+	v1Hash := setV1MetadataBranch(t, repo)
+	storerErr := errors.New("set failed")
+	repo.Storer = setReferenceErrorStorer{Storer: repo.Storer, err: storerErr}
+
+	err := MirrorCommittedMetadataRef(t.Context(), repo, v1CustomRefsForTest())
+	require.ErrorIs(t, err, storerErr)
+	assert.Contains(t, err.Error(), paths.MetadataRefName)
+	assert.Contains(t, err.Error(), v1Hash.String())
+}
+
+// Not parallel: uses t.Chdir().
+func TestMirrorCommittedMetadataRefBestEffort_V1MissingNoOp(t *testing.T) {
+	repo := setupV1CustomRefRepo(t, `"1.1"`) // no v1 metadata branch created
+
+	MirrorCommittedMetadataRefBestEffort(t.Context(), repo)
 
 	_, ok := v1CustomRefHash(t, repo)
 	assert.False(t, ok, "v1 custom ref must not be created when v1 metadata branch is absent")
