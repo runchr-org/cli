@@ -1,7 +1,6 @@
 package review_test
 
 import (
-	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,7 +9,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/skilldiscovery"
 	"github.com/entireio/cli/cmd/entire/cli/review"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 const (
@@ -284,23 +282,5 @@ func TestBuildReviewPickerFields_SingleBuiltinDefaultsSelectedAndRenders(t *test
 	field.Focus()
 	if got := field.View(); !strings.Contains(got, "/review") {
 		t.Fatalf("single built-in option did not render:\n%s", got)
-	}
-}
-
-func TestSaveReviewFixAgent_PersistsSettings(t *testing.T) {
-	tmp := t.TempDir()
-	testutil.InitRepo(t, tmp)
-	t.Chdir(tmp)
-
-	if err := review.SaveReviewFixAgent(context.Background(), testCodexAgent); err != nil {
-		t.Fatal(err)
-	}
-
-	prefs, err := settings.LoadClonePreferences(context.Background())
-	if err != nil {
-		t.Fatalf("load preferences: %v", err)
-	}
-	if prefs.ReviewFixAgent != testCodexAgent {
-		t.Fatalf("ReviewFixAgent = %q, want %s", prefs.ReviewFixAgent, testCodexAgent)
 	}
 }

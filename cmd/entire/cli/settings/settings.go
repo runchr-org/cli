@@ -99,9 +99,10 @@ type EntireSettings struct {
 	// still parse, but `entire review` no longer reads this field.
 	Review map[string]ReviewConfig `json:"review,omitempty"`
 
-	// ReviewFixAgent is the saved `entire review --fix` agent preference. It is
-	// transitional: still read by the fix flow until fix-agent selection becomes
-	// fully profile-aware.
+	// ReviewFixAgent is a legacy saved fix-agent preference. The `entire review
+	// --fix` flow has been removed; this field is retained only so older
+	// settings/preferences files still parse. It is no longer read by
+	// `entire review`.
 	ReviewFixAgent string `json:"review_fix_agent,omitempty"`
 
 	// Investigate holds configuration for `entire investigate`. Empty means

@@ -75,12 +75,11 @@ func NewCommand(deps Deps) *cobra.Command {
 	var configure bool
 	var edit bool
 	var agentOverride string
+	var modelOverride string
 	var baseOverride string
 	var profileOverride string
 	var perRunPrompt string
 	var findings bool
-	var fix bool
-	var all bool
 
 	cmd := &cobra.Command{
 		Use: "review",
@@ -104,10 +103,8 @@ Flags:
   --configure    open the simple review setup wizard without starting agents
   --edit         re-open the advanced review profile skill picker
   --findings     browse local review findings
-  --fix          apply review findings in a normal agent session
-  --all          with --fix, apply all sources/findings without selectors
-  --agent NAME   run only one worker from the selected profile, or select the
-                 fix agent with --fix
+  --agent NAME   run only one worker from the selected profile
+  --model NAME   override the model for the --agent worker (requires --agent)
   --profile NAME select a review profile (also accepted as positional arg)
   --prompt TEXT  add one-off per-run instructions for this invocation
   --base REF     scope the review against REF instead of mainline. Useful
@@ -122,7 +119,7 @@ Subcommands:
 			if len(args) > 1 {
 				return fmt.Errorf("accepts at most one argument, received %d", len(args))
 			}
-			if len(args) == 1 && !fix && profileOverride != "" {
+			if len(args) == 1 && profileOverride != "" {
 				return errors.New("pass profile either positionally or with --profile, not both")
 			}
 			return nil
@@ -134,20 +131,20 @@ Subcommands:
 			// and agent.Get can't see them.
 			external.DiscoverAndRegister(ctx)
 
-			if all && !fix {
-				return errors.New("--all requires --fix")
-			}
 			modes := 0
-			for _, enabled := range []bool{configure, edit, findings, fix} {
+			for _, enabled := range []bool{configure, edit, findings} {
 				if enabled {
 					modes++
 				}
 			}
 			if modes > 1 {
-				return errors.New("--configure, --edit, --findings, and --fix are mutually exclusive")
+				return errors.New("--configure, --edit, and --findings are mutually exclusive")
+			}
+			if modelOverride != "" && agentOverride == "" {
+				return errors.New("--model requires --agent (the model applies to a single worker)")
 			}
 			profileName := profileOverride
-			if len(args) == 1 && !fix {
+			if len(args) == 1 {
 				profileName = args[0]
 			}
 			if configure {
@@ -160,22 +157,14 @@ Subcommands:
 			if findings {
 				return runReviewFindings(ctx, cmd, deps.NewSilentError)
 			}
-			if fix {
-				target := ""
-				if len(args) == 1 {
-					target = args[0]
-				}
-				return runReviewFix(ctx, cmd, target, all, agentOverride, deps.NewSilentError)
-			}
-			return runReview(ctx, cmd, agentOverride, baseOverride, profileName, perRunPrompt, deps)
+			return runReview(ctx, cmd, agentOverride, modelOverride, baseOverride, profileName, perRunPrompt, deps)
 		},
 	}
 	cmd.Flags().BoolVar(&configure, "configure", false, "open the simple review setup wizard without starting agents")
 	cmd.Flags().BoolVar(&edit, "edit", false, "re-open the advanced review profile skill picker")
 	cmd.Flags().BoolVar(&findings, "findings", false, "browse local review findings")
-	cmd.Flags().BoolVar(&fix, "fix", false, "apply review findings in a normal agent session")
-	cmd.Flags().BoolVar(&all, "all", false, "with --fix, apply all sources/findings without selectors")
-	cmd.Flags().StringVar(&agentOverride, "agent", "", "run one configured worker from the selected profile; with --fix, select the fix agent")
+	cmd.Flags().StringVar(&agentOverride, "agent", "", "run one configured worker from the selected profile")
+	cmd.Flags().StringVar(&modelOverride, "model", "", "override the model for the --agent worker (requires --agent)")
 	cmd.Flags().StringVar(&profileOverride, "profile", "", "review profile to run (default: review_default_profile or general)")
 	cmd.Flags().StringVar(&perRunPrompt, "prompt", "", "one-off instructions appended to this review run")
 	cmd.Flags().StringVar(&baseOverride, "base", "", "git ref to scope the review against (default: origin/HEAD → origin/main → origin/master → main → master)")
@@ -222,7 +211,7 @@ func runReviewConfigure(ctx context.Context, cmd *cobra.Command, profileOverride
 }
 
 // runReview executes the main review flow.
-func runReview(ctx context.Context, cmd *cobra.Command, agentOverride, baseOverride, profileOverride, perRunPrompt string, deps Deps) error {
+func runReview(ctx context.Context, cmd *cobra.Command, agentOverride, modelOverride, baseOverride, profileOverride, perRunPrompt string, deps Deps) error {
 	out := cmd.OutOrStdout()
 	silentErr := deps.NewSilentError
 
@@ -313,6 +302,9 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride, baseOverr
 			err := fmt.Errorf("%w in review profile %q", selectErr, profileName)
 			fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
 			return silentErr(err)
+		}
+		if modelOverride != "" {
+			cfg.Model = modelOverride
 		}
 		return runSingleAgentPath(ctx, cmd, profileName, workerName, baseOverride, perRunPrompt, profile.Task, cfg, installed, deps, out)
 	}
@@ -835,7 +827,7 @@ func warnManifestNotWritten(out io.Writer, reason string) {
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Note: review skills ran but findings were not persisted.")
 	fmt.Fprintf(out, "  Reason: %s\n", reason)
-	fmt.Fprintln(out, "  `entire review --findings` and `entire review --fix` will not see this run.")
+	fmt.Fprintln(out, "  `entire review --findings` will not see this run.")
 	fmt.Fprintln(out, "  Re-run with `ENTIRE_LOG_LEVEL=debug` for diagnostic detail.")
 }
 

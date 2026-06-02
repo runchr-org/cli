@@ -11,7 +11,9 @@ entire review --profile accessibility  # Same, flag form
 entire review --configure --profile general # Simple guided config, no agents started
 entire review --edit --profile general      # Advanced skill-level config
 entire review --agent <name>           # Run one worker from the selected profile
+entire review --agent <name> --model <model>  # Override that worker's model for this run
 entire review --prompt "focus on auth" # Add one-off instructions
+entire review --findings                # Browse local review findings
 entire review attach <session-id>      # Tag an existing agent session as a review (post-hoc)
 entire review attach --force           # Skip confirmation
 entire review attach --agent <name>    # Agent that created the session

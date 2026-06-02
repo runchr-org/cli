@@ -86,7 +86,7 @@ func TestReviewCmd_Help(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"review", "--edit", "--findings", "--fix", "--all", "--agent", "attach", "Labs entry"} {
+	for _, want := range []string{"review", "--configure", "--edit", "--findings", "--agent", "--model", "attach", "Labs entry"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("--help output missing %q: %s", want, out)
 		}
@@ -120,7 +120,6 @@ func TestReview_NotGitRepoReturnsSilentError(t *testing.T) {
 		args []string
 	}{
 		{"findings", []string{"review", "--findings"}},
-		{"fix", []string{"review", "--fix", "review-session"}},
 	}
 
 	for _, tt := range tests {

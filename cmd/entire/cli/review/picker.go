@@ -527,21 +527,6 @@ func MergePickerResults(existing map[string]settings.ReviewConfig, offered map[s
 	return merged
 }
 
-func SaveReviewFixAgent(ctx context.Context, agentName string) error {
-	prefs, err := settings.LoadClonePreferences(ctx)
-	if err != nil {
-		return fmt.Errorf("load review preferences before save: %w", err)
-	}
-	if prefs == nil {
-		prefs = &settings.ClonePreferences{}
-	}
-	prefs.ReviewFixAgent = agentName
-	if err := settings.SaveClonePreferences(ctx, prefs); err != nil {
-		return fmt.Errorf("save review preferences: %w", err)
-	}
-	return nil
-}
-
 func saveReviewProfileConfig(ctx context.Context, profileName string, agents map[string]settings.ReviewConfig, master string) error {
 	prefs, err := settings.LoadClonePreferences(ctx)
 	if err != nil {
@@ -585,16 +570,25 @@ func pickReviewMasterAgentPreference(ctx context.Context, review map[string]sett
 	}
 }
 
-func pickReviewFixAgentPreference(ctx context.Context, review map[string]settings.ReviewConfig, current string) (string, error) {
-	choices := reviewFixAgentChoices(review)
-	switch len(choices) {
-	case 0:
-		return current, nil
-	case 1:
-		return choices[0].Name, nil
-	default:
-		return promptForReviewFixAgent(ctx, choices, current)
+// defaultAgentPick returns the saved choice if it is still offered, otherwise
+// the first choice. Shared by the master picker.
+func defaultAgentPick(choices []AgentChoice, saved string) string {
+	if pick, ok := savedAgentPick(choices, saved); ok {
+		return pick
 	}
+	if len(choices) == 0 {
+		return ""
+	}
+	return choices[0].Name
+}
+
+func savedAgentPick(choices []AgentChoice, saved string) (string, bool) {
+	for _, choice := range choices {
+		if choice.Name == saved {
+			return saved, true
+		}
+	}
+	return "", false
 }
 
 func reviewMasterAgentChoices(configured map[string]settings.ReviewConfig) []AgentChoice {
@@ -626,7 +620,7 @@ func promptForReviewMasterAgent(ctx context.Context, choices []AgentChoice, save
 	for _, choice := range choices {
 		options = append(options, huh.NewOption(choice.Label, choice.Name))
 	}
-	picked := defaultReviewFixAgentPick(choices, saved)
+	picked := defaultAgentPick(choices, saved)
 	form := newAccessibleForm(huh.NewGroup(
 		huh.NewSelect[string]().
 			Title("Choose review master").

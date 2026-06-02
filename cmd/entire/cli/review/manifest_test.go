@@ -235,48 +235,7 @@ func TestLocalReviewManifest_PrefixMatchWithinSameManifestDoesNotAmbiguate(t *te
 	}
 }
 
-func TestComposeReviewFixPrompt_UsesSelectedSources(t *testing.T) {
-	manifest := LocalReviewManifest{
-		WorktreePath: "/repo",
-		Sources: []ManifestSource{
-			{
-				SessionID: "claude-session",
-				Agent:     "claude-code",
-				Label:     "Claude Code",
-				Output:    "H1. Claude finding",
-			},
-			{
-				SessionID: "codex-session",
-				Agent:     manifestTestCodexAgent,
-				Label:     "Codex",
-				Output:    "M1. Codex finding",
-			},
-		},
-		AggregateOutput: "Aggregate finding",
-	}
-
-	prompt := composeReviewFixPrompt(manifest, []reviewFixSource{
-		{Kind: reviewFixSourceAgent, Label: "Codex", Output: "M1. Codex finding"},
-		{Kind: reviewFixSourceAggregate, Label: "Aggregate summary", Output: "Aggregate finding"},
-	})
-
-	for _, want := range []string{
-		"Fix only the selected review findings.",
-		"Codex",
-		"M1. Codex finding",
-		"Aggregate summary",
-		"Aggregate finding",
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("prompt missing %q:\n%s", want, prompt)
-		}
-	}
-	if strings.Contains(prompt, "H1. Claude finding") {
-		t.Fatalf("prompt should not include unselected Claude output:\n%s", prompt)
-	}
-}
-
-func TestWriteReviewCompletionFooter_PrintsExactFixCommands(t *testing.T) {
+func TestWriteReviewCompletionFooter_PointsToFindings(t *testing.T) {
 	manifest := LocalReviewManifest{
 		Sources: []ManifestSource{{SessionID: "claude-session", Label: "Claude Code"}},
 	}
@@ -285,18 +244,17 @@ func TestWriteReviewCompletionFooter_PrintsExactFixCommands(t *testing.T) {
 	writeReviewCompletionFooter(&b, manifest)
 
 	got := b.String()
-	for _, want := range []string{
-		"Review complete.",
-		"entire review --fix claude-session --all",
-		"entire review --fix claude-session",
-	} {
+	for _, want := range []string{"Review complete.", "entire review --findings"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("footer missing %q:\n%s", want, got)
 		}
 	}
+	if strings.Contains(got, "--fix") {
+		t.Fatalf("footer should not reference removed --fix:\n%s", got)
+	}
 }
 
-func TestPrintReviewFindingsList_PrintsProductionCommandName(t *testing.T) {
+func TestPrintReviewFindingsList_ListsSessionsWithoutLocalPath(t *testing.T) {
 	oldArgs := os.Args
 	t.Cleanup(func() { os.Args = oldArgs })
 	os.Args = []string{"/tmp/local-build/entire"}
@@ -317,45 +275,8 @@ func TestPrintReviewFindingsList_PrintsProductionCommandName(t *testing.T) {
 	if strings.Contains(got, "/tmp/local-build/entire") {
 		t.Fatalf("findings list should not print local binary path:\n%s", got)
 	}
-	if !strings.Contains(got, "entire review --fix claude-session --all") {
-		t.Fatalf("findings list missing production command:\n%s", got)
-	}
-}
-
-func TestReviewFixSourcesForManifest_AddsAggregateFallbackForMultipleAgents(t *testing.T) {
-	manifest := LocalReviewManifest{
-		Sources: []ManifestSource{
-			{
-				SessionID: "claude-session",
-				Agent:     "claude-code",
-				Label:     "Claude Code",
-				Output:    "H1. Claude finding",
-			},
-			{
-				SessionID: "codex-session",
-				Agent:     manifestTestCodexAgent,
-				Label:     "Codex",
-				Output:    "M1. Codex finding",
-			},
-		},
-	}
-
-	sources := reviewFixSourcesForManifest(manifest)
-
-	if len(sources) != 3 {
-		t.Fatalf("sources = %d, want 3: %#v", len(sources), sources)
-	}
-	aggregate := sources[2]
-	if aggregate.Kind != reviewFixSourceAggregate {
-		t.Fatalf("aggregate kind = %q, want %q", aggregate.Kind, reviewFixSourceAggregate)
-	}
-	if aggregate.Label != "Aggregate findings" {
-		t.Fatalf("aggregate label = %q", aggregate.Label)
-	}
-	for _, want := range []string{"Claude Code findings", "H1. Claude finding", "Codex findings", "M1. Codex finding"} {
-		if !strings.Contains(aggregate.Output, want) {
-			t.Fatalf("aggregate output missing %q:\n%s", want, aggregate.Output)
-		}
+	if !strings.Contains(got, "claude-session") {
+		t.Fatalf("findings list missing session handle:\n%s", got)
 	}
 }
 
@@ -367,67 +288,13 @@ func TestReviewPickerHeight_ShowsAllSmallOptionSets(t *testing.T) {
 	}
 }
 
-func TestReviewFixSourcePickerTitle_IncludesSessionHandle(t *testing.T) {
-	manifest := LocalReviewManifest{
-		Sources: []ManifestSource{{SessionID: "073be48b-2a68-473e-b783-9fa7b78a85aa"}},
-	}
-
-	got := reviewFixSourcePickerTitle(manifest)
-
-	if !strings.Contains(got, "073be48b-2a68-473e-b783-9fa7b78a85aa") {
-		t.Fatalf("title = %q, want session id", got)
-	}
-}
-
-func TestReviewFixAgentFromSelectedSources_UsesSingleAgentSource(t *testing.T) {
-	got, ok := reviewFixAgentFromSelectedSources([]reviewFixSource{
-		{Kind: reviewFixSourceAgent, Agent: manifestTestCodexAgent, Label: "Codex findings"},
-	})
-
-	if !ok {
-		t.Fatal("expected single-source agent inference")
-	}
-	if got != manifestTestCodexAgent {
-		t.Fatalf("agent = %q, want codex", got)
-	}
-}
-
-func TestReviewFixAgentFromSelectedSources_DoesNotInferForAggregateOrMultiple(t *testing.T) {
-	tests := []struct {
-		name    string
-		sources []reviewFixSource
-	}{
-		{
-			name: "aggregate",
-			sources: []reviewFixSource{
-				{Kind: reviewFixSourceAggregate, Label: "Aggregate summary"},
-			},
-		},
-		{
-			name: "multiple agents",
-			sources: []reviewFixSource{
-				{Kind: reviewFixSourceAgent, Agent: "claude-code"},
-				{Kind: reviewFixSourceAgent, Agent: manifestTestCodexAgent},
-			},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := reviewFixAgentFromSelectedSources(tc.sources)
-			if ok {
-				t.Fatalf("agent = %q, want no inference", got)
-			}
-		})
-	}
-}
-
-func TestSavedReviewFixAgentPick_UsesSavedWhenAvailable(t *testing.T) {
+func TestSavedAgentPick_UsesSavedWhenAvailable(t *testing.T) {
 	choices := []AgentChoice{
 		{Name: "claude-code", Label: "Claude Code"},
 		{Name: manifestTestCodexAgent, Label: "Codex"},
 	}
 
-	got, ok := savedReviewFixAgentPick(choices, manifestTestCodexAgent)
+	got, ok := savedAgentPick(choices, manifestTestCodexAgent)
 
 	if !ok {
 		t.Fatal("expected saved agent match")
@@ -437,25 +304,13 @@ func TestSavedReviewFixAgentPick_UsesSavedWhenAvailable(t *testing.T) {
 	}
 }
 
-func TestSavedReviewFixAgentPick_RejectsUnknownSavedAgent(t *testing.T) {
+func TestSavedAgentPick_RejectsUnknownSavedAgent(t *testing.T) {
 	choices := []AgentChoice{{Name: "claude-code", Label: "Claude Code"}}
 
-	got, ok := savedReviewFixAgentPick(choices, manifestTestCodexAgent)
+	got, ok := savedAgentPick(choices, manifestTestCodexAgent)
 
 	if ok {
 		t.Fatalf("saved pick = %q, want no match", got)
-	}
-}
-
-func TestPickReviewFixAgentPreference_PreservesCurrentWhenNoChoices(t *testing.T) {
-	t.Parallel()
-
-	got, err := pickReviewFixAgentPreference(context.Background(), nil, manifestTestCodexAgent)
-	if err != nil {
-		t.Fatalf("pickReviewFixAgentPreference: %v", err)
-	}
-	if got != manifestTestCodexAgent {
-		t.Fatalf("fix agent = %q, want codex", got)
 	}
 }
 
@@ -524,7 +379,7 @@ func TestWarnManifestNotWritten_PrintsReasonAndDiagnosticHints(t *testing.T) {
 	for _, want := range []string{
 		"Note: review skills ran but findings were not persisted.",
 		"Reason: test reason text",
-		"`entire review --findings` and `entire review --fix` will not see this run.",
+		"`entire review --findings` will not see this run.",
 		"`ENTIRE_LOG_LEVEL=debug`",
 	} {
 		if !strings.Contains(got, want) {
