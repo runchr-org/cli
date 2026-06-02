@@ -210,12 +210,14 @@ func mirrorAdvertisesHead(ctx context.Context, checkURL, token string) (ready bo
 	}
 	// Drain before close so the transport can return the connection to the
 	// idle pool and reuse the TLS session on the next tick. Go only recycles
-	// a conn whose body was read to EOF before Close; the Decode error
-	// returns below leave the body partially read, so without this drain the
-	// pool is defeated and every probe pays a fresh TLS handshake. Bound the
-	// drain by maxProbeBytes to match the read cap above.
+	// a conn whose body was read to EOF before Close, and the Decode error
+	// returns below leave the body partially read. Drain to EOF, uncapped:
+	// the maxProbeBytes cap on the read below bounds the Decode *allocation*,
+	// but draining to io.Discard is O(1) memory, and a LimitReader cap
+	// shorter than the body would stop before EOF and silently defeat reuse.
+	// The client Timeout still bounds how long the drain can run.
 	defer func() {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxProbeBytes)) //nolint:errcheck // best-effort drain to enable conn reuse; copy errors are irrelevant
+		_, _ = io.Copy(io.Discard, resp.Body) //nolint:errcheck // best-effort drain to enable conn reuse; copy errors are irrelevant
 		_ = resp.Body.Close()
 	}()
 	if resp.StatusCode != http.StatusOK {
