@@ -167,7 +167,7 @@ func TestResolveCreds_BlankEnvTokenFailsClosed(t *testing.T) {
 	dummyURL := &url.URL{Scheme: "entire", Host: "cluster.example.com"}
 	for _, blank := range []string{"", " ", "\t", "\n", " \t\n "} {
 		t.Setenv(auth.EnvTokenVar, blank)
-		creds, err := resolveCreds(t.Context(), dummyURL, "https://cluster.example.com", nil)
+		creds, err := resolveCreds(t.Context(), dummyURL, "https://cluster.example.com", false, nil)
 		if err == nil {
 			t.Fatalf("blank ENTIRE_TOKEN %q should fail closed", blank)
 		}
