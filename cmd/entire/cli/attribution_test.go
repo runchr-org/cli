@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
@@ -46,13 +47,15 @@ func TestParseBlamePorcelain(t *testing.T) {
 	require.Equal(t, "Ada Lovelace", lines[0].Author)
 	require.Equal(t, "print('hello')", lines[0].Content)
 	require.NotNil(t, lines[0].AuthorTime)
+	require.Equal(t, time.UTC, lines[0].AuthorTime.Location())
+	require.Equal(t, "2023-11-14T22:13:20Z", lines[0].AuthorTime.Format(time.RFC3339))
 	require.Equal(t, 2, lines[1].LineNumber)
 }
 
 func TestParseBlamePorcelainSupportsSHA256ObjectIDs(t *testing.T) {
 	sha256ID := strings.Repeat("a", 64)
 	output := strings.Join([]string{
-		fmt.Sprintf("%s 1 1 1", sha256ID),
+		sha256ID + " 1 1 1",
 		"author Ada Lovelace",
 		"author-time 1700000000",
 		"\tprint('hello')",
@@ -112,13 +115,48 @@ func TestAttributionBlameShowsHumanAndAICheckpointLines(t *testing.T) {
 	text := out.String()
 	require.Contains(t, text, "[HU]")
 	require.Contains(t, text, "[AI]")
-	require.Contains(t, text, "Source")
+	require.Contains(t, text, "Agent")
+	require.Contains(t, text, "Author")
 	require.Contains(t, text, "Checkpoint")
 	require.NotContains(t, text, "Model")
-	require.NotContains(t, text, "Author")
+	require.NotContains(t, text, "Checkpoint/Session")
 	require.Contains(t, text, "a1b2c3d4e5f6")
 	require.Contains(t, text, "AI: 1")
 	require.Contains(t, text, "Human: 1")
+	requireCompactBlameTableFits(t, text, 80)
+	requireCompactBlameColumnsAlign(t, text)
+}
+
+func TestAttributionBlameColumnExpandsForFiveDigitLines(t *testing.T) {
+	lines := []attributionLine{
+		{
+			LineNumber: 9999,
+			Authorship: attributionHuman,
+			Author:     "Suhaan",
+			Content:    "human_line = 1",
+		},
+		{
+			LineNumber:   10000,
+			Authorship:   attributionAI,
+			Agent:        "Codex",
+			Author:       "Codex",
+			CheckpointID: "a1b2c3d4e5f6",
+			Content:      "ai_line = 2",
+		},
+	}
+	result := &fileAttributionResult{
+		File:    "large.py",
+		Lines:   lines,
+		Summary: summarizeAttributionLines(lines),
+	}
+
+	var out bytes.Buffer
+	renderAttributionBlameCompact(&out, result, "9999-10000")
+	text := out.String()
+
+	requireCompactBlameColumnsAlign(t, text)
+	require.Contains(t, text, "10000  [AI]")
+	require.Equal(t, 5, attributionLineColumnWidth(lines))
 }
 
 func TestAttributionBlameLongShowsDetailedColumns(t *testing.T) {
@@ -226,6 +264,17 @@ func TestAttributionBlameJSONIsStable(t *testing.T) {
 	require.Equal(t, attributionAI, payload.Lines[1].Authorship)
 	require.Equal(t, "d1b2c3d4e5f6", payload.Lines[1].CheckpointID)
 	require.Contains(t, payload.Checkpoints, "d1b2c3d4e5f6")
+}
+
+func TestAttributionBlameJSONEmptyFileUsesEmptyLinesArray(t *testing.T) {
+	repoRoot := newAttributionRepo(t)
+	testutil.WriteFile(t, repoRoot, "empty.txt", "")
+	testutil.GitAdd(t, repoRoot, "empty.txt")
+	testutil.GitCommit(t, repoRoot, "add empty file")
+
+	var out bytes.Buffer
+	require.NoError(t, runAttributionBlame(context.Background(), &out, "empty.txt", attributionBlameOptions{JSON: true}))
+	require.Contains(t, out.String(), `"lines": []`)
 }
 
 func TestAttributionBlameJSONLineFilterPrunesCheckpoints(t *testing.T) {
@@ -374,4 +423,69 @@ func formatCheckpointTrailers(message string, checkpointIDs ...string) string {
 		fmt.Fprintf(&b, "%s: %s\n", trailers.CheckpointTrailerKey, checkpointID)
 	}
 	return b.String()
+}
+
+func requireCompactBlameTableFits(t *testing.T, text string, width int) {
+	t.Helper()
+	for _, line := range strings.Split(text, "\n") {
+		switch {
+		case strings.Contains(line, "Line  Tag"):
+		case strings.Contains(line, "──"):
+		case strings.Contains(line, "[HU]"):
+		case strings.Contains(line, "[AI]"):
+		default:
+			continue
+		}
+		require.LessOrEqual(t, len([]rune(line)), width, line)
+	}
+}
+
+func requireCompactBlameColumnsAlign(t *testing.T, text string) {
+	t.Helper()
+	lines := strings.Split(text, "\n")
+	var header, humanRow, aiRow string
+	for _, line := range lines {
+		switch {
+		case strings.Contains(line, "Line  Tag"):
+			header = line
+		case humanRow == "" && strings.Contains(line, "[HU]"):
+			humanRow = line
+		case aiRow == "" && strings.Contains(line, "[AI]"):
+			aiRow = line
+		}
+	}
+	require.NotEmpty(t, header)
+	require.NotEmpty(t, humanRow)
+	require.NotEmpty(t, aiRow)
+
+	tagCol := strings.Index(header, "Tag")
+	agentCol := strings.Index(header, "Agent")
+	authorCol := strings.Index(header, "Author")
+	checkpointCol := strings.Index(header, "Checkpoint")
+	require.NotEqual(t, -1, tagCol)
+	require.NotEqual(t, -1, agentCol)
+	require.NotEqual(t, -1, authorCol)
+	require.NotEqual(t, -1, checkpointCol)
+
+	require.Equal(t, tagCol, strings.Index(humanRow, "[HU]"))
+	require.Equal(t, tagCol, strings.Index(aiRow, "[AI]"))
+	require.Equal(t, 8, authorCol-agentCol)
+	require.Equal(t, agentCol, firstNonSpaceIndex(aiRow, agentCol, authorCol))
+	require.Equal(t, authorCol, firstNonSpaceIndex(humanRow, authorCol, checkpointCol))
+	require.Equal(t, authorCol, firstNonSpaceIndex(aiRow, authorCol, checkpointCol))
+	require.NotEmpty(t, strings.TrimSpace(aiRow[agentCol:authorCol]))
+	require.NotEmpty(t, strings.TrimSpace(humanRow[authorCol:checkpointCol]))
+	require.NotEmpty(t, strings.TrimSpace(aiRow[authorCol:checkpointCol]))
+}
+
+func firstNonSpaceIndex(s string, start, end int) int {
+	if start < 0 || end > len(s) || start >= end {
+		return -1
+	}
+	for i := start; i < end; i++ {
+		if s[i] != ' ' {
+			return i
+		}
+	}
+	return -1
 }

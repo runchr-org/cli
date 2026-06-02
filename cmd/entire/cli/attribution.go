@@ -273,6 +273,7 @@ func resolveFileAttribution(ctx context.Context, file string, fetchOnMiss bool) 
 
 	result := &fileAttributionResult{
 		File:        relFile,
+		Lines:       make([]attributionLine, 0, len(rawLines)),
 		Checkpoints: make(map[string]attributionCheckpointContext),
 	}
 	for _, raw := range rawLines {
@@ -584,7 +585,7 @@ func parseBlamePorcelain(output string) ([]rawBlameLine, error) {
 		case strings.HasPrefix(line, "author-time "):
 			seconds, err := strconv.ParseInt(strings.TrimPrefix(line, "author-time "), 10, 64)
 			if err == nil {
-				t := time.Unix(seconds, 0)
+				t := time.Unix(seconds, 0).UTC()
 				current.AuthorTime = &t
 			}
 		case strings.HasPrefix(line, "\t"):
@@ -740,23 +741,30 @@ func renderAttributionBlameCompact(w io.Writer, result *fileAttributionResult, l
 		return
 	}
 
-	lineWidth := len(strconv.Itoa(maxAttributionLineNumber(result.Lines)))
-	const sourceWidth = 12
+	lineWidth := attributionLineColumnWidth(result.Lines)
+	const agentWidth = 6
+	const authorWidth = 6
 	const checkpointWidth = 12
-	contentWidth := sty.width - 2 - (lineWidth + 38)
-	if contentWidth < 24 {
-		contentWidth = 24
+	const minContentWidth = 12
+	fixedWidth := 2 + lineWidth + 2 + len("[AI]") + 2 + agentWidth + 2 + authorWidth + 2 + checkpointWidth + 2
+	contentWidth := sty.width - fixedWidth
+	if contentWidth < minContentWidth {
+		contentWidth = minContentWidth
 	}
-	tableWidth := lineWidth + 38 + contentWidth
+	tableWidth := fixedWidth + contentWidth - 2
 
-	fmt.Fprintf(w, "  %*s  Tag   %-12s  %-12s  Content\n", lineWidth, "Line", "Source", "Checkpoint")
+	fmt.Fprintf(w, "  %*s  Tag   %-*s  %-*s  %-*s  Content\n", lineWidth, "Line", agentWidth, "Agent", authorWidth, "Author", checkpointWidth, "Checkpoint")
 	fmt.Fprintf(w, "  %s\n", sty.render(sty.dim, strings.Repeat("─", tableWidth)))
 
 	for _, line := range result.Lines {
-		fmt.Fprintf(w, "  %s  %s  %-12s  %-12s  %s\n",
+		fmt.Fprintf(w, "  %s  %s  %-*s  %-*s  %-*s  %s\n",
 			sty.render(sty.dim, fmt.Sprintf("%*d", lineWidth, line.LineNumber)),
 			renderAttributionTag(sty, line.Authorship),
-			stringutil.TruncateRunes(compactAttributionSource(line), sourceWidth, ""),
+			agentWidth,
+			stringutil.TruncateRunes(compactAttributionAgent(line), agentWidth, ""),
+			authorWidth,
+			stringutil.TruncateRunes(shortAuthorName(line.Author), authorWidth, ""),
+			checkpointWidth,
 			stringutil.TruncateRunes(compactAttributionCheckpoint(line), checkpointWidth, ""),
 			renderAttributionContentCompact(sty, line, contentWidth),
 		)
@@ -774,7 +782,7 @@ func renderAttributionBlameLong(w io.Writer, result *fileAttributionResult, line
 		return
 	}
 
-	lineWidth := len(strconv.Itoa(maxAttributionLineNumber(result.Lines)))
+	lineWidth := attributionLineColumnWidth(result.Lines)
 	const checkpointColumnWidth = 21
 	fmt.Fprintf(w, "  %*s  Tag   %-12s  %-18s  %-16s  %-21s  Content\n",
 		lineWidth, "Line", "Agent", "Model", "Author", "Checkpoint/Session")
@@ -812,14 +820,16 @@ func renderAttributionSummary(w io.Writer, sty statusStyles, summary attribution
 	fmt.Fprintf(w, "  %s %s\n\n", sty.render(sty.bold, "Summary:"), strings.Join(parts, sty.render(sty.dim, " · ")))
 }
 
-func compactAttributionSource(line attributionLine) string {
+func compactAttributionAgent(line attributionLine) string {
 	switch line.Authorship {
 	case attributionAI, attributionMixed:
 		return fallbackString(line.Agent, "AI")
 	case attributionUncommitted:
-		return "working tree"
+		return "working"
+	case attributionHuman:
+		return ""
 	default:
-		return fallbackString(shortAuthorName(line.Author), "human")
+		return ""
 	}
 }
 
@@ -1005,6 +1015,10 @@ func maxAttributionLineNumber(lines []attributionLine) int {
 		}
 	}
 	return maxLine
+}
+
+func attributionLineColumnWidth(lines []attributionLine) int {
+	return max(len("Line"), len(strconv.Itoa(maxAttributionLineNumber(lines))))
 }
 
 func attributionTag(authorship attributionAuthorship) string {
