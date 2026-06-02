@@ -208,7 +208,16 @@ func mirrorAdvertisesHead(ctx context.Context, checkURL, token string) (ready bo
 	if err != nil {
 		return false, 0
 	}
-	defer func() { _ = resp.Body.Close() }()
+	// Drain before close so the transport can return the connection to the
+	// idle pool and reuse the TLS session on the next tick. Go only recycles
+	// a conn whose body was read to EOF before Close; the Decode error
+	// returns below leave the body partially read, so without this drain the
+	// pool is defeated and every probe pays a fresh TLS handshake. Bound the
+	// drain by maxProbeBytes to match the read cap above.
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxProbeBytes)) //nolint:errcheck // best-effort drain to enable conn reuse; copy errors are irrelevant
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return false, resp.StatusCode
 	}
