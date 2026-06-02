@@ -46,8 +46,9 @@ type Context struct {
 
 // File is the on-disk shape of contexts.json.
 type File struct {
-	// CurrentContext is the active login; the default identity for cluster
-	// operations and direct CLI commands. Empty until the first login.
+	// CurrentContext is the active login; preferred identity for cluster
+	// operations (used when its CoreURL is eligible for the target cluster)
+	// and the default for direct CLI commands. Empty until the first login.
 	CurrentContext string `json:"current_context,omitempty"`
 	// Contexts is the list of stored credentials. Order is preserved on
 	// disk so list output stays stable across saves.
