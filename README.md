@@ -258,7 +258,9 @@ go test -tags=integration ./cmd/entire/cli/integration_test -run TestLogin
 `entire blame <file>` and `entire why <file>:<line>` help review AI-assisted
 code after an agent edits a repo. Instead of only seeing that `auth.py`
 changed, you can see which lines came from an Entire checkpoint and jump from a
-specific line back to the prompt, session, and checkpoint that created it.
+specific line back to the prompt, session, and checkpoint that created it. Use
+`entire blame <file> --long` for the full agent, model, author, and session
+table.
 
 ### `entire enable` Flags
 

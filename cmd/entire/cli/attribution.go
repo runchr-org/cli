@@ -125,6 +125,7 @@ type attributionResolver struct {
 func newBlameCmd() *cobra.Command {
 	var lineFlag string
 	var jsonFlag bool
+	var longFlag bool
 
 	cmd := &cobra.Command{
 		Use:   "blame <file>",
@@ -132,12 +133,17 @@ func newBlameCmd() *cobra.Command {
 		Long:  "Show git-blame-style line attribution enriched with Entire checkpoint metadata.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAttributionBlame(cmd.Context(), cmd.OutOrStdout(), args[0], lineFlag, jsonFlag)
+			return runAttributionBlame(cmd.Context(), cmd.OutOrStdout(), args[0], attributionBlameOptions{
+				LineFlag: lineFlag,
+				JSON:     jsonFlag,
+				Long:     longFlag,
+			})
 		},
 	}
 
 	cmd.Flags().StringVar(&lineFlag, "line", "", "Only show a line or range, for example 12 or 12-20")
 	cmd.Flags().BoolVar(&jsonFlag, "json", false, "Output attribution as JSON")
+	cmd.Flags().BoolVar(&longFlag, "long", false, "Show the full attribution table with agent, model, author, and session columns")
 	return cmd
 }
 
@@ -158,10 +164,16 @@ func newWhyCmd() *cobra.Command {
 	return cmd
 }
 
-func runAttributionBlame(ctx context.Context, w io.Writer, file, lineFlag string, jsonOutput bool) error {
+type attributionBlameOptions struct {
+	LineFlag string
+	JSON     bool
+	Long     bool
+}
+
+func runAttributionBlame(ctx context.Context, w io.Writer, file string, opts attributionBlameOptions) error {
 	var lineRange *attributionLineRange
-	if lineFlag != "" {
-		parsed, err := parseAttributionLineRange(lineFlag)
+	if opts.LineFlag != "" {
+		parsed, err := parseAttributionLineRange(opts.LineFlag)
 		if err != nil {
 			return err
 		}
@@ -178,10 +190,10 @@ func runAttributionBlame(ctx context.Context, w io.Writer, file, lineFlag string
 		result.Checkpoints = checkpointContextsForLines(result.Lines, result.Checkpoints)
 	}
 
-	if jsonOutput {
+	if opts.JSON {
 		return writeJSON(w, result)
 	}
-	renderAttributionBlame(w, result, lineFlag)
+	renderAttributionBlame(w, result, opts.LineFlag, opts.Long)
 	return nil
 }
 
@@ -711,7 +723,49 @@ func summarizeAttributionLines(lines []attributionLine) attributionSummary {
 	return summary
 }
 
-func renderAttributionBlame(w io.Writer, result *fileAttributionResult, lineFlag string) {
+func renderAttributionBlame(w io.Writer, result *fileAttributionResult, lineFlag string, longOutput bool) {
+	if longOutput {
+		renderAttributionBlameLong(w, result, lineFlag)
+		return
+	}
+	renderAttributionBlameCompact(w, result, lineFlag)
+}
+
+func renderAttributionBlameCompact(w io.Writer, result *fileAttributionResult, lineFlag string) {
+	sty := newStatusStyles(w)
+	fmt.Fprintf(w, "\n  %s\n\n", sty.render(sty.bold, result.File))
+
+	if len(result.Lines) == 0 {
+		fmt.Fprintln(w, sty.render(sty.dim, "  No lines to display."))
+		return
+	}
+
+	lineWidth := len(strconv.Itoa(maxAttributionLineNumber(result.Lines)))
+	const sourceWidth = 12
+	const checkpointWidth = 12
+	contentWidth := sty.width - 2 - (lineWidth + 38)
+	if contentWidth < 24 {
+		contentWidth = 24
+	}
+	tableWidth := lineWidth + 38 + contentWidth
+
+	fmt.Fprintf(w, "  %*s  Tag   %-12s  %-12s  Content\n", lineWidth, "Line", "Source", "Checkpoint")
+	fmt.Fprintf(w, "  %s\n", sty.render(sty.dim, strings.Repeat("─", tableWidth)))
+
+	for _, line := range result.Lines {
+		fmt.Fprintf(w, "  %s  %s  %-12s  %-12s  %s\n",
+			sty.render(sty.dim, fmt.Sprintf("%*d", lineWidth, line.LineNumber)),
+			renderAttributionTag(sty, line.Authorship),
+			stringutil.TruncateRunes(compactAttributionSource(line), sourceWidth, ""),
+			stringutil.TruncateRunes(compactAttributionCheckpoint(line), checkpointWidth, ""),
+			renderAttributionContentCompact(sty, line, contentWidth),
+		)
+	}
+
+	renderAttributionSummary(w, sty, result.Summary, lineFlag)
+}
+
+func renderAttributionBlameLong(w io.Writer, result *fileAttributionResult, lineFlag string) {
 	sty := newStatusStyles(w)
 	fmt.Fprintf(w, "\n  %s\n\n", sty.render(sty.bold, result.File))
 
@@ -738,8 +792,11 @@ func renderAttributionBlame(w io.Writer, result *fileAttributionResult, lineFlag
 		)
 	}
 
-	summary := result.Summary
 	fmt.Fprintf(w, "  %s\n", sty.render(sty.dim, strings.Repeat("─", lineWidth+92)))
+	renderAttributionSummary(w, sty, result.Summary, lineFlag)
+}
+
+func renderAttributionSummary(w io.Writer, sty statusStyles, summary attributionSummary, lineFlag string) {
 	parts := []string{
 		sty.render(sty.green, fmt.Sprintf("AI: %d (%d%%)", summary.AILines, summary.AIPercentage)),
 		fmt.Sprintf("Human: %d (%d%%)", summary.HumanLines, summary.HumanPercentage),
@@ -753,6 +810,31 @@ func renderAttributionBlame(w io.Writer, result *fileAttributionResult, lineFlag
 		return
 	}
 	fmt.Fprintf(w, "  %s %s\n\n", sty.render(sty.bold, "Summary:"), strings.Join(parts, sty.render(sty.dim, " · ")))
+}
+
+func compactAttributionSource(line attributionLine) string {
+	switch line.Authorship {
+	case attributionAI, attributionMixed:
+		return fallbackString(line.Agent, "AI")
+	case attributionUncommitted:
+		return "working tree"
+	default:
+		return fallbackString(shortAuthorName(line.Author), "human")
+	}
+}
+
+func compactAttributionCheckpoint(line attributionLine) string {
+	if line.CheckpointID != "" {
+		return line.CheckpointID
+	}
+	if line.Authorship == attributionUncommitted {
+		return "uncommitted"
+	}
+	return ""
+}
+
+func renderAttributionContentCompact(sty statusStyles, line attributionLine, width int) string {
+	return renderByAuthorship(sty, line.Authorship, stringutil.TruncateRunes(line.Content, width, "..."))
 }
 
 func renderAttributionLineWhy(w io.Writer, file string, line attributionLine) {

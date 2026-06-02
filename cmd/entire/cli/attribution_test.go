@@ -108,14 +108,49 @@ func TestAttributionBlameShowsHumanAndAICheckpointLines(t *testing.T) {
 	testutil.GitCommit(t, repoRoot, trailers.FormatCheckpoint("agent update", checkpointid.MustCheckpointID("a1b2c3d4e5f6")))
 
 	var out bytes.Buffer
-	require.NoError(t, runAttributionBlame(context.Background(), &out, "auth.py", "", false))
+	require.NoError(t, runAttributionBlame(context.Background(), &out, "auth.py", attributionBlameOptions{}))
 	text := out.String()
 	require.Contains(t, text, "[HU]")
 	require.Contains(t, text, "[AI]")
-	require.Contains(t, text, "claude-sonne")
+	require.Contains(t, text, "Source")
+	require.Contains(t, text, "Checkpoint")
+	require.NotContains(t, text, "Model")
+	require.NotContains(t, text, "Author")
 	require.Contains(t, text, "a1b2c3d4e5f6")
 	require.Contains(t, text, "AI: 1")
 	require.Contains(t, text, "Human: 1")
+}
+
+func TestAttributionBlameLongShowsDetailedColumns(t *testing.T) {
+	repoRoot := newAttributionRepo(t)
+	writeAttributionCheckpoint(t, repoRoot, "a2b2c3d4e5f6", checkpoint.WriteCommittedOptions{
+		SessionID:        "session-ai-12345678",
+		Prompts:          []string{"Add an agent-owned helper."},
+		FilesTouched:     []string{"auth.py"},
+		Agent:            agent.AgentTypeClaudeCode,
+		Model:            "claude-sonnet-test",
+		CheckpointsCount: 1,
+		InitialAttribution: &checkpoint.InitialAttribution{
+			AgentLines:        1,
+			TotalCommitted:    1,
+			TotalLinesChanged: 1,
+			AgentPercentage:   100,
+			MetricVersion:     2,
+		},
+	})
+	testutil.WriteFile(t, repoRoot, "auth.py", "human_line = 1\nai_line = 2\n")
+	testutil.GitAdd(t, repoRoot, "auth.py")
+	testutil.GitCommit(t, repoRoot, trailers.FormatCheckpoint("agent update", checkpointid.MustCheckpointID("a2b2c3d4e5f6")))
+
+	var out bytes.Buffer
+	require.NoError(t, runAttributionBlame(context.Background(), &out, "auth.py", attributionBlameOptions{Long: true}))
+	text := out.String()
+	require.Contains(t, text, "Agent")
+	require.Contains(t, text, "Model")
+	require.Contains(t, text, "Author")
+	require.Contains(t, text, "Checkpoint/Session")
+	require.Contains(t, text, "claude-sonne")
+	require.Contains(t, text, "a2b2c3d4e5f6")
 }
 
 func TestAttributionBlameMarksMixedCheckpoint(t *testing.T) {
@@ -141,7 +176,7 @@ func TestAttributionBlameMarksMixedCheckpoint(t *testing.T) {
 	testutil.GitCommit(t, repoRoot, trailers.FormatCheckpoint("mixed update", checkpointid.MustCheckpointID("b1b2c3d4e5f6")))
 
 	var out bytes.Buffer
-	require.NoError(t, runAttributionBlame(context.Background(), &out, "auth.py", "2", false))
+	require.NoError(t, runAttributionBlame(context.Background(), &out, "auth.py", attributionBlameOptions{LineFlag: "2"}))
 	require.Contains(t, out.String(), "[MX]")
 	require.Contains(t, out.String(), "Mixed: 1")
 }
@@ -183,7 +218,7 @@ func TestAttributionBlameJSONIsStable(t *testing.T) {
 	testutil.GitCommit(t, repoRoot, trailers.FormatCheckpoint("json update", checkpointid.MustCheckpointID("d1b2c3d4e5f6")))
 
 	var out bytes.Buffer
-	require.NoError(t, runAttributionBlame(context.Background(), &out, "auth.py", "", true))
+	require.NoError(t, runAttributionBlame(context.Background(), &out, "auth.py", attributionBlameOptions{JSON: true}))
 	var payload fileAttributionResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &payload))
 	require.Equal(t, "auth.py", payload.File)
@@ -207,7 +242,7 @@ func TestAttributionBlameJSONLineFilterPrunesCheckpoints(t *testing.T) {
 	testutil.GitCommit(t, repoRoot, trailers.FormatCheckpoint("line filter update", checkpointid.MustCheckpointID("e1b2c3d4e5f6")))
 
 	var humanOut bytes.Buffer
-	require.NoError(t, runAttributionBlame(context.Background(), &humanOut, "auth.py", "1", true))
+	require.NoError(t, runAttributionBlame(context.Background(), &humanOut, "auth.py", attributionBlameOptions{LineFlag: "1", JSON: true}))
 	var humanPayload fileAttributionResult
 	require.NoError(t, json.Unmarshal(humanOut.Bytes(), &humanPayload))
 	require.Len(t, humanPayload.Lines, 1)
@@ -215,7 +250,7 @@ func TestAttributionBlameJSONLineFilterPrunesCheckpoints(t *testing.T) {
 	require.Empty(t, humanPayload.Checkpoints)
 
 	var aiOut bytes.Buffer
-	require.NoError(t, runAttributionBlame(context.Background(), &aiOut, "auth.py", "2", true))
+	require.NoError(t, runAttributionBlame(context.Background(), &aiOut, "auth.py", attributionBlameOptions{LineFlag: "2", JSON: true}))
 	var aiPayload fileAttributionResult
 	require.NoError(t, json.Unmarshal(aiOut.Bytes(), &aiPayload))
 	require.Len(t, aiPayload.Lines, 1)
@@ -259,7 +294,7 @@ func TestAttributionBlameMixedUsesFileMatchingCheckpoint(t *testing.T) {
 	testutil.GitCommit(t, repoRoot, formatCheckpointTrailers("squash-style update", "f2b2c3d4e5f6", "f1b2c3d4e5f6"))
 
 	var out bytes.Buffer
-	require.NoError(t, runAttributionBlame(context.Background(), &out, "auth.py", "2", true))
+	require.NoError(t, runAttributionBlame(context.Background(), &out, "auth.py", attributionBlameOptions{LineFlag: "2", JSON: true}))
 	var payload fileAttributionResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &payload))
 	require.Len(t, payload.Lines, 1)
