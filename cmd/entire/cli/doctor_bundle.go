@@ -148,17 +148,13 @@ func writeDoctorBundle(ctx context.Context, repoRoot, outPath string, raw bool) 
 	return nil
 }
 
-// entireRefsReport captures entire-related git refs (v1 metadata branch,
-// v1.1 read mirror, shadow branches, origin tracking) plus the mirror
-// diagnosis. Best-effort: failures are recorded in the report instead of
-// failing the bundle.
+// entireRefsReport captures entire-related git refs plus the mirror diagnosis.
+// Best-effort: failures are recorded in the report, not returned.
 func entireRefsReport(ctx context.Context, repoRoot string) string {
 	var sb strings.Builder
 
-	// Deliberately broad namespace globs rather than the resolved topology
-	// refs: refs/heads/entire covers the metadata branch (paths.
-	// MetadataBranchName) plus shadow/trails branches, and refs/entire covers
-	// the v1.1 mirror (paths.MetadataRefName) and any future custom refs.
+	// Broad globs on purpose: refs/heads/entire also catches shadow/trails
+	// branches, refs/entire catches the v1.1 mirror and future custom refs.
 	cmd := exec.CommandContext(ctx, "git", "for-each-ref", "--format=%(refname) %(objectname)",
 		"refs/heads/entire", "refs/entire", "refs/remotes/origin/entire")
 	cmd.Dir = repoRoot
@@ -179,8 +175,7 @@ func mirrorStatusReportLine(ctx context.Context, repoRoot string) string {
 	if err != nil {
 		return fmt.Sprintf("mirror status: [error: %v]\n", err)
 	}
-	// The bundle may run with a CWD outside repoRoot; scope settings
-	// resolution to this repo before consulting the topology.
+	// Scope settings to repoRoot; the bundle's CWD may be elsewhere.
 	diag, err := strategy.DiagnoseCommittedMetadataMirror(settings.WithWorktreeRoot(ctx, repoRoot), repo)
 	if err != nil {
 		return fmt.Sprintf("mirror status: [error: %v]\n", err)

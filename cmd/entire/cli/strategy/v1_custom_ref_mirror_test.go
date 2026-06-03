@@ -386,7 +386,7 @@ func TestUpdateCombinedAttribution_MirrorsV1CustomRefWhenEnabled(t *testing.T) {
 	assert.Equal(t, v1Hash, got, "custom ref must track v1 after combined-attribution write")
 }
 
-// Not parallel: uses t.Chdir().
+// Not parallel: uses t.Chdir(). Setup returns the expected diagnosis fields.
 func TestDiagnoseCommittedMetadataMirror(t *testing.T) {
 	setMirror := func(t *testing.T, repo *git.Repository, hash plumbing.Hash) {
 		t.Helper()
@@ -464,7 +464,7 @@ func TestDiagnoseCommittedMetadataMirror(t *testing.T) {
 			assert.Equal(t, expected.primary, diag.Primary)
 			assert.Equal(t, expected.mirror, diag.Mirror)
 			assert.Equal(t, expected.status != MirrorNotConfigured, diag.Refs.HasMirror(),
-				"Refs must carry the resolved topology so callers can repair with MirrorCommittedMetadataRef")
+				"Refs must carry the topology for repair")
 
 			mirrorAfter, mirrorExistsAfter := v1CustomRefHash(t, repo)
 			require.Equal(t, mirrorExistedBefore, mirrorExistsAfter, "diagnosis must not create or delete the mirror ref")

@@ -400,8 +400,7 @@ func TestRunSessionsFix_ForceDiscardOutput_Indented(t *testing.T) {
 	}
 }
 
-// setupMirrorCheckRepo creates a repo with one commit and v1.1 settings,
-// chdirs in (cannot t.Parallel), and returns the opened repository.
+// setupMirrorCheckRepo is setupHeadFlagsRepo plus the v1.1 settings opt-in.
 func setupMirrorCheckRepo(t *testing.T) *git.Repository {
 	t.Helper()
 	repo := setupHeadFlagsRepo(t)
@@ -443,8 +442,7 @@ func metadataMirrorHash(t *testing.T, repo *git.Repository) (plumbing.Hash, bool
 	return ref.Hash(), true
 }
 
-// secondCommitInCwd creates a second commit in the current test repo and
-// returns its hash.
+// secondCommitInCwd creates a second commit in the test repo and returns its hash.
 func secondCommitInCwd(t *testing.T, repo *git.Repository) plumbing.Hash {
 	t.Helper()
 	cwd, err := os.Getwd()
@@ -457,122 +455,113 @@ func secondCommitInCwd(t *testing.T, repo *git.Repository) plumbing.Hash {
 	return head.Hash()
 }
 
-// TestCheckCommittedMetadataMirror_SilentWhenNotConfigured — v1-mode repos
-// (no checkpoints_version opt-in) must see no mirror output at all.
-func TestCheckCommittedMetadataMirror_SilentWhenNotConfigured(t *testing.T) {
-	repo := setupHeadFlagsRepo(t) // no v1.1 settings
-	setMetadataV1Branch(t, repo)
+// Not parallel: uses t.Chdir(). Setup returns the expected final mirror state.
+func TestCheckCommittedMetadataMirror(t *testing.T) {
+	tests := []struct {
+		name    string
+		v1Only  bool // skip the v1.1 settings opt-in
+		force   bool
+		setup   func(t *testing.T, repo *git.Repository) (plumbing.Hash, bool)
+		wantOut []string // empty = expect no output at all
+	}{
+		{
+			name:   "silent when not configured",
+			v1Only: true,
+			setup: func(t *testing.T, repo *git.Repository) (plumbing.Hash, bool) {
+				setMetadataV1Branch(t, repo)
+				return plumbing.ZeroHash, false
+			},
+		},
+		{
+			name: "ok",
+			setup: func(t *testing.T, repo *git.Repository) (plumbing.Hash, bool) {
+				v1 := setMetadataV1Branch(t, repo)
+				setMetadataMirrorRef(t, repo, v1)
+				return v1, true
+			},
+			wantOut: []string{"✓ Checkpoint read mirror: OK"},
+		},
+		{
+			name: "ok when no metadata yet",
+			setup: func(_ *testing.T, _ *git.Repository) (plumbing.Hash, bool) {
+				return plumbing.ZeroHash, false
+			},
+			wantOut: []string{"✓ Checkpoint read mirror: OK (no committed metadata yet)"},
+		},
+		{
+			// Warn-only anomaly: even --force must not move or delete the mirror.
+			name:  "warns when mirror outlives v1",
+			force: true,
+			setup: func(t *testing.T, repo *git.Repository) (plumbing.Hash, bool) {
+				head, err := repo.Head()
+				require.NoError(t, err)
+				setMetadataMirrorRef(t, repo, head.Hash())
+				return head.Hash(), true
+			},
+			wantOut: []string{
+				"Checkpoint read mirror: V1 BRANCH MISSING",
+				"git fetch origin entire/checkpoints/v1:entire/checkpoints/v1",
+			},
+		},
+		{
+			name:  "force seeds missing mirror",
+			force: true,
+			setup: func(t *testing.T, repo *git.Repository) (plumbing.Hash, bool) {
+				return setMetadataV1Branch(t, repo), true
+			},
+			wantOut: []string{"Checkpoint read mirror: MISSING", "✓ Fixed"},
+		},
+		{
+			name:  "force advances stale mirror",
+			force: true,
+			setup: func(t *testing.T, repo *git.Repository) (plumbing.Hash, bool) {
+				setMetadataMirrorRef(t, repo, setMetadataV1Branch(t, repo))
+				secondCommitInCwd(t, repo)
+				return setMetadataV1Branch(t, repo), true
+			},
+			wantOut: []string{"Checkpoint read mirror: STALE", "✓ Fixed"},
+		},
+		{
+			name:  "force resets diverged mirror",
+			force: true,
+			setup: func(t *testing.T, repo *git.Repository) (plumbing.Hash, bool) {
+				v1 := setMetadataV1Branch(t, repo)
+				setMetadataMirrorRef(t, repo, secondCommitInCwd(t, repo))
+				return v1, true
+			},
+			wantOut: []string{"Checkpoint read mirror: DIVERGED", "discard", "✓ Fixed"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var repo *git.Repository
+			if tt.v1Only {
+				repo = setupHeadFlagsRepo(t)
+			} else {
+				repo = setupMirrorCheckRepo(t)
+			}
+			wantMirror, wantExists := tt.setup(t, repo)
 
-	cmd, stdout := newTestCmd(t)
-	require.NoError(t, checkCommittedMetadataMirror(cmd, false))
-	assert.Empty(t, stdout.String())
+			cmd, stdout := newTestCmd(t)
+			require.NoError(t, checkCommittedMetadataMirror(cmd, tt.force))
+
+			if len(tt.wantOut) == 0 {
+				assert.Empty(t, stdout.String())
+			}
+			for _, want := range tt.wantOut {
+				assert.Contains(t, stdout.String(), want)
+			}
+
+			gotMirror, gotExists := metadataMirrorHash(t, repo)
+			require.Equal(t, wantExists, gotExists)
+			if wantExists {
+				assert.Equal(t, wantMirror, gotMirror)
+			}
+		})
+	}
 }
 
-func TestCheckCommittedMetadataMirror_OK(t *testing.T) {
-	repo := setupMirrorCheckRepo(t)
-	v1Hash := setMetadataV1Branch(t, repo)
-	setMetadataMirrorRef(t, repo, v1Hash)
-
-	cmd, stdout := newTestCmd(t)
-	require.NoError(t, checkCommittedMetadataMirror(cmd, false))
-	assert.Contains(t, stdout.String(), "✓ Checkpoint read mirror: OK")
-
-	got, ok := metadataMirrorHash(t, repo)
-	require.True(t, ok)
-	assert.Equal(t, v1Hash, got, "an OK check must not move the mirror")
-}
-
-// TestCheckCommittedMetadataMirror_OKNoMetadataYet — a fresh v1.1 repo with
-// no committed metadata at all is healthy, not broken.
-func TestCheckCommittedMetadataMirror_OKNoMetadataYet(t *testing.T) {
-	setupMirrorCheckRepo(t)
-
-	cmd, stdout := newTestCmd(t)
-	require.NoError(t, checkCommittedMetadataMirror(cmd, false))
-	assert.Contains(t, stdout.String(), "✓ Checkpoint read mirror: OK (no committed metadata yet)")
-}
-
-// TestCheckCommittedMetadataMirror_WarnsWhenV1MissingButMirrorExists — the
-// mirror outliving the v1 branch is an anomaly doctor reports but does not
-// auto-fix; restoring v1 is out of scope, so it suggests the fetch command.
-func TestCheckCommittedMetadataMirror_WarnsWhenV1MissingButMirrorExists(t *testing.T) {
-	repo := setupMirrorCheckRepo(t)
-	head, err := repo.Head()
-	require.NoError(t, err)
-	setMetadataMirrorRef(t, repo, head.Hash())
-
-	cmd, stdout := newTestCmd(t)
-	require.NoError(t, checkCommittedMetadataMirror(cmd, true)) // even --force must not "fix" this
-
-	out := stdout.String()
-	assert.Contains(t, out, "Checkpoint read mirror: V1 BRANCH MISSING")
-	assert.Contains(t, out, "git fetch origin entire/checkpoints/v1:entire/checkpoints/v1")
-
-	got, ok := metadataMirrorHash(t, repo)
-	require.True(t, ok, "warn-only state must not delete the mirror")
-	assert.Equal(t, head.Hash(), got, "warn-only state must not move the mirror")
-}
-
-func TestCheckCommittedMetadataMirror_ForceFixesMissing(t *testing.T) {
-	repo := setupMirrorCheckRepo(t)
-	v1Hash := setMetadataV1Branch(t, repo)
-
-	cmd, stdout := newTestCmd(t)
-	require.NoError(t, checkCommittedMetadataMirror(cmd, true))
-
-	out := stdout.String()
-	assert.Contains(t, out, "Checkpoint read mirror: MISSING")
-	assert.Contains(t, out, "✓ Fixed")
-
-	got, ok := metadataMirrorHash(t, repo)
-	require.True(t, ok, "force must seed the missing mirror")
-	assert.Equal(t, v1Hash, got)
-}
-
-func TestCheckCommittedMetadataMirror_ForceFixesStale(t *testing.T) {
-	repo := setupMirrorCheckRepo(t)
-	oldHash := setMetadataV1Branch(t, repo)
-	setMetadataMirrorRef(t, repo, oldHash)
-	secondCommitInCwd(t, repo)
-	newHash := setMetadataV1Branch(t, repo)
-	require.NotEqual(t, oldHash, newHash)
-
-	cmd, stdout := newTestCmd(t)
-	require.NoError(t, checkCommittedMetadataMirror(cmd, true))
-
-	out := stdout.String()
-	assert.Contains(t, out, "Checkpoint read mirror: STALE")
-	assert.Contains(t, out, "✓ Fixed")
-
-	got, ok := metadataMirrorHash(t, repo)
-	require.True(t, ok)
-	assert.Equal(t, newHash, got, "force must advance the stale mirror to the v1 tip")
-}
-
-// TestCheckCommittedMetadataMirror_ForceFixesDiverged — a diverged mirror is
-// repaired by force-pointing it at v1, and the output must say the diverged
-// commits are discarded (v1 is the source of truth).
-func TestCheckCommittedMetadataMirror_ForceFixesDiverged(t *testing.T) {
-	repo := setupMirrorCheckRepo(t)
-	v1Hash := setMetadataV1Branch(t, repo)
-	aheadHash := secondCommitInCwd(t, repo)
-	setMetadataMirrorRef(t, repo, aheadHash)
-
-	cmd, stdout := newTestCmd(t)
-	require.NoError(t, checkCommittedMetadataMirror(cmd, true))
-
-	out := stdout.String()
-	assert.Contains(t, out, "Checkpoint read mirror: DIVERGED")
-	assert.Contains(t, out, "discard")
-	assert.Contains(t, out, "✓ Fixed")
-
-	got, ok := metadataMirrorHash(t, repo)
-	require.True(t, ok)
-	assert.Equal(t, v1Hash, got, "force must reset the diverged mirror to the v1 tip")
-}
-
-// TestRunSessionsFix_IncludesMirrorCheck proves the mirror check is wired into
-// the main doctor flow, not just unit-callable.
+// Proves the mirror check is wired into the main doctor flow.
 func TestRunSessionsFix_IncludesMirrorCheck(t *testing.T) {
 	repo := setupMirrorCheckRepo(t)
 	v1Hash := setMetadataV1Branch(t, repo)

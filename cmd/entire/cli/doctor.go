@@ -96,8 +96,8 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 		finalErr = NewSilentError(fmt.Errorf("metadata check failed: %w", metadataErr))
 	}
 
-	// Check 2: v1.1 committed-read mirror drift (runs after check 1 because
-	// reconciliation rewrites v1 and re-mirrors; this catches residual drift).
+	// Check 2: v1.1 read-mirror drift (after check 1: reconciliation rewrites
+	// v1 and re-mirrors).
 	if mirrorErr := checkCommittedMetadataMirror(cmd, force); mirrorErr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Error: checkpoint read mirror check failed: %v\n", mirrorErr)
 		if finalErr == nil {
@@ -386,10 +386,9 @@ func checkDisconnectedMetadata(cmd *cobra.Command, force bool) error {
 	return nil
 }
 
-// checkCommittedMetadataMirror detects and optionally repairs a v1.1
-// committed-read mirror that drifted from the v1 metadata branch. Read paths
-// use the mirror as-is (no read-time self-repair), so doctor is the repair
-// tool. Silent when checkpoints_version doesn't configure a mirror.
+// checkCommittedMetadataMirror detects and optionally repairs v1.1 read-mirror
+// drift. Read paths use the mirror as-is, so doctor is the repair tool.
+// Silent when the topology has no mirror.
 func checkCommittedMetadataMirror(cmd *cobra.Command, force bool) error {
 	ctx := cmd.Context()
 	repo, err := openRepository(ctx)
@@ -457,9 +456,8 @@ func checkCommittedMetadataMirror(cmd *cobra.Command, force bool) error {
 	return nil
 }
 
-// confirmDoctorFix asks a yes/no fix confirmation shared by doctor checks.
-// Returns false with no error when the user declines (prints "-> Skipped")
-// or aborts the prompt.
+// confirmDoctorFix prompts to apply a doctor fix. Declining (which prints
+// "-> Skipped") and aborting both return false with no error.
 func confirmDoctorFix(w io.Writer, title string) (bool, error) {
 	var confirmed bool
 	form := NewAccessibleForm(

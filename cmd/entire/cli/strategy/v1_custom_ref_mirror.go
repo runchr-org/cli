@@ -33,8 +33,7 @@ const (
 	MirrorPrimaryMissing                     // mirror exists but the primary ref it mirrors is gone
 )
 
-// String returns the status name; doctor and bundle output derive their
-// labels from here so the two surfaces cannot drift.
+// String returns the status label shared by doctor and bundle output.
 func (s MirrorStatus) String() string {
 	switch s {
 	case MirrorNotConfigured:
@@ -56,8 +55,7 @@ func (s MirrorStatus) String() string {
 	}
 }
 
-// MirrorDiagnosis reports the mirror's state plus the resolved topology so
-// callers can repair with MirrorCommittedMetadataRef.
+// MirrorDiagnosis is the mirror's state plus the resolved topology for repair.
 type MirrorDiagnosis struct {
 	Status  MirrorStatus
 	Refs    checkpoint.CommittedRefs
@@ -66,10 +64,7 @@ type MirrorDiagnosis struct {
 }
 
 // DiagnoseCommittedMetadataMirror classifies the mirror ref against the local
-// primary metadata ref. Read-only: it never creates, advances, or deletes
-// refs — repair is the caller's decision (e.g. `entire doctor`). Diagnosis is
-// against the local primary only; a remote-tracking ref ahead of the local
-// primary is an entire-managed fetch concern, not a mirror one.
+// primary metadata ref. Read-only; repair is the caller's decision.
 func DiagnoseCommittedMetadataMirror(ctx context.Context, repo *git.Repository) (MirrorDiagnosis, error) {
 	refs := checkpoint.ResolveCommittedRefs(ctx)
 	diag := MirrorDiagnosis{Status: MirrorNotConfigured, Refs: refs}

@@ -76,9 +76,8 @@ func TestWriteDoctorBundle_ContainsExpectedEntries(t *testing.T) {
 	}
 }
 
-// TestWriteDoctorBundle_CapturesEntireRefs — the bundle must record entire's
-// git refs (v1 branch, v1.1 mirror, shadow branches) plus the mirror
-// diagnosis so support can debug v1.1 read issues from a bundle alone.
+// The bundle must record entire's git refs and the mirror diagnosis so
+// support can debug v1.1 read issues from a bundle alone.
 func TestWriteDoctorBundle_CapturesEntireRefs(t *testing.T) {
 	t.Parallel()
 
