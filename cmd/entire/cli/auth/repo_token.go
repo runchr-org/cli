@@ -12,6 +12,16 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/api"
 )
 
+// ErrRepoTargetUnknown reports that the cluster's STS refused the exchange
+// with RFC 8693 `invalid_target`: it has no servable mirror at the
+// requested audience. The placement row may well exist but be suspended —
+// the data plane's auth gate deliberately hides suspended mirrors behind
+// invalid_target rather than disclosing their state (an enumeration guard;
+// see entiredb's validateMirrorRepoExchange). Callers that already know the
+// mirror exists (e.g. the create flow's clone probe) use this to render an
+// actionable message instead of the raw OAuth error.
+var ErrRepoTargetUnknown = errors.New("cluster has no servable mirror at this audience")
+
 // repoExchangeTransportForTest, when non-nil, is used as the sts.Client
 // transport by RepoScopedToken instead of the default. Test-only seam so
 // the wire form (audience / scope / client_id) can be asserted without a
@@ -105,7 +115,25 @@ func RepoScopedToken(ctx context.Context, clusterBaseURL, repoSlug, action strin
 		Extra: url.Values{"client_id": {provider.ClientID}},
 	})
 	if err != nil {
+		if isInvalidTarget(err) {
+			// Preserve the verbatim STS text (second %w) so a caller that
+			// doesn't recognise the sentinel still sees the original code +
+			// description.
+			return "", fmt.Errorf("repo-scoped token exchange: %w: %w", ErrRepoTargetUnknown, err)
+		}
 		return "", fmt.Errorf("repo-scoped token exchange: %w", err)
 	}
 	return set.AccessToken, nil
+}
+
+// isInvalidTarget reports whether err is an STS token-exchange failure
+// carrying the RFC 8693 `invalid_target` error code. auth-go's sts package
+// renders the OAuth error into the message as
+// "token exchange: status <n>: invalid_target[: <desc>]" (sts.readAPIError)
+// without a typed code we could errors.As on, so we match the code token in
+// the rendered string. The code alphabet is constrained to [a-z_] and the
+// server's descriptions don't contain the token, so the substring match
+// won't false-positive on a description.
+func isInvalidTarget(err error) bool {
+	return strings.Contains(err.Error(), "invalid_target")
 }
