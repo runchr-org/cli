@@ -763,7 +763,10 @@ func renderAttributionBlame(w io.Writer, result *fileAttributionResult, lineFlag
 	renderAttributionBlameCompact(w, result, lineFlag)
 }
 
-func renderAttributionBlameCompact(w io.Writer, result *fileAttributionResult, lineFlag string) {
+// renderAttributionBlameTable renders the scaffolding shared by every blame
+// table — the file header, the empty-file short-circuit, and the trailing
+// summary — and delegates the column layout to body.
+func renderAttributionBlameTable(w io.Writer, result *fileAttributionResult, lineFlag string, body func(statusStyles)) {
 	sty := newStatusStyles(w)
 	fmt.Fprintf(w, "\n  %s\n\n", sty.render(sty.bold, result.File))
 
@@ -772,67 +775,65 @@ func renderAttributionBlameCompact(w io.Writer, result *fileAttributionResult, l
 		return
 	}
 
-	lineWidth := attributionLineColumnWidth(result.Lines)
-	const agentWidth = 6
-	const authorWidth = 6
-	const checkpointWidth = 12
-	const minContentWidth = 12
-	fixedWidth := 2 + lineWidth + 2 + len("[AI]") + 2 + agentWidth + 2 + authorWidth + 2 + checkpointWidth + 2
-	contentWidth := sty.width - fixedWidth
-	if contentWidth < minContentWidth {
-		contentWidth = minContentWidth
-	}
-	tableWidth := fixedWidth + contentWidth - 2
-
-	fmt.Fprintf(w, "  %*s  Tag   %-*s  %-*s  %-*s  Content\n", lineWidth, "Line", agentWidth, "Agent", authorWidth, "Author", checkpointWidth, "Checkpoint")
-	fmt.Fprintf(w, "  %s\n", sty.render(sty.dim, strings.Repeat("─", tableWidth)))
-
-	for _, line := range result.Lines {
-		fmt.Fprintf(w, "  %s  %s  %-*s  %-*s  %-*s  %s\n",
-			sty.render(sty.dim, fmt.Sprintf("%*d", lineWidth, line.LineNumber)),
-			renderAttributionTag(sty, line.Authorship),
-			agentWidth,
-			stringutil.TruncateRunes(compactAttributionAgent(line), agentWidth, ""),
-			authorWidth,
-			stringutil.TruncateRunes(shortAuthorName(line.Author), authorWidth, ""),
-			checkpointWidth,
-			stringutil.TruncateRunes(compactAttributionCheckpoint(line), checkpointWidth, ""),
-			renderAttributionContentCompact(sty, line, contentWidth),
-		)
-	}
-
+	body(sty)
 	renderAttributionSummary(w, sty, result.Summary, lineFlag)
 }
 
+func renderAttributionBlameCompact(w io.Writer, result *fileAttributionResult, lineFlag string) {
+	renderAttributionBlameTable(w, result, lineFlag, func(sty statusStyles) {
+		lineWidth := attributionLineColumnWidth(result.Lines)
+		const agentWidth = 6
+		const authorWidth = 6
+		const checkpointWidth = 12
+		const minContentWidth = 12
+		fixedWidth := 2 + lineWidth + 2 + len("[AI]") + 2 + agentWidth + 2 + authorWidth + 2 + checkpointWidth + 2
+		contentWidth := sty.width - fixedWidth
+		if contentWidth < minContentWidth {
+			contentWidth = minContentWidth
+		}
+		tableWidth := fixedWidth + contentWidth - 2
+
+		fmt.Fprintf(w, "  %*s  Tag   %-*s  %-*s  %-*s  Content\n", lineWidth, "Line", agentWidth, "Agent", authorWidth, "Author", checkpointWidth, "Checkpoint")
+		fmt.Fprintf(w, "  %s\n", sty.render(sty.dim, strings.Repeat("─", tableWidth)))
+
+		for _, line := range result.Lines {
+			fmt.Fprintf(w, "  %s  %s  %-*s  %-*s  %-*s  %s\n",
+				sty.render(sty.dim, fmt.Sprintf("%*d", lineWidth, line.LineNumber)),
+				renderAttributionTag(sty, line.Authorship),
+				agentWidth,
+				stringutil.TruncateRunes(compactAttributionAgent(line), agentWidth, ""),
+				authorWidth,
+				stringutil.TruncateRunes(shortAuthorName(line.Author), authorWidth, ""),
+				checkpointWidth,
+				stringutil.TruncateRunes(compactAttributionCheckpoint(line), checkpointWidth, ""),
+				renderAttributionContentCompact(sty, line, contentWidth),
+			)
+		}
+	})
+}
+
 func renderAttributionBlameLong(w io.Writer, result *fileAttributionResult, lineFlag string) {
-	sty := newStatusStyles(w)
-	fmt.Fprintf(w, "\n  %s\n\n", sty.render(sty.bold, result.File))
+	renderAttributionBlameTable(w, result, lineFlag, func(sty statusStyles) {
+		lineWidth := attributionLineColumnWidth(result.Lines)
+		const checkpointColumnWidth = 21
+		fmt.Fprintf(w, "  %*s  Tag   %-12s  %-18s  %-16s  %-21s  Content\n",
+			lineWidth, "Line", "Agent", "Model", "Author", "Checkpoint/Session")
+		fmt.Fprintf(w, "  %s\n", sty.render(sty.dim, strings.Repeat("─", lineWidth+92)))
 
-	if len(result.Lines) == 0 {
-		fmt.Fprintln(w, sty.render(sty.dim, "  No lines to display."))
-		return
-	}
+		for _, line := range result.Lines {
+			fmt.Fprintf(w, "  %s  %s  %-12s  %-18s  %-16s  %-21s  %s\n",
+				sty.render(sty.dim, fmt.Sprintf("%*d", lineWidth, line.LineNumber)),
+				renderAttributionTag(sty, line.Authorship),
+				stringutil.TruncateRunes(line.Agent, 12, ""),
+				stringutil.TruncateRunes(line.Model, 18, ""),
+				stringutil.TruncateRunes(shortAuthorName(line.Author), 16, ""),
+				stringutil.TruncateRunes(shortCheckpointSession(line), checkpointColumnWidth, ""),
+				renderAttributionContent(sty, line),
+			)
+		}
 
-	lineWidth := attributionLineColumnWidth(result.Lines)
-	const checkpointColumnWidth = 21
-	fmt.Fprintf(w, "  %*s  Tag   %-12s  %-18s  %-16s  %-21s  Content\n",
-		lineWidth, "Line", "Agent", "Model", "Author", "Checkpoint/Session")
-	fmt.Fprintf(w, "  %s\n", sty.render(sty.dim, strings.Repeat("─", lineWidth+92)))
-
-	for _, line := range result.Lines {
-		fmt.Fprintf(w, "  %s  %s  %-12s  %-18s  %-16s  %-21s  %s\n",
-			sty.render(sty.dim, fmt.Sprintf("%*d", lineWidth, line.LineNumber)),
-			renderAttributionTag(sty, line.Authorship),
-			stringutil.TruncateRunes(line.Agent, 12, ""),
-			stringutil.TruncateRunes(line.Model, 18, ""),
-			stringutil.TruncateRunes(shortAuthorName(line.Author), 16, ""),
-			stringutil.TruncateRunes(shortCheckpointSession(line), checkpointColumnWidth, ""),
-			renderAttributionContent(sty, line),
-		)
-	}
-
-	fmt.Fprintf(w, "  %s\n", sty.render(sty.dim, strings.Repeat("─", lineWidth+92)))
-	renderAttributionSummary(w, sty, result.Summary, lineFlag)
+		fmt.Fprintf(w, "  %s\n", sty.render(sty.dim, strings.Repeat("─", lineWidth+92)))
+	})
 }
 
 func renderAttributionSummary(w io.Writer, sty statusStyles, summary attributionSummary, lineFlag string) {
