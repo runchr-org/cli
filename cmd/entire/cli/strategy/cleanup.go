@@ -142,7 +142,7 @@ func DeleteShadowBranches(ctx context.Context, branches []string) (deleted []str
 
 // ListOrphanedSessionStates returns session state files that are orphaned.
 // A session state is orphaned if:
-//   - No checkpoints on entire/checkpoints/v1 reference this session ID
+//   - No checkpoints on the configured committed read ref reference this session ID
 //   - No shadow branch exists for the session's base commit
 //
 // This is strategy-agnostic as session states are shared by all strategies.
@@ -168,7 +168,7 @@ func ListOrphanedSessionStates(ctx context.Context) ([]CleanupItem, error) {
 		return []CleanupItem{}, nil
 	}
 
-	// Get all checkpoints to find which sessions have checkpoints
+	// Get all committed checkpoints from the configured read ref to find which sessions have checkpoints
 	cpStore := checkpoint.NewCommittedReadStore(ctx, repo)
 
 	sessionsWithCheckpoints := make(map[string]bool)
@@ -196,7 +196,7 @@ func ListOrphanedSessionStates(ctx context.Context) ([]CleanupItem, error) {
 			continue
 		}
 
-		// Check if session has checkpoints on entire/checkpoints/v1
+		// Check if session has checkpoints in committed checkpoint storage
 		hasCheckpoints := sessionsWithCheckpoints[state.SessionID]
 
 		// Check if shadow branch exists for this session's base commit and worktree
