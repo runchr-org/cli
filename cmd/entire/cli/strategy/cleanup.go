@@ -175,7 +175,13 @@ func ListOrphanedSessionStates(ctx context.Context) ([]CleanupItem, error) {
 	checkpoints, listErr := cpStore.ListCommitted(ctx)
 	if listErr == nil {
 		for _, cp := range checkpoints {
+			// cp.SessionID is the most-recent session in a multi-session checkpoint;
+			// cp.SessionIDs lists every session that contributed. Track all of them so
+			// archived sessions of condensed checkpoints aren't flagged as orphaned.
 			sessionsWithCheckpoints[cp.SessionID] = true
+			for _, sid := range cp.SessionIDs {
+				sessionsWithCheckpoints[sid] = true
+			}
 		}
 	}
 
