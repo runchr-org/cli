@@ -216,8 +216,13 @@ remotes. When `strategy_options.checkpoints_version` is `"1.1"`, committed reads
 resolve against `refs/entire/checkpoints/v1.1` instead.
 
 The v1.1 ref is a local-only mirror. It lives outside `refs/heads/`, is never
-pushed, and does not appear in normal branch listings. Strategy write paths and
-active v1 fetch/sync paths update it after they advance `entire/checkpoints/v1`.
+pushed, and does not appear in normal branch listings. Entire-managed v1 write
+and fetch paths advance the mirror best-effort after they advance
+`entire/checkpoints/v1`; mirror failures are logged but never fail the primary
+operation. The resume bootstrap that promotes local v1 from origin's
+remote-tracking ref is the deliberate exception — it does not mirror and is
+skipped entirely in v1.1 mode.
+
 Read paths do not create, repair, or advance the mirror before use; they read
 the configured committed-read ref as-is.
 
