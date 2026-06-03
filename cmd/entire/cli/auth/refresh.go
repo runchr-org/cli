@@ -52,7 +52,14 @@ func (s contextTokenStore) LoadTokens(string) (tokens.TokenSet, error) {
 		return tokens.TokenSet{}, fmt.Errorf("read access token: %w", err)
 	}
 	access, expiresAt := tokenstore.DecodeTokenWithExpiration(enc)
-	refresh, _ := tokenstore.Get(tokenstore.RefreshService(s.service), s.handle) //nolint:errcheck // an absent refresh token is fine — treated as no-refresh
+	// A missing refresh slot is fine (login predating offline_access) — treat
+	// it as no-refresh. Any other store error must surface, not be swallowed:
+	// dropping it would silently discard a valid refresh token and force a
+	// re-login on what was really a transient keyring/file-store failure.
+	refresh, err := tokenstore.Get(tokenstore.RefreshService(s.service), s.handle)
+	if err != nil && !errors.Is(err, tokenstore.ErrNotFound) {
+		return tokens.TokenSet{}, fmt.Errorf("read refresh token: %w", err)
+	}
 	return tokens.TokenSet{
 		AccessToken:  access,
 		RefreshToken: refresh,

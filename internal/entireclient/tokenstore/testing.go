@@ -33,10 +33,21 @@ func UseFileBackendForTesting(path string) func() {
 // paths (e.g. the refresh-then-access ordering in contextTokenStore) without
 // exposing the unexported store interface. Returns a cleanup function.
 func UseFailingBackendForTesting(path string, failSet func(service, user string) bool) func() {
+	return installFaultStore(faultStore{inner: &fileStore{path: path}, failSet: failSet})
+}
+
+// UseFailingGetBackendForTesting is the read-side analogue: Get returns an
+// error for any (service, user) pair where failGet reports true. Used to test
+// that callers surface a real store failure rather than swallowing it.
+func UseFailingGetBackendForTesting(path string, failGet func(service, user string) bool) func() {
+	return installFaultStore(faultStore{inner: &fileStore{path: path}, failGet: failGet})
+}
+
+func installFaultStore(fs faultStore) func() {
 	backendMu.Lock()
 	prevBackend := backend
 	prevResolved := resolved
-	backend = faultStore{inner: &fileStore{path: path}, failSet: failSet}
+	backend = fs
 	resolved = true
 	backendMu.Unlock()
 
@@ -51,9 +62,13 @@ func UseFailingBackendForTesting(path string, failSet func(service, user string)
 type faultStore struct {
 	inner   store
 	failSet func(service, user string) bool
+	failGet func(service, user string) bool
 }
 
 func (f faultStore) Get(service, user string) (string, error) {
+	if f.failGet != nil && f.failGet(service, user) {
+		return "", fmt.Errorf("injected Get failure for %s/%s", service, user)
+	}
 	//nolint:wrapcheck // thin test wrapper; callers handle errors
 	return f.inner.Get(service, user)
 }

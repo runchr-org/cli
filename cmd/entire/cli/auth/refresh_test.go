@@ -18,11 +18,15 @@ import (
 	"github.com/entireio/cli/internal/entireclient/tokenstore"
 )
 
+// testCoreService is the keychain access-token service used across the
+// contextTokenStore tests (paired refresh slot is RefreshService(it)).
+const testCoreService = "entire-core:https://core.example"
+
 func TestContextTokenStore_RoundTrip(t *testing.T) {
 	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
 	t.Cleanup(restore)
 
-	st := contextTokenStore{service: "entire-core:https://core.example", handle: "alice"}
+	st := contextTokenStore{service: testCoreService, handle: "alice"}
 
 	// Missing → ErrNotFound.
 	if _, err := st.LoadTokens(""); !errors.Is(err, authtokenstore.ErrNotFound) {
@@ -57,6 +61,32 @@ func TestContextTokenStore_RoundTrip(t *testing.T) {
 	}
 	if r, _ := tokenstore.Get(tokenstore.RefreshService(st.service), st.handle); r != "" { //nolint:errcheck // read-back; only the value matters here
 		t.Fatalf("refresh slot survived delete: %q", r)
+	}
+}
+
+// A non-NotFound failure reading the refresh slot must surface, not be
+// swallowed — swallowing would discard a valid refresh token and force a
+// re-login on a transient keyring/file-store hiccup.
+func TestContextTokenStore_LoadTokens_RefreshReadErrorSurfaces(t *testing.T) {
+	svc := testCoreService
+
+	// Seed a valid access token through a clean backend.
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	seedRestore := tokenstore.UseFileBackendForTesting(path)
+	access := makeJWT(t, fmt.Sprintf(`{"iss":"https://core.example","handle":"alice","exp":%d}`, time.Now().Add(time.Hour).Unix()))
+	if err := tokenstore.Set(svc, "alice", tokenstore.EncodeTokenWithExpiration(access, 3600)); err != nil {
+		t.Fatalf("seed access: %v", err)
+	}
+	seedRestore()
+
+	// Fail only the refresh-slot read; the access read still succeeds.
+	failRefreshGet := func(service, _ string) bool { return service == tokenstore.RefreshService(svc) }
+	restore := tokenstore.UseFailingGetBackendForTesting(path, failRefreshGet)
+	t.Cleanup(restore)
+
+	st := contextTokenStore{service: svc, handle: "alice"}
+	if _, err := st.LoadTokens(""); err == nil {
+		t.Fatal("LoadTokens: want error when the refresh-slot read fails, got nil")
 	}
 }
 
@@ -189,7 +219,7 @@ func TestNewRefreshingLoginProvider_RefreshesAndRotates(t *testing.T) {
 // re-login. The store persists refresh-first to invert both failure modes.
 func TestContextTokenStore_SaveTokens_RefreshFirstOrdering(t *testing.T) {
 	t.Run("refresh write fails: access slot untouched", func(t *testing.T) {
-		svc := "entire-core:https://core.example"
+		svc := testCoreService
 		path := filepath.Join(t.TempDir(), "tokens.json")
 
 		// Seed an existing good pair through a clean backend first — the fault
@@ -224,7 +254,7 @@ func TestContextTokenStore_SaveTokens_RefreshFirstOrdering(t *testing.T) {
 	})
 
 	t.Run("access write fails: refresh slot already advanced (self-heals)", func(t *testing.T) {
-		svc := "entire-core:https://core.example"
+		svc := testCoreService
 		failAccess := func(service, _ string) bool { return service == svc }
 		restore := tokenstore.UseFailingBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"), failAccess)
 		t.Cleanup(restore)
