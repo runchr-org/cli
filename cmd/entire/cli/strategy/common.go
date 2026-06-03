@@ -760,22 +760,19 @@ func decodeCheckpointInfo(
 	return &metadata, nil
 }
 
-// GetMetadataBranchTree returns the tree object for the entire/checkpoints/v1 branch.
-func GetMetadataBranchTree(repo *git.Repository) (*object.Tree, error) {
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
-	ref, err := repo.Reference(refName, true)
+// GetMetadataRefTree returns the tree object at the given committed-metadata ref.
+func GetMetadataRefTree(repo *git.Repository, ref plumbing.ReferenceName) (*object.Tree, error) {
+	resolvedRef, err := repo.Reference(ref, true)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get metadata branch reference: %w", err)
+		return nil, fmt.Errorf("read ref %s: %w", ref, err)
 	}
-
-	commit, err := repo.CommitObject(ref.Hash())
+	commit, err := repo.CommitObject(resolvedRef.Hash())
 	if err != nil {
-		return nil, fmt.Errorf("failed to get metadata branch commit: %w", err)
+		return nil, fmt.Errorf("read commit at %s: %w", ref, err)
 	}
-
 	tree, err := commit.Tree()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get metadata branch tree: %w", err)
+		return nil, fmt.Errorf("read tree at %s: %w", ref, err)
 	}
 	return tree, nil
 }
