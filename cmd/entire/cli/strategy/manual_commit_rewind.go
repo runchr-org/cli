@@ -125,11 +125,11 @@ func (s *ManualCommitStrategy) GetRewindPoints(ctx context.Context, limit int) (
 }
 
 // GetLogsOnlyRewindPoints finds commits in the current branch's history that have
-// condensed session logs on the entire/checkpoints/v1 branch. These are commits that
+// condensed session logs in committed checkpoint storage. These are commits that
 // were created with session data but the shadow branch has been condensed.
 //
 // The function works by:
-// 1. Getting all checkpoints from the entire/checkpoints/v1 branch
+// 1. Getting all checkpoints from committed checkpoint storage
 // 2. Building a map of checkpoint ID -> checkpoint info
 // 3. Scanning the current branch history for commits with Entire-Checkpoint trailers
 // 4. Matching by checkpoint ID (stable across amend/rebase)
@@ -140,7 +140,7 @@ func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limi
 	}
 	defer repo.Close()
 
-	// Get all checkpoints from entire/checkpoints/v1 branch
+	// Get all checkpoints from committed checkpoint storage
 	checkpoints, err := s.listCheckpoints(ctx)
 	if err != nil {
 		// No checkpoints yet is fine
@@ -160,7 +160,7 @@ func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limi
 		}
 	}
 
-	// Get metadata branch tree for reading session prompts (best-effort, ignore errors)
+	// Get committed metadata read tree for session prompts (best-effort, ignore errors)
 	readRef := cpkg.ResolveCommittedRefs(ctx).Read
 	metadataTree, _ := GetMetadataRefTree(repo, readRef) //nolint:errcheck // Best-effort for session prompts
 
@@ -219,7 +219,10 @@ func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limi
 					sessionPrompt = sessionPrompts[len(sessionPrompts)-1]
 				}
 			} else {
-				sessionPrompt = ReadSessionPromptFromTree(metadataTree, checkpointPath)
+				sessionPrompt = ReadLatestSessionPromptFromCommittedTree(metadataTree, cpInfo.CheckpointID, cpInfo.SessionCount)
+				if sessionPrompt == "" {
+					sessionPrompt = ReadSessionPromptFromTree(metadataTree, checkpointPath)
+				}
 				if sessionPrompt != "" {
 					sessionPrompts = []string{sessionPrompt}
 				}

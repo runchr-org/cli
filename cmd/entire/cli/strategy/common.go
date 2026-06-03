@@ -939,28 +939,32 @@ func ReadLatestSessionPromptFromCommittedTree(tree *object.Tree, cpID id.Checkpo
 
 // ReadAllSessionPromptsFromTree reads the first prompt for all sessions in a multi-session checkpoint.
 // Returns a slice of prompts parallel to sessionIDs (oldest to newest).
-// For single-session checkpoints, returns a slice with just the root prompt.
+// For single-session checkpoints, returns a slice with just the session prompt.
 func ReadAllSessionPromptsFromTree(tree *object.Tree, checkpointPath string, sessionCount int, sessionIDs []string) []string {
 	if sessionCount <= 1 || len(sessionIDs) <= 1 {
-		// Single session - just return the root prompt
-		prompt := ReadSessionPromptFromTree(tree, checkpointPath)
+		prompt := ReadSessionPromptFromTree(tree, checkpointPath+"/0")
+		if prompt == "" {
+			prompt = ReadSessionPromptFromTree(tree, checkpointPath)
+		}
 		if prompt != "" {
 			return []string{prompt}
 		}
 		return nil
 	}
 
-	// Multi-session: read prompts from archived folders (0/, 1/, etc.) and root
 	prompts := make([]string, len(sessionIDs))
 
-	// Read archived session prompts (folders 0, 1, ... N-2)
-	for i := range sessionCount - 1 {
-		archivedPath := fmt.Sprintf("%s/%d", checkpointPath, i)
-		prompts[i] = ReadSessionPromptFromTree(tree, archivedPath)
+	sessionLimit := min(sessionCount, len(prompts))
+	for i := range sessionLimit {
+		sessionPath := fmt.Sprintf("%s/%d", checkpointPath, i)
+		prompts[i] = ReadSessionPromptFromTree(tree, sessionPath)
 	}
 
-	// Read the most recent session prompt (at root level)
-	prompts[len(prompts)-1] = ReadSessionPromptFromTree(tree, checkpointPath)
+	// Older committed metadata stored the latest prompt at the checkpoint root.
+	latestIndex := sessionLimit - 1
+	if latestIndex >= 0 && prompts[latestIndex] == "" {
+		prompts[latestIndex] = ReadSessionPromptFromTree(tree, checkpointPath)
+	}
 
 	return prompts
 }
