@@ -393,6 +393,42 @@ func TestAttributionBlameScopesMixedToSessionNotCheckpoint(t *testing.T) {
 	require.Equal(t, 0, payload.Summary.MixedLines)
 }
 
+func TestAttributionFlagsSessionFallbackForUnmatchedFile(t *testing.T) {
+	repoRoot := newAttributionRepo(t)
+	// One checkpoint, two sessions, neither recording a touch to auth.py (e.g.
+	// the file was renamed after the checkpoint). Attribution must fall back to
+	// a session and flag that the agent/prompt shown is approximate.
+	writeAttributionCheckpoint(t, repoRoot, "aab2c3d4e5f6", checkpoint.WriteCommittedOptions{
+		SessionID:        "session-one-12345678",
+		Prompts:          []string{"Edit the first file."},
+		FilesTouched:     []string{"old_name.py"},
+		Agent:            agent.AgentTypeClaudeCode,
+		CheckpointsCount: 1,
+	})
+	writeAttributionCheckpoint(t, repoRoot, "aab2c3d4e5f6", checkpoint.WriteCommittedOptions{
+		SessionID:        "session-two-12345678",
+		Prompts:          []string{"Edit a second file."},
+		FilesTouched:     []string{"other.py"},
+		Agent:            agent.AgentTypeClaudeCode,
+		CheckpointsCount: 1,
+	})
+	testutil.WriteFile(t, repoRoot, "auth.py", "human_line = 1\nai_line = 2\n")
+	testutil.GitAdd(t, repoRoot, "auth.py")
+	testutil.GitCommit(t, repoRoot, trailers.FormatCheckpoint("renamed update", checkpointid.MustCheckpointID("aab2c3d4e5f6")))
+
+	var jsonOut bytes.Buffer
+	require.NoError(t, runAttributionBlame(context.Background(), &jsonOut, "auth.py", attributionBlameOptions{LineFlag: "2", JSON: true}))
+	var payload fileAttributionResult
+	require.NoError(t, json.Unmarshal(jsonOut.Bytes(), &payload))
+	require.Len(t, payload.Lines, 1)
+	require.Equal(t, attributionAI, payload.Lines[0].Authorship)
+	require.True(t, payload.Lines[0].SessionFallback)
+
+	var whyOut bytes.Buffer
+	require.NoError(t, runAttributionWhy(context.Background(), &whyOut, "auth.py:2", false))
+	require.Contains(t, whyOut.String(), "may have been renamed")
+}
+
 func TestRunGitBlameWrapsExecError(t *testing.T) {
 	repoRoot := newAttributionRepo(t)
 

@@ -66,6 +66,7 @@ type attributionLine struct {
 	Prompt          string                 `json:"prompt,omitempty"`
 	Intent          string                 `json:"intent,omitempty"`
 	MetadataMissing bool                   `json:"metadata_missing,omitempty"`
+	SessionFallback bool                   `json:"session_fallback,omitempty"`
 	Content         string                 `json:"content"`
 	Candidates      []attributionCandidate `json:"candidates,omitempty"`
 }
@@ -86,6 +87,11 @@ type attributionCheckpointContext struct {
 	FilesTouched    []string `json:"files_touched,omitempty"`
 	MetadataMissing bool     `json:"metadata_missing,omitempty"`
 	Mixed           bool     `json:"mixed,omitempty"`
+	// SessionFallback is set when the file is not in any resolved session's
+	// recorded paths (e.g. it was renamed after the checkpoint) and the
+	// agent/prompt shown is a best-effort guess from the checkpoint's first
+	// session rather than the session that actually touched this file.
+	SessionFallback bool `json:"session_fallback,omitempty"`
 }
 
 type attributionCandidate = attributionCheckpointContext
@@ -413,21 +419,41 @@ func (r *attributionResolver) readCheckpointContext(cpID id.CheckpointID, file s
 
 	selected := checkpointSessionForFile{}
 	var fallback checkpointSessionForFile
+	sessionsRead := 0
+	matchedFile := false
 	for i := range summary.Sessions {
 		sessionCtx, readErr := r.readSessionForCheckpoint(cpID, i)
 		if readErr != nil {
 			continue
 		}
+		sessionsRead++
 		if fallback.SessionID == "" {
 			fallback = sessionCtx
 		}
 		if selected.SessionID == "" && pathsContainFile(sessionCtx.FilesTouched, file) {
 			selected = sessionCtx
+			matchedFile = true
 		}
 	}
 
 	if selected.SessionID == "" {
 		selected = fallback
+	}
+
+	// We resolved a session, but the file is in none of the sessions' recorded
+	// paths, and there was more than one session to choose from — so the agent
+	// and prompt shown are a guess (the checkpoint's first session) rather than
+	// the session that actually produced this line. Flag the approximation.
+	if selected.SessionID != "" && !matchedFile && sessionsRead > 1 {
+		ctx.SessionFallback = true
+	}
+
+	// Sessions existed but none could be read: the per-session detail (agent,
+	// model, prompt) is unavailable even though the checkpoint commit exists.
+	// Mark it missing so callers show the "trailer-level only" hint and the
+	// why path attempts a remote fetch.
+	if len(summary.Sessions) > 0 && sessionsRead == 0 {
+		ctx.MetadataMissing = true
 	}
 
 	// Mixed authorship is scoped to the session whose work actually touched
@@ -895,6 +921,9 @@ func renderAttributionLineWhy(w io.Writer, file string, line attributionLine) {
 		if line.MetadataMissing {
 			fmt.Fprintf(w, "  %s\n", sty.render(sty.yellow, "Checkpoint metadata was not found locally; showing trailer-level attribution only."))
 		}
+		if line.SessionFallback {
+			fmt.Fprintf(w, "  %s\n", sty.render(sty.yellow, "This file is not in the checkpoint's recorded paths (it may have been renamed); the agent and prompt shown are from the checkpoint's first session."))
+		}
 		if len(line.Candidates) > 1 {
 			fmt.Fprintf(w, "\n  %s\n", sty.render(sty.bold, "Candidate checkpoints:"))
 			for _, candidate := range line.Candidates {
@@ -1054,6 +1083,7 @@ func applyPreferredToLine(line *attributionLine, preferred *attributionCandidate
 	line.Prompt = preferred.Prompt
 	line.Intent = preferred.Intent
 	line.MetadataMissing = preferred.MetadataMissing
+	line.SessionFallback = preferred.SessionFallback
 }
 
 // authorshipForPreferred maps the preferred candidate to a line's authorship.
