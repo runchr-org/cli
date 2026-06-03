@@ -16,11 +16,6 @@ import (
 	"github.com/entireio/cli/internal/entireclient/tokenstore"
 )
 
-// refreshGrantPath is the token endpoint path where grant_type=refresh_token
-// is POSTed. Both provider versions multiplex grants at /oauth/token (the
-// same endpoint repocreds exchanges against), so it's stable across them.
-const refreshGrantPath = "/oauth/token"
-
 // defaultSavedTokenTTL is the encoded keychain expiry used when a refreshed
 // token carries no usable ExpiresAt. The server is the real authority; this
 // only governs when local readers consider the cached token stale.
