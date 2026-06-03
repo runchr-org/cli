@@ -90,7 +90,7 @@ func run(args []string) int {
 		Transport: httpclient.NewTransport(skipTLS),
 	}
 
-	creds, err := resolveCreds(ctx, parsedURL, clusterBaseURL, httpClient)
+	creds, err := resolveCreds(ctx, parsedURL, clusterBaseURL, skipTLS, httpClient)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		return 128
@@ -171,7 +171,7 @@ func parseProtocolVersion(raw string, warn io.Writer) int {
 //   - otherwise: resolve the login context for this cluster from contexts.json
 //     (migrating any pre-contexts.json login first) and exchange its stored
 //     login JWT.
-func resolveCreds(ctx context.Context, parsedURL *url.URL, clusterBaseURL string, httpClient *http.Client) (*repocreds.Cache, error) {
+func resolveCreds(ctx context.Context, parsedURL *url.URL, clusterBaseURL string, skipTLS bool, httpClient *http.Client) (*repocreds.Cache, error) {
 	// Presence of ENTIRE_TOKEN is the signal: if it's set at all (LookupEnv,
 	// not Getenv, so we can tell set-empty from unset), we commit to the
 	// env-token path and any failure to use it is fatal — never a silent
@@ -204,11 +204,17 @@ func resolveCreds(ctx context.Context, parsedURL *url.URL, clusterBaseURL string
 		return nil, err //nolint:wrapcheck // ResolveContextForCluster already returns a user-facing error; preserved verbatim for the "fatal: <msg>" surface
 	}
 
+	// The login-JWT provider transparently refreshes an expired login JWT
+	// from the stored refresh token (serialised across processes, rotated
+	// tokens persisted) before repocreds exchanges it for repo-scoped tokens.
+	loginProvider, err := auth.NewRefreshingLoginProvider(clusterCtx, httpClient.Transport, skipTLS)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // NewRefreshingLoginProvider already returns a user-facing error
+	}
+
 	// Mint repo-scoped tokens by exchanging the context's login JWT at its
 	// login server's /oauth/token, cached per (repo, action) for this invocation.
-	return repocreds.New(clusterCtx.CoreURL, clusterBaseURL, func(context.Context) (string, error) {
-		return auth.LoginTokenForContext(clusterCtx)
-	}, httpClient), nil
+	return repocreds.New(clusterCtx.CoreURL, clusterBaseURL, loginProvider, httpClient), nil
 }
 
 // resolveEnvTokenCreds builds the repo-cred cache for the ENTIRE_TOKEN path.
