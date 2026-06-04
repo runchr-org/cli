@@ -19,6 +19,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
+	"github.com/entireio/cli/cmd/entire/cli/validation"
 
 	"charm.land/huh/v2"
 	"github.com/go-git/go-git/v6"
@@ -691,6 +692,14 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 			fmt.Fprintf(errW, "  Warning: session %d has no session ID, skipping\n", i)
 			continue
 		}
+		// Checkpoint metadata comes from the shared entire/checkpoints/v1 branch
+		// and is attacker-influenceable. Reject path separators/absolute IDs before
+		// they reach ResolveSessionFile + WriteSession, which would otherwise let a
+		// crafted session ID overwrite files outside the agent session directory.
+		if err := validation.ValidateSessionID(sessionID); err != nil {
+			fmt.Fprintf(errW, "  Warning: session %d has unsafe session ID %q, skipping: %v\n", i, sessionID, err)
+			continue
+		}
 
 		// Resolve per-session agent from metadata — skip if agent is unknown
 		if content.Metadata.Agent == "" {
@@ -842,6 +851,11 @@ func (s *ManualCommitStrategy) classifySessionsForRestore(ctx context.Context, r
 
 		sessionID := content.Metadata.SessionID
 		if sessionID == "" || content.Metadata.Agent == "" {
+			continue
+		}
+		// Skip unsafe session IDs (see RestoreLogsOnly): this path stats the resolved
+		// transcript file, so a crafted ID could otherwise probe arbitrary locations.
+		if validation.ValidateSessionID(sessionID) != nil {
 			continue
 		}
 
