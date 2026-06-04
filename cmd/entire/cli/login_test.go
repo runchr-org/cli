@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -298,5 +299,157 @@ func TestWaitForApproval_ContextCancelled(t *testing.T) {
 	_, _, err := waitForApproval(ctx, poller, "device-1", 60, time.Millisecond, time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "context canceled") {
 		t.Fatalf("err = %v, want context canceled", err)
+	}
+}
+
+// fakeBrowserFlow implements auth.BrowserAuthFlow for unit tests.
+type fakeBrowserFlow struct {
+	authURL     string
+	waitCode    string
+	waitErr     error
+	exchAccess  string
+	exchRefresh string
+	exchErr     error
+
+	gotExchangeCode string
+	closed          bool
+}
+
+func (f *fakeBrowserFlow) AuthorizationURL() string { return f.authURL }
+
+func (f *fakeBrowserFlow) Wait(context.Context) (string, error) { return f.waitCode, f.waitErr }
+
+func (f *fakeBrowserFlow) Exchange(_ context.Context, code string) (string, string, error) {
+	f.gotExchangeCode = code
+	return f.exchAccess, f.exchRefresh, f.exchErr
+}
+
+func (f *fakeBrowserFlow) Close() error {
+	f.closed = true
+	return nil
+}
+
+// fakeBrowserClient implements browserAuthClient for unit tests.
+type fakeBrowserClient struct {
+	flow     *fakeBrowserFlow
+	startErr error
+}
+
+func (c *fakeBrowserClient) StartBrowserAuth(context.Context) (auth.BrowserAuthFlow, error) {
+	if c.startErr != nil {
+		return nil, c.startErr
+	}
+	return c.flow, nil
+}
+
+func (c *fakeBrowserClient) BaseURL() string { return "http://test" }
+
+func TestShouldUseBrowserLogin(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		useDevice bool
+		canPrompt bool
+		want      bool
+	}{
+		{useDevice: false, canPrompt: true, want: true},   // default interactive → browser
+		{useDevice: false, canPrompt: false, want: false}, // headless → fall back to device
+		{useDevice: true, canPrompt: true, want: false},   // --device forces device
+		{useDevice: true, canPrompt: false, want: false},
+	}
+	for _, tc := range cases {
+		if got := shouldUseBrowserLogin(tc.useDevice, tc.canPrompt); got != tc.want {
+			t.Errorf("shouldUseBrowserLogin(%v, %v) = %v, want %v", tc.useDevice, tc.canPrompt, got, tc.want)
+		}
+	}
+}
+
+func TestRunBrowserLogin_StartError(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeBrowserClient{startErr: errors.New("bind failed")}
+	noopOpen := func(context.Context, string) error { return nil }
+
+	err := runBrowserLogin(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, client, noopOpen)
+	if err == nil || !strings.Contains(err.Error(), "start login") {
+		t.Fatalf("err = %v, want start login error", err)
+	}
+}
+
+func TestRunBrowserLogin_OpensAuthorizationURL(t *testing.T) {
+	t.Parallel()
+
+	flow := &fakeBrowserFlow{authURL: "https://auth.test/authorize?x=1", waitErr: errors.New("stop")}
+	client := &fakeBrowserClient{flow: flow}
+
+	var openedURL string
+	openURL := func(_ context.Context, u string) error {
+		openedURL = u
+		return nil
+	}
+
+	var out bytes.Buffer
+	_ = runBrowserLogin(context.Background(), &out, &bytes.Buffer{}, client, openURL)
+
+	if openedURL != flow.authURL {
+		t.Errorf("opened URL = %q, want %q", openedURL, flow.authURL)
+	}
+	if !strings.Contains(out.String(), "Opening") {
+		t.Errorf("output missing open message:\n%s", out.String())
+	}
+	if !flow.closed {
+		t.Error("flow was not closed")
+	}
+}
+
+func TestRunBrowserLogin_OpenBrowserFallback(t *testing.T) {
+	t.Parallel()
+
+	flow := &fakeBrowserFlow{authURL: "https://auth.test/authorize", waitErr: errors.New("stop")}
+	client := &fakeBrowserClient{flow: flow}
+	failOpen := func(context.Context, string) error { return errors.New("no browser") }
+
+	var out, errW bytes.Buffer
+	_ = runBrowserLogin(context.Background(), &out, &errW, client, failOpen)
+
+	if !strings.Contains(errW.String(), "failed to open browser") {
+		t.Errorf("stderr missing warning:\n%s", errW.String())
+	}
+	if !strings.Contains(out.String(), flow.authURL) {
+		t.Errorf("stdout missing fallback URL:\n%s", out.String())
+	}
+}
+
+func TestRunBrowserLogin_WaitError(t *testing.T) {
+	t.Parallel()
+
+	denied := errors.New("access_denied")
+	flow := &fakeBrowserFlow{authURL: "https://auth.test/authorize", waitErr: denied}
+	client := &fakeBrowserClient{flow: flow}
+	noopOpen := func(context.Context, string) error { return nil }
+
+	err := runBrowserLogin(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, client, noopOpen)
+	if !errors.Is(err, denied) {
+		t.Fatalf("err = %v, want wrapped %v", err, denied)
+	}
+}
+
+func TestRunBrowserLogin_ExchangeError(t *testing.T) {
+	t.Parallel()
+
+	flow := &fakeBrowserFlow{
+		authURL:  "https://auth.test/authorize",
+		waitCode: "the-code",
+		exchErr:  errors.New("invalid_grant"),
+	}
+	client := &fakeBrowserClient{flow: flow}
+	noopOpen := func(context.Context, string) error { return nil }
+
+	err := runBrowserLogin(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, client, noopOpen)
+	if err == nil || !strings.Contains(err.Error(), "complete login") {
+		t.Fatalf("err = %v, want complete login error", err)
+	}
+	if flow.gotExchangeCode != "the-code" {
+		t.Errorf("Exchange got code %q, want the-code", flow.gotExchangeCode)
 	}
 }

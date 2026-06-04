@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entireio/auth-go/authcode"
 	"github.com/entireio/auth-go/deviceflow"
 	"github.com/entireio/auth-go/tokens"
 	"github.com/entireio/cli/cmd/entire/cli/api"
@@ -41,7 +42,8 @@ type DeviceAuthPoll struct {
 // (ENTIRE_AUTH_PROVIDER_VERSION wins, then split-host auto-detect,
 // then v1 fallback).
 type Client struct {
-	inner *deviceflow.Client
+	inner   *deviceflow.Client
+	browser *authcode.Client
 }
 
 // NewClient constructs a Client targeting the active provider version.
@@ -61,20 +63,85 @@ func NewClient(httpClient *http.Client, allowInsecureHTTP bool) *Client {
 	if httpClient != nil {
 		transport = httpClient.Transport
 	}
-	return &Client{inner: &deviceflow.Client{
-		Transport: transport,
-		BaseURL:   issuer,
-		ClientID:  p.ClientID,
-		// offline_access asks the authorization server for a refresh token.
-		// The server only mints one when it's requested (it's client-gated),
-		// so without this the device login is access-token-only and silent
-		// refresh is impossible.
-		Scope:             "cli offline_access",
-		UserAgent:         p.ClientID,
-		DeviceCodePath:    p.DeviceCodePath,
-		TokenPath:         p.TokenPath,
-		AllowInsecureHTTP: allowInsecureHTTP || isLoopbackHTTP(issuer),
-	}}
+	// offline_access asks the authorization server for a refresh token.
+	// The server only mints one when it's requested (it's client-gated),
+	// so without this the login is access-token-only and silent refresh is
+	// impossible. Both flows request it identically.
+	const scope = "cli offline_access"
+	allowHTTP := allowInsecureHTTP || isLoopbackHTTP(issuer)
+	return &Client{
+		inner: &deviceflow.Client{
+			Transport:         transport,
+			BaseURL:           issuer,
+			ClientID:          p.ClientID,
+			Scope:             scope,
+			UserAgent:         p.ClientID,
+			DeviceCodePath:    p.DeviceCodePath,
+			TokenPath:         p.TokenPath,
+			AllowInsecureHTTP: allowHTTP,
+		},
+		browser: &authcode.Client{
+			Transport:         transport,
+			BaseURL:           issuer,
+			ClientID:          p.ClientID,
+			Scope:             scope,
+			UserAgent:         p.ClientID,
+			AuthorizePath:     p.AuthorizePath,
+			TokenPath:         p.TokenPath,
+			AllowInsecureHTTP: allowHTTP,
+		},
+	}
+}
+
+// BrowserAuthFlow is one in-progress loopback authorization-code login.
+// It wraps an authcode.Flow so login.go can depend on a small interface
+// (and fake it in tests) rather than the concrete library type that owns
+// a live loopback listener.
+type BrowserAuthFlow interface {
+	// AuthorizationURL is the URL to open in the user's browser.
+	AuthorizationURL() string
+	// Wait blocks until the browser is redirected to the loopback
+	// listener, returning the authorization code.
+	Wait(ctx context.Context) (code string, err error)
+	// Exchange redeems code for access + refresh tokens.
+	Exchange(ctx context.Context, code string) (accessToken, refreshToken string, err error)
+	// Close tears down the loopback listener. Safe to call after Wait.
+	Close() error
+}
+
+// browserAuthFlow adapts *authcode.Flow to BrowserAuthFlow, flattening the
+// TokenSet to the (access, refresh) pair login.go persists — mirroring how
+// PollDeviceAuth flattens the device-flow result.
+type browserAuthFlow struct {
+	inner *authcode.Flow
+}
+
+func (f *browserAuthFlow) AuthorizationURL() string { return f.inner.AuthorizationURL }
+
+func (f *browserAuthFlow) Wait(ctx context.Context) (string, error) {
+	return f.inner.Wait(ctx) //nolint:wrapcheck // shim preserves the lib's wrapped errors verbatim for errors.Is
+}
+
+func (f *browserAuthFlow) Exchange(ctx context.Context, code string) (string, string, error) {
+	ts, err := f.inner.Exchange(ctx, code)
+	if err != nil {
+		return "", "", err //nolint:wrapcheck // shim returns authcode errors verbatim so callers can errors.Is on sentinels
+	}
+	return ts.AccessToken, ts.RefreshToken, nil
+}
+
+func (f *browserAuthFlow) Close() error {
+	return f.inner.Close() //nolint:wrapcheck // shutdown error is best-effort; caller logs at most
+}
+
+// StartBrowserAuth begins the loopback authorization-code flow: it binds a
+// local listener and returns a flow carrying the browser URL to open.
+func (c *Client) StartBrowserAuth(ctx context.Context) (BrowserAuthFlow, error) {
+	f, err := c.browser.Start(ctx)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // shim returns authcode errors verbatim so callers can errors.Is on sentinels
+	}
+	return &browserAuthFlow{inner: f}, nil
 }
 
 // BaseURL returns the issuer base URL this client talks to.
