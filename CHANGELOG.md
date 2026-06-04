@@ -18,8 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Simplified the `entire auth` surface: dropped the sunset `ent_` PATs (removing `auth list` and `auth revoke`), made `auth status` show your identity, active context, and the active sessions on that core, and routed `logout`/`logout --all` through entire-core to revoke exactly those sessions — fixing a logout/status bug that previously hit entire.io's PAT endpoint and 400'd ([#1341](https://github.com/entireio/cli/pull/1341))
-- `git-remote-entire` now stamps a version-stamped `User-Agent` (`git-remote-entire/<version>`) on every outbound HTTP request, so the helper is identifiable in upstream access logs ([#1348](https://github.com/entireio/cli/pull/1348))
+- Simplified the `entire auth` surface: dropped support for the sunset `ent_` PATs (removing `auth list` and `auth revoke`), made `auth status` show your identity, active context, and the active sessions on that core, and routed `logout`/`logout --all` through entire-core to revoke exactly those sessions — fixing a logout/status bug that previously called entire.io's PAT endpoint and returned HTTP 400 ([#1341](https://github.com/entireio/cli/pull/1341))
+- `git-remote-entire` now stamps a versioned `User-Agent` (`git-remote-entire/<version>`) on every outbound HTTP request, so the helper is identifiable in upstream access logs ([#1348](https://github.com/entireio/cli/pull/1348))
 - `entire repo mirror create` skips clone polling when the upstream has no refs, printing a short note and returning instead of waiting out the timeout ([#1357](https://github.com/entireio/cli/pull/1357))
 - `entire repo mirror create` now explains suspended mirrors with resume guidance instead of a generic error ([#1344](https://github.com/entireio/cli/pull/1344))
 - Better alignment of the labs commands ([#1345](https://github.com/entireio/cli/pull/1345))
