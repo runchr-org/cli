@@ -394,8 +394,11 @@ func TestRunBrowserLogin_OpensAuthorizationURL(t *testing.T) {
 	if openedURL != flow.authURL {
 		t.Errorf("opened URL = %q, want %q", openedURL, flow.authURL)
 	}
-	if !strings.Contains(out.String(), "Opening") {
-		t.Errorf("output missing open message:\n%s", out.String())
+	if !strings.Contains(out.String(), "Login URL:") || !strings.Contains(out.String(), flow.authURL) {
+		t.Errorf("output missing login URL:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "Press Enter to open in browser...") {
+		t.Errorf("output missing enter-to-open prompt:\n%s", out.String())
 	}
 	if !flow.closed {
 		t.Error("flow was not closed")

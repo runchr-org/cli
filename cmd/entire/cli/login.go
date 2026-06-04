@@ -129,10 +129,6 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 	return persistLogin(outW, errW, client.BaseURL(), token, refreshToken)
 }
 
-// runBrowserLogin runs the loopback authorization-code flow: open the
-// authorization URL in the user's browser, wait for the redirect back to
-// the local listener, then exchange the code for tokens. Shares the token
-// validation + persistence tail with runLogin via persistLogin.
 // shouldUseBrowserLogin reports whether `entire login` should use the
 // loopback authorization-code (browser) flow. The browser flow is the
 // default but needs a local browser + reachable 127.0.0.1, so it's only
@@ -142,6 +138,10 @@ func shouldUseBrowserLogin(useDevice, canPrompt bool) bool {
 	return !useDevice && canPrompt
 }
 
+// runBrowserLogin runs the loopback authorization-code flow: open the
+// authorization URL in the user's browser, wait for the redirect back to
+// the local listener, then exchange the code for tokens. Shares the token
+// validation + persistence tail with runLogin via persistLogin.
 func runBrowserLogin(ctx context.Context, outW, errW io.Writer, client browserAuthClient, openURL browserOpenFunc) error {
 	flow, err := client.StartBrowserAuth(ctx)
 	if err != nil {
@@ -151,15 +151,27 @@ func runBrowserLogin(ctx context.Context, outW, errW io.Writer, client browserAu
 	// covers the error paths before Wait runs.
 	defer func() { _ = flow.Close() }()
 
+	// Mirror the device flow's interactive shape: show the URL, pause on
+	// Enter before opening the browser, then wait on the same line so
+	// persistLogin's "Login complete." reads "Waiting for sign-in...
+	// Login complete." runBrowserLogin is only reached interactively (see
+	// shouldUseBrowserLogin), so the Enter prompt is unconditional here.
 	authURL := flow.AuthorizationURL()
+	fmt.Fprintf(outW, "Login URL:   %s\n\n", authURL)
+	fmt.Fprintf(outW, "Press Enter to open in browser...")
+
+	// Read from /dev/tty so we get a real keypress and don't consume piped stdin.
+	if err := waitForEnter(ctx); err != nil {
+		return fmt.Errorf("wait for input: %w", err)
+	}
+
+	fmt.Fprintln(outW)
 	if err := openURL(ctx, authURL); err != nil {
 		fmt.Fprintf(errW, "Warning: failed to open browser: %v\n", err)
 		fmt.Fprintf(outW, "Open this URL in your browser to sign in: %s\n", authURL)
-	} else {
-		fmt.Fprintf(outW, "Opening %s in your browser to sign in...\n", authURL)
 	}
 
-	fmt.Fprintln(outW, "Waiting for sign-in to complete...")
+	fmt.Fprint(outW, "Waiting for sign-in... ")
 
 	code, err := flow.Wait(ctx)
 	if err != nil {
@@ -330,6 +342,13 @@ func waitForApproval(ctx context.Context, poller deviceAuthClient, deviceCode st
 // If /dev/tty cannot be opened (e.g. on Windows), it returns immediately.
 // Returns ctx.Err() if the context is cancelled before the user presses Enter.
 func waitForEnter(ctx context.Context) error {
+	// Under test (in-process go test, or a child with ENTIRE_TEST_TTY set)
+	// don't block on a real /dev/tty read — tests that force interactive
+	// mode still need this prompt to return. Mirrors openBrowser's guard.
+	if interactive.UnderTest() {
+		return nil
+	}
+
 	tty, err := os.Open("/dev/tty")
 	if err != nil {
 		return nil //nolint:nilerr // tty unavailable (e.g. Windows) — skip prompt silently

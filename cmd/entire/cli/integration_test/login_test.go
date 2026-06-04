@@ -333,13 +333,13 @@ func waitForLoginPrompt(t *testing.T, stdout *bufio.Reader) (string, string) {
 	return "", ""
 }
 
-// waitForBrowserPrompt reads login stdout until it finds the
-// "Opening <url> in your browser to sign in..." line and returns the URL.
+// waitForBrowserPrompt reads login stdout until it finds the "Login URL:"
+// line (the browser flow mirrors the device flow's prompt) and returns the
+// URL. The browser flow has no "Device code:" line, so this scans for the
+// URL alone rather than reusing waitForLoginPrompt.
 func waitForBrowserPrompt(t *testing.T, stdout *bufio.Reader) string {
 	t.Helper()
 
-	const prefix = "Opening "
-	const suffix = " in your browser to sign in..."
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		line, err := stdout.ReadString('\n')
@@ -347,10 +347,8 @@ func waitForBrowserPrompt(t *testing.T, stdout *bufio.Reader) string {
 			t.Fatalf("read login output: %v", err)
 		}
 		line = strings.TrimSpace(line)
-		if after, ok := strings.CutPrefix(line, prefix); ok {
-			if authURL, ok := strings.CutSuffix(after, suffix); ok {
-				return authURL
-			}
+		if after, ok := strings.CutPrefix(line, "Login URL:"); ok {
+			return strings.TrimSpace(after)
 		}
 	}
 
