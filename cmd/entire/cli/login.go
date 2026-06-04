@@ -157,21 +157,25 @@ func runBrowserLogin(ctx context.Context, outW, errW io.Writer, client browserAu
 	// Login complete." runBrowserLogin is only reached interactively (see
 	// shouldUseBrowserLogin), so the Enter prompt is unconditional here.
 	authURL := flow.AuthorizationURL()
-	fmt.Fprintf(outW, "Login URL:   %s\n\n", authURL)
-	fmt.Fprintf(outW, "Press Enter to open in browser...")
+	// Show the auth host, not the full authorize URL — the PKCE challenge +
+	// loopback redirect make it long and unreadable, and the browser is
+	// opened for the user anyway. The full URL is only printed below as a
+	// fallback when the browser can't be opened.
+	fmt.Fprintf(outW, "Logging in to:  %s\n\n", client.BaseURL())
+	fmt.Fprint(outW, "Press Enter to open in browser...")
 
 	// Read from /dev/tty so we get a real keypress and don't consume piped stdin.
 	if err := waitForEnter(ctx); err != nil {
 		return fmt.Errorf("wait for input: %w", err)
 	}
-
 	fmt.Fprintln(outW)
+
 	if err := openURL(ctx, authURL); err != nil {
 		fmt.Fprintf(errW, "Warning: failed to open browser: %v\n", err)
 		fmt.Fprintf(outW, "Open this URL in your browser to sign in: %s\n", authURL)
 	}
 
-	fmt.Fprint(outW, "Waiting for sign-in... ")
+	fmt.Fprint(outW, "\nWaiting for sign-in... ")
 
 	code, err := flow.Wait(ctx)
 	if err != nil {
@@ -378,12 +382,13 @@ func openBrowser(ctx context.Context, browserURL string) error {
 		return fmt.Errorf("refusing to open non-HTTP URL: %s", browserURL)
 	}
 
-	// Tests force interactive mode (ENTIRE_TEST_TTY=1) to exercise the
-	// browser flow, but must not actually spawn a browser on the test/CI
-	// host. Report success so the "Opening..." path runs — the loopback
-	// listener is what the test drives. URL validation above still applies.
+	// Under test there's no usable browser, and we must not spawn a real one
+	// on a dev/CI host. Report failure so the caller takes the "here's the
+	// URL" fallback — exactly the path a genuinely headless machine hits, and
+	// what lets an integration test recover the loopback callback URL from
+	// stdout. URL validation above still applies.
 	if interactive.UnderTest() {
-		return nil
+		return errors.New("browser unavailable under test")
 	}
 
 	var command string

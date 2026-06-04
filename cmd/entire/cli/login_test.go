@@ -394,8 +394,13 @@ func TestRunBrowserLogin_OpensAuthorizationURL(t *testing.T) {
 	if openedURL != flow.authURL {
 		t.Errorf("opened URL = %q, want %q", openedURL, flow.authURL)
 	}
-	if !strings.Contains(out.String(), "Login URL:") || !strings.Contains(out.String(), flow.authURL) {
-		t.Errorf("output missing login URL:\n%s", out.String())
+	// Happy path shows the auth host, not the full authorize URL, and
+	// doesn't print the URL at all (the browser opened fine).
+	if !strings.Contains(out.String(), "Logging in to:") {
+		t.Errorf("output missing 'Logging in to:' line:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), flow.authURL) {
+		t.Errorf("happy path should not print the full authorize URL:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "Press Enter to open in browser...") {
 		t.Errorf("output missing enter-to-open prompt:\n%s", out.String())

@@ -333,13 +333,15 @@ func waitForLoginPrompt(t *testing.T, stdout *bufio.Reader) (string, string) {
 	return "", ""
 }
 
-// waitForBrowserPrompt reads login stdout until it finds the "Login URL:"
-// line (the browser flow mirrors the device flow's prompt) and returns the
-// URL. The browser flow has no "Device code:" line, so this scans for the
-// URL alone rather than reusing waitForLoginPrompt.
+// waitForBrowserPrompt reads login stdout until it finds the
+// "Open this URL in your browser to sign in: <url>" fallback line and
+// returns the URL. Under test openBrowser reports failure (no usable
+// browser on a headless host), so the browser flow always prints this
+// fallback — which is how the test recovers the ephemeral callback URL.
 func waitForBrowserPrompt(t *testing.T, stdout *bufio.Reader) string {
 	t.Helper()
 
+	const prefix = "Open this URL in your browser to sign in: "
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		line, err := stdout.ReadString('\n')
@@ -347,8 +349,8 @@ func waitForBrowserPrompt(t *testing.T, stdout *bufio.Reader) string {
 			t.Fatalf("read login output: %v", err)
 		}
 		line = strings.TrimSpace(line)
-		if after, ok := strings.CutPrefix(line, "Login URL:"); ok {
-			return strings.TrimSpace(after)
+		if after, ok := strings.CutPrefix(line, prefix); ok {
+			return after
 		}
 	}
 
