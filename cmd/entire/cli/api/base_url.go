@@ -64,6 +64,15 @@ func AuthBaseURL() string {
 	return NormalizeOriginURL(raw)
 }
 
+// AuthBaseURLOverridden reports whether ENTIRE_AUTH_BASE_URL is explicitly
+// set (non-empty after trimming). Control-plane host resolution treats an
+// explicit override as unconditional: it pins the core to that origin and
+// skips the active-context lookup, so split-host / local-dev invocations that
+// already set this var keep their exact behaviour.
+func AuthBaseURLOverridden() bool {
+	return strings.TrimSpace(os.Getenv(AuthBaseURLEnvVar)) != ""
+}
+
 // IsSplitHost reports whether the CLI is configured for split-host —
 // i.e. ENTIRE_AUTH_BASE_URL points at a different origin than the data
 // API. Both sides are canonicalised via NormalizeOriginURL before
