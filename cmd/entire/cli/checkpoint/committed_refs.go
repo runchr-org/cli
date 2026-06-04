@@ -35,10 +35,19 @@ func DefaultV1Refs() CommittedRefs {
 }
 
 // PrimaryFetchableFromOrigin reports whether Primary has an origin-tracking
-// shadow — i.e. whether bootstrap-from-origin paths can fetch it. True when
-// Primary appears in Push: we push it, so origin tracks it.
+// shadow — i.e. whether bootstrap-from-origin paths can fetch it. Only branch
+// refs in Push get a refs/remotes/origin/<name> shadow; non-branch refs are
+// pushed without remote-tracking.
 func (r CommittedRefs) PrimaryFetchableFromOrigin() bool {
-	return slices.Contains(r.Push, r.Primary)
+	return r.Primary.IsBranch() && slices.Contains(r.Push, r.Primary)
+}
+
+// ReadBootstrappableFromOrigin reports whether the read ref can be bootstrapped
+// from origin. True when reads target Primary AND Primary is fetchable from
+// origin. False when reads target a local-only mirror (origin doesn't track
+// it), even if Primary is itself fetchable.
+func (r CommittedRefs) ReadBootstrappableFromOrigin() bool {
+	return r.Read == r.Primary && r.PrimaryFetchableFromOrigin()
 }
 
 // ResolveCommittedRefs returns the topology for the settings on disk, falling

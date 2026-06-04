@@ -315,10 +315,8 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 		return fmt.Errorf("failed to write checkpoint: %w", err)
 	}
 
-	if refs := opts.committedRefs(ctx); refs.HasMirror() {
-		if err := strategy.MirrorCommittedMetadataRef(ctx, repo, refs); err != nil {
-			return fmt.Errorf("checkpoint was written to %s, but failed to mirror to %s: %w", refs.Primary, refs.Mirror, err)
-		}
+	if err := strategy.MirrorCommittedMetadataRef(ctx, repo, refs); err != nil {
+		return fmt.Errorf("checkpoint was written to %s, but failed to mirror to %s: %w", refs.Primary, refs.Mirror, err)
 	}
 
 	// Create or update session state.
@@ -416,7 +414,10 @@ func refreshCheckpointRefs(ctx context.Context) (*git.Repository, error) {
 
 // checkpointPresentLocally reports whether the checkpoint already exists on
 // the local primary ref we would write to. Remote-tracking alone is not
-// enough; see ensureCheckpointAvailable.
+// enough; see ensureCheckpointAvailable. Reads target Primary directly even
+// when the configured Read ref differs (e.g. v1.1 mirror) because the
+// question is "is the write target up to date," not "what's visible to
+// readers."
 func checkpointPresentLocally(ctx context.Context, repo *git.Repository, refs cpkg.CommittedRefs, checkpointID id.CheckpointID) (bool, error) {
 	if _, err := repo.Reference(refs.Primary, true); err != nil {
 		// Local ref doesn't exist — treat as "not present locally". We
@@ -424,7 +425,9 @@ func checkpointPresentLocally(ctx context.Context, repo *git.Repository, refs cp
 		// ensureCheckpointAvailable's docstring.
 		return false, nil //nolint:nilerr // Missing ref is the "absent" signal, not an error.
 	}
-	summary, err := cpkg.NewGitStore(repo, refs).ReadCommitted(ctx, checkpointID)
+	primaryRefs := refs
+	primaryRefs.Read = refs.Primary
+	summary, err := cpkg.NewGitStore(repo, primaryRefs).ReadCommitted(ctx, checkpointID)
 	if err != nil {
 		return false, err //nolint:wrapcheck // Caller wraps with checkpoint ID context
 	}

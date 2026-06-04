@@ -191,7 +191,7 @@ func resumeFromCurrentBranch(ctx context.Context, w, errW io.Writer, branchName 
 	store.SetBlobFetcher(FetchBlobsByHash)
 
 	refs := store.Refs()
-	if refs.Read == refs.Primary && refs.PrimaryFetchableFromOrigin() {
+	if refs.ReadBootstrappableFromOrigin() {
 		promoteRemoteTrackingPrimary(ctx, repo, refs)
 	}
 
@@ -607,7 +607,7 @@ func checkRemoteMetadata(
 ) error {
 	logCtx := logging.WithComponent(ctx, "resume.checkRemoteMetadata")
 
-	if refs.Read != refs.Primary || !refs.PrimaryFetchableFromOrigin() {
+	if !refs.ReadBootstrappableFromOrigin() {
 		fmt.Fprintf(errW, "Checkpoint '%s' found in commit but metadata is not available in %s.\n", checkpointID, refs.Read)
 		fmt.Fprintf(errW, "This ref is local-only. Try: entire explain %s\n", checkpointID)
 		return nil

@@ -55,13 +55,6 @@ func (s *ManualCommitStrategy) getCheckpointStore(ctx context.Context, repo *git
 	return s.withBlobFetcher(checkpoint.NewGitStore(repo, checkpoint.ResolveCommittedRefs(ctx)))
 }
 
-// getCommittedReadStore returns a store for reading committed checkpoints.
-// Equivalent to getCheckpointStore today; kept as a separate name to mark
-// read-path call sites.
-func (s *ManualCommitStrategy) getCommittedReadStore(ctx context.Context, repo *git.Repository) *checkpoint.GitStore {
-	return s.getCheckpointStore(ctx, repo)
-}
-
 // NewManualCommitStrategy creates a new manual-commit strategy instance.
 func NewManualCommitStrategy() *ManualCommitStrategy {
 	return &ManualCommitStrategy{}

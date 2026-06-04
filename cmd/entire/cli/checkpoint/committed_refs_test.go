@@ -79,6 +79,7 @@ func TestCommittedRefs_PrimaryFetchableFromOrigin(t *testing.T) {
 		{"v1 in push", CommittedRefs{Primary: v1, Push: []plumbing.ReferenceName{v1}}, true},
 		{"primary not in push", CommittedRefs{Primary: custom, Push: []plumbing.ReferenceName{v1}}, false},
 		{"empty push", CommittedRefs{Primary: v1, Push: nil}, false},
+		{"non-branch primary in push", CommittedRefs{Primary: custom, Push: []plumbing.ReferenceName{custom}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -222,6 +222,53 @@ func TestPushBranchIfNeeded_LocalBareRepo_PushesSuccessfully(t *testing.T) {
 	}
 }
 
+// TestFetchAndRebase_NonBranchRef verifies the fetch+rebase wiring accepts a
+// non-branch ref (e.g. refs/entire/checkpoints/v1.1). Today's resolver doesn't
+// emit non-branch refs in CommittedRefs.Push, but the helper must remain
+// correct when one is wired in.
+//
+// Not parallel: uses t.Chdir() (required for OpenRepository).
+func TestFetchAndRebase_NonBranchRef(t *testing.T) {
+	ctx := context.Background()
+
+	tmpDir := setupRepoWithCheckpointBranch(t)
+
+	// Point a non-branch ref at HEAD locally.
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	customRef := plumbing.ReferenceName("refs/entire/checkpoints/synthetic")
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(customRef, head.Hash())))
+
+	// Bare remote that has the same ref at the same hash so the fetch+rebase
+	// resolves to a no-op fast-forward (no rebase work required).
+	bareDir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "--bare"},
+	} {
+		c := exec.CommandContext(ctx, "git", args...)
+		c.Dir = bareDir
+		c.Env = testutil.GitIsolatedEnv()
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	bareRepo, err := git.PlainOpen(bareDir)
+	require.NoError(t, err)
+	require.NoError(t, bareRepo.Storer.SetReference(plumbing.NewHashReference(customRef, head.Hash())))
+
+	t.Chdir(tmpDir)
+
+	require.NoError(t, fetchAndRebaseSessionsCommon(ctx, "file://"+bareDir, customRef),
+		"fetchAndRebaseSessionsCommon should accept a non-branch ref")
+
+	// The local ref should remain at the same hash.
+	got, err := repo.Reference(customRef, true)
+	require.NoError(t, err)
+	assert.Equal(t, head.Hash(), got.Hash())
+}
+
 // TestFetchAndRebase_DivergedBranches verifies that when local and remote
 // metadata branches have diverged (shared ancestor, different commits on each),
 // fetchAndRebaseSessionsCommon produces a linear history (no merge commits)

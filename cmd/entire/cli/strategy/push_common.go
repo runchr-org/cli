@@ -32,6 +32,9 @@ import (
 func pushRefIfNeeded(ctx context.Context, target string, ref plumbing.ReferenceName) error {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
+		logging.Debug(ctx, "push skipped: open repository failed",
+			slog.String("ref", ref.String()),
+			slog.String("error", err.Error()))
 		return nil
 	}
 	defer repo.Close()
@@ -412,10 +415,18 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target string, ref plumbi
 	}
 
 	// Helper to advance ref and clean up the temp fetch ref. When ref is the
-	// configured Primary, the mirror is advanced too (best-effort).
+	// configured Primary, the mirror is advanced too (best-effort); otherwise
+	// the mirror step is skipped because origin doesn't track this ref.
+	refs := checkpoint.ResolveCommittedRefs(ctx)
 	advance := func(hash plumbing.Hash) error {
-		if err := setLocalAfterSync(ctx, repo, ref, hash); err != nil {
-			return err
+		var setErr error
+		if ref == refs.Primary {
+			setErr = AdvanceCommittedPrimary(ctx, repo, refs, hash)
+		} else {
+			setErr = repo.Storer.SetReference(plumbing.NewHashReference(ref, hash))
+		}
+		if setErr != nil {
+			return fmt.Errorf("failed to update ref %s: %w", ref, setErr)
 		}
 		if usedTempRef {
 			_ = repo.Storer.RemoveReference(fetchedRefName) //nolint:errcheck // cleanup is best-effort
@@ -471,23 +482,6 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target string, ref plumbi
 	}
 
 	return advance(newTip)
-}
-
-// setLocalAfterSync points ref at hash and, when ref is the configured
-// Primary, best-effort-advances refs.Mirror. Returns an error only if the
-// local ref update fails; mirror failures are logged.
-func setLocalAfterSync(ctx context.Context, repo *git.Repository, ref plumbing.ReferenceName, hash plumbing.Hash) error {
-	refs := checkpoint.ResolveCommittedRefs(ctx)
-	if ref == refs.Primary {
-		return AdvanceCommittedPrimary(ctx, repo, refs, hash)
-	}
-	if err := repo.Storer.SetReference(plumbing.NewHashReference(ref, hash)); err != nil {
-		return fmt.Errorf("failed to update ref %s: %w", ref, err)
-	}
-	logging.Debug(ctx, "committed-ref mirror skipped after sync: ref is not the configured primary",
-		slog.String("ref", ref.String()),
-		slog.String("primary", refs.Primary.String()))
-	return nil
 }
 
 // getMergeBase returns the merge base hash of two commits, or an error if they

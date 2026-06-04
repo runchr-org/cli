@@ -101,10 +101,12 @@ func enableV1CustomRefMirror(t *testing.T, dir string) {
 }
 
 func v1CustomRefsForTest() checkpoint.CommittedRefs {
+	v1Branch := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 	return checkpoint.CommittedRefs{
-		Primary: plumbing.NewBranchReferenceName(paths.MetadataBranchName),
+		Primary: v1Branch,
 		Read:    plumbing.ReferenceName(paths.MetadataRefName),
 		Mirror:  plumbing.ReferenceName(paths.MetadataRefName),
+		Push:    []plumbing.ReferenceName{v1Branch},
 	}
 }
 

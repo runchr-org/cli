@@ -1782,13 +1782,13 @@ func (s *GitStore) getFetchingTree(ctx context.Context) (*FetchingTree, error) {
 }
 
 // getSessionsBranchTree returns the tree object at the configured read ref.
-// Falls back to origin's remote-tracking ref when Read equals Primary and
-// Primary is in Push (origin tracks it). When reads target the local-only
-// mirror, the fallback skips because origin doesn't track the mirror.
+// Falls back to origin's remote-tracking ref when reads are bootstrappable
+// from origin. When reads target a local-only mirror, the fallback skips
+// because origin doesn't track the mirror.
 func (s *GitStore) getSessionsBranchTree() (*object.Tree, error) {
 	ref, err := s.repo.Reference(s.refs.Read, true)
 	if err != nil {
-		if s.refs.Read != s.refs.Primary || !s.refs.PrimaryFetchableFromOrigin() {
+		if !s.refs.ReadBootstrappableFromOrigin() {
 			return nil, fmt.Errorf("sessions ref %s not found: %w", s.refs.Read, err)
 		}
 		remoteRefName := plumbing.NewRemoteReferenceName("origin", s.refs.Primary.Short())

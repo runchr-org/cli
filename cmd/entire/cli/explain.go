@@ -826,13 +826,12 @@ func runPreFetch(ctx context.Context, ft *checkpoint.FetchingTree, cpID id.Check
 }
 
 // loadPrimaryMetadataRootTree reads the tree at refs.Primary, falling back to
-// origin's remote-tracking ref when reads are bootstrappable from origin
-// (Read == Primary && Primary in Push).
+// origin's remote-tracking ref when Primary is pushed.
 func loadPrimaryMetadataRootTree(ctx context.Context, repo *git.Repository, refs checkpoint.CommittedRefs) (*object.Tree, error) {
 	if tree, err := strategy.GetMetadataRefTree(repo, refs.Primary); err == nil {
 		return tree, nil
 	}
-	if refs.Read != refs.Primary || !refs.PrimaryFetchableFromOrigin() {
+	if !refs.PrimaryFetchableFromOrigin() {
 		return nil, fmt.Errorf("read primary metadata tree %s: ref not found locally", refs.Primary)
 	}
 	tree, err := strategy.GetRemotePrimaryTree(ctx, repo)
@@ -933,10 +932,9 @@ func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, store *ch
 		return fmt.Errorf("failed to save summary: %w", err)
 	}
 
-	if refs := checkpoint.ResolveCommittedRefs(ctx); refs.HasMirror() {
-		if err := strategy.MirrorCommittedMetadataRef(ctx, store.Repository(), refs); err != nil {
-			return fmt.Errorf("summary was written to %s, but failed to mirror to %s: %w", refs.Primary, refs.Mirror, err)
-		}
+	refs := checkpoint.ResolveCommittedRefs(ctx)
+	if err := strategy.MirrorCommittedMetadataRef(ctx, store.Repository(), refs); err != nil {
+		return fmt.Errorf("summary was written to %s, but failed to mirror to %s: %w", refs.Primary, refs.Mirror, err)
 	}
 
 	styles := newStatusStyles(w)

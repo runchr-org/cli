@@ -334,7 +334,7 @@ func DeleteOrphanedCheckpoints(ctx context.Context, checkpointIDs []string) (del
 	}
 
 	// Update branch reference and best-effort mirror
-	if err := AdvanceCommittedPrimary(ctx, repo, checkpoint.ResolveCommittedRefs(ctx), commitHash); err != nil {
+	if err := AdvanceCommittedPrimary(ctx, repo, refs, commitHash); err != nil {
 		return nil, nil, fmt.Errorf("failed to update branch: %w", err)
 	}
 
