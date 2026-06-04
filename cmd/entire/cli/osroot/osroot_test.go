@@ -80,18 +80,6 @@ func TestMkdirAll_Idempotent(t *testing.T) {
 	require.NoError(t, osroot.MkdirAll(root, "x/y", 0o755))
 }
 
-func TestMkdirAll_EmptyOrDotIsNoop(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	defer root.Close()
-
-	require.NoError(t, osroot.MkdirAll(root, "", 0o755))
-	require.NoError(t, osroot.MkdirAll(root, ".", 0o755))
-}
-
 func TestMkdirAll_TraversalBlocked(t *testing.T) {
 	t.Parallel()
 

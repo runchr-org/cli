@@ -420,7 +420,7 @@ func (s *ManualCommitStrategy) Rewind(ctx context.Context, w, errW io.Writer, po
 		// name (e.g. containing "..") from an untrusted checkpoint cannot create
 		// directories outside the repo. f.Name uses forward slashes (git tree).
 		dir := path.Dir(f.Name)
-		if dir != "." && dir != "" {
+		if dir != "." {
 			if err := osroot.MkdirAll(repoRootHandle, dir, 0o755); err != nil {
 				return fmt.Errorf("failed to create directory %s: %w", dir, err)
 			}

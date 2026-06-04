@@ -2,23 +2,17 @@
 // (Go 1.24+). These helpers ensure that file operations cannot escape a scoped
 // directory, preventing symlink attacks and TOCTOU races at the kernel level.
 //
-// os.Root supports: Open, OpenFile, Create, Stat, Lstat, Mkdir, Remove, OpenRoot.
-// os.Root does NOT support: MkdirAll, WriteFile, ReadFile, Rename, RemoveAll.
-// For unsupported operations, callers should use standard os functions with
-// lexical validation.
+// These wrappers predate Go 1.25, which added native ReadFile/WriteFile/MkdirAll
+// (etc.) on *os.Root; they remain as the codebase's stable, consistent helper
+// surface and delegate to the native methods where those now exist.
 //
 // Errors from these functions are returned unwrapped so that callers can use
 // os.IsNotExist() and errors.Is() directly without losing the original sentinel.
 package osroot
 
 import (
-	"errors"
 	"io"
-	"io/fs"
 	"os"
-	"path"
-	"path/filepath"
-	"strings"
 )
 
 // ReadFile reads the named file relative to root using os.Root for
@@ -60,29 +54,13 @@ func WriteFile(root *os.Root, name string, data []byte, perm os.FileMode) (retEr
 }
 
 // MkdirAll creates the directory named by name, along with any necessary
-// parents, relative to root. Each level is created with os.Root.Mkdir so the
-// kernel enforces containment: unlike os.MkdirAll, it cannot create directories
-// outside root. A name that escapes root (absolute, or containing ".." segments
-// that climb above root) is rejected by os.Root and returns an error. Already-
-// existing directories are tolerated. name may use either OS-native or forward
-// slashes; an empty or "." name is a no-op.
+// parents, relative to root. The kernel enforces containment: a name that
+// escapes root (absolute, or climbing above it via "..") is rejected. Already-
+// existing directories are tolerated, like os.MkdirAll. This thin wrapper keeps
+// the package's os.Root helper surface (alongside ReadFile/WriteFile/Remove)
+// consistent at call sites.
 func MkdirAll(root *os.Root, name string, perm os.FileMode) error {
-	name = strings.Trim(filepath.ToSlash(name), "/")
-	if name == "" || name == "." {
-		return nil
-	}
-
-	cur := ""
-	for _, part := range strings.Split(name, "/") {
-		if part == "" {
-			continue
-		}
-		cur = path.Join(cur, part)
-		if err := root.Mkdir(cur, perm); err != nil && !errors.Is(err, fs.ErrExist) {
-			return err //nolint:wrapcheck // preserve original error (incl. traversal rejection) for callers
-		}
-	}
-	return nil
+	return root.MkdirAll(name, perm) //nolint:wrapcheck // preserve original error for errors.Is/os.IsNotExist
 }
 
 // Remove removes the named file relative to root using os.Root for
