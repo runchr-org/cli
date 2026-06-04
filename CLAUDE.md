@@ -33,7 +33,9 @@ at the canonical group form.
 - `configure`: bare prints help and a hint pointing at `entire agent`; flags
   manage non-agent settings (telemetry, git-hook installation mode, strategy
   options, summary provider). Agent CRUD lives under `entire agent`.
-- `auth`: `login`, `logout`, `status`, `list`, `revoke`
+- `auth`: `login`, `logout`, `status`, `contexts`, `use`. `logout` takes
+  `--everywhere` (revoke every session on the active core, not just the
+  current one) and `--all-contexts` (log out of every saved login)
 - `doctor`: bare runs the scan-and-fix flow, plus `trace`, `logs`, `bundle`
 
 Top-level lifecycle and standalone commands: `enable`, `disable`, `status`,
@@ -417,7 +419,6 @@ The `Strategy` interface provides:
 - `SaveTaskStep()` - Save subagent task step checkpoint
 - `GetRewindPoints()` / `Rewind()` - List and restore to checkpoints
 - `GetSessionLog()` / `GetSessionInfo()` - Retrieve session data
-- `ListSessions()` / `GetSession()` - Session discovery
 
 #### How It Works
 
@@ -427,6 +428,7 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 - **Worktree-specific branches** - each git worktree gets its own shadow branch namespace, preventing conflicts
 - **Supports multiple concurrent sessions** - checkpoints from different sessions in the same directory interleave on the same shadow branch
 - Condenses session logs to permanent `entire/checkpoints/v1` branch on user commits
+- When `checkpoints_version` is `1.1`, best-effort mirrors v1 metadata to the local-only `refs/entire/checkpoints/v1.1` read ref after entire-managed v1 writes and fetches; mirror failures are logged, not fatal. The resume bootstrap that promotes local v1 from origin's remote-tracking ref is the deliberate exception — it does not mirror and is skipped entirely in v1.1 mode. Read paths use the configured ref as-is.
 - Uses the `post-rewrite` Git hook to keep local session linkage aligned after amend/rebase rewrites
 - Builds git trees in-memory using go-git plumbing APIs
 - Rewind restores files from shadow branch commit tree (does not use `git reset`)

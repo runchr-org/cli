@@ -1618,17 +1618,6 @@ func TestFormatSessionInfo_WithSourceRef(t *testing.T) {
 	}
 }
 
-// TestManualCommitStrategyCallable verifies that the strategy's methods are callable
-func TestManualCommitStrategyCallable(t *testing.T) {
-	s := strategy.NewManualCommitStrategy()
-
-	// GetAdditionalSessions should exist and be callable
-	_, err := s.GetAdditionalSessions(context.Background())
-	if err != nil {
-		t.Logf("GetAdditionalSessions returned error: %v", err)
-	}
-}
-
 func TestFormatSessionInfo_CheckpointNumberingReversed(t *testing.T) {
 	now := time.Now()
 	session := &strategy.Session{
@@ -2310,6 +2299,7 @@ func TestRunExplainCheckpoint_GenerateV11ReloadsAfterV1Write(t *testing.T) {
 		AuthorName:   "Test",
 		AuthorEmail:  "test@example.com",
 	}))
+	require.NoError(t, strategy.MirrorCommittedMetadataRef(ctx, repo, checkpoint.ResolveCommittedRefs(ctx)))
 
 	var buf, errBuf bytes.Buffer
 	err = runExplainCheckpoint(ctx, &buf, &errBuf, "bbccdd", false, false, false, false, true, true, false, 0)
@@ -2325,7 +2315,7 @@ func TestRunExplainCheckpoint_GenerateV11ReloadsAfterV1Write(t *testing.T) {
 	require.NoError(t, err)
 	customRef, err := repo.Reference(plumbing.ReferenceName(paths.MetadataRefName), true)
 	require.NoError(t, err)
-	require.Equal(t, v1Ref.Hash(), customRef.Hash(), "reload should resync v1.1 to the v1 write")
+	require.Equal(t, v1Ref.Hash(), customRef.Hash(), "summary generation should mirror the v1 write to v1.1")
 }
 
 func TestRunExplainCheckpoint_DefaultViewUsesV1Transcript(t *testing.T) {
