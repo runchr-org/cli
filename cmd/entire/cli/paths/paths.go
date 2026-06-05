@@ -41,9 +41,11 @@ const MetadataBranchName = "entire/checkpoints/v1"
 // MetadataRefName is the v1 custom ref that committed metadata is mirrored to
 // when checkpoints_version is "1.1". It lives under refs/entire/ (not
 // refs/heads/) so it stays invisible to `git branch -a` and is not pulled by a
-// default `git clone`. v1 remains the source of truth; this ref is a local-only
-// mirror. When v1.1 is enabled, committed reads resolve against this ref as-is;
-// active v1 write/fetch paths update the mirror, and it is never pushed.
+// default `git clone`. v1 remains the source of truth; this ref mirrors it.
+// When v1.1 is enabled, committed reads resolve against this ref as-is, active
+// v1 write/fetch paths update the mirror, and PrePush pushes it to the remote
+// alongside v1. As a non-branch ref it gets no origin-tracking shadow, so reads
+// still do not bootstrap it from origin.
 const MetadataRefName = "refs/entire/checkpoints/v1.1"
 
 // TrailsBranchName is the orphan branch used to store trail metadata.

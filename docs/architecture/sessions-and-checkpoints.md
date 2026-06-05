@@ -213,7 +213,7 @@ resolve against `refs/entire/checkpoints/v1.1` instead.
 
 The v1.1 ref lives outside `refs/heads/` and does not appear in normal branch
 listings. It is pushed to the configured remote alongside `entire/checkpoints/v1`
-— the resolver adds it to the push set and `PrePush` advances every ref there.
+— the resolver adds it to the push set and `PrePush` pushes every ref there.
 Because it is not a branch it gets no `refs/remotes/origin/...` tracking ref,
 and reads still resolve against the local ref rather than bootstrapping it from
 origin (reads target v1.1 while the primary write/fetch ref stays

@@ -101,8 +101,9 @@ func TestCommittedRefs_ReadBootstrappableFromOrigin(t *testing.T) {
 		want bool
 	}{
 		{"v1-only: reads target fetchable primary", CommittedRefs{Primary: v1, Read: v1, Push: []plumbing.ReferenceName{v1}}, true},
-		// v1.1-push milestone: v1.1 is pushed, but reads target the local-only
-		// mirror (Read != Primary), so reads still cannot bootstrap from origin.
+		// v1.1-push milestone: v1.1 is pushed, but it's a non-branch ref with no
+		// origin-tracking shadow and Read != Primary, so reads still cannot
+		// bootstrap from origin.
 		{"v1.1 pushed but reads target mirror", CommittedRefs{Primary: v1, Read: custom, Mirror: custom, Push: []plumbing.ReferenceName{v1, custom}}, false},
 		{"reads target primary but primary not pushed", CommittedRefs{Primary: v1, Read: v1, Push: nil}, false},
 	}
