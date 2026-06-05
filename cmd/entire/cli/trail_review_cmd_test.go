@@ -24,6 +24,7 @@ const (
 )
 
 func TestTrailCommandSurfaceUsesFindings(t *testing.T) {
+	t.Parallel()
 	trailCmd := newTrailCmd()
 	children := map[string]*cobra.Command{}
 	for _, child := range trailCmd.Commands() {
@@ -54,6 +55,7 @@ func TestTrailCommandSurfaceUsesFindings(t *testing.T) {
 }
 
 func TestTrailCommandRejectsRemovedReviewCommand(t *testing.T) {
+	t.Parallel()
 	cmd := newTrailCmd()
 	cmd.SetArgs([]string{"review"})
 	cmd.SetOut(io.Discard)
@@ -64,6 +66,7 @@ func TestTrailCommandRejectsRemovedReviewCommand(t *testing.T) {
 }
 
 func TestTrailReviewCommentsPath(t *testing.T) {
+	t.Parallel()
 	got := trailReviewCommentsPath("trail id/with slash", trailReviewListOptions{
 		Status:           "open,resolved",
 		Severity:         "high,medium",
@@ -79,6 +82,7 @@ func TestTrailReviewCommentsPath(t *testing.T) {
 }
 
 func TestParseTrailSelectorAndCommentID(t *testing.T) {
+	t.Parallel()
 	selector, commentID, err := parseTrailSelectorAndCommentID([]string{trailReviewTestCommentID}, "425")
 	if err != nil {
 		t.Fatalf("parseTrailSelectorAndCommentID with --trail: %v", err)
@@ -101,6 +105,7 @@ func TestParseTrailSelectorAndCommentID(t *testing.T) {
 }
 
 func TestLoadTrailReviewCommentPatchFile(t *testing.T) {
+	t.Parallel()
 	opts, err := loadTrailReviewCommentPatchFile(trailReviewCommentAddOptions{PatchFile: "-"}, strings.NewReader("diff --git a/file.txt b/file.txt\n"))
 	if err != nil {
 		t.Fatalf("loadTrailReviewCommentPatchFile: %v", err)
@@ -115,6 +120,7 @@ func TestLoadTrailReviewCommentPatchFile(t *testing.T) {
 }
 
 func TestBuildTrailReviewCommentCreateRequest(t *testing.T) {
+	t.Parallel()
 	req, err := buildTrailReviewCommentCreateRequest(trailReviewCommentAddOptions{
 		Title:       "Missing expiry skew handling",
 		Body:        "Token refresh should allow clock skew.",
@@ -187,6 +193,7 @@ func TestCreateTrailReviewCommentPostsTrailScopedPath(t *testing.T) {
 }
 
 func TestPrintTrailReviewDashboard(t *testing.T) {
+	t.Parallel()
 	high := trailReviewSeverityHigh
 	medium := trailReviewSeverityMedium
 	path := "src/auth/session.ts"
@@ -239,6 +246,7 @@ func TestPrintTrailReviewDashboard(t *testing.T) {
 }
 
 func TestPrintTrailReviewDashboard_UsesSeparateCountsWhenFilteredCommentsEmpty(t *testing.T) {
+	t.Parallel()
 	var out strings.Builder
 	counts := countTrailReviewComments([]api.TrailReviewComment{
 		{ID: "resolved-1", Status: trailReviewStatusResolved},
@@ -432,6 +440,9 @@ func TestApplyTrailReviewSuggestions_RejectsGitMetadataPaths(t *testing.T) {
 func newTrailReviewApplyRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
+	// Bare `git init` rather than testutil.InitRepo: these tests apply patches to
+	// the working tree without committing, so no user/GPG config is needed, and we
+	// must avoid testutil's core.autocrlf=true which rewrites patched LF to CRLF.
 	runTrailReviewApplyGit(t, dir, "init")
 	paths.ClearWorktreeRootCache()
 	t.Chdir(dir)

@@ -84,10 +84,6 @@ Events emitted by the server:
 }
 
 func runTrailWatch(cmd *cobra.Command, number int, jsonOutput, showPings, once bool) error {
-	return runTrailWatchWithOptions(cmd, number, jsonOutput, showPings, once)
-}
-
-func runTrailWatchWithOptions(cmd *cobra.Command, number int, jsonOutput, showPings, once bool) error {
 	ctx := cmd.Context()
 	client, err := NewAuthenticatedAPIClient(ctx, trailInsecureHTTP(cmd))
 	if err != nil {

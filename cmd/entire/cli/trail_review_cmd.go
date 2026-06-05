@@ -826,7 +826,7 @@ func trailReviewStatePath(trailID, reviewID, cursor string) string {
 }
 
 func verifyTrailReviewHead(ctx context.Context, state api.TrailReviewStateResponse) error {
-	want := strings.TrimSpace(optionalStringValue(state.CodeVersion.HeadSHA))
+	want := strings.TrimSpace(stringPtrValue(state.CodeVersion.HeadSHA))
 	if want == "" {
 		return nil
 	}
@@ -953,7 +953,9 @@ func validatePatchPath(raw string) error {
 		return fmt.Errorf("path %q escapes the repository", raw)
 	}
 	for _, part := range strings.Split(clean, "/") {
-		if part == ".git" {
+		// EqualFold guards case-insensitive filesystems (default macOS/Windows)
+		// where ".GIT/config" would otherwise slip past an exact match.
+		if strings.EqualFold(part, ".git") {
 			return fmt.Errorf("path %q targets .git metadata", raw)
 		}
 	}
@@ -1322,13 +1324,6 @@ func stringPtr(s string) *string {
 }
 
 func stringPtrValue(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-func optionalStringValue(s *string) string {
 	if s == nil {
 		return ""
 	}
