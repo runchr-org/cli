@@ -313,6 +313,48 @@ func TestPrintTrailListUnknownStatusGroupedInOtherBucket(t *testing.T) {
 	}
 }
 
+func TestPrintTrailListEmptyDefaultStatusNamesFilterAndHints(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	printTrailListEmpty(&out, "", []trail.Status{trail.StatusInProgress})
+
+	text := out.String()
+	for _, want := range []string{
+		"No in progress trails found.",
+		"Use --status any to see trails in other statuses.",
+		"entire trail create",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("output missing %q, got:\n%s", want, text)
+		}
+	}
+}
+
+func TestPrintTrailListEmptyAnyStatusOmitsHint(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	printTrailListEmpty(&out, "", nil)
+
+	text := out.String()
+	if !strings.Contains(text, "No trails found.") {
+		t.Fatalf("expected generic empty message, got:\n%s", text)
+	}
+	if strings.Contains(text, "--status any") {
+		t.Fatalf("should not hint --status any when no status filter is active, got:\n%s", text)
+	}
+}
+
+func TestPrintTrailListEmptyIncludesAuthor(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	printTrailListEmpty(&out, trailListTestAuthorAlice, []trail.Status{trail.StatusInProgress})
+
+	text := out.String()
+	if !strings.Contains(text, "No in progress trails found for alice.") {
+		t.Fatalf("expected author in empty message, got:\n%s", text)
+	}
+}
+
 func TestFetchCurrentUserLoginReturnsLogin(t *testing.T) {
 	t.Parallel()
 	r := newFakeRunner()

@@ -236,12 +236,7 @@ func runTrailListAll(ctx context.Context, w io.Writer, opts trailListOptions) er
 	}
 
 	if len(trails) == 0 {
-		fmt.Fprintln(w, "No trails found.")
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "Commands:")
-		fmt.Fprintln(w, "  entire trail create   Create a trail for the current branch")
-		fmt.Fprintln(w, "  entire trail list     List recent trails")
-		fmt.Fprintln(w, "  entire trail update   Update trail metadata")
+		printTrailListEmpty(w, authorFilter, statusFilters)
 		return nil
 	}
 
@@ -252,6 +247,32 @@ func runTrailListAll(ctx context.Context, w io.Writer, opts trailListOptions) er
 	})
 
 	return nil
+}
+
+// printTrailListEmpty renders the empty-state message. It names the active
+// status filter so a bare `entire trail list` (which defaults to in_progress)
+// doesn't read as "this repo has no trails" when trails exist in other
+// statuses. statusFilters is empty when the user passed --status any.
+func printTrailListEmpty(w io.Writer, authorFilter string, statusFilters []trail.Status) {
+	desc := "No trails found"
+	if len(statusFilters) > 0 {
+		desc = fmt.Sprintf("No %s trails found", trailStatusListDisplay(statusFilters))
+	}
+	if authorFilter != "" {
+		desc += " for " + authorFilter
+	}
+	fmt.Fprintf(w, "%s.\n", desc)
+
+	if len(statusFilters) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Use --status any to see trails in other statuses.")
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Commands:")
+	fmt.Fprintln(w, "  entire trail create   Create a trail for the current branch")
+	fmt.Fprintln(w, "  entire trail list     List recent trails")
+	fmt.Fprintln(w, "  entire trail update   Update trail metadata")
 }
 
 func limitTrails(trails []*trail.Metadata, limit int) []*trail.Metadata {
