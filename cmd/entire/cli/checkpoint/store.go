@@ -9,9 +9,8 @@ import (
 var _ Store = (*GitStore)(nil)
 
 // GitStore provides operations for both temporary and committed checkpoint
-// storage. It wraps a git repository and owns the committed-metadata ref
-// topology: writes target refs.Primary, committed reads resolve against
-// refs.Read, and mirror advancement runs through strategy.AdvanceCommittedPrimary.
+// storage. Writes target refs.Primary; committed reads resolve against
+// refs.Read. The store does not advance refs.Mirror.
 type GitStore struct {
 	repo        *git.Repository
 	refs        CommittedRefs

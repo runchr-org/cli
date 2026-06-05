@@ -357,7 +357,7 @@ func fetchAndRebaseRefCommon(ctx context.Context, target string, ref plumbing.Re
 	var refSpec string
 	usedTempRef := remote.IsURL(fetchTarget) || !ref.IsBranch()
 	if usedTempRef {
-		tmpRef := "refs/entire-fetch-tmp/" + ref.Short()
+		tmpRef := "refs/entire-fetch-tmp/" + strings.TrimPrefix(ref.String(), "refs/")
 		refSpec = fmt.Sprintf("+%s:%s", ref.String(), tmpRef)
 		fetchedRefName = plumbing.ReferenceName(tmpRef)
 	} else {
