@@ -108,16 +108,16 @@ func TestProviderSource_BearerAuth(t *testing.T) {
 		}
 	})
 
-	t.Run("other errors surface without the login hint", func(t *testing.T) {
+	t.Run("other errors surface verbatim", func(t *testing.T) {
 		t.Parallel()
-		sentinel := errors.New("STS rejected the exchange")
+		// The active-context provider returns an already-tailored message; it
+		// must reach the user unprefixed (no generic "resolve control-plane
+		// token" wrapper burying it) and without the login hint.
+		sentinel := errors.New(`no usable login for "ctx" (https://core.example); run ENTIRE_AUTH_BASE_URL=https://core.example entire login`)
 		src := &providerSource{provide: func(context.Context) (string, error) { return "", sentinel }}
 		_, err := src.BearerAuth(context.Background(), "")
-		if err == nil || !errors.Is(err, sentinel) {
-			t.Fatalf("error = %v, want it to wrap the sentinel", err)
-		}
-		if strings.Contains(err.Error(), "entire login") {
-			t.Fatalf("non-auth error must not carry a login hint: %v", err)
+		if err == nil || err.Error() != sentinel.Error() {
+			t.Fatalf("error = %v, want the provider message surfaced verbatim", err)
 		}
 	})
 }

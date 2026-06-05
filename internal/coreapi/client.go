@@ -84,14 +84,17 @@ type providerSource struct {
 func (p *providerSource) BearerAuth(ctx context.Context, _ OperationName) (BearerAuth, error) {
 	token, err := p.provide(ctx)
 	if err != nil {
-		// Only suggest login when the user genuinely isn't logged in.
-		// Other failures (STS rejection, refresh-expired, network) already
-		// carry descriptive messages and must surface verbatim rather than
-		// be masked by a login hint.
+		// The static fallback path returns a bare ErrNotLoggedIn sentinel with
+		// no helpful text, so add the standard login hint. The active-context
+		// path (NewRefreshingLoginProvider) instead returns a tailored message
+		// that already names the context, its login server, and the exact
+		// re-login command — surface that verbatim rather than burying it under
+		// a generic prefix. Other failures (STS rejection, network) are
+		// likewise self-descriptive.
 		if errors.Is(err, auth.ErrNotLoggedIn) {
 			return BearerAuth{}, fmt.Errorf("not logged in — run 'entire login': %w", err)
 		}
-		return BearerAuth{}, fmt.Errorf("resolve control-plane token: %w", err)
+		return BearerAuth{}, err
 	}
 	return BearerAuth{Token: token}, nil
 }

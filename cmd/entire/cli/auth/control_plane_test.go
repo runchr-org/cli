@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -78,6 +79,20 @@ func TestResolveControlPlaneTarget_ActiveContextWins(t *testing.T) {
 	}
 	if got != jwt {
 		t.Fatalf("TokenSource returned %q, want the context's stored JWT", got)
+	}
+}
+
+// A genuine contexts.json read/parse error must fail loud — not silently fall
+// back to a stale legacy identity for a control-plane mutation.
+func TestResolveControlPlaneTarget_CorruptContextsErrors(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("ENTIRE_CONFIG_DIR", configDir)
+	t.Setenv(api.AuthBaseURLEnvVar, "")
+	if err := os.WriteFile(filepath.Join(configDir, "contexts.json"), []byte("{ not valid json"), 0o600); err != nil {
+		t.Fatalf("write corrupt contexts.json: %v", err)
+	}
+	if _, err := ResolveControlPlaneTarget(); err == nil {
+		t.Fatal("want an error when contexts.json is corrupt, got nil")
 	}
 }
 
