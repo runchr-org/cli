@@ -265,7 +265,7 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	// review-attach on such a session silently overwrites the existing
 	// session's metadata in the checkpoint.
 	if opts.Review && isExistingCheckpoint {
-		exists, readErr := checkpointHasSessionMetadata(ctx, store, checkpointID, sessionID)
+		exists, readErr := checkpointHasSessionMetadata(ctx, repo, refs, checkpointID, sessionID)
 		if readErr != nil {
 			return fmt.Errorf("failed to check checkpoint %s for session %s: %w", checkpointID.String(), sessionID, readErr)
 		}
@@ -344,7 +344,11 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	return nil
 }
 
-func checkpointHasSessionMetadata(ctx context.Context, store *cpkg.GitStore, checkpointID id.CheckpointID, sessionID string) (bool, error) {
+// checkpointHasSessionMetadata reports whether sessionID has existing metadata
+// at Primary. Reads target Primary directly, not refs.Read, because this guard
+// must reflect what the next write would target.
+func checkpointHasSessionMetadata(ctx context.Context, repo *git.Repository, refs cpkg.CommittedRefs, checkpointID id.CheckpointID, sessionID string) (bool, error) {
+	store := cpkg.NewGitStore(repo, refs.PrimaryAsRead())
 	summary, err := store.ReadCommitted(ctx, checkpointID)
 	if err != nil {
 		return false, fmt.Errorf("read checkpoint summary: %w", err)
@@ -436,22 +440,15 @@ func refreshCheckpointRefs(ctx context.Context) (*git.Repository, error) {
 	return repo, err
 }
 
-// checkpointPresentLocally reports whether the checkpoint already exists on
-// the local primary ref we would write to. Remote-tracking alone is not
-// enough; see ensureCheckpointAvailable. Reads target Primary directly even
-// when the configured Read ref differs (e.g. v1.1 mirror) because the
-// question is "is the write target up to date," not "what's visible to
-// readers."
+// checkpointPresentLocally reports whether the checkpoint already exists at
+// Primary locally. Reads target Primary directly, not refs.Read, because this
+// asks what the next write would find, not what readers see. A missing local
+// ref is reported as absent; the caller is responsible for any remote refresh.
 func checkpointPresentLocally(ctx context.Context, repo *git.Repository, refs cpkg.CommittedRefs, checkpointID id.CheckpointID) (bool, error) {
 	if _, err := repo.Reference(refs.Primary, true); err != nil {
-		// Local ref doesn't exist — treat as "not present locally". We
-		// deliberately do not fall back to remote-tracking: see
-		// ensureCheckpointAvailable's docstring.
 		return false, nil //nolint:nilerr // Missing ref is the "absent" signal, not an error.
 	}
-	primaryRefs := refs
-	primaryRefs.Read = refs.Primary
-	summary, err := cpkg.NewGitStore(repo, primaryRefs).ReadCommitted(ctx, checkpointID)
+	summary, err := cpkg.NewGitStore(repo, refs.PrimaryAsRead()).ReadCommitted(ctx, checkpointID)
 	if err != nil {
 		return false, err //nolint:wrapcheck // Caller wraps with checkpoint ID context
 	}

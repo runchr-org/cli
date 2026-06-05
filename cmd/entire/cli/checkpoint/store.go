@@ -1,6 +1,8 @@
 package checkpoint
 
 import (
+	"fmt"
+
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 )
@@ -9,9 +11,8 @@ import (
 var _ Store = (*GitStore)(nil)
 
 // GitStore provides operations for both temporary and committed checkpoint
-// storage. It wraps a git repository and owns the committed-metadata ref
-// topology: writes target refs.Primary, committed reads resolve against
-// refs.Read, and mirror advancement runs through strategy.AdvanceCommittedPrimary.
+// storage. Writes target refs.Primary; committed reads resolve against
+// refs.Read. The store does not advance refs.Mirror.
 type GitStore struct {
 	repo        *git.Repository
 	refs        CommittedRefs
@@ -44,4 +45,11 @@ func (s *GitStore) Refs() CommittedRefs {
 // CommittedReadRef returns the ref that committed-checkpoint reads resolve against.
 func (s *GitStore) CommittedReadRef() plumbing.ReferenceName {
 	return s.refs.Read
+}
+
+func (s *GitStore) setPrimaryRef(hash plumbing.Hash) error {
+	if err := s.repo.Storer.SetReference(plumbing.NewHashReference(s.refs.Primary, hash)); err != nil {
+		return fmt.Errorf("set primary metadata ref %s to %s: %w", s.refs.Primary, hash, err)
+	}
+	return nil
 }

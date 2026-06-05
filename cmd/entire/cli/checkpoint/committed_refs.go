@@ -42,12 +42,16 @@ func (r CommittedRefs) PrimaryFetchableFromOrigin() bool {
 	return r.Primary.IsBranch() && slices.Contains(r.Push, r.Primary)
 }
 
-// ReadBootstrappableFromOrigin reports whether the read ref can be bootstrapped
-// from origin. True when reads target Primary AND Primary is fetchable from
-// origin. False when reads target a local-only mirror (origin doesn't track
-// it), even if Primary is itself fetchable.
+// ReadBootstrappableFromOrigin reports whether reads can be bootstrapped from
+// origin: true when reads target Primary and Primary is fetchable from origin.
 func (r CommittedRefs) ReadBootstrappableFromOrigin() bool {
 	return r.Read == r.Primary && r.PrimaryFetchableFromOrigin()
+}
+
+// PrimaryAsRead returns a copy of r with Read pinned to Primary.
+func (r CommittedRefs) PrimaryAsRead() CommittedRefs {
+	r.Read = r.Primary
+	return r
 }
 
 // ResolveCommittedRefs returns the topology for the settings on disk, falling
