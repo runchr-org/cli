@@ -148,12 +148,11 @@ func newContextTokenManager(c *contexts.Context, transport http.RoundTripper, al
 // (refresh vs exchange).
 func contextReauthError(c *contexts.Context, err error) error {
 	coreURL := strings.TrimRight(c.CoreURL, "/")
-	relogin := fmt.Sprintf("ENTIRE_AUTH_BASE_URL=%s entire login", coreURL)
 	switch {
 	case errors.Is(err, tokenmanager.ErrReauthRequired):
-		return fmt.Errorf("login session for %q (%s) expired; run `%s` to re-authenticate", c.Name, coreURL, relogin)
+		return fmt.Errorf("login session for %q (%s) expired; run `entire login` to re-authenticate", c.Name, coreURL)
 	case errors.Is(err, tokenmanager.ErrNotLoggedIn):
-		return fmt.Errorf("no usable login for %q (%s); run `%s`", c.Name, coreURL, relogin)
+		return fmt.Errorf("no usable login for %q (%s); run `entire login`", c.Name, coreURL)
 	}
 	return nil
 }

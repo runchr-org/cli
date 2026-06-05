@@ -142,8 +142,7 @@ func renderLoginHint(subject string, coreURLs []string) string {
 	for _, u := range coreURLs {
 		fmt.Fprintf(&b, "  %s\n", u)
 	}
-	fmt.Fprint(&b, "\nAuthenticate against one of those login servers and re-run your command:\n"+
-		"  ENTIRE_AUTH_BASE_URL=<url> entire login\n"+
-		"or, if you already have a login there, switch to it with `entire auth use <context>`.")
+	fmt.Fprint(&b, "\nLog in with `entire login`, then re-run your command.\n"+
+		"If you already have a login on one of those servers, switch to it with `entire auth use <context>`.")
 	return b.String()
 }
