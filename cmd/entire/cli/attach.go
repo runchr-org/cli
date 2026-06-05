@@ -265,7 +265,11 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	// review-attach on such a session silently overwrites the existing
 	// session's metadata in the checkpoint.
 	if opts.Review && isExistingCheckpoint {
-		if existing, readErr := store.ReadSessionContentByID(ctx, checkpointID, sessionID); readErr == nil && existing != nil {
+		exists, readErr := checkpointHasSessionMetadata(ctx, store, checkpointID, sessionID)
+		if readErr != nil {
+			return fmt.Errorf("failed to check checkpoint %s for session %s: %w", checkpointID.String(), sessionID, readErr)
+		}
+		if exists {
 			return fmt.Errorf(
 				"session %s is already recorded in checkpoint %s; rewriting an existing checkpoint as a review is not supported yet",
 				sessionID, checkpointID.String(),
@@ -338,6 +342,26 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	}
 
 	return nil
+}
+
+func checkpointHasSessionMetadata(ctx context.Context, store *cpkg.GitStore, checkpointID id.CheckpointID, sessionID string) (bool, error) {
+	summary, err := store.ReadCommitted(ctx, checkpointID)
+	if err != nil {
+		return false, fmt.Errorf("read checkpoint summary: %w", err)
+	}
+	if summary == nil {
+		return false, nil
+	}
+	for i := range summary.Sessions {
+		metadata, err := store.ReadSessionMetadata(ctx, checkpointID, i)
+		if err != nil {
+			return false, fmt.Errorf("read session %d metadata: %w", i, err)
+		}
+		if metadata != nil && metadata.SessionID == sessionID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // getHeadCommit returns the HEAD commit object.

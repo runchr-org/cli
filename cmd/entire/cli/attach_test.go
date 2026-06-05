@@ -25,6 +25,7 @@ import (
 	cliReview "github.com/entireio/cli/cmd/entire/cli/review"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
+	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/redact"
@@ -1277,6 +1278,49 @@ func TestAttach_ReviewWithExistingCheckpointErrorsEvenWithoutSessionState(t *tes
 	})
 	if err == nil {
 		t.Fatal("expected error when review-attaching a session already recorded in HEAD's checkpoint, even without session state")
+	}
+	if !strings.Contains(err.Error(), "already recorded in checkpoint") {
+		t.Errorf("error should mention 'already recorded in checkpoint'; got: %v", err)
+	}
+}
+
+func TestAttach_ReviewWithExistingMetadataOnlyCheckpointErrorsEvenWithoutSessionState(t *testing.T) {
+	setupAttachTestRepo(t)
+
+	repoRoot := mustGetwd(t)
+	repo, err := git.PlainOpen(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sessionID := "test-attach-review-metadata-only"
+	checkpointID := id.MustCheckpointID("aabbccddeeff")
+	store := cpkg.NewGitStore(repo, cpkg.DefaultV1Refs())
+	if err := store.WriteCommitted(context.Background(), cpkg.WriteCommittedOptions{
+		CheckpointID: checkpointID,
+		SessionID:    sessionID,
+		Strategy:     strategy.StrategyNameManualCommit,
+		Transcript:   redact.AlreadyRedacted(nil),
+		Prompts:      []string{"original prompt"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+		Agent:        agent.AgentTypeClaudeCode,
+	}); err != nil {
+		t.Fatalf("WriteCommitted: %v", err)
+	}
+	runGitInDir(t, repoRoot, "commit", "--amend", "--no-edit", "-m", "init\n\nEntire-Checkpoint: "+checkpointID.String())
+
+	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"review again"},"uuid":"uuid-1"}
+`)
+
+	var out bytes.Buffer
+	err = runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, attachOptions{
+		Force:                true,
+		Review:               true,
+		ReviewSkillsOverride: []string{"/pr-review-toolkit:review-pr"},
+	})
+	if err == nil {
+		t.Fatal("expected error when review-attaching a metadata-only session already recorded in HEAD's checkpoint")
 	}
 	if !strings.Contains(err.Error(), "already recorded in checkpoint") {
 		t.Errorf("error should mention 'already recorded in checkpoint'; got: %v", err)
