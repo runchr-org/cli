@@ -18,8 +18,29 @@ import (
 const dataAPIDiscoveryTimeout = 8 * time.Second
 
 // resolveContextForAPI is the discovery seam, swapped in tests so they don't
-// reach the network.
+// reach the network. See SetResolveContextForAPIForTest for cross-package tests.
 var resolveContextForAPI = clusterdiscovery.ResolveContextForAPI
+
+// SetResolveContextForAPIForTest overrides the /.well-known/entire-api.json
+// discovery seam and returns a cleanup func. Tests in other packages that
+// exercise a data-API command (activity/search/dispatch/recap) MUST install
+// this — otherwise ResolveDataAPIToken makes a real network call to the
+// configured data host and bypasses any SetManagerForTest fallback seam. Pass
+// a func returning clusterdiscovery.ErrDiscoveryUnavailable to force the static
+// fallback path. Test-only.
+func SetResolveContextForAPIForTest(t interface{ Helper() }, fn func(context.Context, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, *clusterdiscovery.APIResponse, error)) func() {
+	t.Helper()
+	prev := resolveContextForAPI
+	resolveContextForAPI = fn
+	return func() { resolveContextForAPI = prev }
+}
+
+// DiscoveryUnavailableForTest is a ready-made SetResolveContextForAPIForTest
+// value that forces the discovery-unavailable fallback (no network), so a
+// cross-package test exercises the static TokenForResource path deterministically.
+func DiscoveryUnavailableForTest(context.Context, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, *clusterdiscovery.APIResponse, error) {
+	return nil, nil, clusterdiscovery.ErrDiscoveryUnavailable
+}
 
 // ResolveDataAPIToken returns a bearer for the data API at dataBaseURL.
 //
