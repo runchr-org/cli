@@ -10,32 +10,23 @@ import (
 	"github.com/entireio/cli/internal/entireclient/discovery"
 )
 
-// APIPath is the well-known path a data/web API (entire.io) serves to
-// advertise its trust roots, mirroring entire.io's api/src/app.ts route.
-// Unlike the cluster blob (core_urls only) it also carries the audience
-// the CLI must exchange its core token for, since a resource API
-// validates a fixed `aud` claim.
+// APIPath is the well-known path a data/web API (entire.io) serves to advertise
+// its trust roots, mirroring entire.io's api/src/app.ts route. The document also
+// carries an `audience`, but the CLI doesn't consume it: the data API requires
+// `aud` == its own base URI (https://entire.io / https://partial.to), which the
+// token manager already derives from the resource origin it's dialing, so the
+// only field the CLI needs is the trusted-issuer list — exactly like a git
+// cluster's core_urls.
 const APIPath = "/.well-known/entire-api.json"
 
-// APIResponse is the parsed shape of /.well-known/entire-api.json. New
-// fields may be added by the server; unknown ones are ignored.
+// APIResponse is the parsed shape of /.well-known/entire-api.json. The CLI reads
+// only trusted_issuers (to pick the login context); issuer/audience/jwks_uris
+// are server-side concerns and ignored on decode.
 type APIResponse struct {
-	// Issuer is the API's home core (its preferred login server).
-	Issuer string `json:"issuer"`
-	// TrustedIssuers is every core whose JWTs the API accepts. Used the
-	// same way cluster discovery uses core_urls: to pick the local
-	// context whose CoreURL the API will honour.
+	// TrustedIssuers is every core whose JWTs the API accepts. Used the same way
+	// cluster discovery uses core_urls: to pick the local context whose CoreURL
+	// the API will honour.
 	TrustedIssuers []string `json:"trusted_issuers"`
-	// Audience is the `aud` the exchanged token must carry. The CLI
-	// passes this verbatim as the RFC 8693 audience so the issued token
-	// matches what the API validates — today the data host origin, but
-	// advertised (not assumed) so the server can change it without a CLI
-	// release.
-	Audience string `json:"audience"`
-	// The server also advertises its JWKS URI(s) for verifying inbound
-	// tokens, but that's a server-side concern — the CLI never fetches
-	// JWKS — so we don't model the field here. Unknown JSON fields are
-	// ignored on decode, so the server's shape can evolve freely.
 }
 
 // ErrDiscoveryUnavailable wraps every "the API didn't give us a usable
@@ -48,11 +39,10 @@ type APIResponse struct {
 // the user must see.
 var ErrDiscoveryUnavailable = errors.New("api discovery unavailable")
 
-// DiscoverAPI fetches and parses an API host's /.well-known/entire-api.json.
-// On success it returns a body with a non-empty TrustedIssuers and
-// Audience. Every failure mode (transport, non-200, decode, empty
-// required fields) is folded under ErrDiscoveryUnavailable so the caller
-// has a single sentinel to fall back on.
+// DiscoverAPI fetches and parses an API host's /.well-known/entire-api.json,
+// returning its trusted issuers. Every failure mode (transport, non-200,
+// decode, empty trusted_issuers) is folded under ErrDiscoveryUnavailable so the
+// caller has a single sentinel to fall back on.
 //
 // debugf is optional; nil suppresses debug output.
 func DiscoverAPI(ctx context.Context, apiHost string, c *http.Client, debugf DebugFunc) (*APIResponse, error) {
@@ -63,73 +53,71 @@ func DiscoverAPI(ctx context.Context, apiHost string, c *http.Client, debugf Deb
 	if err := fetchWellKnownJSON(ctx, apiHost, APIPath, c, &body, debugf); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrDiscoveryUnavailable, err)
 	}
-	if len(body.TrustedIssuers) == 0 || body.Audience == "" {
-		debugf("api discovery: incomplete document from https://%s%s (trusted_issuers=%d, audience=%q)",
-			apiHost, APIPath, len(body.TrustedIssuers), body.Audience)
+	if len(body.TrustedIssuers) == 0 {
+		debugf("api discovery: no trusted_issuers in response from https://%s%s", apiHost, APIPath)
 		return nil, fmt.Errorf("%w: incomplete /.well-known/entire-api.json from %s", ErrDiscoveryUnavailable, apiHost)
 	}
 	return &body, nil
 }
 
-// resolveAPIDoc returns apiHost's trust-root document, from api_discovery.json
-// when fresh, otherwise via a live /.well-known/entire-api.json fetch (which is
-// then cached). A stale-but-present cache entry is used as a fallback when the
-// live fetch fails, so a brief outage doesn't break a command whose trust roots
-// we already knew. Mirrors resolveClusterCores. Every cold failure stays folded
-// under ErrDiscoveryUnavailable (from DiscoverAPI) for the caller's fallback.
-func resolveAPIDoc(ctx context.Context, cacheDir, apiHost string, httpClient *http.Client, debugf DebugFunc) (*APIResponse, error) {
-	cache, err := discovery.LoadAPIDiscovery(cacheDir)
+// resolveAPITrustedIssuers returns apiHost's trusted issuer URLs, from
+// api_discovery.json when fresh, otherwise via a live
+// /.well-known/entire-api.json fetch (which is then cached). A stale-but-present
+// cache entry is used as a fallback when the live fetch fails, so a brief outage
+// doesn't break a command whose trust roots we already knew. Mirrors
+// resolveClusterCores exactly — the data-API trusted issuers ARE core URLs, so
+// they share the cores cache (different file). Cold failures stay folded under
+// ErrDiscoveryUnavailable (from DiscoverAPI) for the caller's static fallback.
+func resolveAPITrustedIssuers(ctx context.Context, cacheDir, apiHost string, httpClient *http.Client, debugf DebugFunc) ([]string, error) {
+	cache, err := discovery.LoadAPICores(cacheDir)
 	if err != nil {
 		// A cache read problem must not block resolution — discover live.
 		debugf("api-discovery cache load failed: %v; discovering live", err)
 		cache = nil
 	}
 
-	var stale *APIResponse
+	var stale []string
 	if cache != nil {
-		if entry, fresh, ok := cache.Get(apiHost); ok {
-			doc := &APIResponse{Issuer: entry.Issuer, TrustedIssuers: entry.TrustedIssuers, Audience: entry.Audience}
+		if urls, fresh, ok := cache.Get(apiHost); ok {
 			if fresh {
-				debugf("api host %s trust roots from cache", apiHost)
-				return doc, nil
+				debugf("api host %s trusted issuers from cache: %v", apiHost, urls)
+				return urls, nil
 			}
-			stale = doc
-			debugf("api host %s trust-roots cache expired; re-fetching %s", apiHost, APIPath)
+			stale = urls
+			debugf("api host %s trusted-issuers cache expired; re-fetching %s", apiHost, APIPath)
 		}
 	}
 
-	doc, err := DiscoverAPI(ctx, apiHost, httpClient, debugf)
+	body, err := DiscoverAPI(ctx, apiHost, httpClient, debugf)
 	if err != nil {
 		if stale != nil {
-			debugf("api discovery for %s failed (%v); falling back to stale cached trust roots", apiHost, err)
+			debugf("api discovery for %s failed (%v); falling back to stale cached trusted issuers %v", apiHost, err, stale)
 			return stale, nil
 		}
 		return nil, err
 	}
 
-	if mErr := discovery.ModifyAPIDiscovery(cacheDir, func(c discovery.APIDiscoveryCache) error {
-		c.Set(apiHost, discovery.APIDiscoveryEntry{Issuer: doc.Issuer, TrustedIssuers: doc.TrustedIssuers, Audience: doc.Audience})
+	if mErr := discovery.ModifyAPICores(cacheDir, func(c discovery.ClusterCoresCache) error {
+		c.Set(apiHost, body.TrustedIssuers)
 		return nil
 	}); mErr != nil {
-		// Non-fatal: we resolved the doc, the next command just re-fetches.
+		// Non-fatal: we resolved the issuers, the next command just re-fetches.
 		debugf("api-discovery cache write for %s failed: %v", apiHost, mErr)
 	}
-	return doc, nil
+	return body.TrustedIssuers, nil
 }
 
 // ResolveContextForAPI picks the local login context to authenticate data-API
-// calls against apiHost, and returns the discovery document alongside it so
-// the caller can exchange for the advertised audience.
+// calls against apiHost.
 //
-// It mirrors ResolveContextForCluster's account selection — active context
-// wins when its CoreURL is among the API's trusted issuers, else the sole
-// eligible context, else an explicit-choice / login error — but sources the
-// trusted issuers from /.well-known/entire-api.json instead of
-// entire-cluster.json. The trust-root document is cached (api_discovery.json,
-// long TTL) and re-fetched on expiry, with stale fallback — the same
-// cache-then-/.well-known path the cluster resolver uses (resolveClusterCores).
+// It mirrors ResolveContextForCluster: active context wins when its CoreURL is
+// among the API's trusted issuers, else the sole eligible context, else an
+// explicit-choice / login error — sourcing the trusted issuers from
+// /.well-known/entire-api.json (cached in api_discovery.json, long TTL,
+// re-fetched on expiry with stale fallback) instead of entire-cluster.json.
 // Account selection is recomputed every call from the live contexts, never
-// persisted.
+// persisted. The caller exchanges the chosen context's token for the data host
+// origin (which is the audience the API requires); no audience is read here.
 //
 // When the API doesn't advertise discovery (404 / unreachable / 503 /
 // malformed) and no cache entry exists, the returned error wraps
@@ -138,21 +126,17 @@ func resolveAPIDoc(ctx context.Context, cacheDir, apiHost string, httpClient *ht
 // unwrapped — the user must act on it.
 //
 // debugf is optional; nil suppresses debug output.
-func ResolveContextForAPI(ctx context.Context, configDir, cacheDir, apiHost string, httpClient *http.Client, debugf DebugFunc) (*contexts.Context, *APIResponse, error) {
+func ResolveContextForAPI(ctx context.Context, configDir, cacheDir, apiHost string, httpClient *http.Client, debugf DebugFunc) (*contexts.Context, error) {
 	if debugf == nil {
 		debugf = func(string, ...any) {}
 	}
-	doc, err := resolveAPIDoc(ctx, cacheDir, apiHost, httpClient, debugf)
+	trustedIssuers, err := resolveAPITrustedIssuers(ctx, cacheDir, apiHost, httpClient, debugf)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	f, err := contexts.Load(configDir)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load contexts: %w", err)
+		return nil, fmt.Errorf("load contexts: %w", err)
 	}
-	selected, err := selectContext(f, "API host "+apiHost, doc.TrustedIssuers, debugf)
-	if err != nil {
-		return nil, nil, err
-	}
-	return selected, doc, nil
+	return selectContext(f, "API host "+apiHost, trustedIssuers, debugf)
 }

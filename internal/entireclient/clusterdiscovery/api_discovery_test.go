@@ -26,8 +26,9 @@ func (s schemeRewriteTransport) RoundTrip(req *http.Request) (*http.Response, er
 	return s.base.RoundTrip(req)
 }
 
-// apiDiscoveryBody includes jwks_uris (the server's real field, plural per
-// entire.io#2281) to prove the CLI ignores fields it doesn't model.
+// apiDiscoveryBody carries issuer/audience/jwks_uris alongside trusted_issuers
+// to prove the CLI reads only trusted_issuers and ignores the rest (audience is
+// derived from the data host origin; jwks is server-side).
 const apiDiscoveryBody = `{
   "issuer": "https://us.auth.partial.to",
   "trusted_issuers": ["https://us.auth.partial.to", "https://eu.auth.partial.to"],
@@ -49,9 +50,7 @@ func TestDiscoverAPI(t *testing.T) {
 
 		doc, err := DiscoverAPI(t.Context(), "partial.to", hostPinningClient(t, srv), t.Logf)
 		require.NoError(t, err)
-		assert.Equal(t, "https://us.auth.partial.to", doc.Issuer)
 		assert.Equal(t, []string{"https://us.auth.partial.to", "https://eu.auth.partial.to"}, doc.TrustedIssuers)
-		assert.Equal(t, "https://partial.to", doc.Audience)
 	})
 
 	// 404 (deployment predating the well-known), 503 (unconfigured), transport
@@ -124,10 +123,11 @@ func TestDiscoverAPI(t *testing.T) {
 		assert.ErrorIs(t, err, ErrDiscoveryUnavailable)
 	})
 
-	t.Run("missing audience → ErrDiscoveryUnavailable", func(t *testing.T) {
+	t.Run("missing trusted_issuers → ErrDiscoveryUnavailable", func(t *testing.T) {
 		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte(`{"trusted_issuers":["https://us.auth.partial.to"]}`)) //nolint:errcheck // test handler
+			// Only audience, no trusted_issuers — the one field the CLI needs.
+			_, _ = w.Write([]byte(`{"audience":"https://partial.to"}`)) //nolint:errcheck // test handler
 		}))
 		defer srv.Close()
 
@@ -136,17 +136,9 @@ func TestDiscoverAPI(t *testing.T) {
 	})
 }
 
-// apiTestAudience is the advertised audience every apiHandler serves; the data
-// host origin, matching real entire.io config.
-const apiTestAudience = "https://partial.to"
-
 func apiHandler(t *testing.T, trustedIssuers ...string) http.HandlerFunc {
 	t.Helper()
-	doc := APIResponse{
-		Issuer:         trustedIssuers[0],
-		TrustedIssuers: trustedIssuers,
-		Audience:       apiTestAudience,
-	}
+	doc := APIResponse{TrustedIssuers: trustedIssuers}
 	body, err := json.Marshal(doc)
 	require.NoError(t, err)
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -173,10 +165,9 @@ func TestResolveContextForAPI(t *testing.T) {
 			},
 		}))
 
-		c, doc, err := ResolveContextForAPI(t.Context(), configDir, t.TempDir(), "partial.to", hostPinningClient(t, srv), t.Logf)
+		c, err := ResolveContextForAPI(t.Context(), configDir, t.TempDir(), "partial.to", hostPinningClient(t, srv), t.Logf)
 		require.NoError(t, err)
 		assert.Equal(t, "me@us-partial", c.Name)
-		assert.Equal(t, "https://partial.to", doc.Audience)
 	})
 
 	// The cross-core case the slice exists to fix: the active context is a prod
@@ -196,7 +187,7 @@ func TestResolveContextForAPI(t *testing.T) {
 			},
 		}))
 
-		c, _, err := ResolveContextForAPI(t.Context(), configDir, t.TempDir(), "partial.to", hostPinningClient(t, srv), t.Logf)
+		c, err := ResolveContextForAPI(t.Context(), configDir, t.TempDir(), "partial.to", hostPinningClient(t, srv), t.Logf)
 		require.NoError(t, err)
 		assert.Equal(t, "me@staging", c.Name)
 	})
@@ -212,7 +203,7 @@ func TestResolveContextForAPI(t *testing.T) {
 			Contexts:       []*contexts.Context{{Name: "me@prod", CoreURL: "https://us.auth.entire.io", Handle: "me", KeychainService: "kc:prod"}},
 		}))
 
-		_, _, err := ResolveContextForAPI(t.Context(), configDir, t.TempDir(), "partial.to", hostPinningClient(t, srv), t.Logf)
+		_, err := ResolveContextForAPI(t.Context(), configDir, t.TempDir(), "partial.to", hostPinningClient(t, srv), t.Logf)
 		require.Error(t, err)
 		require.NotErrorIs(t, err, ErrDiscoveryUnavailable, "a reachable-but-unmatched API is a real login error, not a fallback case")
 		assert.Contains(t, err.Error(), "no auth context for API host partial.to")
@@ -233,7 +224,7 @@ func TestResolveContextForAPI(t *testing.T) {
 			},
 		}))
 
-		_, _, err := ResolveContextForAPI(t.Context(), configDir, t.TempDir(), "partial.to", hostPinningClient(t, srv), t.Logf)
+		_, err := ResolveContextForAPI(t.Context(), configDir, t.TempDir(), "partial.to", hostPinningClient(t, srv), t.Logf)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "multiple login contexts")
 		assert.Contains(t, err.Error(), "API host partial.to")
@@ -246,7 +237,7 @@ func TestResolveContextForAPI(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		_, _, err := ResolveContextForAPI(t.Context(), t.TempDir(), t.TempDir(), "partial.to", hostPinningClient(t, srv), t.Logf)
+		_, err := ResolveContextForAPI(t.Context(), t.TempDir(), t.TempDir(), "partial.to", hostPinningClient(t, srv), t.Logf)
 		assert.ErrorIs(t, err, ErrDiscoveryUnavailable)
 	})
 }
@@ -256,7 +247,7 @@ func TestResolveContextForAPI(t *testing.T) {
 // live fetches.
 func countingAPIHandler(t *testing.T, calls *int32, trustedIssuers ...string) http.HandlerFunc {
 	t.Helper()
-	doc := APIResponse{Issuer: trustedIssuers[0], TrustedIssuers: trustedIssuers, Audience: apiTestAudience}
+	doc := APIResponse{TrustedIssuers: trustedIssuers}
 	body, err := json.Marshal(doc)
 	require.NoError(t, err)
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -290,23 +281,23 @@ func TestResolveContextForAPI_CachedAcrossCalls(t *testing.T) {
 	cacheDir := t.TempDir()
 	partialContexts(t, configDir)
 
-	_, doc, err := ResolveContextForAPI(t.Context(), configDir, cacheDir, "partial.to", hostPinningClient(t, srv), t.Logf)
+	c, err := ResolveContextForAPI(t.Context(), configDir, cacheDir, "partial.to", hostPinningClient(t, srv), t.Logf)
 	require.NoError(t, err)
-	assert.Equal(t, "https://partial.to", doc.Audience)
+	assert.Equal(t, "me@us-partial", c.Name)
 	require.Equal(t, int32(1), atomic.LoadInt32(&calls), "first call fetches /.well-known")
 
-	_, doc2, err := ResolveContextForAPI(t.Context(), configDir, cacheDir, "partial.to", hostPinningClient(t, srv), t.Logf)
+	c2, err := ResolveContextForAPI(t.Context(), configDir, cacheDir, "partial.to", hostPinningClient(t, srv), t.Logf)
 	require.NoError(t, err)
-	assert.Equal(t, "https://partial.to", doc2.Audience)
+	assert.Equal(t, "me@us-partial", c2.Name)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "second call is served from the api-discovery cache")
 
-	// The trust roots are persisted; the audience round-trips through the cache.
-	cache, err := discovery.LoadAPIDiscovery(cacheDir)
+	// The trusted issuers are persisted (in the cores cache, separate file).
+	cache, err := discovery.LoadAPICores(cacheDir)
 	require.NoError(t, err)
-	entry, fresh, ok := cache.Get("partial.to")
+	urls, fresh, ok := cache.Get("partial.to")
 	require.True(t, ok)
 	assert.True(t, fresh)
-	assert.Equal(t, "https://partial.to", entry.Audience)
+	assert.Equal(t, []string{"https://us.auth.partial.to"}, urls)
 }
 
 // TestResolveContextForAPI_StaleFallbackOnFetchFailure: a present-but-stale
@@ -326,19 +317,16 @@ func TestResolveContextForAPI_StaleFallbackOnFetchFailure(t *testing.T) {
 	partialContexts(t, configDir)
 
 	// Seed a stale entry (fetched longer ago than the TTL).
-	require.NoError(t, discovery.ModifyAPIDiscovery(cacheDir, func(c discovery.APIDiscoveryCache) error {
-		c["partial.to"] = &discovery.APIDiscoveryEntry{
-			Issuer:         "https://us.auth.partial.to",
-			TrustedIssuers: []string{"https://us.auth.partial.to"},
-			Audience:       "https://partial.to",
-			FetchedAt:      time.Now().Add(-discovery.APIDiscoveryTTL - time.Hour),
+	require.NoError(t, discovery.ModifyAPICores(cacheDir, func(c discovery.ClusterCoresCache) error {
+		c["partial.to"] = &discovery.CoresEntry{
+			CoreURLs:  []string{"https://us.auth.partial.to"},
+			FetchedAt: time.Now().Add(-discovery.ClusterCoresTTL - time.Hour),
 		}
 		return nil
 	}))
 
-	c, doc, err := ResolveContextForAPI(t.Context(), configDir, cacheDir, "partial.to", hostPinningClient(t, srv), t.Logf)
+	c, err := ResolveContextForAPI(t.Context(), configDir, cacheDir, "partial.to", hostPinningClient(t, srv), t.Logf)
 	require.NoError(t, err, "stale cache entry should rescue a failed re-fetch")
 	require.NotErrorIs(t, err, ErrDiscoveryUnavailable)
 	assert.Equal(t, "me@us-partial", c.Name)
-	assert.Equal(t, "https://partial.to", doc.Audience)
 }

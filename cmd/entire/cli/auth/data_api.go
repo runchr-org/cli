@@ -21,7 +21,7 @@ const dataAPIDiscoveryTimeout = 8 * time.Second
 // resolveContextForAPIFunc is the shape of the discovery seam: it mirrors
 // clusterdiscovery.ResolveContextForAPI (ctx, configDir, cacheDir, apiHost,
 // httpClient, debugf).
-type resolveContextForAPIFunc func(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, *clusterdiscovery.APIResponse, error)
+type resolveContextForAPIFunc func(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, error)
 
 // resolveContextForAPI is the discovery seam, swapped in tests so they don't
 // reach the network. See SetResolveContextForAPIForTest for cross-package tests.
@@ -44,8 +44,8 @@ func SetResolveContextForAPIForTest(t interface{ Helper() }, fn resolveContextFo
 // DiscoveryUnavailableForTest is a ready-made SetResolveContextForAPIForTest
 // value that forces the discovery-unavailable fallback (no network), so a
 // cross-package test exercises the static TokenForResource path deterministically.
-func DiscoveryUnavailableForTest(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, *clusterdiscovery.APIResponse, error) {
-	return nil, nil, clusterdiscovery.ErrDiscoveryUnavailable
+func DiscoveryUnavailableForTest(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, error) {
+	return nil, clusterdiscovery.ErrDiscoveryUnavailable
 }
 
 // ResolveDataAPIToken returns a bearer for the data API at dataBaseURL.
@@ -88,7 +88,7 @@ func ResolveDataAPIToken(ctx context.Context, dataBaseURL string) (string, error
 	defer cancel()
 	httpClient := &http.Client{Timeout: dataAPIDiscoveryTimeout}
 
-	selected, doc, err := resolveContextForAPI(dctx, contexts.DefaultConfigDir(), discovery.DefaultCacheDir(), host, httpClient, nil)
+	selected, err := resolveContextForAPI(dctx, contexts.DefaultConfigDir(), discovery.DefaultCacheDir(), host, httpClient, nil)
 	if errors.Is(err, clusterdiscovery.ErrDiscoveryUnavailable) {
 		// Old deployment / not rolled out / transient — preserve today's behaviour.
 		return TokenForResource(ctx, dataOrigin)
@@ -97,8 +97,10 @@ func ResolveDataAPIToken(ctx context.Context, dataBaseURL string) (string, error
 		return "", err
 	}
 
+	// Exchange for the data host origin; the token manager derives the RFC 8693
+	// audience from it, which is the aud the API requires (aud == base URI).
 	allowInsecure := insecureHTTPEnabled() || isLoopbackHTTP(selected.CoreURL)
-	provider, err := NewRefreshingResourceProvider(selected, dataOrigin, doc.Audience, nil, allowInsecure)
+	provider, err := NewRefreshingResourceProvider(selected, dataOrigin, nil, allowInsecure)
 	if err != nil {
 		return "", err
 	}

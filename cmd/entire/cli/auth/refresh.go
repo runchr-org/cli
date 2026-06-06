@@ -239,26 +239,27 @@ func RefreshedLoginToken(ctx context.Context, c *contexts.Context) (string, erro
 }
 
 // NewRefreshingResourceProvider returns a provider that mints a bearer valid
-// for resourceOrigin carrying the given audience, by exchanging context c's
-// login JWT at c's own core (RFC 8693). It is NewRefreshingLoginProvider's
-// sibling for resource servers: where that returns the bare login JWT (the
-// control plane / cluster cases, where the host is the core), this performs
-// the token exchange the data API requires.
+// for resourceOrigin, by exchanging context c's login JWT at c's own core (RFC
+// 8693). It is NewRefreshingLoginProvider's sibling for resource servers: where
+// that returns the bare login JWT (the control plane / cluster cases, where the
+// host is the core), this performs the token exchange the data API requires.
 //
 // Both the silent login-JWT re-mint and the exchange run through the shared
 // per-context tokenmanager (newContextTokenManager). resourceOrigin must
-// already be origin-only (no path); audience is passed verbatim as the RFC
-// 8693 audience param. Exchanged tokens are cached in-process by the
-// tokenmanager for the life of this process.
+// already be origin-only (no path). No audience is passed: the token manager
+// defaults the RFC 8693 audience to the resource origin, which is exactly what
+// the data API requires (aud == its base URI), so the audience is derived from
+// the host being dialed rather than read from discovery. Exchanged tokens are
+// cached in-process by the tokenmanager for the life of this process.
 //
 // transport carries the caller's TLS configuration; allowInsecureHTTP permits
 // an http:// core/resource for loopback/dev.
-func NewRefreshingResourceProvider(c *contexts.Context, resourceOrigin, audience string, transport http.RoundTripper, allowInsecureHTTP bool) (func(context.Context) (string, error), error) {
+func NewRefreshingResourceProvider(c *contexts.Context, resourceOrigin string, transport http.RoundTripper, allowInsecureHTTP bool) (func(context.Context) (string, error), error) {
 	mgr, err := newContextTokenManager(c, transport, allowInsecureHTTP)
 	if err != nil {
 		return nil, err
 	}
-	req := tokenmanager.TokenRequest{Resource: resourceOrigin, Audience: audience}
+	req := tokenmanager.TokenRequest{Resource: resourceOrigin}
 	return func(ctx context.Context) (string, error) {
 		tok, err := mgr.Token(ctx, req)
 		if mapped := contextReauthError(c, err); mapped != nil {

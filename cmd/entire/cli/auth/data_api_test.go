@@ -42,8 +42,8 @@ func TestResolveDataAPIToken_FallbackWhenDiscoveryUnavailable(t *testing.T) {
 	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
 	t.Cleanup(restore)
 
-	stubResolveContextForAPI(t, func(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, *clusterdiscovery.APIResponse, error) {
-		return nil, nil, fmt.Errorf("%w: 404", clusterdiscovery.ErrDiscoveryUnavailable)
+	stubResolveContextForAPI(t, func(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, error) {
+		return nil, fmt.Errorf("%w: 404", clusterdiscovery.ErrDiscoveryUnavailable)
 	})
 
 	// Pin the singleton manager to an empty store so the static fallback's
@@ -74,8 +74,8 @@ func TestResolveDataAPIToken_SurfacesSelectionError(t *testing.T) {
 	t.Cleanup(restore)
 
 	sentinel := errors.New("multiple login contexts can authenticate against API host entire.io")
-	stubResolveContextForAPI(t, func(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, *clusterdiscovery.APIResponse, error) {
-		return nil, nil, sentinel
+	stubResolveContextForAPI(t, func(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, error) {
+		return nil, sentinel
 	})
 
 	_, err := ResolveDataAPIToken(context.Background(), "https://entire.io")
@@ -85,9 +85,11 @@ func TestResolveDataAPIToken_SurfacesSelectionError(t *testing.T) {
 }
 
 // The success path: discovery picks a context, and the provider exchanges that
-// context's login JWT at its core for the advertised audience, returning the
-// exchanged token.
-func TestResolveDataAPIToken_ExchangesForAdvertisedAudience(t *testing.T) {
+// context's login JWT at its core for an audience equal to the data host
+// origin (the aud the API requires), returning the exchanged token. The
+// audience is derived from the resource origin by the token manager, not read
+// from discovery.
+func TestResolveDataAPIToken_ExchangesForDataHostOrigin(t *testing.T) {
 	t.Setenv("ENTIRE_CONFIG_DIR", t.TempDir())
 	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
 	t.Cleanup(restore)
@@ -118,12 +120,8 @@ func TestResolveDataAPIToken_ExchangesForAdvertisedAudience(t *testing.T) {
 	}
 	ctxObj := &contexts.Context{Name: "me@core", CoreURL: srv.URL, Handle: "me", KeychainService: svc}
 
-	stubResolveContextForAPI(t, func(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, *clusterdiscovery.APIResponse, error) {
-		return ctxObj, &clusterdiscovery.APIResponse{
-			Issuer:         srv.URL,
-			TrustedIssuers: []string{srv.URL},
-			Audience:       wantAudience,
-		}, nil
+	stubResolveContextForAPI(t, func(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, error) {
+		return ctxObj, nil
 	})
 
 	// allowInsecure flows from the loopback http core (srv.URL) automatically.
@@ -138,7 +136,7 @@ func TestResolveDataAPIToken_ExchangesForAdvertisedAudience(t *testing.T) {
 		t.Fatalf("grant_type = %q, want token-exchange", gotGrant)
 	}
 	if gotAudience != wantAudience {
-		t.Fatalf("audience = %q, want the advertised audience %q", gotAudience, wantAudience)
+		t.Fatalf("audience = %q, want the data host origin %q (derived from the resource)", gotAudience, wantAudience)
 	}
 	if want := mustOrigin(t, dataOrigin); gotResource != want {
 		t.Fatalf("resource = %q, want the data origin %q", gotResource, want)
@@ -147,10 +145,10 @@ func TestResolveDataAPIToken_ExchangesForAdvertisedAudience(t *testing.T) {
 
 func TestNewRefreshingResourceProvider_Validation(t *testing.T) {
 	t.Parallel()
-	if _, err := NewRefreshingResourceProvider(nil, "https://data.example", "aud", nil, false); err == nil {
+	if _, err := NewRefreshingResourceProvider(nil, "https://data.example", nil, false); err == nil {
 		t.Fatal("want error for nil context")
 	}
-	if _, err := NewRefreshingResourceProvider(&contexts.Context{Name: "x", CoreURL: "https://core.example"}, "https://data.example", "aud", nil, false); err == nil {
+	if _, err := NewRefreshingResourceProvider(&contexts.Context{Name: "x", CoreURL: "https://core.example"}, "https://data.example", nil, false); err == nil {
 		t.Fatal("want error for a context with no keychain slot")
 	}
 }
@@ -164,7 +162,7 @@ func TestNewRefreshingResourceProvider_NotLoggedInPreservesSentinel(t *testing.T
 	t.Cleanup(restore)
 
 	c := &contexts.Context{Name: "me@core", CoreURL: "https://core.example", Handle: "me", KeychainService: "kc:me"}
-	provider, err := NewRefreshingResourceProvider(c, "https://data.example", "https://data.example", nil, false)
+	provider, err := NewRefreshingResourceProvider(c, "https://data.example", nil, false)
 	if err != nil {
 		t.Fatalf("NewRefreshingResourceProvider: %v", err)
 	}
