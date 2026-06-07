@@ -61,11 +61,6 @@ type Deps struct {
 	// per-agent reviewer packages import review (for ComposeReviewPrompt /
 	// AppendReviewEnv), so review/cmd.go cannot import them back.
 	ReviewerFor func(agentName string) reviewtypes.AgentReviewer
-
-	// AttachCmd, when non-nil, is registered as the `review attach`
-	// subcommand. Callers in the cli package pass newReviewAttachCmd() here;
-	// tests pass nil to skip the subcommand.
-	AttachCmd *cobra.Command
 }
 
 // NewCommand returns the `entire review` cobra command wired with the
@@ -126,9 +121,8 @@ Flags:
                  branch, not main. Default: first existing of origin/HEAD,
                  origin/main, origin/master, main, master.
 
-Subcommands:
-  attach <id>    tag an existing session as a review (equivalent to
-                 'entire attach --review <id>')`,
+To tag an already-finished session as a review, use
+'entire attach --review <id>'.`,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) > 1 {
 				return fmt.Errorf("accepts at most one argument, received %d", len(args))
@@ -204,9 +198,6 @@ Subcommands:
 	cmd.Flags().StringVar(&profileOverride, "profile", "", "review profile to run (default: review_default_profile or general)")
 	cmd.Flags().StringVar(&perRunPrompt, "prompt", "", "one-off instructions appended to this review run")
 	cmd.Flags().StringVar(&baseOverride, "base", "", "git ref to scope the review against (default: origin/HEAD → origin/main → origin/master → main → master)")
-	if deps.AttachCmd != nil {
-		cmd.AddCommand(deps.AttachCmd)
-	}
 	return cmd
 }
 

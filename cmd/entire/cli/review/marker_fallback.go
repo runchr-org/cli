@@ -11,9 +11,8 @@
 //
 // For agents without a review-runner adapter, the marker is purely a record of
 // what the user was asked to do: RunMarkerFallback writes it before printing manual-start
-// guidance, and `entire attach --review <session-id>` (and its discovery
-// shortcut `entire review attach`) reads the marker to tag a manual
-// session after the fact. ReadPendingReviewMarker / ClearPendingReviewMarker
+// guidance, and `entire attach --review <session-id>` reads the marker to tag a
+// manual session after the fact. ReadPendingReviewMarker / ClearPendingReviewMarker
 // are exported for that attach flow; nothing else reads the marker.
 package review
 
@@ -35,7 +34,7 @@ const pendingReviewMarkerFilename = "review-pending.json"
 
 // PendingReviewMarker is written by `entire review` before instructing the
 // user to open an agent manually. The marker records which agent and
-// skills should run so that `entire review attach` can tag the resulting
+// skills should run so that `entire attach --review` can tag the resulting
 // session after the fact.
 //
 // WorktreePath scopes the marker to the worktree `entire review` was invoked
@@ -124,9 +123,8 @@ func ClearPendingReviewMarker(ctx context.Context) error {
 // ENTIRE_REVIEW_* env vars on the spawned process, not the marker file.
 // For adapterless review agents the user starts the agent manually, so no env
 // inheritance happens. The marker exists purely so that `entire attach
-// --review <session-id>` (and its `entire review attach` shortcut) has a
-// record of what the user was asked to review when tagging the session
-// after the fact.
+// --review <session-id>` has a record of what the user was asked to review
+// when tagging the session after the fact.
 //
 // agentName must be the agent's registry key (e.g. "cursor").
 // cfg carries skills and the starting SHA.

@@ -8,20 +8,17 @@ package cli
 //   review → claudecode/codex/geminicli → review
 
 import (
-	"github.com/spf13/cobra"
-
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
+	"github.com/entireio/cli/cmd/entire/cli/agent/pi"
 	cliReview "github.com/entireio/cli/cmd/entire/cli/review"
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
 )
 
 // buildReviewDeps builds the review.Deps struct used by review.NewCommand.
-// attachCmd is the cobra.Command for `entire review attach`; pass nil in
-// tests that don't need the subcommand.
-func buildReviewDeps(attachCmd *cobra.Command) cliReview.Deps {
+func buildReviewDeps() cliReview.Deps {
 	return cliReview.Deps{
 		GetAgentsWithHooksInstalled: GetAgentsWithHooksInstalled,
 		NewSilentError: func(err error) error {
@@ -30,7 +27,6 @@ func buildReviewDeps(attachCmd *cobra.Command) cliReview.Deps {
 		HeadHasReviewCheckpoint: headHasReviewCheckpoint,
 		ReviewCheckpointContext: reviewCheckpointContext,
 		ReviewerFor:             launchableReviewerFor,
-		AttachCmd:               attachCmd,
 	}
 }
 
@@ -47,6 +43,8 @@ func launchableReviewerFor(agentName string) reviewtypes.AgentReviewer {
 		return codex.NewReviewer()
 	case string(agent.AgentNameGemini):
 		return geminicli.NewReviewer()
+	case string(agent.AgentNamePi):
+		return pi.NewReviewer()
 	default:
 		return nil
 	}

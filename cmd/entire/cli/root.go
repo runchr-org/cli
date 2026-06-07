@@ -91,7 +91,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newPluginGroupCmd())     // 'plugin' (managed install/list/remove)
 
 	// Top-level lifecycle and standalone commands.
-	cmd.AddCommand(cliReview.NewCommand(buildReviewDeps(newReviewAttachCmd()))) // hidden during maturation; runs review profiles
+	cmd.AddCommand(cliReview.NewCommand(buildReviewDeps())) // hidden during maturation; runs review profiles
 	cmd.AddCommand(investigate.NewCommand(buildInvestigateDeps()))              // hidden during maturation; runs a multi-agent investigation
 	cmd.AddCommand(newOrgCmd())                                                 // hidden during maturation; control-plane org management
 	cmd.AddCommand(newProjectCmd())                                             // hidden during maturation; control-plane project management
