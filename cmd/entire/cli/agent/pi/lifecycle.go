@@ -71,20 +71,10 @@ type piSkillEventInput struct {
 }
 
 // piSkillEvents converts the Pi extension's live skill-invocation reports into
-// agent.SkillEvents. This is Pi's ONLY skill-capture path, and it is captured
-// live: the embedded extension matches "/skill:<name>" on raw input (before Pi
-// expands it into a <skill name="..."> block) and ships the result in the
-// before_agent_start hook payload. These events flow into state.SkillEvents and
-// are merged into checkpoint metadata at condensation.
-//
-// Deliberately, PiAgent does NOT implement agent.SkillEventExtractor (the
-// transcript-extraction interface that claude-code uses). The two models are
-// mutually exclusive on purpose — see TestPiAgent_UsesLiveSkillCaptureNotTranscriptExtraction.
-// Adding a transcript extractor here would double-count: condensation merges
-// the extractor output with these live events via mergeSkillEvents, and the
-// keys cannot dedup cleanly (live events carry their original per-invocation
-// TurnID, while a re-extraction stamps every event with the current TurnID),
-// so earlier-turn skills would surface twice in checkpoint metadata.
+// agent.SkillEvents. This is Pi's only skill-capture path. PiAgent intentionally
+// does NOT implement agent.SkillEventExtractor: a transcript extractor would
+// double-count these live events at condensation (see
+// TestPiAgent_UsesLiveSkillCaptureNotTranscriptExtraction).
 func piSkillEvents(in []piSkillEventInput) []agent.SkillEvent {
 	if len(in) == 0 {
 		return nil

@@ -71,11 +71,8 @@ func TestParseHookEvent_BeforeAgentStart_WithSkillEvent(t *testing.T) {
 	}
 }
 
-// TestParseHookEvent_BeforeAgentStart_MultipleSkillEvents locks the live-capture
-// guarantee for more than one invocation in a single turn: every reported
-// /skill:<name> must surface as its own SkillEvent. This is the path that backs
-// invoked-skill capture for ALL live Pi sessions, including `entire review
-// --agent pi`.
+// TestParseHookEvent_BeforeAgentStart_MultipleSkillEvents locks live capture of
+// every /skill:<name> in a turn (the path backing all live Pi sessions).
 func TestParseHookEvent_BeforeAgentStart_MultipleSkillEvents(t *testing.T) {
 	t.Parallel()
 	a := &PiAgent{}
@@ -98,25 +95,14 @@ func TestParseHookEvent_BeforeAgentStart_MultipleSkillEvents(t *testing.T) {
 	}
 }
 
-// TestPiAgent_UsesLiveSkillCaptureNotTranscriptExtraction is an architectural
-// guard. Pi captures invoked skills LIVE via the extension's input handler
-// (see piSkillEvents), which is mutually exclusive with the transcript-
-// extraction model claude-code uses. PiAgent must therefore NOT implement
-// agent.SkillEventExtractor: condensation merges any extractor output with the
-// live state.SkillEvents, and the keys cannot dedup cleanly across the
-// live/transcript boundary (per-invocation vs current TurnID), so adding an
-// extractor would double-count earlier-turn skills in checkpoint metadata.
-//
-// If you are here because this test failed: you likely added an ExtractSkillEvents
-// method to PiAgent. Don't — Pi already captures invoked skills live. Reconcile
-// the dedup model first (make skill-event identity stable across the boundary)
-// before reintroducing transcript extraction.
+// TestPiAgent_UsesLiveSkillCaptureNotTranscriptExtraction guards Pi's
+// live-capture model: a transcript extractor would double-count at
+// condensation (see piSkillEvents).
 func TestPiAgent_UsesLiveSkillCaptureNotTranscriptExtraction(t *testing.T) {
 	t.Parallel()
 	if _, ok := agent.AsSkillEventExtractor(NewPiAgent()); ok {
-		t.Fatal("PiAgent implements SkillEventExtractor: Pi uses live skill capture; " +
-			"a transcript extractor would double-count live-captured events at condensation. " +
-			"See piSkillEvents and this test's doc comment.")
+		t.Fatal("PiAgent must not implement SkillEventExtractor: Pi captures skills live; " +
+			"a transcript extractor would double-count at condensation (see piSkillEvents)")
 	}
 }
 
