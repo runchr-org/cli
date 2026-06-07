@@ -148,6 +148,25 @@ func runAttachSurfaceReviewErrors(cmd *cobra.Command, sessionID string, agentNam
 	return err
 }
 
+// attachStepCount returns the displayed "steps" count for an attached session:
+// the number of user prompts (turns) in the attached transcript, as counted by
+// extractTranscriptMetadata. Floored at 1 so it never renders as "0 steps" for an
+// empty/unparseable transcript. SaveStepCount stays 0 (no SaveStep ran), keeping
+// the combined-attribution gate conservative for this fallback session.
+func attachStepCount(turnCount int) int {
+	return max(turnCount, 1)
+}
+
+// attachPrompts returns the prompts recorded on an attached checkpoint. Attach
+// records only the first user prompt (used for the display title); the full
+// per-turn list isn't reconstructed for post-hoc imports.
+func attachPrompts(meta transcriptMetadata) []string {
+	if meta.FirstPrompt == "" {
+		return nil
+	}
+	return []string{meta.FirstPrompt}
+}
+
 func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName types.AgentName, opts attachOptions) error {
 	// Initialize structured logger so logging.Warn/Info write to .entire/logs/ not stderr.
 	if err := logging.Init(ctx, sessionID); err != nil {
@@ -282,11 +301,6 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 		return fmt.Errorf("failed to get git author: %w", err)
 	}
 
-	var prompts []string
-	if meta.FirstPrompt != "" {
-		prompts = []string{meta.FirstPrompt}
-	}
-
 	tokenUsage := agent.CalculateTokenUsage(logCtx, ag, transcriptData, 0, "")
 
 	_, redactSpan := perf.Start(ctx, "redact_transcript")
@@ -297,16 +311,17 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	}
 
 	writeOpts := cpkg.WriteCommittedOptions{
-		CheckpointID: checkpointID,
-		SessionID:    sessionID,
-		Strategy:     strategy.StrategyNameManualCommit,
-		Transcript:   redactedTranscript,
-		Prompts:      prompts,
-		AuthorName:   author.Name,
-		AuthorEmail:  author.Email,
-		Agent:        ag.Type(),
-		Model:        meta.Model,
-		TokenUsage:   tokenUsage,
+		CheckpointID:     checkpointID,
+		SessionID:        sessionID,
+		Strategy:         strategy.StrategyNameManualCommit,
+		Transcript:       redactedTranscript,
+		Prompts:          attachPrompts(meta),
+		CheckpointsCount: attachStepCount(meta.TurnCount),
+		AuthorName:       author.Name,
+		AuthorEmail:      author.Email,
+		Agent:            ag.Type(),
+		Model:            meta.Model,
+		TokenUsage:       tokenUsage,
 	}
 	if opts.Review {
 		writeOpts.Kind = string(session.KindAgentReview)

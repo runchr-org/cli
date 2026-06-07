@@ -259,6 +259,24 @@ diagnosis in `entire-refs.txt`.
 }
 ```
 
+`checkpoints_count` in the root summary is the aggregate displayed "steps" count: the sum of per-session prompt-window counts. Despite the historical name, it is not a count of checkpoint records.
+
+**Session-level metadata.json (`CommittedMetadata`, abbreviated):**
+```json
+{
+  "checkpoint_id": "abc123def456",
+  "session_id": "2025-12-01-8f76b0e8-b8f1-4a87-9186-848bdd83d62e",
+  "strategy": "manual-commit",
+  "created_at": "2025-12-01T12:34:56Z",
+  "branch": "main",
+  "checkpoints_count": 3,
+  "save_step_count": 3,
+  "files_touched": ["file1.txt", "file2.txt"]
+}
+```
+
+In session metadata, `checkpoints_count` is the displayed prompt-window count for that session. `save_step_count` records SaveStep-created shadow-branch commits and is the conservative "real checkpoint work happened" signal; it is omitted when zero (for example, commit-only/fallback sessions). `save_step_count` is not aggregated into the root `CheckpointSummary`.
+
 When condensing multiple concurrent sessions:
 - All sessions are stored in numbered subdirectories using 0-based indexing (`0/`, `1/`, `2/`, ...)
 - Each `session_id` is assigned a stable index; subsequent writes for the same session reuse the same numbered folder
