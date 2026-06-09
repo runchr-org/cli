@@ -544,11 +544,13 @@ func buildConfiguredProfile(ctx context.Context, profileName string, opts review
 		profile.Master = opts.Master
 	}
 	if len(nonZeroAgentConfigs(profile.Agents)) > 1 {
-		if strings.TrimSpace(profile.Master) == "" {
-			profile.Master = defaultReviewMaster(ctx, profile.Agents)
-		}
-		if _, _, masterErr := selectProfileWorker(profile, profile.Master); masterErr != nil {
-			return settings.ReviewProfileConfig{}, fmt.Errorf("master %q is not one of the profile workers (%s)", profile.Master, strings.Join(sortedProfileAgentNames(profile), ", "))
+		if strings.TrimSpace(profile.MasterAgent) == "" {
+			if strings.TrimSpace(profile.Master) == "" {
+				profile.Master = defaultReviewMaster(ctx, profile.Agents)
+			}
+			if _, _, masterErr := selectProfileWorker(profile, profile.Master); masterErr != nil {
+				return settings.ReviewProfileConfig{}, fmt.Errorf("master %q is not one of the profile workers (%s)", profile.Master, strings.Join(sortedProfileAgentNames(profile), ", "))
+			}
 		}
 	} else {
 		profile.Master = ""
@@ -691,15 +693,23 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride, modelOver
 			fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
 			return silentErr(err)
 		}
-		if strings.TrimSpace(profile.Master) == "" {
+		masterAgent, _, hasMaster := profileMasterIdentity(profile)
+		if !hasMaster {
 			cmd.SilenceUsage = true
-			err := fmt.Errorf("review profile %q has multiple workers but no master; set review_profiles.%s.master", profileName, profileName)
+			err := fmt.Errorf("review profile %q has multiple workers but no master; set review_profiles.%s.master_agent", profileName, profileName)
 			fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
 			return silentErr(err)
 		}
-		if _, _, masterErr := selectProfileWorker(profile, profile.Master); masterErr != nil {
+		if strings.TrimSpace(profile.MasterAgent) == "" {
+			if _, _, masterErr := selectProfileWorker(profile, profile.Master); masterErr != nil {
+				cmd.SilenceUsage = true
+				err := fmt.Errorf("review profile %q master is invalid: %w", profileName, masterErr)
+				fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
+				return silentErr(err)
+			}
+		} else if !agentSupportsTextGeneration(ctx, masterAgent) {
 			cmd.SilenceUsage = true
-			err := fmt.Errorf("review profile %q master is invalid: %w", profileName, masterErr)
+			err := fmt.Errorf("review profile %q master %q cannot write the final report (no text generation)", profileName, masterAgent)
 			fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
 			return silentErr(err)
 		}
@@ -1008,12 +1018,8 @@ func runMultiAgentPath(
 	}
 	aggregateOutput := ""
 
-	masterWorkerName, masterCfg, masterErr := selectProfileWorker(profile, profile.Master)
-	masterLabel := profile.Master
-	if masterErr == nil {
-		masterLabel = reviewWorkerLabel(masterWorkerName, masterCfg)
-	}
 	masterAgentName, masterModel := resolveProfileMaster(profile)
+	masterLabel := masterDisplayLabel(profile, masterAgentName, masterModel)
 	masterProvider := AgentSynthesisProvider{AgentName: masterAgentName, Model: masterModel}
 	sinks := composeMultiAgentSinks(multiAgentSinkInputs{
 		out:               out,

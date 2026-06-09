@@ -146,16 +146,43 @@ func reviewWorkerLabel(workerName string, cfg settings.ReviewConfig) string {
 	return strings.Join(parts, "")
 }
 
-func resolveProfileMaster(profile settings.ReviewProfileConfig) (string, string) {
+// profileMasterIdentity resolves the master's agent name and model, and reports
+// whether the profile has a master at all. A standalone master (MasterAgent
+// set) wins and need not be one of the workers; otherwise the legacy worker
+// master (Master keying into Agents) is resolved.
+func profileMasterIdentity(profile settings.ReviewProfileConfig) (string, string, bool) {
+	if ma := strings.TrimSpace(profile.MasterAgent); ma != "" {
+		return ma, strings.TrimSpace(profile.MasterModel), true
+	}
 	workerName, cfg, err := selectProfileWorker(profile, profile.Master)
 	if err != nil {
-		return profile.Master, strings.TrimSpace(profile.MasterModel)
+		return "", "", false
 	}
 	model := strings.TrimSpace(profile.MasterModel)
 	if model == "" {
 		model = strings.TrimSpace(cfg.Model)
 	}
-	return reviewAgentName(workerName, cfg), model
+	return reviewAgentName(workerName, cfg), model, true
+}
+
+func resolveProfileMaster(profile settings.ReviewProfileConfig) (string, string) {
+	agentName, model, _ := profileMasterIdentity(profile)
+	return agentName, model
+}
+
+// masterDisplayLabel renders the master for UI/dump output: "agent · model" for
+// a standalone master, or the worker label for a legacy worker master.
+func masterDisplayLabel(profile settings.ReviewProfileConfig, agentName, model string) string {
+	if strings.TrimSpace(profile.MasterAgent) != "" {
+		if strings.TrimSpace(model) != "" {
+			return labelForSimpleAgent(agentName) + " · " + model
+		}
+		return labelForSimpleAgent(agentName)
+	}
+	if workerName, cfg, err := selectProfileWorker(profile, profile.Master); err == nil {
+		return reviewWorkerLabel(workerName, cfg)
+	}
+	return agentName
 }
 
 func selectProfileWorker(profile settings.ReviewProfileConfig, selector string) (string, settings.ReviewConfig, error) {

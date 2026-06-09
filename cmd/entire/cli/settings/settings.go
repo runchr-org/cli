@@ -273,10 +273,18 @@ func (s *EntireSettings) SummaryTimeoutValue() time.Duration {
 // ReviewProfileConfig is intentionally small: the review package owns built-in
 // default task text for conventional profile names like "general".
 type ReviewProfileConfig struct {
-	Task        string                  `json:"task,omitempty"`
-	Agents      map[string]ReviewConfig `json:"agents,omitempty"`
-	Master      string                  `json:"master,omitempty"`
-	MasterModel string                  `json:"master_model,omitempty"`
+	Task   string                  `json:"task,omitempty"`
+	Agents map[string]ReviewConfig `json:"agents,omitempty"`
+	// Master is the legacy master selector: a worker key in Agents that also
+	// writes the final report. Superseded by MasterAgent; still honored when
+	// MasterAgent is empty.
+	Master string `json:"master,omitempty"`
+	// MasterAgent, when set, is a standalone master (judge): it synthesizes the
+	// workers' reports and is NOT required to be one of the worker slots. Takes
+	// precedence over Master.
+	MasterAgent string `json:"master_agent,omitempty"`
+	// MasterModel is the model for the master (applies to either form).
+	MasterModel string `json:"master_model,omitempty"`
 }
 
 // IsZero reports whether the profile is effectively unset.

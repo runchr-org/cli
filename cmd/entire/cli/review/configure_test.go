@@ -9,6 +9,13 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
 
+const (
+	tAgentClaude = "claude-code"
+	tAgentCodex  = "codex"
+	tModelOpus   = "opus"
+	tModelSonnet = "sonnet"
+)
+
 func TestModelInList(t *testing.T) {
 	models := []agent.ModelInfo{{ID: "opus"}, {ID: "sonnet"}}
 	if !modelInList("opus", models) {
@@ -70,7 +77,7 @@ func TestBuildConfiguredProfile_FromSlots_AllowsDuplicateAgents(t *testing.T) {
 		context.Background(),
 		"general",
 		reviewConfigureOptions{
-			Slots: []string{"claude-code=opus", "claude-code=sonnet", "claude-code", "claude-code"},
+			Slots: []string{tAgentClaude + "=" + tModelOpus, tAgentClaude + "=" + tModelSonnet, tAgentClaude, tAgentClaude},
 		},
 		&settings.EntireSettings{},
 		deps,
@@ -84,14 +91,46 @@ func TestBuildConfiguredProfile_FromSlots_AllowsDuplicateAgents(t *testing.T) {
 	}
 	models := map[string]int{}
 	for _, cfg := range profile.Agents {
-		if cfg.Agent != "claude-code" {
+		if cfg.Agent != tAgentClaude {
 			t.Errorf("worker agent = %q, want claude-code", cfg.Agent)
 		}
 		models[cfg.Model]++
 	}
-	if models["opus"] != 1 || models["sonnet"] != 1 || models[""] != 2 {
+	if models[tModelOpus] != 1 || models[tModelSonnet] != 1 || models[""] != 2 {
 		t.Errorf("model distribution = %#v, want opus:1 sonnet:1 default:2", models)
 	}
+}
+
+func TestProfileMasterIdentity(t *testing.T) {
+	t.Run("standalone master wins and need not be a worker", func(t *testing.T) {
+		profile := settings.ReviewProfileConfig{
+			Agents:      map[string]settings.ReviewConfig{tAgentCodex: {Agent: tAgentCodex}},
+			MasterAgent: tAgentClaude,
+			MasterModel: tModelOpus,
+		}
+		name, model, ok := profileMasterIdentity(profile)
+		if !ok || name != tAgentClaude || model != tModelOpus {
+			t.Fatalf("got (%q,%q,%v), want (claude-code, opus, true)", name, model, ok)
+		}
+	})
+	t.Run("legacy worker master resolves from Agents", func(t *testing.T) {
+		profile := settings.ReviewProfileConfig{
+			Agents: map[string]settings.ReviewConfig{tAgentClaude: {Agent: tAgentClaude, Model: tModelSonnet}},
+			Master: tAgentClaude,
+		}
+		name, model, ok := profileMasterIdentity(profile)
+		if !ok || name != tAgentClaude || model != tModelSonnet {
+			t.Fatalf("got (%q,%q,%v), want (claude-code, sonnet, true)", name, model, ok)
+		}
+	})
+	t.Run("no master", func(t *testing.T) {
+		profile := settings.ReviewProfileConfig{
+			Agents: map[string]settings.ReviewConfig{tAgentCodex: {Agent: tAgentCodex}},
+		}
+		if _, _, ok := profileMasterIdentity(profile); ok {
+			t.Fatal("expected ok=false when no master is set")
+		}
+	})
 }
 
 func TestBuildConfiguredProfile_RejectsNonAdapterAgent(t *testing.T) {
