@@ -216,7 +216,7 @@ func resolveSearchToken(ctx context.Context, serviceURL string, insecureHTTPAuth
 	if insecureHTTPAuth {
 		auth.EnableInsecureHTTP()
 	}
-	token, err := auth.TokenForResource(ctx, api.OriginOnly(serviceURL))
+	token, err := auth.ResolveDataAPIToken(ctx, serviceURL)
 	if errors.Is(err, auth.ErrNotLoggedIn) {
 		return "", errors.New("not authenticated. Run 'entire login' to authenticate")
 	}
