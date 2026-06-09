@@ -64,6 +64,36 @@ func TestBuildConfiguredProfile_FromFlags(t *testing.T) {
 	}
 }
 
+func TestBuildConfiguredProfile_FromSlots_AllowsDuplicateAgents(t *testing.T) {
+	deps := configureTestDeps("claude-code", "codex")
+	profile, err := buildConfiguredProfile(
+		context.Background(),
+		"general",
+		reviewConfigureOptions{
+			Slots: []string{"claude-code=opus", "claude-code=sonnet", "claude-code", "claude-code"},
+		},
+		&settings.EntireSettings{},
+		deps,
+	)
+	if err != nil {
+		t.Fatalf("buildConfiguredProfile: %v", err)
+	}
+	// Four distinct workers: two different models + two identical default slots.
+	if len(profile.Agents) != 4 {
+		t.Fatalf("agents = %d, want 4: %#v", len(profile.Agents), profile.Agents)
+	}
+	models := map[string]int{}
+	for _, cfg := range profile.Agents {
+		if cfg.Agent != "claude-code" {
+			t.Errorf("worker agent = %q, want claude-code", cfg.Agent)
+		}
+		models[cfg.Model]++
+	}
+	if models["opus"] != 1 || models["sonnet"] != 1 || models[""] != 2 {
+		t.Errorf("model distribution = %#v, want opus:1 sonnet:1 default:2", models)
+	}
+}
+
 func TestBuildConfiguredProfile_RejectsNonAdapterAgent(t *testing.T) {
 	deps := configureTestDeps("claude-code")
 	_, err := buildConfiguredProfile(

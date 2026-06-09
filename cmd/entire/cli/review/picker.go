@@ -168,107 +168,228 @@ func promptForSimpleReviewProfile(ctx context.Context) (string, error) {
 	return picked, nil
 }
 
-// crewAgentChoice tracks one agent row in the "Build the review crew" picker:
-// the multiselect's bound selection of model values for that agent.
-type crewAgentChoice struct {
-	agentName string
-	selected  []string
+// crewSlot is one worker slot in the review crew: an agent plus an optional
+// model ("" means the agent's own default). Duplicate slots — the same agent
+// and model — are allowed; each becomes its own worker.
+type crewSlot struct {
+	agent string
+	model string
 }
 
-// promptForReviewCrew renders one screen that combines worker-agent and model
-// selection. Each launchable agent gets a multiselect of its advertised models
-// (plus Default and Custom…); checking more than one model under an agent
-// creates that many workers — the same agent on different models. Each agent's
-// Default option is pre-checked, so pressing enter yields one worker per agent
-// on its default model.
+const (
+	crewActionAdd    = "add"
+	crewActionRemove = "remove"
+	crewActionDone   = "done"
+)
+
+// promptForReviewCrew builds the review crew as an explicit list of worker
+// slots. It seeds one slot per launchable agent (default model) so pressing
+// Done immediately reproduces the all-agents-on-defaults baseline, then lets
+// the user add, remove, or duplicate slots freely — e.g. five Claude slots on
+// different (or identical) models.
 func promptForReviewCrew(ctx context.Context, out io.Writer, profileName string, launchable []string) (settings.ReviewProfileConfig, error) {
+	slots := make([]crewSlot, 0, len(launchable))
+	for _, name := range launchable {
+		slots = append(slots, crewSlot{agent: name})
+	}
+
 	fmt.Fprintln(out, "Build the review crew")
-	fmt.Fprintln(out, "Each worker is an agent + model. Check more than one model to run the same")
-	fmt.Fprintln(out, "agent on different models. Space toggles, enter confirms.")
+	fmt.Fprintln(out, "Each slot is one worker: an agent + model. Add as many as you like —")
+	fmt.Fprintln(out, "including the same agent more than once, on different or identical models.")
 	fmt.Fprintln(out)
 
-	choices := make([]*crewAgentChoice, 0, len(launchable))
-	fields := make([]huh.Field, 0, len(launchable))
-	for _, name := range launchable {
-		models := listAgentModelOptions(ctx, name)
-		options := make([]huh.Option[string], 0, len(models)+2)
-		options = append(options, huh.NewOption("Default (agent's own default model)", reviewModelDefaultSentinel).Selected(true))
-		for _, m := range models {
-			label := m.ID
-			if m.Note != "" {
-				label = m.ID + "  — " + m.Note
-			}
-			options = append(options, huh.NewOption(label, m.ID))
+	for {
+		action, err := promptCrewAction(ctx, slots)
+		if err != nil {
+			return settings.ReviewProfileConfig{}, err
 		}
-		options = append(options, huh.NewOption("Custom… (type any value)", reviewModelCustomSentinel))
-
-		choice := &crewAgentChoice{agentName: name, selected: []string{reviewModelDefaultSentinel}}
-		choices = append(choices, choice)
-		fields = append(fields, huh.NewMultiSelect[string]().
-			Title(labelForSimpleAgent(name)).
-			Options(options...).
-			Height(reviewPickerHeight(len(options))).
-			Value(&choice.selected))
-	}
-
-	form := newAccessibleForm(huh.NewGroup(fields...))
-	if err := form.RunWithContext(ctx); err != nil {
-		return settings.ReviewProfileConfig{}, fmt.Errorf("review crew picker: %w", err)
-	}
-
-	profile := settings.ReviewProfileConfig{
-		Task:   profileTask(profileName, settings.ReviewProfileConfig{}),
-		Agents: map[string]settings.ReviewConfig{},
-	}
-	for _, choice := range choices {
-		seen := make(map[string]bool, len(choice.selected))
-		for _, value := range choice.selected {
-			model, err := resolveCrewModel(ctx, choice.agentName, value)
+		switch action {
+		case crewActionAdd:
+			agentName, err := promptCrewAgent(ctx, launchable)
 			if err != nil {
 				return settings.ReviewProfileConfig{}, err
 			}
-			if seen[model] {
+			model, err := promptCrewModel(ctx, agentName)
+			if err != nil {
+				return settings.ReviewProfileConfig{}, err
+			}
+			slots = append(slots, crewSlot{agent: agentName, model: model})
+		case crewActionRemove:
+			idx, err := promptCrewRemove(ctx, slots)
+			if err != nil {
+				return settings.ReviewProfileConfig{}, err
+			}
+			if idx >= 0 && idx < len(slots) {
+				slots = append(slots[:idx], slots[idx+1:]...)
+			}
+		case crewActionDone:
+			if len(slots) == 0 {
+				fmt.Fprintln(out, "Add at least one slot before finishing.")
 				continue
 			}
-			seen[model] = true
-			cfg := defaultReviewAgentConfig(profileName, choice.agentName)
-			// Set Agent explicitly so the worker is valid even when the agent
-			// has no default skills/prompt (e.g. Pi): IsZero is false once Agent
-			// is set, and reviewAgentName resolves the real agent for the worker.
-			cfg.Agent = choice.agentName
-			cfg.Model = model
-			profile.Agents[workerIDForAgentModel(choice.agentName, model, profile.Agents)] = cfg
+			return buildCrewProfile(ctx, profileName, slots), nil
 		}
 	}
-	if len(profile.Agents) == 0 {
-		return settings.ReviewProfileConfig{}, ErrNoAgentsSelected
-	}
-	profile.Master = defaultReviewMaster(ctx, profile.Agents)
-	return profile, nil
 }
 
-// resolveCrewModel maps a crew multiselect value to a concrete model string:
-// Default → "" (agent default), Custom… → a follow-up text prompt, otherwise
-// the model id verbatim.
-func resolveCrewModel(ctx context.Context, agentName, value string) (string, error) {
-	switch value {
+// buildCrewProfile turns an ordered slot list into a profile. Each slot becomes
+// a worker keyed by workerIDForAgentModel, which disambiguates duplicates
+// (claude-code, claude-code-2, claude-code:opus, …).
+func buildCrewProfile(ctx context.Context, profileName string, slots []crewSlot) settings.ReviewProfileConfig {
+	profile := settings.ReviewProfileConfig{
+		Task:   profileTask(profileName, settings.ReviewProfileConfig{}),
+		Agents: make(map[string]settings.ReviewConfig, len(slots)),
+	}
+	for _, s := range slots {
+		cfg := defaultReviewAgentConfig(profileName, s.agent)
+		// Set Agent explicitly so the worker is valid even when the agent has no
+		// default skills/prompt (e.g. Pi): IsZero is false once Agent is set, and
+		// reviewAgentName resolves the real agent for the worker.
+		cfg.Agent = s.agent
+		cfg.Model = s.model
+		profile.Agents[workerIDForAgentModel(s.agent, s.model, profile.Agents)] = cfg
+	}
+	profile.Master = defaultReviewMaster(ctx, profile.Agents)
+	return profile
+}
+
+// promptCrewAction shows the current crew and asks what to do next.
+func promptCrewAction(ctx context.Context, slots []crewSlot) (string, error) {
+	options := []huh.Option[string]{huh.NewOption("Add a slot", crewActionAdd)}
+	if len(slots) > 0 {
+		options = append(options,
+			huh.NewOption("Remove a slot", crewActionRemove),
+			huh.NewOption(fmt.Sprintf("Done — %d slot(s)", len(slots)), crewActionDone),
+		)
+	} else {
+		options = append(options, huh.NewOption("Done (no slots yet)", crewActionDone))
+	}
+	picked := crewActionDone
+	if len(slots) == 0 {
+		picked = crewActionAdd
+	}
+	form := newAccessibleForm(huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("Review crew").
+			Description(crewSummary(slots)).
+			Options(options...).
+			Height(reviewPickerHeight(len(options))).
+			Value(&picked),
+	))
+	if err := form.RunWithContext(ctx); err != nil {
+		return "", fmt.Errorf("review crew action: %w", err)
+	}
+	return picked, nil
+}
+
+func crewSummary(slots []crewSlot) string {
+	if len(slots) == 0 {
+		return "No slots yet. Add at least one worker (agent + model)."
+	}
+	lines := make([]string, len(slots))
+	for i, s := range slots {
+		lines[i] = fmt.Sprintf("%d. %s", i+1, slotLabel(s))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func slotLabel(s crewSlot) string {
+	model := strings.TrimSpace(s.model)
+	if model == "" {
+		model = "default model"
+	}
+	return labelForSimpleAgent(s.agent) + " · " + model
+}
+
+// promptCrewAgent picks the agent for a new slot. Auto-selects when only one
+// launchable agent exists.
+func promptCrewAgent(ctx context.Context, launchable []string) (string, error) {
+	if len(launchable) == 1 {
+		return launchable[0], nil
+	}
+	options := make([]huh.Option[string], 0, len(launchable))
+	for _, name := range launchable {
+		options = append(options, huh.NewOption(labelForSimpleAgent(name), name))
+	}
+	picked := launchable[0]
+	form := newAccessibleForm(huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("Add a slot — which agent?").
+			Options(options...).
+			Height(reviewPickerHeight(len(options))).
+			Value(&picked),
+	))
+	if err := form.RunWithContext(ctx); err != nil {
+		return "", fmt.Errorf("review crew agent: %w", err)
+	}
+	return picked, nil
+}
+
+// promptCrewModel picks a model for a slot: Default, an advertised model, or a
+// Custom… free-text value. Returns "" for the agent's own default.
+func promptCrewModel(ctx context.Context, agentName string) (string, error) {
+	models := listAgentModelOptions(ctx, agentName)
+	options := make([]huh.Option[string], 0, len(models)+2)
+	options = append(options, huh.NewOption("Default (agent's own default model)", reviewModelDefaultSentinel))
+	for _, m := range models {
+		label := m.ID
+		if m.Note != "" {
+			label = m.ID + "  — " + m.Note
+		}
+		options = append(options, huh.NewOption(label, m.ID))
+	}
+	options = append(options, huh.NewOption("Custom… (type any value)", reviewModelCustomSentinel))
+
+	picked := reviewModelDefaultSentinel
+	form := newAccessibleForm(huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("Model for " + labelForSimpleAgent(agentName)).
+			Description("Pick a model, Default, or Custom… to type any value.").
+			Options(options...).
+			Height(reviewPickerHeight(len(options))).
+			Value(&picked),
+	))
+	if err := form.RunWithContext(ctx); err != nil {
+		return "", fmt.Errorf("review crew model: %w", err)
+	}
+	switch picked {
 	case reviewModelDefaultSentinel:
 		return "", nil
 	case reviewModelCustomSentinel:
 		model := ""
-		form := newAccessibleForm(huh.NewGroup(
+		customForm := newAccessibleForm(huh.NewGroup(
 			huh.NewInput().
 				Title("Custom model for " + labelForSimpleAgent(agentName)).
 				Description("Any value accepted by the agent CLI; leave blank for the default.").
 				Value(&model),
 		))
-		if err := form.RunWithContext(ctx); err != nil {
+		if err := customForm.RunWithContext(ctx); err != nil {
 			return "", fmt.Errorf("custom model input: %w", err)
 		}
 		return strings.TrimSpace(model), nil
 	default:
-		return value, nil
+		return picked, nil
 	}
+}
+
+// promptCrewRemove picks which slot to drop. Returns the slot index.
+func promptCrewRemove(ctx context.Context, slots []crewSlot) (int, error) {
+	options := make([]huh.Option[int], 0, len(slots))
+	for i, s := range slots {
+		options = append(options, huh.NewOption(fmt.Sprintf("%d. %s", i+1, slotLabel(s)), i))
+	}
+	picked := 0
+	form := newAccessibleForm(huh.NewGroup(
+		huh.NewSelect[int]().
+			Title("Remove which slot?").
+			Options(options...).
+			Height(reviewPickerHeight(len(options))).
+			Value(&picked),
+	))
+	if err := form.RunWithContext(ctx); err != nil {
+		return -1, fmt.Errorf("review crew remove: %w", err)
+	}
+	return picked, nil
 }
 
 func labelForSimpleAgent(name string) string {

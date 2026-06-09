@@ -81,6 +81,7 @@ func NewCommand(deps Deps) *cobra.Command {
 	var setMaster string
 	var setTask string
 	var setModels []string
+	var setSlots []string
 
 	cmd := &cobra.Command{
 		Use: "review",
@@ -108,6 +109,8 @@ Flags:
   --set-master   with --configure: master agent that writes the final report
   --set-task     with --configure: the profile's canonical task text
   --set-model    with --configure: per-worker model as agent=model (repeatable)
+  --set-slot     with --configure: a worker slot as agent[=model] (repeatable;
+                 the same agent/model may repeat to run it multiple times)
   --edit         re-open the advanced review profile skill picker
   --findings     browse local review findings
   --agent NAME   run only one worker from the selected profile
@@ -172,6 +175,7 @@ To tag an already-finished session as a review, use
 					Master: setMaster,
 					Task:   setTask,
 					Models: setModels,
+					Slots:  setSlots,
 				}, deps)
 			}
 			if edit {
@@ -189,6 +193,7 @@ To tag an already-finished session as a review, use
 	cmd.Flags().StringVar(&setMaster, "set-master", "", "with --configure: master agent that writes the final report")
 	cmd.Flags().StringVar(&setTask, "set-task", "", "with --configure: the profile's canonical task text")
 	cmd.Flags().StringArrayVar(&setModels, "set-model", nil, "with --configure: per-worker model as agent=model (repeatable)")
+	cmd.Flags().StringArrayVar(&setSlots, "set-slot", nil, "with --configure: a worker slot as agent[=model] (repeatable; same agent/model may repeat)")
 	cmd.Flags().BoolVar(&edit, "edit", false, "re-open the advanced review profile skill picker")
 	cmd.Flags().BoolVar(&findings, "findings", false, "browse local review findings")
 	cmd.Flags().BoolVar(&listAgents, "agents", false, "list the worker agents you can pass to --agent for the selected profile")
@@ -207,10 +212,11 @@ type reviewConfigureOptions struct {
 	Master string   // master agent (--set-master)
 	Task   string   // profile task text (--set-task)
 	Models []string // per-worker "agent=model" entries (--set-model)
+	Slots  []string // worker slots as "agent[=model]" entries (--set-slot)
 }
 
 func (o reviewConfigureOptions) scripted() bool {
-	return len(o.Agents) > 0 || o.Master != "" || o.Task != "" || len(o.Models) > 0
+	return len(o.Agents) > 0 || o.Master != "" || o.Task != "" || len(o.Models) > 0 || len(o.Slots) > 0
 }
 
 func runReviewConfigure(ctx context.Context, cmd *cobra.Command, profileOverride string, opts reviewConfigureOptions, deps Deps) error {
@@ -471,8 +477,8 @@ func exampleAgentList(catalog []reviewAgentCatalogEntry) string {
 func buildConfiguredProfile(ctx context.Context, profileName string, opts reviewConfigureOptions, s *settings.EntireSettings, deps Deps) (settings.ReviewProfileConfig, error) {
 	profile := s.ReviewProfiles[profileName]
 
-	if len(opts.Agents) > 0 {
-		agents := make(map[string]settings.ReviewConfig, len(opts.Agents))
+	if len(opts.Agents) > 0 || len(opts.Slots) > 0 {
+		agents := make(map[string]settings.ReviewConfig, len(opts.Agents)+len(opts.Slots))
 		for _, raw := range opts.Agents {
 			name := strings.TrimSpace(raw)
 			if name == "" {
@@ -481,15 +487,34 @@ func buildConfiguredProfile(ctx context.Context, profileName string, opts review
 			if deps.ReviewerFor(name) == nil {
 				return settings.ReviewProfileConfig{}, fmt.Errorf("agent %q has no review runner adapter; available: %s", name, strings.Join(reviewAgentNames(deps), ", "))
 			}
+			// Keyed by the bare agent name so `--set-model agent=model` can target
+			// it; one default-model slot per agent.
 			agents[name] = defaultReviewAgentConfig(profileName, name)
 		}
+		for _, raw := range opts.Slots {
+			rawName, model, _ := strings.Cut(raw, "=")
+			name := strings.TrimSpace(rawName)
+			model = strings.TrimSpace(model)
+			if name == "" {
+				continue
+			}
+			if deps.ReviewerFor(name) == nil {
+				return settings.ReviewProfileConfig{}, fmt.Errorf("agent %q has no review runner adapter; available: %s", name, strings.Join(reviewAgentNames(deps), ", "))
+			}
+			// Each slot is its own worker; workerIDForAgentModel disambiguates
+			// duplicates (claude-code, claude-code-2, claude-code:opus, …).
+			cfg := defaultReviewAgentConfig(profileName, name)
+			cfg.Agent = name
+			cfg.Model = model
+			agents[workerIDForAgentModel(name, model, agents)] = cfg
+		}
 		if len(agents) == 0 {
-			return settings.ReviewProfileConfig{}, errors.New("--set-agents listed no usable agents")
+			return settings.ReviewProfileConfig{}, errors.New("--set-agents/--set-slot listed no usable agents")
 		}
 		profile.Agents = agents
 	}
 	if len(nonZeroAgentConfigs(profile.Agents)) == 0 {
-		return settings.ReviewProfileConfig{}, errors.New("profile has no agents; pass --set-agents")
+		return settings.ReviewProfileConfig{}, errors.New("profile has no agents; pass --set-agents or --set-slot")
 	}
 
 	for _, raw := range opts.Models {
