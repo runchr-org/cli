@@ -931,267 +931,206 @@ func (m searchModel) renderDetailContent(r search.Result, contentWidth int, show
 	}
 }
 
-func (m searchModel) renderCheckpointDetail(r search.Result, contentWidth int, showSections bool) string {
+// detailWriter accumulates a label/value detail body. It owns the shared
+// layout (label column width, value wrap width, section spacing) so the
+// per-type renderers below differ only in which fields they emit.
+type detailWriter struct {
+	b            strings.Builder
+	styles       searchStyles
+	labelWidth   int
+	valueWidth   int
+	showSections bool
+}
+
+func (m searchModel) newDetailWriter(title string, contentWidth int, showSections bool) *detailWriter {
 	const labelWidth = 12
 	valueWidth := contentWidth - labelWidth - 1
 	if valueWidth < 20 {
 		valueWidth = 0
 	}
-
-	var content strings.Builder
-
-	content.WriteString(m.styles.render(m.styles.detailTitle, "Checkpoint Detail"))
-	content.WriteString("\n")
-
-	formatLabel := func(label string) string {
-		return m.styles.render(m.styles.label, fmt.Sprintf("%-*s", labelWidth, label+":"))
+	w := &detailWriter{
+		styles:       m.styles,
+		labelWidth:   labelWidth,
+		valueWidth:   valueWidth,
+		showSections: showSections,
 	}
+	w.b.WriteString(w.styles.render(w.styles.detailTitle, title) + "\n")
+	return w
+}
 
-	writeField := func(label, value string) {
-		content.WriteString(formatLabel(label) + " " + value + "\n")
+func (w *detailWriter) label(label string) string {
+	return w.styles.render(w.styles.label, fmt.Sprintf("%-*s", w.labelWidth, label+":"))
+}
+
+func (w *detailWriter) field(label, value string) {
+	w.b.WriteString(w.label(label) + " " + value + "\n")
+}
+
+func (w *detailWriter) wrappedField(label, value string) {
+	if w.valueWidth == 0 || len(value) <= w.valueWidth {
+		w.field(label, value)
+		return
 	}
-
-	writeWrappedField := func(label, value string) {
-		if valueWidth == 0 || len(value) <= valueWidth {
-			writeField(label, value)
-			return
-		}
-		indent := strings.Repeat(" ", labelWidth+1)
-		wrapped := wrapText(value, valueWidth)
-		lines := strings.Split(wrapped, "\n")
-		content.WriteString(formatLabel(label) + " " + lines[0] + "\n")
-		for _, line := range lines[1:] {
-			content.WriteString(indent + line + "\n")
-		}
+	indent := strings.Repeat(" ", w.labelWidth+1)
+	lines := strings.Split(wrapText(value, w.valueWidth), "\n")
+	w.b.WriteString(w.label(label) + " " + lines[0] + "\n")
+	for _, line := range lines[1:] {
+		w.b.WriteString(indent + line + "\n")
 	}
+}
 
-	writeSection := func(title string) {
-		if showSections {
-			content.WriteString("\n" + m.styles.render(m.styles.detailTitle, title) + "\n")
-		} else {
-			content.WriteString("\n")
-		}
+func (w *detailWriter) section(title string) {
+	if w.showSections {
+		w.b.WriteString("\n" + w.styles.render(w.styles.detailTitle, title) + "\n")
+	} else {
+		w.b.WriteString("\n")
 	}
+}
 
+// matchField emits the "Match" row, appending the relevance score when present.
+func (w *detailWriter) matchField(meta search.Meta) {
+	value := meta.MatchType
+	if meta.Score > 0 {
+		value += " " + w.styles.render(w.styles.dim, fmt.Sprintf("(score: %.3f)", meta.Score))
+	}
+	w.field("Match", value)
+}
+
+// authorField emits the "Author" row, preferring the username with the raw
+// author dimmed in parentheses when both are available.
+func (w *detailWriter) authorField(author string, username *string) {
+	value := author
+	if username != nil && *username != "" {
+		value = *username + " " + w.styles.render(w.styles.dim, "("+author+")")
+	}
+	w.field("Author", value)
+}
+
+func (w *detailWriter) String() string {
+	return strings.TrimRight(w.b.String(), "\n")
+}
+
+func (m searchModel) renderCheckpointDetail(r search.Result, contentWidth int, showSections bool) string {
+	w := m.newDetailWriter("Checkpoint Detail", contentWidth, showSections)
 	cp := r.Checkpoint
 	if cp == nil {
-		return content.String()
+		return w.String()
 	}
 
 	// ── OVERVIEW ──
-	writeSection("OVERVIEW")
-	writeField("ID", cp.ID)
-	writeWrappedField("Prompt", stringutil.CollapseWhitespace(cp.Prompt))
-	matchType := r.Meta.MatchType
-	if r.Meta.Score > 0 {
-		matchType += " " + m.styles.render(m.styles.dim, fmt.Sprintf("(score: %.3f)", r.Meta.Score))
-	}
-	writeField("Match", matchType)
+	w.section("OVERVIEW")
+	w.field("ID", cp.ID)
+	w.wrappedField("Prompt", stringutil.CollapseWhitespace(cp.Prompt))
+	w.matchField(r.Meta)
 
 	// ── SOURCE ──
-	writeSection("SOURCE")
-	writeWrappedField("Commit", formatCommit(cp.CommitSHA, cp.CommitMessage))
-	writeField("Branch", cp.Branch)
-	writeField("Repo", cp.Org+"/"+cp.Repo)
-	authorStr := cp.Author
-	if cp.AuthorUsername != nil && *cp.AuthorUsername != "" {
-		authorStr = *cp.AuthorUsername + " " + m.styles.render(m.styles.dim, "("+cp.Author+")")
-	}
-	writeField("Author", authorStr)
-	createdStr := formatDetailCreatedAt(cp.CreatedAt, m.styles)
-	writeField("Created", createdStr)
+	w.section("SOURCE")
+	w.wrappedField("Commit", formatCommit(cp.CommitSHA, cp.CommitMessage))
+	w.field("Branch", cp.Branch)
+	w.field("Repo", cp.Org+"/"+cp.Repo)
+	w.authorField(cp.Author, cp.AuthorUsername)
+	w.field("Created", formatDetailCreatedAt(cp.CreatedAt, m.styles))
 
 	// ── SNIPPET ──
 	if r.Meta.Snippet != "" {
-		writeSection("SNIPPET")
+		w.section("SNIPPET")
 		switch {
 		case showSections:
-			content.WriteString(renderSnippetMarkdown(r.Meta.Snippet, contentWidth, m.darkBg) + "\n")
-		case valueWidth > 0:
-			content.WriteString(wrapText(r.Meta.Snippet, contentWidth) + "\n")
+			w.b.WriteString(renderSnippetMarkdown(r.Meta.Snippet, contentWidth, m.darkBg) + "\n")
+		case w.valueWidth > 0:
+			w.b.WriteString(wrapText(r.Meta.Snippet, contentWidth) + "\n")
 		default:
-			content.WriteString(r.Meta.Snippet + "\n")
+			w.b.WriteString(r.Meta.Snippet + "\n")
 		}
 	}
 
 	// ── FILES ──
 	if len(cp.FilesTouched) > 0 {
-		content.WriteString("\n")
+		w.b.WriteString("\n")
 		if showSections {
-			content.WriteString(m.styles.render(m.styles.detailTitle, "FILES") + "\n")
+			w.b.WriteString(m.styles.render(m.styles.detailTitle, "FILES") + "\n")
 		} else {
-			content.WriteString(m.styles.render(m.styles.label, "Files:") + "\n")
+			w.b.WriteString(m.styles.render(m.styles.label, "Files:") + "\n")
 		}
 		for _, f := range cp.FilesTouched {
-			content.WriteString("  " + f + "\n")
+			w.b.WriteString("  " + f + "\n")
 		}
 	}
 
-	return strings.TrimRight(content.String(), "\n")
+	return w.String()
 }
 
 func (m searchModel) renderCommitDetail(r search.Result, contentWidth int, showSections bool) string {
-	const labelWidth = 12
-	valueWidth := contentWidth - labelWidth - 1
-	if valueWidth < 20 {
-		valueWidth = 0
-	}
-
-	var content strings.Builder
-
-	content.WriteString(m.styles.render(m.styles.detailTitle, "Commit Detail"))
-	content.WriteString("\n")
-
-	formatLabel := func(label string) string {
-		return m.styles.render(m.styles.label, fmt.Sprintf("%-*s", labelWidth, label+":"))
-	}
-
-	writeField := func(label, value string) {
-		content.WriteString(formatLabel(label) + " " + value + "\n")
-	}
-
-	writeWrappedField := func(label, value string) {
-		if valueWidth == 0 || len(value) <= valueWidth {
-			writeField(label, value)
-			return
-		}
-		indent := strings.Repeat(" ", labelWidth+1)
-		wrapped := wrapText(value, valueWidth)
-		lines := strings.Split(wrapped, "\n")
-		content.WriteString(formatLabel(label) + " " + lines[0] + "\n")
-		for _, line := range lines[1:] {
-			content.WriteString(indent + line + "\n")
-		}
-	}
-
-	writeSection := func(title string) {
-		if showSections {
-			content.WriteString("\n" + m.styles.render(m.styles.detailTitle, title) + "\n")
-		} else {
-			content.WriteString("\n")
-		}
-	}
-
+	w := m.newDetailWriter("Commit Detail", contentWidth, showSections)
 	cm := r.Commit
 	if cm == nil {
-		return content.String()
+		return w.String()
 	}
 
-	writeSection("OVERVIEW")
+	w.section("OVERVIEW")
 	sha := cm.CommitSHA
 	if len(sha) > 7 {
 		sha = sha[:7]
 	}
-	writeField("SHA", sha)
-	writeWrappedField("Subject", cm.CommitSubject)
+	w.field("SHA", sha)
+	w.wrappedField("Subject", cm.CommitSubject)
 	if cm.CommitMessage != cm.CommitSubject {
-		writeWrappedField("Message", stringutil.CollapseWhitespace(cm.CommitMessage))
+		w.wrappedField("Message", stringutil.CollapseWhitespace(cm.CommitMessage))
 	}
-	matchType := r.Meta.MatchType
-	if r.Meta.Score > 0 {
-		matchType += " " + m.styles.render(m.styles.dim, fmt.Sprintf("(score: %.3f)", r.Meta.Score))
-	}
-	writeField("Match", matchType)
+	w.matchField(r.Meta)
 
-	writeSection("SOURCE")
-	writeField("Branch", cm.Branch)
-	writeField("Repo", cm.Org+"/"+cm.Repo)
-	authorStr := cm.Author
-	if cm.AuthorUsername != nil && *cm.AuthorUsername != "" {
-		authorStr = *cm.AuthorUsername + " " + m.styles.render(m.styles.dim, "("+cm.Author+")")
-	}
-	writeField("Author", authorStr)
-	writeField("Created", formatDetailCreatedAt(cm.CreatedAt, m.styles))
+	w.section("SOURCE")
+	w.field("Branch", cm.Branch)
+	w.field("Repo", cm.Org+"/"+cm.Repo)
+	w.authorField(cm.Author, cm.AuthorUsername)
+	w.field("Created", formatDetailCreatedAt(cm.CreatedAt, m.styles))
 
-	writeSection("STATS")
-	writeField("Additions", fmt.Sprintf("+%d", cm.Additions))
-	writeField("Deletions", fmt.Sprintf("-%d", cm.Deletions))
-	writeField("Files", fmt.Sprintf("%d changed", cm.FilesChanged))
+	w.section("STATS")
+	w.field("Additions", fmt.Sprintf("+%d", cm.Additions))
+	w.field("Deletions", fmt.Sprintf("-%d", cm.Deletions))
+	w.field("Files", fmt.Sprintf("%d changed", cm.FilesChanged))
 
 	if cm.HTMLUrl != nil && *cm.HTMLUrl != "" {
-		writeField("URL", *cm.HTMLUrl)
+		w.field("URL", *cm.HTMLUrl)
 	}
 
-	return strings.TrimRight(content.String(), "\n")
+	return w.String()
 }
 
 func (m searchModel) renderSessionDetail(r search.Result, contentWidth int, showSections bool) string {
-	const labelWidth = 12
-	valueWidth := contentWidth - labelWidth - 1
-	if valueWidth < 20 {
-		valueWidth = 0
-	}
-
-	var content strings.Builder
-
-	content.WriteString(m.styles.render(m.styles.detailTitle, "Session Detail"))
-	content.WriteString("\n")
-
-	formatLabel := func(label string) string {
-		return m.styles.render(m.styles.label, fmt.Sprintf("%-*s", labelWidth, label+":"))
-	}
-
-	writeField := func(label, value string) {
-		content.WriteString(formatLabel(label) + " " + value + "\n")
-	}
-
-	writeWrappedField := func(label, value string) {
-		if valueWidth == 0 || len(value) <= valueWidth {
-			writeField(label, value)
-			return
-		}
-		indent := strings.Repeat(" ", labelWidth+1)
-		wrapped := wrapText(value, valueWidth)
-		lines := strings.Split(wrapped, "\n")
-		content.WriteString(formatLabel(label) + " " + lines[0] + "\n")
-		for _, line := range lines[1:] {
-			content.WriteString(indent + line + "\n")
-		}
-	}
-
-	writeSection := func(title string) {
-		if showSections {
-			content.WriteString("\n" + m.styles.render(m.styles.detailTitle, title) + "\n")
-		} else {
-			content.WriteString("\n")
-		}
-	}
-
+	w := m.newDetailWriter("Session Detail", contentWidth, showSections)
 	ss := r.Session
 	if ss == nil {
-		return content.String()
+		return w.String()
 	}
 
-	writeSection("OVERVIEW")
-	writeField("Session ID", ss.SessionID)
-	writeWrappedField("Name", ss.DisplayName)
+	w.section("OVERVIEW")
+	w.field("Session ID", ss.SessionID)
+	w.wrappedField("Name", ss.DisplayName)
 	if ss.Prompt != nil && *ss.Prompt != "" {
-		writeWrappedField("Prompt", stringutil.CollapseWhitespace(*ss.Prompt))
+		w.wrappedField("Prompt", stringutil.CollapseWhitespace(*ss.Prompt))
 	}
 	if ss.Agent != nil && *ss.Agent != "" {
-		writeField("Agent", *ss.Agent)
+		w.field("Agent", *ss.Agent)
 	}
 	if ss.Model != nil && *ss.Model != "" {
-		writeField("Model", *ss.Model)
+		w.field("Model", *ss.Model)
 	}
-	writeField("Steps", strconv.Itoa(ss.StepCount))
-	matchType := r.Meta.MatchType
-	if r.Meta.Score > 0 {
-		matchType += " " + m.styles.render(m.styles.dim, fmt.Sprintf("(score: %.3f)", r.Meta.Score))
-	}
-	writeField("Match", matchType)
+	w.field("Steps", strconv.Itoa(ss.StepCount))
+	w.matchField(r.Meta)
 
-	writeSection("SOURCE")
-	writeField("Repo", ss.Org+"/"+ss.Repo)
+	w.section("SOURCE")
+	w.field("Repo", ss.Org+"/"+ss.Repo)
 	if ss.Branch != nil && *ss.Branch != "" {
-		writeField("Branch", *ss.Branch)
+		w.field("Branch", *ss.Branch)
 	}
+	// Session author is the username only (no raw-author fallback to dim).
 	if ss.AuthorUsername != nil && *ss.AuthorUsername != "" {
-		writeField("Author", *ss.AuthorUsername)
+		w.field("Author", *ss.AuthorUsername)
 	}
-	writeField("Created", formatDetailCreatedAt(ss.CreatedAt, m.styles))
+	w.field("Created", formatDetailCreatedAt(ss.CreatedAt, m.styles))
 
-	return strings.TrimRight(content.String(), "\n")
+	return w.String()
 }
 
 // formatDetailCreatedAt renders date (default) + relative time (dim) for the detail view.
