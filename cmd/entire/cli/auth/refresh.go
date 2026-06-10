@@ -137,13 +137,10 @@ func newContextTokenManager(c *contexts.Context, transport http.RoundTripper, al
 }
 
 // reauthError carries a friendly, context-named re-login message while still
-// unwrapping to the underlying tokenmanager sentinel. Callers that branch on
-// errors.Is(err, ErrNotLoggedIn) (NewAuthenticatedAPIClient, search, dispatch)
-// keep matching — without this, the discovery path turned a missing keyring
-// token into an opaque string and those callers fell through to their generic
-// error, a regression vs the pre-discovery TokenForResource path. Error()
-// returns only msg so the sentinel's terse text ("not logged in") doesn't leak
-// into the rendered message.
+// unwrapping to the underlying tokenmanager sentinel, so callers that branch
+// on errors.Is(err, ErrNotLoggedIn) (NewAuthenticatedAPIClient, search,
+// dispatch) keep matching. Error() returns only msg so the sentinel's terse
+// text ("not logged in") doesn't leak into the rendered message.
 type reauthError struct {
 	msg      string
 	sentinel error
