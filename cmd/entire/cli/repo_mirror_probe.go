@@ -162,6 +162,10 @@ func explainSuspendedMirror(w io.Writer, mirrorID string, freshCreate bool, err 
 	return true, NewSilentError(fmt.Errorf("mirror %s is suspended", mirrorID))
 }
 
+// mintRepoToken mints the repo-scoped pull token for the clone probe.
+// Package var so tests can substitute a slow or failing auth path.
+var mintRepoToken = auth.RepoScopedToken
+
 // waitForMirrorClone blocks until the mirror at /gh/<owner>/<repo> on
 // clusterHost advertises a resolvable HEAD (the initial GitHub→EntireDB
 // clone has landed) or the deadline expires. It probes the data plane's
@@ -174,24 +178,28 @@ func explainSuspendedMirror(w io.Writer, mirrorID string, freshCreate bool, err 
 // rather than minting once up front. Re-mints are floored at
 // minReauthInterval so a flapping STS can't be amplified into a re-mint
 // every probeInterval ticks.
+//
+// The deadline is applied before the first mint: minting now spans cluster
+// discovery and a possible login refresh, so the authorization phase must
+// consume the user's wait budget, not run before it.
 func waitForMirrorClone(ctx context.Context, out io.Writer, clusterHost, owner, repo string, timeout time.Duration) error {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
 	repoSlug := "/gh/" + owner + "/" + repo
 	checkURL := fmt.Sprintf("https://%s%s/info/refs?service=git-upload-pack", clusterHost, repoSlug)
 
 	mintToken := func() (string, error) {
-		return auth.RepoScopedToken(ctx, clusterHost, repoSlug, "pull")
+		return mintRepoToken(ctx, clusterHost, repoSlug, "pull")
 	}
 	token, err := mintToken()
 	if err != nil {
 		return fmt.Errorf("authorize clone probe: %w", err)
 	}
 	lastMint := time.Now()
-
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
 
 	ticker := time.NewTicker(probeInterval)
 	defer ticker.Stop()

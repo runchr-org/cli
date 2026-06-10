@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -508,4 +509,24 @@ func mustReq(t *testing.T, rawURL string) *http.Request {
 	u, err := url.Parse(rawURL)
 	require.NoError(t, err)
 	return &http.Request{URL: u}
+}
+
+// TestWaitForMirrorClone_TimeoutBoundsAuthorization pins that --wait-timeout
+// covers the initial token mint, not just the probe loop: minting spans
+// cluster discovery and a possible login refresh, so a hung auth path must
+// be cut off by the user's wait budget.
+//
+// Not parallel: swaps the package-level mintRepoToken seam.
+func TestWaitForMirrorClone_TimeoutBoundsAuthorization(t *testing.T) {
+	prev := mintRepoToken
+	mintRepoToken = func(ctx context.Context, _, _, _ string) (string, error) {
+		<-ctx.Done() // hang until the wait deadline fires
+		return "", ctx.Err()
+	}
+	t.Cleanup(func() { mintRepoToken = prev })
+
+	start := time.Now()
+	err := waitForMirrorClone(context.Background(), io.Discard, "cluster.example", "o", "r", 50*time.Millisecond)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), 10*time.Second, "first mint must be bounded by the wait timeout")
 }
