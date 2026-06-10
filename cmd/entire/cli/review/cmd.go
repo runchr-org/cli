@@ -77,6 +77,7 @@ func NewCommand(deps Deps) *cobra.Command {
 	var findings bool
 	var listModels bool
 	var listAgents bool
+	var listProfiles bool
 	var setAgents []string
 	var setMaster string
 	var setTask string
@@ -117,6 +118,7 @@ Flags:
   --edit         re-open the advanced profile skill picker
   --findings     browse local findings
   --agent NAME   run only one worker from the selected profile
+  --list         list configured scout profiles (their workers and master)
   --agents       list the worker agents you can pass to --agent for the profile
   --model NAME   override the model for the --agent worker (requires --agent)
   --models       list the models each agent advertises (optionally --agent NAME)
@@ -154,6 +156,9 @@ use 'entire attach --review <id>'.`,
 					listProfile = args[0]
 				}
 				return runReviewListAgents(ctx, cmd, listProfile, deps)
+			}
+			if listProfiles {
+				return runReviewListProfiles(ctx, cmd, deps)
 			}
 
 			modes := 0
@@ -201,6 +206,7 @@ use 'entire attach --review <id>'.`,
 	cmd.Flags().BoolVar(&findings, "findings", false, "browse local review findings")
 	cmd.Flags().BoolVar(&listAgents, "agents", false, "list the worker agents you can pass to --agent for the selected profile")
 	cmd.Flags().BoolVar(&listModels, "models", false, "list the models each review agent advertises (optionally filtered by --agent)")
+	cmd.Flags().BoolVar(&listProfiles, "list", false, "list configured scout profiles (workers and master)")
 	cmd.Flags().StringVar(&agentOverride, "agent", "", "run one configured worker from the selected profile")
 	cmd.Flags().StringVar(&modelOverride, "model", "", "override the model for the --agent worker (requires --agent)")
 	cmd.Flags().StringVar(&profileOverride, "profile", "", "review profile to run (default: review_default_profile or general)")
@@ -340,6 +346,59 @@ func runReviewListModels(ctx context.Context, cmd *cobra.Command, agentFilter st
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "These are common models/aliases, not an exhaustive list. Use one with:")
 	fmt.Fprintln(out, "  entire scout --agent <name> --model <model>")
+	return nil
+}
+
+// runReviewListProfiles prints the configured scout profiles with their workers
+// and master, marking the default. Needs settings but no review run.
+func runReviewListProfiles(ctx context.Context, cmd *cobra.Command, deps Deps) error {
+	out := cmd.OutOrStdout()
+	s, err := settings.Load(ctx)
+	if err != nil {
+		cmd.SilenceUsage = true
+		fmt.Fprintf(cmd.ErrOrStderr(), "Failed to load settings: %v\n", err)
+		return deps.NewSilentError(err)
+	}
+	if s == nil {
+		s = &settings.EntireSettings{}
+	}
+	profiles := nonZeroProfiles(s.ReviewProfiles)
+	if len(profiles) == 0 {
+		fmt.Fprintln(out, "No scout profiles configured. Create one with `entire scout --configure`.")
+		return nil
+	}
+	defaultName := strings.TrimSpace(s.ReviewDefaultProfile)
+	fmt.Fprintln(out, "Profiles:")
+	for _, name := range sortedProfileNames(profiles) {
+		p := profiles[name]
+		p.Agents = nonZeroAgentConfigs(p.Agents)
+		marker := ""
+		if name == defaultName {
+			marker = "  (default)"
+		}
+		fmt.Fprintf(out, "  %s%s\n", name, marker)
+
+		workers := make([]string, 0, len(p.Agents))
+		for _, w := range sortedProfileAgentNames(p) {
+			cfg := p.Agents[w]
+			model := strings.TrimSpace(cfg.Model)
+			if model == "" {
+				model = "default"
+			}
+			workers = append(workers, reviewAgentName(w, cfg)+" · "+model)
+		}
+		fmt.Fprintf(out, "    workers: %s\n", strings.Join(workers, ", "))
+
+		if masterAgent, masterModel, ok := profileMasterIdentity(p); ok {
+			label := masterAgent
+			if strings.TrimSpace(masterModel) != "" {
+				label += " · " + masterModel
+			}
+			fmt.Fprintf(out, "    master:  %s\n", label)
+		}
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Run one with `entire scout <name>`.")
 	return nil
 }
 
