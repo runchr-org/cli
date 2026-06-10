@@ -28,7 +28,9 @@ shortcuts remain functional but hidden, and emit a deprecation hint pointing
 at the canonical group form.
 
 - `session` (alias: `sessions`): `list`, `info`, `stop`, `attach`, `resume`, `current`
-- `checkpoint` (aliases: `cp`, `checkpoints`): `list`, `explain`, `rewind`, `search`
+- `checkpoint` (aliases: `cp`, `checkpoints`): `list`, `explain`, `search`, plus
+  the deprecated `rewind` (functional, prints a cobra deprecation message, will
+  be removed in a future release)
 - `agent`: bare opens the interactive agent selector, plus `list`, `add`, `remove`
 - `configure`: bare prints help and a hint pointing at `entire agent`; flags
   manage non-agent settings (telemetry, git-hook installation mode, strategy
@@ -43,13 +45,14 @@ Top-level lifecycle and standalone commands: `enable`, `disable`, `status`,
 `configure`.
 
 Hidden top-level shortcuts (functional, emit a one-line deprecation hint):
-`rewind` → `checkpoint rewind`, `resume` → `session resume`, `attach` →
-`session attach`, `explain` → `checkpoint explain`, `trace` → `doctor trace`.
+`resume` → `session resume`, `attach` → `session attach`, `explain` →
+`checkpoint explain`, `trace` → `doctor trace`.
 Cobra-native aliases (no hint): `sessions` → `session`, `cp`/`checkpoints` →
 `checkpoint`. The `search` top-level remains hidden without a hint.
 
-Deprecated top-level alias (functional, prints cobra deprecation message):
-`reset` → `clean`.
+Deprecated top-level commands (functional, print a cobra deprecation message):
+`reset` → `clean`, and `rewind` (no replacement, announces removal — same
+deprecation as `checkpoint rewind`).
 
 Hidden infrastructure commands: `hooks`, `trail`,
 `curl-bash-post-install`, `__send_analytics`.

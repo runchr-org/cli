@@ -117,7 +117,9 @@ Just use one of your AI agents as before. Entire runs in the background, trackin
 entire status  # Check current session status anytime
 ```
 
-### 3. Rewind to a Previous Checkpoint
+### 3. Rewind to a Previous Checkpoint (deprecated)
+
+> **Deprecated:** `entire checkpoint rewind` will be removed in a future release.
 
 If you want to undo some changes and go back to an earlier checkpoint:
 
@@ -242,9 +244,9 @@ go test -tags=integration ./cmd/entire/cli/integration_test -run TestLogin
 | `entire disable` | Remove Entire hooks from repository                                                               |
 | `entire doctor`  | Fix or clean up stuck sessions                                                                    |
 | `entire enable`  | Enable Entire in your repository                                                                  |
-| `entire checkpoint`        | List, explain, rewind, and search checkpoints                                           |
+| `entire checkpoint`        | List, explain, and search checkpoints                                                   |
 | `entire checkpoint explain` | Explain a session, commit, or checkpoint                                               |
-| `entire checkpoint rewind` | Rewind to a previous checkpoint                                                         |
+| `entire checkpoint rewind` | Rewind to a previous checkpoint (deprecated, will be removed in a future release)       |
 | `entire login`   | Authenticate the CLI with Entire device auth                                                      |
 | `entire session` | View and manage agent sessions tracked by Entire                                                  |
 | `entire session resume`    | Switch to a branch, restore latest checkpointed session metadata, and show command(s) |
