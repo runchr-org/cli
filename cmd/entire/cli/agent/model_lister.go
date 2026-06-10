@@ -13,13 +13,13 @@ type ModelInfo struct {
 }
 
 // ModelLister is an optional capability for agents that can advertise the
-// models usable with `entire review --model`.
+// models usable with `entire scout --model`.
 //
-// Built-in agents whose CLI has no model-enumeration command (claude-code,
-// codex, gemini) return a curated, intentionally non-exhaustive list of common
-// models/aliases — `--model` ultimately accepts anything the agent CLI does.
-// Agents whose CLI can enumerate models live (e.g. Pi's `pi --list-models`)
-// may shell out instead.
+// Pi enumerates models live by shelling out to `pi --list-models`. claude-code
+// advertises a small curated list of real, valid aliases (opus/sonnet/haiku).
+// Agents whose CLI has no enumeration command (codex, gemini) do not implement
+// this interface at all; the picker then offers only Default + Custom, since
+// `--model` ultimately accepts anything the agent CLI does.
 type ModelLister interface {
 	Agent
 
