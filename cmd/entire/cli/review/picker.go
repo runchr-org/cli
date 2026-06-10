@@ -109,12 +109,14 @@ func RunReviewGuidedSetup(
 	if s != nil {
 		currentDefault = strings.TrimSpace(s.ReviewDefaultProfile)
 	}
+	customTask := ""
 	if !profileWasProvided {
-		pickedProfile, err := promptForSimpleReviewProfile(ctx, currentDefault)
+		pickedProfile, pickedTask, err := promptForReviewFocus(ctx, currentDefault)
 		if err != nil {
 			return "", settings.ReviewProfileConfig{}, err
 		}
 		profileName = pickedProfile
+		customTask = pickedTask
 	}
 
 	// Seed the flow from the existing profile (if any) so re-configuring edits
@@ -128,6 +130,9 @@ func RunReviewGuidedSetup(
 	profile, err := promptForReviewCrew(ctx, profileName, launchable, existing)
 	if err != nil {
 		return "", settings.ReviewProfileConfig{}, err
+	}
+	if customTask != "" {
+		profile.Task = customTask
 	}
 	if len(profile.Agents) > 1 {
 		masterAgent, masterModel, err := promptForStandaloneMaster(ctx, launchable, existing)
@@ -162,7 +167,20 @@ func launchableInstalledAgentNames(installed []types.AgentName, reviewerFor func
 	return names
 }
 
-func promptForSimpleReviewProfile(ctx context.Context, current string) (string, error) {
+// customProfileName is the profile name used when the user writes a custom
+// task in the focus picker.
+const customProfileName = "custom"
+
+// reviewFocusCustomSentinel is the focus-picker option value for "write your
+// own task". Distinct from real profile names.
+const reviewFocusCustomSentinel = "__custom_task__"
+
+// promptForReviewFocus asks what the crew should review. The presets set a
+// named profile (task + default skills); "Custom…" lets the user write the
+// shared task directly. Returns (profileName, customTask); customTask is
+// non-empty only for the custom path. current pre-selects the profile being
+// edited.
+func promptForReviewFocus(ctx context.Context, current string) (string, string, error) {
 	current = strings.TrimSpace(current)
 	picked := DefaultProfileName
 	presets := []struct{ label, value string }{
@@ -170,7 +188,7 @@ func promptForSimpleReviewProfile(ctx context.Context, current string) (string, 
 		{"Security — auth, injection, secrets", "security"},
 		{"Accessibility — keyboard, screen readers, contrast", "accessibility"},
 	}
-	options := make([]huh.Option[string], 0, len(presets))
+	options := make([]huh.Option[string], 0, len(presets)+1)
 	for _, p := range presets {
 		label := p.label
 		if p.value == current {
@@ -179,16 +197,41 @@ func promptForSimpleReviewProfile(ctx context.Context, current string) (string, 
 		}
 		options = append(options, huh.NewOption(label, p.value))
 	}
+	customLabel := "Custom… — describe your own task"
+	if current == customProfileName {
+		customLabel += "  (current)"
+		picked = reviewFocusCustomSentinel
+	}
+	options = append(options, huh.NewOption(customLabel, reviewFocusCustomSentinel))
+
 	form := newAccessibleForm(huh.NewGroup(
 		huh.NewSelect[string]().
-			Title("What kind of review?").
+			Title("What should they review?").
 			Options(options...).
 			Value(&picked),
 	))
 	if err := form.RunWithContext(ctx); err != nil {
-		return "", fmt.Errorf("review profile picker: %w", err)
+		return "", "", fmt.Errorf("review focus picker: %w", err)
 	}
-	return picked, nil
+	if picked != reviewFocusCustomSentinel {
+		return picked, "", nil
+	}
+
+	task := ""
+	taskForm := newAccessibleForm(huh.NewGroup(
+		huh.NewText().
+			Title("Describe the review task").
+			Description("What should the crew look for? This becomes the shared task for every worker.").
+			Value(&task),
+	))
+	if err := taskForm.RunWithContext(ctx); err != nil {
+		return "", "", fmt.Errorf("custom task input: %w", err)
+	}
+	task = strings.TrimSpace(task)
+	if task == "" {
+		return DefaultProfileName, "", nil // empty custom task → fall back to general
+	}
+	return customProfileName, task, nil
 }
 
 // crewSlot is one worker slot in the review crew: an agent plus an optional
