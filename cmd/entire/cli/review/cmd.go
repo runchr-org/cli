@@ -275,7 +275,7 @@ func runReviewConfigure(ctx context.Context, cmd *cobra.Command, profileOverride
 	// given) so the guided setup runs the "what kind of review?" type picker
 	// instead of being silently defaulted to the general profile.
 	if interactive.IsTerminalWriter(out) && interactive.CanPromptInteractively() {
-		name, profile, setupErr := RunReviewGuidedSetup(ctx, out, installed, deps.ReviewerFor, strings.TrimSpace(profileOverride), false)
+		name, profile, setupErr := RunReviewGuidedSetup(ctx, out, installed, deps.ReviewerFor, strings.TrimSpace(profileOverride), false, s)
 		if setupErr != nil {
 			return handlePickerError(cmd, silentErr, setupErr)
 		}
@@ -672,7 +672,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride, modelOver
 		guidedSetup := interactive.IsTerminalWriter(out) && interactive.CanPromptInteractively()
 		if guidedSetup {
 			var setupErr error
-			profileForSetup, profile, setupErr = RunReviewGuidedSetup(ctx, out, installed, deps.ReviewerFor, profileForSetup, true)
+			profileForSetup, profile, setupErr = RunReviewGuidedSetup(ctx, out, installed, deps.ReviewerFor, profileForSetup, true, s)
 			if setupErr != nil {
 				return handlePickerError(cmd, silentErr, setupErr)
 			}

@@ -87,6 +87,7 @@ func RunReviewGuidedSetup(
 	reviewerFor func(string) reviewtypes.AgentReviewer,
 	profileName string,
 	firstRun bool,
+	s *settings.EntireSettings,
 ) (string, settings.ReviewProfileConfig, error) {
 	if firstRun {
 		if !ConfirmFirstRunSetup(ctx, out) {
@@ -104,20 +105,32 @@ func RunReviewGuidedSetup(
 	if profileName == "" {
 		profileName = DefaultProfileName
 	}
+	currentDefault := ""
+	if s != nil {
+		currentDefault = strings.TrimSpace(s.ReviewDefaultProfile)
+	}
 	if !profileWasProvided {
-		pickedProfile, err := promptForSimpleReviewProfile(ctx)
+		pickedProfile, err := promptForSimpleReviewProfile(ctx, currentDefault)
 		if err != nil {
 			return "", settings.ReviewProfileConfig{}, err
 		}
 		profileName = pickedProfile
 	}
 
-	profile, err := promptForReviewCrew(ctx, profileName, launchable)
+	// Seed the flow from the existing profile (if any) so re-configuring edits
+	// the current crew/master rather than starting from scratch.
+	var existing settings.ReviewProfileConfig
+	if s != nil {
+		existing = s.ReviewProfiles[profileName]
+	}
+	existing.Agents = nonZeroAgentConfigs(existing.Agents)
+
+	profile, err := promptForReviewCrew(ctx, profileName, launchable, existing)
 	if err != nil {
 		return "", settings.ReviewProfileConfig{}, err
 	}
 	if len(profile.Agents) > 1 {
-		masterAgent, masterModel, err := promptForStandaloneMaster(ctx, launchable)
+		masterAgent, masterModel, err := promptForStandaloneMaster(ctx, launchable, existing)
 		if err != nil {
 			return "", settings.ReviewProfileConfig{}, err
 		}
@@ -149,16 +162,27 @@ func launchableInstalledAgentNames(installed []types.AgentName, reviewerFor func
 	return names
 }
 
-func promptForSimpleReviewProfile(ctx context.Context) (string, error) {
+func promptForSimpleReviewProfile(ctx context.Context, current string) (string, error) {
+	current = strings.TrimSpace(current)
 	picked := DefaultProfileName
+	presets := []struct{ label, value string }{
+		{"General — correctness, regressions, tests", DefaultProfileName},
+		{"Security — auth, injection, secrets", "security"},
+		{"Accessibility — keyboard, screen readers, contrast", "accessibility"},
+	}
+	options := make([]huh.Option[string], 0, len(presets))
+	for _, p := range presets {
+		label := p.label
+		if p.value == current {
+			label += "  (current)"
+			picked = p.value // pre-select the profile being edited
+		}
+		options = append(options, huh.NewOption(label, p.value))
+	}
 	form := newAccessibleForm(huh.NewGroup(
 		huh.NewSelect[string]().
 			Title("What kind of review?").
-			Options(
-				huh.NewOption("General — correctness, regressions, tests", DefaultProfileName),
-				huh.NewOption("Security — auth, injection, secrets", "security"),
-				huh.NewOption("Accessibility — keyboard, screen readers, contrast", "accessibility"),
-			).
+			Options(options...).
 			Value(&picked),
 	))
 	if err := form.RunWithContext(ctx); err != nil {
@@ -179,10 +203,19 @@ type crewSlot struct {
 // slot per launchable agent (the guided default is "all agents"), then lets the
 // user add, edit, or remove slots from a list until Done. Duplicate slots (same
 // agent and model) are allowed; each becomes its own worker.
-func promptForReviewCrew(ctx context.Context, profileName string, launchable []string) (settings.ReviewProfileConfig, error) {
+func promptForReviewCrew(ctx context.Context, profileName string, launchable []string, existing settings.ReviewProfileConfig) (settings.ReviewProfileConfig, error) {
+	// Seed from the existing profile's workers when editing one; otherwise the
+	// guided default is one slot per launchable agent.
 	slots := make([]crewSlot, 0, len(launchable))
-	for _, name := range launchable {
-		slots = append(slots, crewSlot{agent: name})
+	if len(existing.Agents) > 0 {
+		for _, w := range sortedProfileAgentNames(existing) {
+			cfg := existing.Agents[w]
+			slots = append(slots, crewSlot{agent: reviewAgentName(w, cfg), model: strings.TrimSpace(cfg.Model)})
+		}
+	} else {
+		for _, name := range launchable {
+			slots = append(slots, crewSlot{agent: name})
+		}
 	}
 
 	const (
@@ -427,7 +460,7 @@ func modelInList(id string, models []agent.ModelInfo) bool {
 // promptForStandaloneMaster picks the standalone master (judge) as its own
 // agent + model, independent of the worker slots. Candidates are launchable
 // agents that can write text. Returns (agentName, model).
-func promptForStandaloneMaster(ctx context.Context, launchable []string) (string, string, error) {
+func promptForStandaloneMaster(ctx context.Context, launchable []string, existing settings.ReviewProfileConfig) (string, string, error) {
 	candidates := make([]string, 0, len(launchable))
 	for _, name := range launchable {
 		if agentSupportsTextGeneration(ctx, name) {
@@ -439,6 +472,15 @@ func promptForStandaloneMaster(ctx context.Context, launchable []string) (string
 	}
 
 	agentName := candidates[0]
+	// Pre-select the existing master when re-configuring.
+	if cur, _, ok := profileMasterIdentity(existing); ok {
+		for _, c := range candidates {
+			if c == cur {
+				agentName = cur
+				break
+			}
+		}
+	}
 	if len(candidates) > 1 {
 		options := make([]huh.Option[string], 0, len(candidates))
 		for _, name := range candidates {
