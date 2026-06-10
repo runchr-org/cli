@@ -60,9 +60,11 @@ func cloneValuesWithoutClient(v url.Values) url.Values {
 
 // OAuthError is returned by PostOAuthToken when the OAuth endpoint
 // responds with a non-2xx status. Callers can errors.As it to surface
-// status-specific UX (e.g. a friendly 403 message).
+// status-specific UX (e.g. a friendly 403 message) or branch on the
+// RFC 6749 error code.
 type OAuthError struct {
 	Status int
+	Code   string // RFC 6749 `error` code from the response body; "" when not present
 	Body   string
 }
 
@@ -114,7 +116,11 @@ func PostOAuthToken(ctx context.Context, httpClient *http.Client, coreURL string
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024)) //nolint:errcheck // best-effort body read for error message
-		return "", 0, &OAuthError{Status: resp.StatusCode, Body: strings.TrimSpace(string(msg))}
+		var oauthBody struct {
+			Code string `json:"error"`
+		}
+		_ = json.Unmarshal(msg, &oauthBody) //nolint:errcheck // best-effort code extraction; non-JSON bodies leave Code empty
+		return "", 0, &OAuthError{Status: resp.StatusCode, Code: oauthBody.Code, Body: strings.TrimSpace(string(msg))}
 	}
 
 	var out struct {

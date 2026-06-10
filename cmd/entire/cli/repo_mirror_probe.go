@@ -179,7 +179,7 @@ func waitForMirrorClone(ctx context.Context, out io.Writer, clusterHost, owner, 
 	checkURL := fmt.Sprintf("https://%s%s/info/refs?service=git-upload-pack", clusterHost, repoSlug)
 
 	mintToken := func() (string, error) {
-		return auth.RepoScopedToken(ctx, "https://"+clusterHost, repoSlug, "pull")
+		return auth.RepoScopedToken(ctx, clusterHost, repoSlug, "pull")
 	}
 	token, err := mintToken()
 	if err != nil {
