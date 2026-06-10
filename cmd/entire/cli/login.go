@@ -74,17 +74,19 @@ func newLoginCmd() *cobra.Command {
 				return err
 			}
 			client := auth.NewClient(nil, insecureHTTPAuth)
+			// Closure adapts the concrete *auth.BrowserAuthFlow result to the
+			// browserAuthFlow interface (func types are invariant, so the
+			// method value alone won't do). On error the flow is a typed nil,
+			// which is fine — runLoginAuto checks err before touching it.
 			startBrowser := func(ctx context.Context) (browserAuthFlow, error) {
-				flow, err := client.StartBrowserAuth(ctx)
-				if err != nil {
-					// Explicit nil so the interface value is nil, not a typed nil.
-					return nil, err //nolint:wrapcheck // runLoginAuto surfaces this verbatim in its fallback warning
-				}
-				return flow, nil
+				return client.StartBrowserAuth(ctx)
 			}
 			return runLoginAuto(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(),
-				client, startBrowser, openBrowser,
-				useDevice, interactive.CanPromptInteractively(), isSSHSession())
+				client, startBrowser, openBrowser, loginFlowFacts{
+					useDevice:  useDevice,
+					canPrompt:  interactive.CanPromptInteractively(),
+					sshSession: isSSHSession(),
+				})
 		},
 	}
 	addInsecureHTTPAuthFlag(cmd, &insecureHTTPAuth)
@@ -92,7 +94,7 @@ func newLoginCmd() *cobra.Command {
 	return cmd
 }
 
-func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient, openURL browserOpenFunc) error {
+func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient, openURL browserOpenFunc, canPrompt bool) error {
 	start, err := client.StartDeviceAuth(ctx)
 	if err != nil {
 		return fmt.Errorf("start login: %w", err)
@@ -102,7 +104,7 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 
 	approvalURL := chooseApprovalURL(start)
 
-	if interactive.CanPromptInteractively() {
+	if canPrompt {
 		// chooseApprovalURL prefers the code-embedded verification_uri_complete,
 		// so opening the URL is usually all the user needs to do. The device
 		// code is printed above regardless, so it's still available to confirm
@@ -134,6 +136,15 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 	return persistLogin(outW, errW, client.BaseURL(), token, refreshToken)
 }
 
+// loginFlowFacts carries the environment facts that pick between the
+// browser and device-code flows. Detection happens once at the command
+// entry point; the decision logic below only consumes these values.
+type loginFlowFacts struct {
+	useDevice  bool // --device flag
+	canPrompt  bool // interactive terminal present
+	sshSession bool // running inside an SSH session
+}
+
 // runLoginAuto picks between the browser (loopback authorization-code) and
 // device-code flows and runs the chosen one. The browser flow is the
 // default — no code to type, no poll latency — but it needs a browser that
@@ -142,27 +153,27 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 // fall back to the device flow with a one-line explanation; the same
 // both-flows-with-fallback shape gh / gcloud / aws sso ship. --device
 // forces the device flow without commentary.
-func runLoginAuto(ctx context.Context, outW, errW io.Writer, deviceClient deviceAuthClient, startBrowser func(context.Context) (browserAuthFlow, error), openURL browserOpenFunc, useDevice, canPrompt, sshSession bool) error {
-	if shouldUseBrowserLogin(useDevice, canPrompt, sshSession) {
+func runLoginAuto(ctx context.Context, outW, errW io.Writer, deviceClient deviceAuthClient, startBrowser func(context.Context) (browserAuthFlow, error), openURL browserOpenFunc, facts loginFlowFacts) error {
+	if shouldUseBrowserLogin(facts) {
 		flow, err := startBrowser(ctx)
 		if err != nil {
 			// Binding the loopback listener can fail (sandboxing, firewall,
 			// exhausted ports); that shouldn't strand the user — warn and
 			// use the device flow instead.
 			fmt.Fprintf(errW, "Warning: could not start browser sign-in (%v); falling back to the device-code flow.\n", err)
-			return runLogin(ctx, outW, errW, deviceClient, openURL)
+			return runLogin(ctx, outW, errW, deviceClient, openURL, facts.canPrompt)
 		}
 		return runBrowserLogin(ctx, outW, errW, flow, deviceClient.BaseURL(), openURL, browserLoginTimeout)
 	}
 	switch {
-	case useDevice:
+	case facts.useDevice:
 		// Explicitly requested; no explanation needed.
-	case !canPrompt:
+	case !facts.canPrompt:
 		fmt.Fprintln(errW, "No interactive terminal detected; using device-code flow.")
-	case sshSession:
+	case facts.sshSession:
 		fmt.Fprintln(errW, "SSH session detected; using device-code flow (a browser opened here couldn't reach this machine).")
 	}
-	return runLogin(ctx, outW, errW, deviceClient, openURL)
+	return runLogin(ctx, outW, errW, deviceClient, openURL, facts.canPrompt)
 }
 
 // shouldUseBrowserLogin reports whether `entire login` should use the
@@ -172,8 +183,8 @@ func runLoginAuto(ctx context.Context, outW, errW io.Writer, deviceClient device
 // and we're not inside an SSH session (where the loopback listener binds
 // on the remote host, out of the user's browser's reach); otherwise the
 // caller falls back to the device flow.
-func shouldUseBrowserLogin(useDevice, canPrompt, sshSession bool) bool {
-	return !useDevice && canPrompt && !sshSession
+func shouldUseBrowserLogin(f loginFlowFacts) bool {
+	return !f.useDevice && f.canPrompt && !f.sshSession
 }
 
 // isSSHSession reports whether this process is running inside an SSH

@@ -340,22 +340,20 @@ func TestShouldUseBrowserLogin(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		useDevice  bool
-		canPrompt  bool
-		sshSession bool
-		want       bool
+		facts loginFlowFacts
+		want  bool
 	}{
-		{useDevice: false, canPrompt: true, sshSession: false, want: true},   // default interactive → browser
-		{useDevice: false, canPrompt: false, sshSession: false, want: false}, // headless → fall back to device
-		{useDevice: false, canPrompt: true, sshSession: true, want: false},   // SSH: loopback unreachable → device
-		{useDevice: false, canPrompt: false, sshSession: true, want: false},
-		{useDevice: true, canPrompt: true, sshSession: false, want: false}, // --device forces device
-		{useDevice: true, canPrompt: false, sshSession: false, want: false},
-		{useDevice: true, canPrompt: true, sshSession: true, want: false},
+		{facts: loginFlowFacts{canPrompt: true}, want: true},                    // default interactive → browser
+		{facts: loginFlowFacts{}, want: false},                                  // headless → fall back to device
+		{facts: loginFlowFacts{canPrompt: true, sshSession: true}, want: false}, // SSH: loopback unreachable → device
+		{facts: loginFlowFacts{sshSession: true}, want: false},
+		{facts: loginFlowFacts{useDevice: true, canPrompt: true}, want: false}, // --device forces device
+		{facts: loginFlowFacts{useDevice: true}, want: false},
+		{facts: loginFlowFacts{useDevice: true, canPrompt: true, sshSession: true}, want: false},
 	}
 	for _, tc := range cases {
-		if got := shouldUseBrowserLogin(tc.useDevice, tc.canPrompt, tc.sshSession); got != tc.want {
-			t.Errorf("shouldUseBrowserLogin(%v, %v, %v) = %v, want %v", tc.useDevice, tc.canPrompt, tc.sshSession, got, tc.want)
+		if got := shouldUseBrowserLogin(tc.facts); got != tc.want {
+			t.Errorf("shouldUseBrowserLogin(%+v) = %v, want %v", tc.facts, got, tc.want)
 		}
 	}
 }
@@ -375,6 +373,10 @@ func TestIsSSHSession(t *testing.T) {
 	}
 }
 
+// noopOpenURL is a browserOpenFunc for tests that don't care about the
+// browser actually opening.
+func noopOpenURL(context.Context, string) error { return nil }
+
 // startBrowserStub returns a startBrowser func that records invocations and
 // returns the given flow/error.
 func startBrowserStub(calls *int, flow browserAuthFlow, err error) func(context.Context) (browserAuthFlow, error) {
@@ -389,11 +391,10 @@ func TestRunLoginAuto_Interactive_UsesBrowserFlow(t *testing.T) {
 
 	flow := &fakeBrowserFlow{authURL: "https://auth.test/authorize", waitErr: errors.New("stop")}
 	var browserCalls int
-	noopOpen := func(context.Context, string) error { return nil }
 
 	err := runLoginAuto(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, &mockClient{},
-		startBrowserStub(&browserCalls, flow, nil), noopOpen,
-		false /* useDevice */, true /* canPrompt */, false /* ssh */)
+		startBrowserStub(&browserCalls, flow, nil), noopOpenURL,
+		loginFlowFacts{canPrompt: true})
 
 	if browserCalls != 1 {
 		t.Errorf("startBrowser calls = %d, want 1", browserCalls)
@@ -408,12 +409,11 @@ func TestRunLoginAuto_SSHSession_FallsBackToDevice(t *testing.T) {
 	t.Parallel()
 
 	var browserCalls int
-	noopOpen := func(context.Context, string) error { return nil }
 
 	var errW bytes.Buffer
 	err := runLoginAuto(context.Background(), &bytes.Buffer{}, &errW, &mockClient{},
-		startBrowserStub(&browserCalls, nil, nil), noopOpen,
-		false /* useDevice */, true /* canPrompt */, true /* ssh */)
+		startBrowserStub(&browserCalls, nil, nil), noopOpenURL,
+		loginFlowFacts{canPrompt: true, sshSession: true})
 
 	if browserCalls != 0 {
 		t.Errorf("startBrowser calls = %d, want 0 (SSH must skip the browser flow)", browserCalls)
@@ -431,12 +431,11 @@ func TestRunLoginAuto_Headless_FallsBackToDevice(t *testing.T) {
 	t.Parallel()
 
 	var browserCalls int
-	noopOpen := func(context.Context, string) error { return nil }
 
 	var errW bytes.Buffer
 	err := runLoginAuto(context.Background(), &bytes.Buffer{}, &errW, &mockClient{},
-		startBrowserStub(&browserCalls, nil, nil), noopOpen,
-		false /* useDevice */, false /* canPrompt */, false /* ssh */)
+		startBrowserStub(&browserCalls, nil, nil), noopOpenURL,
+		loginFlowFacts{})
 
 	if browserCalls != 0 {
 		t.Errorf("startBrowser calls = %d, want 0", browserCalls)
@@ -453,12 +452,11 @@ func TestRunLoginAuto_BrowserStartFails_FallsBackToDevice(t *testing.T) {
 	t.Parallel()
 
 	var browserCalls int
-	noopOpen := func(context.Context, string) error { return nil }
 
 	var errW bytes.Buffer
 	err := runLoginAuto(context.Background(), &bytes.Buffer{}, &errW, &mockClient{},
-		startBrowserStub(&browserCalls, nil, errors.New("listen tcp 127.0.0.1:0: operation not permitted")), noopOpen,
-		false /* useDevice */, true /* canPrompt */, false /* ssh */)
+		startBrowserStub(&browserCalls, nil, errors.New("listen tcp 127.0.0.1:0: operation not permitted")), noopOpenURL,
+		loginFlowFacts{canPrompt: true})
 
 	if browserCalls != 1 {
 		t.Errorf("startBrowser calls = %d, want 1", browserCalls)
@@ -476,12 +474,11 @@ func TestRunLoginAuto_DeviceFlag_NoExplanation(t *testing.T) {
 	t.Parallel()
 
 	var browserCalls int
-	noopOpen := func(context.Context, string) error { return nil }
 
 	var errW bytes.Buffer
 	err := runLoginAuto(context.Background(), &bytes.Buffer{}, &errW, &mockClient{},
-		startBrowserStub(&browserCalls, nil, nil), noopOpen,
-		true /* useDevice */, true /* canPrompt */, false /* ssh */)
+		startBrowserStub(&browserCalls, nil, nil), noopOpenURL,
+		loginFlowFacts{useDevice: true, canPrompt: true})
 
 	if browserCalls != 0 {
 		t.Errorf("startBrowser calls = %d, want 0", browserCalls)
@@ -557,9 +554,8 @@ func TestRunBrowserLogin_WaitError(t *testing.T) {
 
 	denied := errors.New("access_denied")
 	flow := &fakeBrowserFlow{authURL: "https://auth.test/authorize", waitErr: denied}
-	noopOpen := func(context.Context, string) error { return nil }
 
-	err := runBrowserLogin(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, flow, "https://auth.test", noopOpen, browserLoginTimeout)
+	err := runBrowserLogin(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, flow, "https://auth.test", noopOpenURL, browserLoginTimeout)
 	if !errors.Is(err, denied) {
 		t.Fatalf("err = %v, want wrapped %v", err, denied)
 	}
@@ -573,9 +569,8 @@ func TestRunBrowserLogin_ExchangeError(t *testing.T) {
 		waitCode: "the-code",
 		exchErr:  errors.New("invalid_grant"),
 	}
-	noopOpen := func(context.Context, string) error { return nil }
 
-	err := runBrowserLogin(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, flow, "https://auth.test", noopOpen, browserLoginTimeout)
+	err := runBrowserLogin(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, flow, "https://auth.test", noopOpenURL, browserLoginTimeout)
 	if err == nil || !strings.Contains(err.Error(), "complete login") {
 		t.Fatalf("err = %v, want complete login error", err)
 	}
@@ -590,9 +585,8 @@ func TestRunBrowserLogin_WaitTimeout(t *testing.T) {
 	// The fake blocks until the wait context expires — the deadline must
 	// come from runBrowserLogin's own timeout, or this test would hang.
 	flow := &fakeBrowserFlow{authURL: "https://auth.test/authorize", waitUntilDone: true}
-	noopOpen := func(context.Context, string) error { return nil }
 
-	err := runBrowserLogin(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, flow, "https://auth.test", noopOpen, 50*time.Millisecond)
+	err := runBrowserLogin(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, flow, "https://auth.test", noopOpenURL, 50*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "timed out waiting for sign-in") {
 		t.Fatalf("err = %v, want sign-in timeout", err)
 	}
@@ -611,9 +605,8 @@ func TestRunBrowserLogin_ParentCancelNotReportedAsTimeout(t *testing.T) {
 	cancel() // user hit Ctrl-C before the redirect arrived
 
 	flow := &fakeBrowserFlow{authURL: "https://auth.test/authorize", waitUntilDone: true}
-	noopOpen := func(context.Context, string) error { return nil }
 
-	err := runBrowserLogin(ctx, &bytes.Buffer{}, &bytes.Buffer{}, flow, "https://auth.test", noopOpen, time.Minute)
+	err := runBrowserLogin(ctx, &bytes.Buffer{}, &bytes.Buffer{}, flow, "https://auth.test", noopOpenURL, time.Minute)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want wrapped context.Canceled", err)
 	}
