@@ -304,12 +304,13 @@ func TestWaitForApproval_ContextCancelled(t *testing.T) {
 
 // fakeBrowserFlow implements the browserAuthFlow interface for unit tests.
 type fakeBrowserFlow struct {
-	authURL     string
-	waitCode    string
-	waitErr     error
-	exchAccess  string
-	exchRefresh string
-	exchErr     error
+	authURL       string
+	waitCode      string
+	waitErr       error
+	waitUntilDone bool // Wait blocks until ctx is done and returns ctx.Err()
+	exchAccess    string
+	exchRefresh   string
+	exchErr       error
 
 	gotExchangeCode string
 	closed          bool
@@ -317,7 +318,13 @@ type fakeBrowserFlow struct {
 
 func (f *fakeBrowserFlow) AuthorizationURL() string { return f.authURL }
 
-func (f *fakeBrowserFlow) Wait(context.Context) (string, error) { return f.waitCode, f.waitErr }
+func (f *fakeBrowserFlow) Wait(ctx context.Context) (string, error) {
+	if f.waitUntilDone {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	return f.waitCode, f.waitErr
+}
 
 func (f *fakeBrowserFlow) Exchange(_ context.Context, code string) (string, string, error) {
 	f.gotExchangeCode = code
@@ -364,7 +371,7 @@ func TestRunBrowserLogin_OpensAuthorizationURL(t *testing.T) {
 	// The stubbed Wait returns an error, so runBrowserLogin stops before
 	// persistLogin (which would hit the real keyring); we assert on the
 	// side effects up to that point.
-	if err := runBrowserLogin(context.Background(), &out, &bytes.Buffer{}, flow, "https://auth.test", openURL); err == nil {
+	if err := runBrowserLogin(context.Background(), &out, &bytes.Buffer{}, flow, "https://auth.test", openURL, browserLoginTimeout); err == nil {
 		t.Fatal("expected error from stubbed Wait")
 	}
 
@@ -394,7 +401,7 @@ func TestRunBrowserLogin_OpenBrowserFallback(t *testing.T) {
 	failOpen := func(context.Context, string) error { return errors.New("no browser") }
 
 	var out, errW bytes.Buffer
-	if err := runBrowserLogin(context.Background(), &out, &errW, flow, "https://auth.test", failOpen); err == nil {
+	if err := runBrowserLogin(context.Background(), &out, &errW, flow, "https://auth.test", failOpen, browserLoginTimeout); err == nil {
 		t.Fatal("expected error from stubbed Wait")
 	}
 
@@ -413,7 +420,7 @@ func TestRunBrowserLogin_WaitError(t *testing.T) {
 	flow := &fakeBrowserFlow{authURL: "https://auth.test/authorize", waitErr: denied}
 	noopOpen := func(context.Context, string) error { return nil }
 
-	err := runBrowserLogin(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, flow, "https://auth.test", noopOpen)
+	err := runBrowserLogin(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, flow, "https://auth.test", noopOpen, browserLoginTimeout)
 	if !errors.Is(err, denied) {
 		t.Fatalf("err = %v, want wrapped %v", err, denied)
 	}
@@ -429,11 +436,49 @@ func TestRunBrowserLogin_ExchangeError(t *testing.T) {
 	}
 	noopOpen := func(context.Context, string) error { return nil }
 
-	err := runBrowserLogin(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, flow, "https://auth.test", noopOpen)
+	err := runBrowserLogin(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, flow, "https://auth.test", noopOpen, browserLoginTimeout)
 	if err == nil || !strings.Contains(err.Error(), "complete login") {
 		t.Fatalf("err = %v, want complete login error", err)
 	}
 	if flow.gotExchangeCode != "the-code" {
 		t.Errorf("Exchange got code %q, want the-code", flow.gotExchangeCode)
+	}
+}
+
+func TestRunBrowserLogin_WaitTimeout(t *testing.T) {
+	t.Parallel()
+
+	// The fake blocks until the wait context expires — the deadline must
+	// come from runBrowserLogin's own timeout, or this test would hang.
+	flow := &fakeBrowserFlow{authURL: "https://auth.test/authorize", waitUntilDone: true}
+	noopOpen := func(context.Context, string) error { return nil }
+
+	err := runBrowserLogin(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}, flow, "https://auth.test", noopOpen, 50*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out waiting for sign-in") {
+		t.Fatalf("err = %v, want sign-in timeout", err)
+	}
+	if !strings.Contains(err.Error(), "--device") {
+		t.Errorf("timeout error should point at the --device escape hatch, got: %v", err)
+	}
+	if !flow.closed {
+		t.Error("flow was not closed")
+	}
+}
+
+func TestRunBrowserLogin_ParentCancelNotReportedAsTimeout(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // user hit Ctrl-C before the redirect arrived
+
+	flow := &fakeBrowserFlow{authURL: "https://auth.test/authorize", waitUntilDone: true}
+	noopOpen := func(context.Context, string) error { return nil }
+
+	err := runBrowserLogin(ctx, &bytes.Buffer{}, &bytes.Buffer{}, flow, "https://auth.test", noopOpen, time.Minute)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want wrapped context.Canceled", err)
+	}
+	if strings.Contains(err.Error(), "timed out") {
+		t.Errorf("cancellation must not be reported as a timeout: %v", err)
 	}
 }

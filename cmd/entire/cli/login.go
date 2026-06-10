@@ -25,6 +25,12 @@ const maxPollInterval = 30 * time.Second
 const maxExpiresIn = 15 * time.Minute
 const maxTransientErrors = 5
 
+// browserLoginTimeout bounds how long the browser flow waits for the
+// loopback redirect. The device flow is bounded by the AS's expires_in
+// (capped at maxExpiresIn); without a bound here a closed browser tab
+// would hang `entire login` forever.
+const browserLoginTimeout = 5 * time.Minute
+
 // browserOpenFunc is the signature for opening a URL in the user's browser.
 type browserOpenFunc func(ctx context.Context, url string) error
 
@@ -81,7 +87,7 @@ func newLoginCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("start login: %w", err)
 				}
-				return runBrowserLogin(cmd.Context(), outW, errW, flow, client.BaseURL(), openBrowser)
+				return runBrowserLogin(cmd.Context(), outW, errW, flow, client.BaseURL(), openBrowser, browserLoginTimeout)
 			}
 			if !useDevice {
 				fmt.Fprintln(errW, "No interactive terminal detected; using device-code flow.")
@@ -147,10 +153,10 @@ func shouldUseBrowserLogin(useDevice, canPrompt bool) bool {
 
 // runBrowserLogin runs the loopback authorization-code flow on an
 // already-started flow: open the authorization URL in the user's browser,
-// wait for the redirect back to the local listener, then exchange the code
-// for tokens. Shares the token validation + persistence tail with runLogin
-// via persistLogin.
-func runBrowserLogin(ctx context.Context, outW, errW io.Writer, flow browserAuthFlow, baseURL string, openURL browserOpenFunc) error {
+// wait up to waitTimeout for the redirect back to the local listener, then
+// exchange the code for tokens. Shares the token validation + persistence
+// tail with runLogin via persistLogin.
+func runBrowserLogin(ctx context.Context, outW, errW io.Writer, flow browserAuthFlow, baseURL string, openURL browserOpenFunc, waitTimeout time.Duration) error {
 	// Wait tears the listener down on return, but Close is idempotent and
 	// covers the error paths before Wait runs.
 	defer func() { _ = flow.Close() }()
@@ -181,8 +187,16 @@ func runBrowserLogin(ctx context.Context, outW, errW io.Writer, flow browserAuth
 
 	fmt.Fprint(outW, "Waiting for sign-in... ")
 
-	code, err := flow.Wait(ctx)
+	// The clock starts here, after the Enter prompt, so time spent reading
+	// the prompt isn't counted against the sign-in itself.
+	waitCtx, cancel := context.WithTimeout(ctx, waitTimeout)
+	defer cancel()
+
+	code, err := flow.Wait(waitCtx)
 	if err != nil {
+		if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("timed out waiting for sign-in after %v; run `entire login` again, or use `entire login --device`", waitTimeout)
+		}
 		return fmt.Errorf("complete login: %w", err)
 	}
 
