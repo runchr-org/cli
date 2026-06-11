@@ -8,10 +8,9 @@ import (
 	"time"
 
 	"github.com/entireio/cli/internal/entireclient/clusterdiscovery"
-	"github.com/entireio/cli/internal/entireclient/contexts"
-	"github.com/entireio/cli/internal/entireclient/discovery"
 	"github.com/entireio/cli/internal/entireclient/httputil"
 	"github.com/entireio/cli/internal/entireclient/repocreds"
+	"github.com/entireio/cli/internal/entireclient/userdirs"
 )
 
 // ErrRepoTargetUnknown reports that the cluster's STS refused the exchange
@@ -78,7 +77,7 @@ func NewRepoTokenSource(ctx context.Context, clusterHost string) (*RepoTokenSour
 	_, _ = MigrateLegacyLoginContext() //nolint:errcheck // best-effort bridge; resolution proceeds regardless
 
 	httpClient := &http.Client{Timeout: repoExchangeTimeout, Transport: repoExchangeTransportForTest}
-	clusterCtx, err := resolveContextForCluster(ctx, contexts.DefaultConfigDir(), discovery.DefaultCacheDir(), clusterHost, httpClient, nil)
+	clusterCtx, err := resolveContextForCluster(ctx, userdirs.Config(), userdirs.Cache(), clusterHost, httpClient, nil)
 	if err != nil {
 		return nil, err
 	}
