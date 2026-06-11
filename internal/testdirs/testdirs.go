@@ -8,7 +8,10 @@
 // ENTIRE_TOKEN_STORE, ...) would silently read and write the developer's
 // real configuration — real auth contexts have been polluted with test
 // fixtures this way. Dir gives the resolution functions a safe default under
-// test: a throwaway directory under os.TempDir instead of the real home.
+// test: a throwaway directory under os.TempDir, never the real config/cache
+// locations. (os.TempDir respects TMPDIR and may itself live under $HOME;
+// the guarantee is "not ~/.config/entire or ~/.cache/entire", not "outside
+// the home directory".)
 //
 // The fallback directory is per-process, not per-test: all tests in one test
 // binary share it. Tests that need isolation from each other must still set

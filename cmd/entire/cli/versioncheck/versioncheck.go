@@ -102,7 +102,7 @@ func CheckAndNotify(ctx context.Context, w io.Writer, currentVersion string) {
 // globalConfigDirPath returns the CLI's global config directory:
 // $ENTIRE_CONFIG_DIR if set, else ~/.config/entire. Under `go test` an
 // unset ENTIRE_CONFIG_DIR resolves to a throwaway per-process directory
-// instead of the real home (see internal/testdirs).
+// instead of the real ~/.config/entire (see internal/testdirs).
 func globalConfigDirPath() (string, error) {
 	if dir := os.Getenv("ENTIRE_CONFIG_DIR"); dir != "" {
 		return dir, nil

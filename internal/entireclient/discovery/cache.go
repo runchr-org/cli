@@ -41,7 +41,8 @@ type RepoEntry struct {
 
 // DefaultCacheDir returns ~/.cache/entire, respecting XDG_CACHE_HOME.
 // Under `go test` an unset XDG_CACHE_HOME resolves to a throwaway
-// per-process directory instead of the real home (see internal/testdirs).
+// per-process directory instead of the real ~/.cache/entire (see
+// internal/testdirs).
 func DefaultCacheDir() string {
 	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
 		return filepath.Join(xdg, "entire")
