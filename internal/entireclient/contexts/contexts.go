@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+
+	"github.com/entireio/cli/internal/testdirs"
 )
 
 // Context is a single kubectl-style entry: which core to talk to, as
@@ -64,8 +66,15 @@ func FilePath(configDir string) (string, error) {
 }
 
 // DefaultConfigDir is $ENTIRE_CONFIG_DIR if set, else ~/.config/entire.
+// Under `go test` an unset ENTIRE_CONFIG_DIR resolves to a throwaway
+// per-process directory instead of the real home, so a test that forgets to
+// isolate can never read or pollute the developer's real config (see
+// internal/testdirs).
 func DefaultConfigDir() string {
 	if dir := os.Getenv("ENTIRE_CONFIG_DIR"); dir != "" {
+		return dir
+	}
+	if dir, ok := testdirs.Dir("config"); ok {
 		return dir
 	}
 	home, err := os.UserHomeDir()

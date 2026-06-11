@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+
+	"github.com/entireio/cli/internal/testdirs"
 )
 
 const (
@@ -38,9 +40,14 @@ type RepoEntry struct {
 }
 
 // DefaultCacheDir returns ~/.cache/entire, respecting XDG_CACHE_HOME.
+// Under `go test` an unset XDG_CACHE_HOME resolves to a throwaway
+// per-process directory instead of the real home (see internal/testdirs).
 func DefaultCacheDir() string {
 	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
 		return filepath.Join(xdg, "entire")
+	}
+	if dir, ok := testdirs.Dir("cache"); ok {
+		return filepath.Join(dir, "entire")
 	}
 	home, _ := os.UserHomeDir() //nolint:errcheck // best-effort default
 	return filepath.Join(home, ".cache", "entire")

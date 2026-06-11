@@ -18,10 +18,13 @@ package tokenstore
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/zalando/go-keyring"
+
+	"github.com/entireio/cli/internal/testdirs"
 )
 
 // ErrNotFound is returned when a credential is not present in the store.
@@ -107,6 +110,14 @@ func resolveBackendLocked() store { //nolint:ireturn // see currentBackend: the 
 			path = home + "/.config/entire/tokens.json"
 		}
 		return &fileStore{path: path}
+	}
+	// Under `go test`, never fall through to the real OS keyring: a test
+	// that forgets tokenstore.UseFileBackendForTesting would otherwise write
+	// real keychain entries. The fallback file is per-process; tests that
+	// need isolation from each other still swap in a per-test file via
+	// UseFileBackendForTesting.
+	if dir, ok := testdirs.Dir("tokenstore"); ok {
+		return &fileStore{path: filepath.Join(dir, "tokens.json")}
 	}
 	return keyringStore{}
 }

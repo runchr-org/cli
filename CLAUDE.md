@@ -172,6 +172,31 @@ t.Chdir(tmpDir)                                 // redirect CWD-based git resolu
 
 **Do NOT** shell out to `git init`/`git commit` directly without setting user config and `--no-gpg-sign`, and **do NOT** run lifecycle/strategy handlers from the real repo CWD in tests.
 
+### Config/Cache/Keyring Isolation in Tests
+
+Tests must never read or write the developer's real `~/.config/entire`
+(contexts.json, version_check.json), `~/.cache/entire` (nodes.json,
+cluster_cores.json, api_discovery.json), or OS keychain. The developer may be
+using `entire` for real while tests run.
+
+- **In-process safety net**: `contexts.DefaultConfigDir()`,
+  `discovery.DefaultCacheDir()`, versioncheck's config path, and the
+  `tokenstore` default backend all detect `go test` (via `internal/testdirs`)
+  and fall back to a throwaway per-process temp directory when their env
+  override is unset. The fallback is shared across tests in one process — for
+  per-test isolation still set `t.Setenv("ENTIRE_CONFIG_DIR", t.TempDir())`
+  and `tokenstore.UseFileBackendForTesting(...)`.
+- **Spawned binaries are NOT covered**: `testing.Testing()` is false in a
+  subprocess. The integration and e2e TestMains set `ENTIRE_CONFIG_DIR`,
+  `XDG_CACHE_HOME`, `ENTIRE_TOKEN_STORE=file`, `ENTIRE_TOKEN_STORE_PATH`, and
+  `ENTIRE_TEST_AUTH_STORE_FILE` process-wide so every spawned `entire` (and
+  every agent-invoked hook) inherits isolation. Any new harness that spawns
+  the real binary must do the same.
+- **Legacy auth store**: `auth.NewStore()` talks straight to the zalando
+  keyring; packages whose tests can reach it need `keyring.MockInit()` in
+  `TestMain` (see `cmd/entire/cli/global_test.go`) — the `testdirs` fallback
+  does not cover it in-process.
+
 ### Spawning subprocesses in tests (TTY detection)
 
 Tests that spawn the real `entire` or `git` binary need the child to be non-interactive so prompts don't hang on a developer terminal.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -289,5 +290,20 @@ func TestDefaultConfigDir_HonorsEnv(t *testing.T) {
 	t.Setenv("ENTIRE_CONFIG_DIR", "/tmp/explicit/path")
 	if got := contexts.DefaultConfigDir(); got != "/tmp/explicit/path" {
 		t.Errorf("DefaultConfigDir = %q, want /tmp/explicit/path", got)
+	}
+}
+
+func TestDefaultConfigDir_TestRunsNeverResolveRealHome(t *testing.T) {
+	// With no explicit override, a `go test` process must fall back to a
+	// throwaway directory — never ~/.config/entire, where it could read or
+	// pollute the developer's real contexts.json.
+	t.Setenv("ENTIRE_CONFIG_DIR", "")
+	got := contexts.DefaultConfigDir()
+	if got == "" {
+		t.Fatal("DefaultConfigDir returned empty string")
+	}
+	home, err := os.UserHomeDir()
+	if err == nil && (got == home || strings.HasPrefix(got, home+string(os.PathSeparator))) {
+		t.Fatalf("DefaultConfigDir = %q resolves under the real home %q during tests", got, home)
 	}
 }

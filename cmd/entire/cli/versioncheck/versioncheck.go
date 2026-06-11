@@ -15,6 +15,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
+	"github.com/entireio/cli/internal/testdirs"
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
 )
@@ -98,8 +99,17 @@ func CheckAndNotify(ctx context.Context, w io.Writer, currentVersion string) {
 	}
 }
 
-// globalConfigDirPath returns the expanded path to the global config directory (~/.config/entire).
+// globalConfigDirPath returns the CLI's global config directory:
+// $ENTIRE_CONFIG_DIR if set, else ~/.config/entire. Under `go test` an
+// unset ENTIRE_CONFIG_DIR resolves to a throwaway per-process directory
+// instead of the real home (see internal/testdirs).
 func globalConfigDirPath() (string, error) {
+	if dir := os.Getenv("ENTIRE_CONFIG_DIR"); dir != "" {
+		return dir, nil
+	}
+	if dir, ok := testdirs.Dir("config"); ok {
+		return dir, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("getting home directory: %w", err)
