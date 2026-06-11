@@ -23,8 +23,8 @@ const (
 	BaseURLEnvVar = "ENTIRE_API_BASE_URL"
 
 	// AuthBaseURLEnvVar is the retired auth-origin override. Nothing reads
-	// its value anymore — RejectRemovedAuthEnv fails every command when it
-	// is set, pointing at `entire login --server`.
+	// its value — RejectRemovedAuthEnv fails every command when it is set,
+	// pointing at `entire login --server`.
 	AuthBaseURLEnvVar = "ENTIRE_AUTH_BASE_URL"
 
 	schemeHTTP  = "http"
@@ -104,7 +104,9 @@ func normalizeBaseURL(raw string) string {
 //
 // Mirrors auth-go's internal/oauthhttp.NormalizeOriginURL so the value the
 // CLI hands to the manager as Issuer survives the manager's own normalisation
-// pass byte-for-byte — see AuthBaseURL.
+// pass byte-for-byte; a cosmetically-different origin (uppercase host,
+// explicit :443, trailing slash) would otherwise be keyed under a different
+// keyring slot than the manager later reads.
 func NormalizeOriginURL(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	u, err := url.Parse(trimmed)

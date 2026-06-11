@@ -82,13 +82,12 @@ type providerSource struct {
 func (p *providerSource) BearerAuth(ctx context.Context, _ OperationName) (BearerAuth, error) {
 	token, err := p.provide(ctx)
 	if err != nil {
-		// The static fallback path returns a bare ErrNotLoggedIn sentinel with
-		// no helpful text, so add the standard login hint. The active-context
-		// path (NewRefreshingLoginProvider) instead returns a tailored message
-		// that already names the context, its login server, and the exact
-		// re-login command — surface that verbatim rather than burying it under
-		// a generic prefix. Other failures (STS rejection, network) are
-		// likewise self-descriptive.
+		// The per-context provider returns a tailored message that already
+		// names the context, its login server, and the exact re-login command
+		// — surface it verbatim rather than burying it under a generic prefix;
+		// other failures (STS rejection, network) are likewise
+		// self-descriptive. A bare ErrNotLoggedIn (no tailored text) gets the
+		// standard login hint as a backstop.
 		if errors.Is(err, auth.ErrNotLoggedIn) {
 			return BearerAuth{}, fmt.Errorf("not logged in — run 'entire login': %w", err)
 		}

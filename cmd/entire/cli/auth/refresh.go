@@ -107,9 +107,9 @@ func (s contextTokenStore) DeleteTokens(string) error {
 // newContextTokenManager builds the per-context auth-go tokenmanager that both
 // NewRefreshingLoginProvider and NewRefreshingResourceProvider sit on. Keying
 // Issuer on c.CoreURL is the whole point: store reads, the refresh grant, and
-// the STS exchange all target that context's core (the bug the singleton
-// manager — pinned to AuthBaseURL — has when the active context lives on a
-// different core).
+// the STS exchange all target that context's core, so a multi-core user's
+// credentials never travel to (or get keyed under) a host the context
+// doesn't belong to.
 //
 // transport carries the caller's TLS configuration; allowInsecureHTTP permits
 // an http:// core/resource for loopback/dev.
@@ -185,10 +185,9 @@ func contextReauthError(c *contexts.Context, err error) error {
 // fetch) could replay the same single-use token and trip the server's
 // reuse detection, revoking the whole family.
 //
-// Behaviour is a strict superset of the old read-only provider: a still
-// valid token is returned with no network call; a context with no refresh
-// token (e.g. a login predating offline_access) behaves exactly as before
-// — valid token used, expired token surfaces a re-login error.
+// A still-valid token is returned with no network call. A context with no
+// stored refresh token degrades gracefully: valid token used, expired token
+// surfaces a re-login error.
 //
 // transport carries the caller's TLS configuration; allowInsecureHTTP
 // permits an http:// core for loopback/dev.

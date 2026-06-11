@@ -343,8 +343,8 @@ func persistLogin(outW, errW io.Writer, baseURL, token, refreshToken string) err
 // still cannot complete a login: RecordLoginContext is the sole
 // persistence path and requires iss/handle claims to key the context,
 // so a claims-free token fails there with a parse error. Entire-core
-// always issues claim-bearing JWTs; legacy opaque-token servers are no
-// longer supported.
+// always issues claim-bearing JWTs; opaque-token-only servers are not
+// supported.
 func validateReceivedToken(rawToken, issuerURL string, now time.Time) error {
 	claims, err := tokens.ParseClaims(rawToken)
 	if errors.Is(err, tokens.ErrUnsignedJWT) {

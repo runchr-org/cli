@@ -15,8 +15,7 @@
 // shared contexts.json: the cluster's cores come from the cluster_cores.json
 // cache (or a live /.well-known fetch on miss), then the account is selected
 // from local contexts. It then mints repo-scoped tokens by exchanging that
-// context's login JWT. A pre-contexts.json login is migrated at read-time so
-// existing users don't have to re-authenticate.
+// context's login JWT.
 package main
 
 import (

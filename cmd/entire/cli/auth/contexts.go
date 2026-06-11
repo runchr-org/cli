@@ -14,10 +14,9 @@ import (
 )
 
 // defaultContextTokenTTL is the encoded keychain expiry used when a login
-// token carries no usable exp claim (e.g. an opaque, non-JWT bearer). The
-// server is the real authority on validity; this only governs when local
-// readers consider the token stale, and we hold no refresh token to act on
-// it, so a conservative non-zero value is enough to keep the entry usable.
+// JWT carries no usable exp claim. The server is the real authority on
+// validity; this only governs when local readers consider the token stale,
+// so a conservative non-zero value is enough to keep the entry usable.
 const defaultContextTokenTTL = time.Hour
 
 // RecordLoginContext records a freshly obtained login token in the
@@ -31,19 +30,17 @@ const defaultContextTokenTTL = time.Hour
 // the same core gets its own context (named handle@host) instead of
 // clobbering the first.
 //
-// activate controls current_context: login passes true (the just-completed
-// login becomes active, kubectl use-context style); read-time migration
-// passes false so it never silently switches the user's active account —
-// it still sets current_context when none exists yet.
+// activate controls current_context: true makes the just-completed login
+// active (kubectl use-context style); false records it without switching
+// the user's active account, though it still sets current_context when
+// none exists yet.
 //
-// This is the contexts.json half of login's dual-write: the legacy
-// entire-cli/<authBaseURL> keyring entry is still written by the caller so
-// the control-plane readers keep working untouched during the transition.
-// A login recorded here is visible to entiredb's CLIs (and the in-CLI git
-// remote helper) because they share this file and keychain layout.
+// This is the CLI's only credential write: a login recorded here is what
+// every consumer resolves against — the control plane, the data API, the
+// in-CLI git remote helper, and entiredb's CLIs, which share this file and
+// keychain layout.
 //
-// Returns the context name on success. Errors are returned (not swallowed)
-// so the caller can warn; login still succeeds on the legacy entry.
+// Returns the context name on success.
 func RecordLoginContext(rawToken, refreshToken string, activate bool) (string, error) {
 	claims, err := tokens.ParseClaims(rawToken)
 	if err != nil {
