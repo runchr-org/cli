@@ -723,7 +723,7 @@ func createTrailReviewFinding(ctx context.Context, client *api.Client, trailID s
 	}
 	var batch api.TrailReviewCommentBatchResponse
 	if err := api.DecodeJSON(resp, &batch); err != nil {
-		return api.TrailReviewComment{}, fmt.Errorf("decode created finding: %w", err)
+		return api.TrailReviewComment{}, fmt.Errorf("decode finding batch response: %w", err)
 	}
 	if len(batch.Results) == 0 {
 		return api.TrailReviewComment{}, errors.New("create finding: server returned no results")
