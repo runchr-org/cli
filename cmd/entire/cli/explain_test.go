@@ -891,7 +891,7 @@ esac
 	require.NoError(t, os.WriteFile(filepath.Join(externalDir, "entire-agent-"+name), []byte(script), 0o755))
 	t.Setenv("PATH", externalDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	got := maybeCompactExternalTranscriptForSummary(ctx, []byte("not-json"), kind)
+	got := maybeCompactExternalTranscript(ctx, []byte("not-json"), kind)
 	if strings.Contains(string(got), secret) {
 		t.Fatalf("external compact transcript was not redacted: %s", got)
 	}
