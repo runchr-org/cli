@@ -48,20 +48,20 @@ The host *is* a core, so there is no discovery. `coreapi.New()` consults
    and an expired access token is silently re-minted from the stored refresh
    token. This is what makes `entire auth use <ctx>` actually retarget
    `org`/`repo`/`project`/`grant`.
-2. **else** (no active context) → the configured auth origin
-   (`ENTIRE_AUTH_BASE_URL` or the default) + `TokenForResource` — the
-   pre-contexts fallback.
+2. **else** (no active context) → the default auth origin +
+   `TokenForResource` — the pre-contexts fallback.
 
-`ENTIRE_AUTH_BASE_URL` is the fallback host, **not** an override: a token
+The default auth origin is the fallback host, **not** an override: a token
 minted by the active context's core can't authenticate against a different
-host, so the active context always wins when present. (At login time the env
-var still chooses where to authenticate, and the resulting context's `CoreURL`
-*is* that host — so local-dev / split-host setups keep working.)
+host, so the active context always wins when present. (At login time
+`entire login --server` chooses where to authenticate, and the resulting
+context's `CoreURL` *is* that host — so local-dev / split-host setups keep
+working. `ENTIRE_AUTH_BASE_URL` is retired and rejected when set.)
 
 Key files: `cmd/entire/cli/auth/control_plane.go` (resolver),
 `cmd/entire/cli/auth/refresh.go` (per-context refreshing provider),
 `internal/coreapi/client.go` (`New()` + `providerSource`),
-`cmd/entire/cli/api/base_url.go` (`AuthBaseURLOverridden`).
+`cmd/entire/cli/api/base_url.go` (`AuthBaseURL`).
 
 Why the per-context path and not the singleton manager: the singleton
 (`auth/exchange.go:defaultManager`) is built once with `Issuer =
@@ -116,7 +116,7 @@ Resolution (`auth.ResolveDataAPIToken`):
    active-context-wins-if-eligible → sole eligible → explicit-choice error.
    This is the lever that makes `ENTIRE_API_BASE_URL=https://partial.to entire
    activity` authenticate as the partial.to login even while the active context
-   is a prod entire.io login — without also setting `ENTIRE_AUTH_BASE_URL`.
+   is a prod entire.io login — with no env override needed.
 3. Exchange that context's login JWT at **its** core for the data host origin
    (`auth.NewRefreshingResourceProvider`, keyed on `c.CoreURL` like the
    control-plane provider; the token manager sets `aud` = that origin).

@@ -121,7 +121,7 @@ func checkProbeRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= maxProbeRedirects {
 		return fmt.Errorf("stopped after %d redirects", maxProbeRedirects)
 	}
-	if req.URL.Scheme != "https" {
+	if req.URL.Scheme != schemeHTTPS {
 		return fmt.Errorf("refusing non-https redirect to %s", req.URL.Redacted())
 	}
 	if !discovery.HostInCluster(req.URL.Hostname(), via[0].URL.Hostname()) {

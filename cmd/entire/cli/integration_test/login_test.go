@@ -5,6 +5,7 @@ package integration
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -21,6 +23,19 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/execx"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
+
+// fakeLoginJWT builds a JWT-shaped access token with a junk signature
+// (ParseClaims doesn't verify signatures) whose iss matches the test server
+// origin, so login's iss cross-check passes and the context can be recorded.
+// A bare opaque token is no longer enough for a --server login: with no iss
+// claim there is nothing to key the login context by, and login fails.
+func fakeLoginJWT(iss string) string {
+	enc := base64.RawURLEncoding
+	header := enc.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	payload := enc.EncodeToString(fmt.Appendf(nil,
+		`{"iss":%q,"sub":"user-123","exp":%d}`, iss, time.Now().Add(time.Hour).Unix()))
+	return header + "." + payload + "." + enc.EncodeToString([]byte("sig"))
+}
 
 func TestLogin_SavesTokenAfterApproval(t *testing.T) {
 	t.Parallel()
@@ -34,7 +49,7 @@ func TestLogin_SavesTokenAfterApproval(t *testing.T) {
 	serverState := &state{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/oauth/device/code":
+		case r.Method == http.MethodPost && r.URL.Path == "/device_authorization":
 			writeJSON(t, w, http.StatusOK, map[string]any{
 				"device_code":               "device-123",
 				"user_code":                 "ABCD-EFGH",
@@ -54,7 +69,7 @@ func TestLogin_SavesTokenAfterApproval(t *testing.T) {
 				return
 			}
 
-			writeJSON(t, w, http.StatusOK, map[string]any{"access_token": "local-token", "token_type": "Bearer", "expires_in": 3600, "scope": "cli"})
+			writeJSON(t, w, http.StatusOK, map[string]any{"access_token": fakeLoginJWT("http://" + r.Host), "token_type": "Bearer", "expires_in": 3600, "scope": "cli"})
 		case r.Method == http.MethodPost && r.URL.Path == "/approve":
 			serverState.Lock()
 			serverState.approved = true
@@ -101,6 +116,18 @@ func TestLogin_SavesTokenAfterApproval(t *testing.T) {
 		t.Fatalf("output missing login complete message (token save likely failed):\n%s", output)
 	}
 
+	// A --server login is recorded as a contexts.json context (the legacy
+	// keyring entry is only written for the default login server, whose key
+	// is the only one legacy readers consult).
+	contextsPath := filepath.Join(proc.configDir, "contexts.json")
+	data, readErr := os.ReadFile(contextsPath)
+	if readErr != nil {
+		t.Fatalf("read %s after login: %v", contextsPath, readErr)
+	}
+	if !strings.Contains(string(data), server.URL) {
+		t.Fatalf("contexts.json does not reference login server %s:\n%s", server.URL, data)
+	}
+
 	serverState.Lock()
 	polls := serverState.polls
 	serverState.Unlock()
@@ -114,7 +141,7 @@ func TestLogin_ExpiredFlow(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/oauth/device/code":
+		case r.Method == http.MethodPost && r.URL.Path == "/device_authorization":
 			writeJSON(t, w, http.StatusOK, map[string]any{
 				"device_code":               "device-expired",
 				"user_code":                 "WXYZ-0000",
@@ -153,7 +180,7 @@ func TestLogin_DeniedFlow(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/oauth/device/code":
+		case r.Method == http.MethodPost && r.URL.Path == "/device_authorization":
 			writeJSON(t, w, http.StatusOK, map[string]any{
 				"device_code":               "device-denied",
 				"user_code":                 "QRST-9999",
@@ -208,7 +235,7 @@ func TestLogin_BrowserFlow_SavesToken(t *testing.T) {
 				t.Error("token request missing code_verifier")
 			}
 			writeJSON(t, w, http.StatusOK, map[string]any{
-				"access_token": "browser-token", "token_type": "Bearer", "expires_in": 3600, "scope": "cli offline_access",
+				"access_token": fakeLoginJWT("http://" + r.Host), "token_type": "Bearer", "expires_in": 3600, "scope": "cli offline_access",
 			})
 			return
 		}
@@ -246,7 +273,10 @@ func TestLogin_BrowserFlow_SavesToken(t *testing.T) {
 
 type loginProcess struct {
 	stdout *bufio.Reader
-	waitFn func() (string, error)
+	// configDir is the sandboxed ENTIRE_CONFIG_DIR the spawned binary writes
+	// contexts.json into; tests can assert on its contents after login.
+	configDir string
+	waitFn    func() (string, error)
 }
 
 func runLoginProcess(t *testing.T, apiBaseURL string) *loginProcess {
@@ -260,7 +290,12 @@ func startLoginProcess(t *testing.T, apiBaseURL string, extraEnv []string, args 
 	t.Helper()
 
 	env := NewTestEnv(t)
+	configDir := filepath.Join(env.RepoDir, ".entire-test-config")
 
+	// ENTIRE_AUTH_BASE_URL is retired (commands reject it when set at all);
+	// --server is how a login targets the test server instead of the
+	// production default.
+	args = append(args, "--server", apiBaseURL)
 	cmd := execx.NonInteractive(context.Background(), getTestBinary(), args...)
 	cmd.Dir = env.RepoDir
 	cmd.Env = append(testutil.GitIsolatedEnv(),
@@ -268,11 +303,13 @@ func startLoginProcess(t *testing.T, apiBaseURL string, extraEnv []string, args 
 		"ENTIRE_TEST_GEMINI_PROJECT_DIR="+env.GeminiProjectDir,
 		"ENTIRE_TEST_OPENCODE_PROJECT_DIR="+env.OpenCodeProjectDir,
 		"ENTIRE_API_BASE_URL="+apiBaseURL,
-		// AuthBaseURL no longer inherits from BaseURL; pin both at the test
-		// server so the flow stays in-process instead of reaching out to the
-		// production us.auth.entire.io default.
-		"ENTIRE_AUTH_BASE_URL="+apiBaseURL,
 		"ENTIRE_TEST_AUTH_STORE_FILE="+filepath.Join(env.RepoDir, ".entire-test-auth-store.json"),
+		// A --server login records its credential in contexts.json and the
+		// token store; point both at the test sandbox so the spawned binary
+		// can't touch the real ~/.config/entire or the OS keychain.
+		"ENTIRE_CONFIG_DIR="+configDir,
+		"ENTIRE_TOKEN_STORE=file",
+		"ENTIRE_TOKEN_STORE_PATH="+filepath.Join(env.RepoDir, ".entire-test-tokens.json"),
 		// Blank the SSH_* vars inherited from os.Environ(): a developer
 		// running tests over SSH would otherwise flip the subprocess'
 		// isSSHSession() detection and route browser-flow tests to the
@@ -297,7 +334,8 @@ func startLoginProcess(t *testing.T, apiBaseURL string, extraEnv []string, args 
 	reader := bufio.NewReader(stdoutPipe)
 
 	return &loginProcess{
-		stdout: reader,
+		stdout:    reader,
+		configDir: configDir,
 		waitFn: func() (string, error) {
 			stdoutBytes, readErr := io.ReadAll(reader)
 			waitErr := cmd.Wait()

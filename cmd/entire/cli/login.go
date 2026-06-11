@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/entireio/auth-go/tokens"
@@ -17,6 +18,11 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/spf13/cobra"
+)
+
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
 )
 
 const fallbackDeviceAuthPollInterval = time.Second
@@ -64,16 +70,23 @@ type browserAuthFlow interface {
 }
 
 func newLoginCmd() *cobra.Command {
-	var insecureHTTPAuth bool
-	var useDevice bool
+	var (
+		insecureHTTPAuth bool
+		useDevice        bool
+		server           string
+	)
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Log in to Entire",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := requireSecureBaseURL(insecureHTTPAuth); err != nil {
+			loginServer, err := parseLoginServer(server)
+			if err != nil {
+				return fmt.Errorf("invalid --server: %w", err)
+			}
+			if err := requireSecureLoginServer(loginServer, insecureHTTPAuth); err != nil {
 				return err
 			}
-			client := auth.NewClient(nil, insecureHTTPAuth)
+			client := auth.NewClient(loginServer, nil, insecureHTTPAuth)
 			// Closure adapts the concrete *auth.BrowserAuthFlow result to the
 			// browserAuthFlow interface (func types are invariant, so the
 			// method value alone won't do). On error the flow is a typed nil,
@@ -89,9 +102,59 @@ func newLoginCmd() *cobra.Command {
 				})
 		},
 	}
+	cmd.Flags().StringVar(&server, "server", api.DefaultAuthBaseURL,
+		"login server to authenticate against (rarely needed; the default serves all standard accounts)")
 	addInsecureHTTPAuthFlag(cmd, &insecureHTTPAuth)
 	cmd.Flags().BoolVar(&useDevice, "device", false, "Use the device-code flow (enter a code in your browser) instead of the default browser redirect")
 	return cmd
+}
+
+// parseLoginServer validates and canonicalises the --server value: an
+// http(s) origin with nothing but scheme and host. Userinfo, path, query,
+// and fragment are rejected rather than silently dropped — the value
+// becomes the OAuth issuer, the token-exchange target, and the keyring
+// key, so surprising rewrites would surface as confusing auth failures
+// much later. A lone trailing slash is tolerated (normalised away).
+func parseLoginServer(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("empty server URL")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse server URL: %w", err)
+	}
+	// Error messages echo u.Redacted(), not raw: the URL may carry
+	// userinfo (that's one of the rejection cases), and stderr often ends
+	// up in CI logs where a password must not appear.
+	switch {
+	case u.Scheme != schemeHTTPS && u.Scheme != schemeHTTP:
+		return "", fmt.Errorf("scheme must be http or https, got %q", u.Redacted())
+	case u.Host == "":
+		return "", fmt.Errorf("missing host in %q", u.Redacted())
+	case u.User != nil:
+		return "", fmt.Errorf("userinfo not allowed in %q", u.Redacted())
+	case u.Path != "" && u.Path != "/":
+		return "", fmt.Errorf("path not allowed in %q (use the bare origin)", u.Redacted())
+	case u.RawQuery != "" || u.Fragment != "":
+		return "", fmt.Errorf("query/fragment not allowed in %q", u.Redacted())
+	}
+	return api.NormalizeOriginURL(raw), nil
+}
+
+// requireSecureLoginServer enforces TLS for the chosen login server.
+// Unlike requireSecureBaseURL it checks only the server being dialled —
+// login never touches the data API. --insecure-http-auth opts in to
+// http:// (and enables it process-wide for the token save path).
+func requireSecureLoginServer(server string, insecureHTTPAuth bool) error {
+	if insecureHTTPAuth {
+		auth.EnableInsecureHTTP()
+		return nil
+	}
+	if err := api.RequireSecureURL(server); err != nil {
+		return fmt.Errorf("login server check: %w", err)
+	}
+	return nil
 }
 
 func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient, openURL browserOpenFunc, canPrompt bool) error {
@@ -261,21 +324,31 @@ func persistLogin(outW, errW io.Writer, baseURL, token, refreshToken string) err
 		return fmt.Errorf("reject login token: %w", err)
 	}
 
-	store := auth.NewStore()
-
-	// Login deliberately uses the legacy SaveToken (string, string)
-	// surface — we only have an access-token string at this point;
-	// neither flow's client returns a TokenSet here.
-	if err := store.SaveToken(baseURL, token); err != nil {
-		return fmt.Errorf("save auth token: %w", err)
+	// Every legacy-keyring read in the CLI keys by api.AuthBaseURL(),
+	// which is always the default origin now that ENTIRE_AUTH_BASE_URL is
+	// retired. A legacy entry saved under any other --server origin would
+	// be unreadable forever (and undeletable by logout, which deletes the
+	// default key) — so only write it when this login targeted that origin.
+	legacyReadable := baseURL == api.AuthBaseURL()
+	if legacyReadable {
+		// Login deliberately uses the legacy SaveToken (string, string)
+		// surface — we only have an access-token string at this point;
+		// neither flow's client returns a TokenSet here.
+		if err := auth.NewStore().SaveToken(baseURL, token); err != nil {
+			return fmt.Errorf("save auth token: %w", err)
+		}
 	}
 
 	// Dual-write the shared contexts.json credential model so the git
 	// remote helper (and entiredb's CLIs) can authenticate against any
-	// entitled cluster from this login. Best-effort: the legacy entry
-	// above remains the control-plane source of truth, so a failure here
-	// must not fail the login — warn and continue.
+	// entitled cluster from this login. Best-effort only when the legacy
+	// entry above exists as the control-plane source of truth; for a
+	// non-default --server the context is the sole record of the login,
+	// so failing to write it means the login failed.
 	if _, err := auth.RecordLoginContext(token, refreshToken, true); err != nil {
+		if !legacyReadable {
+			return fmt.Errorf("record login context: %w", err)
+		}
 		fmt.Fprintf(errW, "Warning: logged in, but could not record a shareable context (clone via entire:// may need a re-login): %v\n", err)
 	}
 
@@ -441,7 +514,7 @@ func waitForEnter(ctx context.Context) error {
 
 func openBrowser(ctx context.Context, browserURL string) error {
 	u, err := url.Parse(browserURL)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+	if err != nil || (u.Scheme != schemeHTTPS && u.Scheme != schemeHTTP) {
 		return fmt.Errorf("refusing to open non-HTTP URL: %s", browserURL)
 	}
 

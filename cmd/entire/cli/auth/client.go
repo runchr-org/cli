@@ -46,19 +46,20 @@ type Client struct {
 	browser *authcode.Client
 }
 
-// NewClient constructs a Client targeting the active provider version.
-// httpClient.Transport is reused when non-nil (its TLS / proxy config
-// flows through); a nil httpClient or nil Transport falls back to the
-// deviceflow default (http.DefaultTransport).
+// NewClient constructs a Client for the device-flow login against server
+// (the login-server origin, validated by the caller — `entire login
+// --server`). httpClient.Transport is reused when non-nil (its TLS /
+// proxy config flows through); a nil httpClient or nil Transport falls
+// back to the deviceflow default (http.DefaultTransport).
 //
 // HTTPS is required by default. Loopback http:// (localhost, 127.0.0.1,
 // ::1) is always permitted — see isLoopbackHTTP. allowInsecureHTTP=true
 // additionally permits non-loopback http:// for cases like local-dev
 // auth hosts on a private network (e.g. http://devbox.internal); the
 // CLI plumbs this from the --insecure-http-auth flag.
-func NewClient(httpClient *http.Client, allowInsecureHTTP bool) *Client {
+func NewClient(server string, httpClient *http.Client, allowInsecureHTTP bool) *Client {
 	p := CurrentProvider()
-	issuer := api.AuthBaseURL()
+	issuer := api.NormalizeOriginURL(server)
 	var transport http.RoundTripper
 	if httpClient != nil {
 		transport = httpClient.Transport

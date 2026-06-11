@@ -59,7 +59,7 @@ func DiscoveryUnavailableForTest(context.Context, string, string, string, *http.
 //	ENTIRE_API_BASE_URL=https://partial.to entire activity
 //
 // authenticate as the partial.to login even while the active context is a
-// prod entire.io login — without the operator also setting ENTIRE_AUTH_BASE_URL.
+// prod entire.io login — with no per-command override needed.
 //
 // When the API doesn't advertise discovery (404 / unreachable / 503 /
 // malformed — e.g. a deployment predating the well-known), it falls back to

@@ -29,13 +29,13 @@ type ControlPlaneTarget struct {
 //  1. the active contexts.json login -> its CoreURL, with a per-context
 //     refreshing bearer (silent JWT re-mint). This is what makes
 //     `entire auth use <ctx>` retarget the control plane onto that core.
-//  2. no active context -> the configured auth origin (ENTIRE_AUTH_BASE_URL or
-//     the default) + TokenForResource, the pre-contexts fallback.
+//  2. no active context -> the default auth origin + TokenForResource,
+//     the pre-contexts fallback.
 //
-// ENTIRE_AUTH_BASE_URL is the fallback host, not an override: a token minted
-// by the active context's core can't authenticate against a different host, so
-// "use the override host but the context's identity" can't succeed. The active
-// context always wins when present.
+// The default auth origin is the fallback host, not an override: a token
+// minted by the active context's core can't authenticate against a different
+// host, so "use the fallback host but the context's identity" can't succeed.
+// The active context always wins when present.
 func ResolveControlPlaneTarget() (ControlPlaneTarget, error) {
 	c, ok, err := activeContext()
 	if err != nil {
@@ -57,7 +57,7 @@ func ResolveControlPlaneTarget() (ControlPlaneTarget, error) {
 }
 
 // staticControlPlaneTarget is the no-active-context fallback: dial the
-// configured auth origin (ENTIRE_AUTH_BASE_URL or the default) and resolve the
+// default auth origin and resolve the
 // bearer through the singleton manager, which performs an RFC 8693 exchange
 // when the stored token's audience doesn't cover the core.
 func staticControlPlaneTarget() ControlPlaneTarget {
