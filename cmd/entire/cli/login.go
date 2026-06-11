@@ -338,20 +338,26 @@ func persistLogin(outW, errW io.Writer, baseURL, token, refreshToken string) err
 // a token from a different issuer than the one we asked, or one whose
 // claims are already-expired).
 //
-// Opaque (non-JWT) tokens pass this check unjudged — only unsigned
-// (alg:none) JWTs are rejected here, via tokens.ErrUnsignedJWT. They
-// still cannot complete a login: RecordLoginContext is the sole
-// persistence path and requires iss/handle claims to key the context,
-// so a claims-free token fails there with a parse error. Entire-core
-// always issues claim-bearing JWTs; opaque-token-only servers are not
-// supported.
+// It also enforces what the contexts model needs up front:
+// RecordLoginContext — the sole persistence path — keys the context and
+// keychain slot on the token's iss and handle/sub claims, so a token
+// without parseable claims can never complete a login. Rejecting it here
+// names the requirement instead of surfacing a parse error from the save
+// step. Entire-core always issues claim-bearing JWTs; opaque-token-only
+// servers are not supported.
 func validateReceivedToken(rawToken, issuerURL string, now time.Time) error {
 	claims, err := tokens.ParseClaims(rawToken)
 	if errors.Is(err, tokens.ErrUnsignedJWT) {
 		return err //nolint:wrapcheck // sentinel surfaces verbatim for caller's errors.Is
 	}
 	if err != nil {
-		return nil //nolint:nilerr // any parse failure other than alg:none means the token isn't a JWT — not this check's concern (RecordLoginContext gates on claims)
+		return fmt.Errorf("login server issued a token without parseable JWT claims (claim-bearing JWTs are required): %w", err)
+	}
+	if claims.Issuer == "" {
+		return errors.New("token has no iss claim; cannot record a login context")
+	}
+	if claims.Handle == "" && claims.Subject == "" {
+		return errors.New("token has no handle or sub claim; cannot record a login context")
 	}
 
 	// iss check: the token must claim to come from the issuer we sent
@@ -373,12 +379,8 @@ func validateReceivedToken(rawToken, issuerURL string, now time.Time) error {
 
 // issMatches reports whether claimed equals expected after stripping path/
 // query/fragment via api.OriginOnly, so "https://issuer/" and "https://issuer"
-// match. Returns nil on match or when the iss claim is empty (some servers
-// omit it — the server still does the real check on every request).
+// match. The caller has already rejected an empty iss claim.
 func issMatches(claimed, expected string) error {
-	if claimed == "" {
-		return nil
-	}
 	normClaimed := api.OriginOnly(claimed)
 	normExpected := api.OriginOnly(expected)
 	if normClaimed != normExpected {
