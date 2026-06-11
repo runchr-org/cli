@@ -217,7 +217,7 @@ mise run dev
 # us.auth.entire.io).
 cd ../cli
 export ENTIRE_API_BASE_URL=http://localhost:8787
-entire login --server http://localhost:8787 --insecure-http-auth
+entire login --server https://localhost:8180
 
 # Run the smoke test
 ./scripts/local-device-auth-smoke.sh
