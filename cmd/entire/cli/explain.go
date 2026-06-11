@@ -1662,9 +1662,8 @@ func formatCheckpointOutput(ctx context.Context, summary *checkpoint.CheckpointS
 		sb.WriteString("\n")
 		sb.WriteString(styles.sectionRule(label, styles.width))
 		sb.WriteString("\n")
-		// Compact only the transcript being rendered, and only after scoping:
-		// CheckpointTranscriptStart indexes the stored format, and compaction
-		// changes line counts.
+		// Compact after scoping: CheckpointTranscriptStart indexes the stored
+		// format, and compaction changes line counts.
 		displayFull := content.Transcript
 		displayScoped := scopedTranscript
 		if full && len(displayFull) > 0 {
