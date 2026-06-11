@@ -74,7 +74,6 @@ func parse(src string) ([]string, map[string]string, []outEdgeWithFrom, bool) {
 	var order []string
 	var edges []outEdgeWithFrom
 	sawFlowchart := false
-	sawAnyContent := false
 
 	ensure := func(id, label string) {
 		cur, exists := labels[id]
@@ -109,7 +108,6 @@ func parse(src string) ([]string, map[string]string, []outEdgeWithFrom, bool) {
 		if !ok {
 			return nil, nil, nil, false
 		}
-		sawAnyContent = true
 		for _, n := range lineNodes {
 			ensure(n.id, n.label)
 		}
@@ -120,7 +118,9 @@ func parse(src string) ([]string, map[string]string, []outEdgeWithFrom, bool) {
 		}
 	}
 
-	if !sawFlowchart || !sawAnyContent || len(labels) == 0 {
+	// Every parsed structural line declares at least one node, so an empty
+	// label map means no content lines were seen.
+	if !sawFlowchart || len(labels) == 0 {
 		return nil, nil, nil, false
 	}
 	return order, labels, edges, true
@@ -202,14 +202,11 @@ func parseNodeToken(s string) (id, label string, ok bool) {
 // the inner label text.
 func unwrapShape(shape string) string {
 	for _, pair := range []struct{ open, close string }{
-		{"[[", "]]"}, {"((", "))"}, {"[", "]"}, {"(", ")"}, {"{", "}"},
+		{"[[", "]]"}, {"((", "))"}, {"[", "]"}, {"(", ")"}, {"{", "}"}, {">", "]"},
 	} {
 		if strings.HasPrefix(shape, pair.open) && strings.HasSuffix(shape, pair.close) {
 			return strings.TrimSuffix(strings.TrimPrefix(shape, pair.open), pair.close)
 		}
-	}
-	if strings.HasPrefix(shape, ">") && strings.HasSuffix(shape, "]") {
-		return strings.TrimSuffix(strings.TrimPrefix(shape, ">"), "]")
 	}
 	return shape
 }
