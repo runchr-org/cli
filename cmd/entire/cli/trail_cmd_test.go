@@ -317,6 +317,84 @@ func TestPrintTrailListUnknownStatusGroupedInOtherBucket(t *testing.T) {
 	}
 }
 
+func TestPrintTrailListTruncatedShowsShownOfTotal(t *testing.T) {
+	t.Parallel()
+	alice := trailListTestAuthorAlice
+	var out bytes.Buffer
+	printTrailList(&out, []*trail.Metadata{
+		{Branch: "feat/a", Status: trail.StatusOpen, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
+	}, trailListDisplayOptions{
+		RequestedAuthor: "",
+		StatusFilters:   nil,
+		TotalMatched:    5,
+		StatusTotals:    map[trail.Status]int{trail.StatusOpen: 4, trail.StatusDraft: 1},
+	})
+
+	text := out.String()
+	for _, want := range []string{"Recent trails · 1/5", "Open · 1/4"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("output missing %q, got:\n%s", want, text)
+		}
+	}
+}
+
+func TestPrintTrailListTruncatedSingleStatusHeaderShowsShownOfTotal(t *testing.T) {
+	t.Parallel()
+	alice := trailListTestAuthorAlice
+	var out bytes.Buffer
+	printTrailList(&out, []*trail.Metadata{
+		{Branch: "feat/a", Status: trail.StatusOpen, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
+	}, trailListDisplayOptions{
+		RequestedAuthor: "",
+		StatusFilters:   []trail.Status{trail.StatusOpen},
+		TotalMatched:    3,
+		StatusTotals:    map[trail.Status]int{trail.StatusOpen: 3},
+	})
+
+	// Pluralized by the total match count, not the truncated page size.
+	if text := out.String(); !strings.Contains(text, "Open · 1/3 trails") {
+		t.Fatalf("expected truncated header 'Open · 1/3 trails', got:\n%s", text)
+	}
+}
+
+func TestPrintTrailListTruncatedOtherBucketShowsShownOfTotal(t *testing.T) {
+	t.Parallel()
+	alice := trailListTestAuthorAlice
+	unknownStatus := trail.Status("experimental_review")
+	var out bytes.Buffer
+	printTrailList(&out, []*trail.Metadata{
+		{Branch: "feat/odd", Status: unknownStatus, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
+	}, trailListDisplayOptions{
+		RequestedAuthor: "",
+		StatusFilters:   nil,
+		TotalMatched:    3,
+		StatusTotals:    map[trail.Status]int{unknownStatus: 2, trail.StatusOpen: 1},
+	})
+
+	if text := out.String(); !strings.Contains(text, "Other · 1/2") {
+		t.Fatalf("expected truncated 'Other · 1/2' group, got:\n%s", text)
+	}
+}
+
+func TestPrintTrailListFullPageKeepsPlainCounts(t *testing.T) {
+	t.Parallel()
+	alice := trailListTestAuthorAlice
+	var out bytes.Buffer
+	printTrailList(&out, []*trail.Metadata{
+		{Branch: "feat/a", Status: trail.StatusOpen, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
+	}, trailListDisplayOptions{
+		RequestedAuthor: "",
+		StatusFilters:   nil,
+		TotalMatched:    1,
+		StatusTotals:    map[trail.Status]int{trail.StatusOpen: 1},
+	})
+
+	text := out.String()
+	if !strings.Contains(text, "Recent trail · 1") || strings.Contains(text, "1/1") {
+		t.Fatalf("expected plain counts without slash when nothing was truncated, got:\n%s", text)
+	}
+}
+
 func TestPrintTrailListEmptyDefaultStatusNamesFilterAndHints(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer

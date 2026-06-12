@@ -160,7 +160,7 @@ func newTrailListCmd() *cobra.Command {
 		"Filter by author login (case-insensitive); use '"+trailListAuthorMe+"' for yourself (requires gh CLI); omit for any author")
 	cmd.Flags().StringVar(&opts.Status, "status", defaultTrailListStatus,
 		"Filter by comma-separated status(es): "+formatValidStatuses()+"; use '"+trailListStatusAny+"' for all statuses")
-	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Output as JSON (respects --status filter)")
+	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Output as JSON (respects --author, --status, and --limit)")
 	cmd.Flags().IntVarP(&opts.Limit, "limit", "n", defaultTrailListLimit, "Maximum number of trails to show")
 
 	return cmd
@@ -227,6 +227,8 @@ func runTrailListAll(ctx context.Context, w io.Writer, opts trailListOptions) er
 	sort.Slice(trails, func(i, j int) bool {
 		return trails[i].UpdatedAt.After(trails[j].UpdatedAt)
 	})
+	totalMatched := len(trails)
+	statusTotals := trailStatusCounts(trails)
 	trails = limitTrails(trails, opts.Limit)
 
 	if opts.JSON {
@@ -247,6 +249,8 @@ func runTrailListAll(ctx context.Context, w io.Writer, opts trailListOptions) er
 		RequestedAuthor: authorFilter,
 		CurrentUser:     currentUserLogin,
 		StatusFilters:   statusFilters,
+		TotalMatched:    totalMatched,
+		StatusTotals:    statusTotals,
 	})
 
 	return nil
@@ -366,6 +370,13 @@ type trailListDisplayOptions struct {
 	RequestedAuthor string
 	CurrentUser     string
 	StatusFilters   []trail.Status
+	// TotalMatched is the number of trails matching the filters before
+	// --limit truncation. Counts render as "shown/total" when they differ so
+	// a full page doesn't read as the total number of matches.
+	TotalMatched int
+	// StatusTotals are the pre-truncation per-status counts backing the
+	// group headers in the grouped view.
+	StatusTotals map[trail.Status]int
 }
 
 func printTrailList(w io.Writer, trails []*trail.Metadata, opts trailListDisplayOptions) {
@@ -389,7 +400,7 @@ func printTrailList(w io.Writer, trails []*trail.Metadata, opts trailListDisplay
 		for _, t := range group {
 			rendered[t] = true
 		}
-		fmt.Fprintf(w, "  %s · %d\n", trailStatusTitle(status), len(group))
+		fmt.Fprintf(w, "  %s · %s\n", trailStatusTitle(status), trailCountDisplay(len(group), opts.StatusTotals[status]))
 		fmt.Fprintln(w)
 		printTrailRows(w, group, showAuthor)
 		fmt.Fprintln(w)
@@ -406,7 +417,11 @@ func printTrailList(w io.Writer, trails []*trail.Metadata, opts trailListDisplay
 			}
 		}
 		if len(other) > 0 {
-			fmt.Fprintf(w, "  Other · %d\n", len(other))
+			otherTotal := opts.TotalMatched
+			for _, status := range trailListStatusOrder(nil) {
+				otherTotal -= opts.StatusTotals[status]
+			}
+			fmt.Fprintf(w, "  Other · %s\n", trailCountDisplay(len(other), otherTotal))
 			fmt.Fprintln(w)
 			printTrailRows(w, other, showAuthor)
 			fmt.Fprintln(w)
@@ -415,12 +430,19 @@ func printTrailList(w io.Writer, trails []*trail.Metadata, opts trailListDisplay
 }
 
 func printTrailListHeader(w io.Writer, opts trailListDisplayOptions, count int) {
+	countStr := trailCountDisplay(count, opts.TotalMatched)
+	// The noun refers to the full match set, so pluralize by the total when
+	// the page is truncated ("1/2 trails", not "1/2 trail").
+	nounCount := count
+	if opts.TotalMatched > count {
+		nounCount = opts.TotalMatched
+	}
 	if opts.RequestedAuthor == "" {
 		if len(opts.StatusFilters) == 0 {
-			fmt.Fprintf(w, "  Recent %s · %d\n", pluralize("trail", count), count)
+			fmt.Fprintf(w, "  Recent %s · %s\n", pluralize("trail", nounCount), countStr)
 			return
 		}
-		fmt.Fprintf(w, "  %s · %d %s\n", trailStatusListTitle(opts.StatusFilters), count, pluralize("trail", count))
+		fmt.Fprintf(w, "  %s · %s %s\n", trailStatusListTitle(opts.StatusFilters), countStr, pluralize("trail", nounCount))
 		return
 	}
 
@@ -432,10 +454,10 @@ func printTrailListHeader(w io.Writer, opts trailListDisplayOptions, count int) 
 		label = fmt.Sprintf("Your trails (%s)", opts.CurrentUser)
 	}
 	if len(opts.StatusFilters) == 0 {
-		fmt.Fprintf(w, "  %s · %d\n", label, count)
+		fmt.Fprintf(w, "  %s · %s\n", label, countStr)
 		return
 	}
-	fmt.Fprintf(w, "  %s · %d %s\n", label, count, trailStatusListDisplay(opts.StatusFilters))
+	fmt.Fprintf(w, "  %s · %s %s\n", label, countStr, trailStatusListDisplay(opts.StatusFilters))
 }
 
 func printTrailRows(w io.Writer, trails []*trail.Metadata, showAuthor bool) {
@@ -515,6 +537,24 @@ func trailStatusTitle(status trail.Status) string {
 		return ""
 	}
 	return strings.ToUpper(display[:1]) + display[1:]
+}
+
+// trailCountDisplay renders a count as "shown/total" when --limit truncated
+// the list, so a capped page doesn't read as the total number of matches.
+func trailCountDisplay(shown, total int) string {
+	if total > shown {
+		return fmt.Sprintf("%d/%d", shown, total)
+	}
+	return strconv.Itoa(shown)
+}
+
+// trailStatusCounts tallies trails per status before --limit truncation.
+func trailStatusCounts(trails []*trail.Metadata) map[trail.Status]int {
+	counts := make(map[trail.Status]int, len(trails))
+	for _, t := range trails {
+		counts[t.Status]++
+	}
+	return counts
 }
 
 func pluralize(s string, count int) string {
