@@ -28,7 +28,7 @@ import (
 const (
 	defaultTrailListLimit  = 10
 	trailListAuthorMe      = "me"
-	defaultTrailListStatus = string(trail.StatusInProgress)
+	defaultTrailListStatus = string(trail.StatusOpen)
 	// trailListStatusAny disables the status filter; user-facing value for --status.
 	trailListStatusAny = "any"
 )
@@ -253,7 +253,7 @@ func runTrailListAll(ctx context.Context, w io.Writer, opts trailListOptions) er
 }
 
 // printTrailListEmpty renders the empty-state message. It names the active
-// status filter so a bare `entire trail list` (which defaults to in_progress)
+// status filter so a bare `entire trail list` (which defaults to open)
 // doesn't read as "this repo has no trails" when trails exist in other
 // statuses. statusFilters is empty when the user passed --status any.
 func printTrailListEmpty(w io.Writer, authorFilter string, statusFilters []trail.Status) {
@@ -467,9 +467,7 @@ func printTrailRows(w io.Writer, trails []*trail.Metadata, showAuthor bool) {
 
 func trailListStatusOrder(filter []trail.Status) []trail.Status {
 	order := []trail.Status{
-		trail.StatusInProgress,
 		trail.StatusOpen,
-		trail.StatusInReview,
 		trail.StatusDraft,
 		trail.StatusMerged,
 		trail.StatusClosed,

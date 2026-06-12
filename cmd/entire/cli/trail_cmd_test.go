@@ -138,11 +138,11 @@ func TestFilterTrailsByAuthorIsCaseInsensitive(t *testing.T) {
 
 func TestParseTrailStatusFilterAcceptsCommaSeparatedStatuses(t *testing.T) {
 	t.Parallel()
-	got, err := parseTrailStatusFilter("in_progress, open,closed")
+	got, err := parseTrailStatusFilter("draft, open,closed")
 	if err != nil {
 		t.Fatalf("parseTrailStatusFilter: %v", err)
 	}
-	want := []trail.Status{trail.StatusInProgress, trail.StatusOpen, trail.StatusClosed}
+	want := []trail.Status{trail.StatusDraft, trail.StatusOpen, trail.StatusClosed}
 	if len(got) != len(want) {
 		t.Fatalf("len = %d, want %d", len(got), len(want))
 	}
@@ -155,8 +155,12 @@ func TestParseTrailStatusFilterAcceptsCommaSeparatedStatuses(t *testing.T) {
 
 func TestParseTrailStatusFilterRejectsInvalidStatus(t *testing.T) {
 	t.Parallel()
-	if _, err := parseTrailStatusFilter("in_progress,nope"); err == nil {
+	if _, err := parseTrailStatusFilter("open,nope"); err == nil {
 		t.Fatal("expected invalid status error")
+	}
+	// in_progress was retired server-side and must no longer parse.
+	if _, err := parseTrailStatusFilter("in_progress"); err == nil {
+		t.Fatal("expected invalid status error for retired in_progress")
 	}
 }
 
@@ -178,17 +182,17 @@ func TestPrintTrailListDefaultRepoShapeShowsAuthor(t *testing.T) {
 	printTrailList(&out, []*trail.Metadata{
 		{
 			Branch:    "feat/repo-wide",
-			Status:    trail.StatusInProgress,
+			Status:    trail.StatusOpen,
 			Author:    &trail.Author{Login: &alice},
 			UpdatedAt: time.Now(),
 		},
 	}, trailListDisplayOptions{
 		RequestedAuthor: "",
-		StatusFilters:   []trail.Status{trail.StatusInProgress},
+		StatusFilters:   []trail.Status{trail.StatusOpen},
 	})
 
 	text := out.String()
-	for _, want := range []string{"In progress · 1 trail", "feat/repo-wide", trailListTestAuthorAlice} {
+	for _, want := range []string{"Open · 1 trail", "feat/repo-wide", trailListTestAuthorAlice} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q, got:\n%s", want, text)
 		}
@@ -204,17 +208,17 @@ func TestPrintTrailListAuthorFilteredShapeHidesAuthor(t *testing.T) {
 	printTrailList(&out, []*trail.Metadata{
 		{
 			Branch:    longBranch,
-			Status:    trail.StatusInProgress,
+			Status:    trail.StatusOpen,
 			Author:    &trail.Author{Login: &alice},
 			UpdatedAt: time.Now().Add(-24 * time.Hour),
 		},
 	}, trailListDisplayOptions{
 		RequestedAuthor: trailListTestAuthorAlice,
-		StatusFilters:   []trail.Status{trail.StatusInProgress},
+		StatusFilters:   []trail.Status{trail.StatusOpen},
 	})
 
 	text := out.String()
-	if !strings.Contains(text, "alice · 1 in progress") {
+	if !strings.Contains(text, "alice · 1 open") {
 		t.Fatalf("output should contain author/status header, got:\n%s", text)
 	}
 	if !strings.Contains(text, longBranch) {
@@ -232,18 +236,18 @@ func TestPrintTrailListYourTrailsRelabelsAndSurfacesGhLogin(t *testing.T) {
 	printTrailList(&out, []*trail.Metadata{
 		{
 			Branch:    "feat/x",
-			Status:    trail.StatusInProgress,
+			Status:    trail.StatusOpen,
 			Author:    &trail.Author{Login: &mixedCase},
 			UpdatedAt: time.Now(),
 		},
 	}, trailListDisplayOptions{
 		RequestedAuthor: "alice",
 		CurrentUser:     "alice",
-		StatusFilters:   []trail.Status{trail.StatusInProgress},
+		StatusFilters:   []trail.Status{trail.StatusOpen},
 	})
 
 	text := out.String()
-	if !strings.Contains(text, "Your trails (alice) · 1 in progress") {
+	if !strings.Contains(text, "Your trails (alice) · 1 open") {
 		t.Fatalf("expected 'Your trails (alice)' header, got:\n%s", text)
 	}
 }
@@ -254,18 +258,18 @@ func TestPrintTrailListAnyAuthorAnyStatusGroupsByStatus(t *testing.T) {
 	bob := trailListTestAuthorBob
 	var out bytes.Buffer
 	printTrailList(&out, []*trail.Metadata{
-		{Branch: "feat/a", Status: trail.StatusInProgress, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
-		{Branch: "fix/b", Status: trail.StatusOpen, Author: &trail.Author{Login: &bob}, UpdatedAt: time.Now()},
+		{Branch: "feat/a", Status: trail.StatusOpen, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
+		{Branch: "fix/b", Status: trail.StatusDraft, Author: &trail.Author{Login: &bob}, UpdatedAt: time.Now()},
 	}, trailListDisplayOptions{
 		RequestedAuthor: "",
 		StatusFilters:   nil,
 	})
 
 	text := out.String()
-	if strings.Index(text, "In progress · 1") > strings.Index(text, "Open · 1") {
-		t.Fatalf("expected in-progress group before open group, got:\n%s", text)
+	if strings.Index(text, "Open · 1") > strings.Index(text, "Draft · 1") {
+		t.Fatalf("expected open group before draft group, got:\n%s", text)
 	}
-	for _, want := range []string{"Recent trails · 2", "In progress · 1", "Open · 1", "feat/a", trailListTestAuthorAlice, "fix/b", trailListTestAuthorBob} {
+	for _, want := range []string{"Recent trails · 2", "Open · 1", "Draft · 1", "feat/a", trailListTestAuthorAlice, "fix/b", trailListTestAuthorBob} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q, got:\n%s", want, text)
 		}
@@ -277,7 +281,7 @@ func TestPrintTrailListSingularRecentTrailWhenOne(t *testing.T) {
 	alice := trailListTestAuthorAlice
 	var out bytes.Buffer
 	printTrailList(&out, []*trail.Metadata{
-		{Branch: "feat/a", Status: trail.StatusInProgress, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
+		{Branch: "feat/a", Status: trail.StatusOpen, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
 	}, trailListDisplayOptions{
 		RequestedAuthor: "",
 		StatusFilters:   nil,
@@ -298,7 +302,7 @@ func TestPrintTrailListUnknownStatusGroupedInOtherBucket(t *testing.T) {
 	unknownStatus := trail.Status("experimental_review")
 	var out bytes.Buffer
 	printTrailList(&out, []*trail.Metadata{
-		{Branch: "feat/known", Status: trail.StatusInProgress, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
+		{Branch: "feat/known", Status: trail.StatusOpen, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
 		{Branch: "feat/odd", Status: unknownStatus, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
 	}, trailListDisplayOptions{
 		RequestedAuthor: "",
@@ -306,7 +310,7 @@ func TestPrintTrailListUnknownStatusGroupedInOtherBucket(t *testing.T) {
 	})
 
 	text := out.String()
-	for _, want := range []string{"Recent trails · 2", "In progress · 1", "Other · 1", "feat/odd"} {
+	for _, want := range []string{"Recent trails · 2", "Open · 1", "Other · 1", "feat/odd"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q, got:\n%s", want, text)
 		}
@@ -316,11 +320,11 @@ func TestPrintTrailListUnknownStatusGroupedInOtherBucket(t *testing.T) {
 func TestPrintTrailListEmptyDefaultStatusNamesFilterAndHints(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	printTrailListEmpty(&out, "", []trail.Status{trail.StatusInProgress})
+	printTrailListEmpty(&out, "", []trail.Status{trail.StatusOpen})
 
 	text := out.String()
 	for _, want := range []string{
-		"No in progress trails found.",
+		"No open trails found.",
 		"Use --status any to see trails in other statuses.",
 		"entire trail create",
 	} {
@@ -347,10 +351,10 @@ func TestPrintTrailListEmptyAnyStatusOmitsHint(t *testing.T) {
 func TestPrintTrailListEmptyIncludesAuthor(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	printTrailListEmpty(&out, trailListTestAuthorAlice, []trail.Status{trail.StatusInProgress})
+	printTrailListEmpty(&out, trailListTestAuthorAlice, []trail.Status{trail.StatusOpen})
 
 	text := out.String()
-	if !strings.Contains(text, "No in progress trails found for alice.") {
+	if !strings.Contains(text, "No open trails found for alice.") {
 		t.Fatalf("expected author in empty message, got:\n%s", text)
 	}
 }
