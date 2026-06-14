@@ -275,15 +275,22 @@ func (s *EntireSettings) SummaryTimeoutValue() time.Duration {
 type ReviewProfileConfig struct {
 	Task   string                  `json:"task,omitempty"`
 	Agents map[string]ReviewConfig `json:"agents,omitempty"`
-	// Master is the legacy master selector: a worker key in Agents that also
-	// writes the final report. Superseded by MasterAgent; still honored when
-	// MasterAgent is empty.
+	// Judges is the panel of judges (each an agent + model) that independently
+	// evaluate the inspectors' reports and render verdicts. Supersedes
+	// MasterAgent/Master. One judge = a single verdict; multiple judges = a
+	// panel reconciled by the Chair.
+	Judges []ReviewConfig `json:"judges,omitempty"`
+	// Chair, when set and there are >=2 judges, names the judge (by agent or
+	// agent:model) that merges the panel verdicts into the final verdict.
+	Chair string `json:"chair,omitempty"`
+	// Master is the legacy single-master selector: a worker key in Agents that
+	// also writes the final report. Superseded by Judges/MasterAgent; still
+	// honored when those are empty.
 	Master string `json:"master,omitempty"`
-	// MasterAgent, when set, is a standalone master (judge): it synthesizes the
-	// workers' reports and is NOT required to be one of the worker slots. Takes
-	// precedence over Master.
+	// MasterAgent is the legacy standalone single master. Superseded by Judges;
+	// still honored when Judges is empty.
 	MasterAgent string `json:"master_agent,omitempty"`
-	// MasterModel is the model for the master (applies to either form).
+	// MasterModel is the model for the legacy master (either form).
 	MasterModel string `json:"master_model,omitempty"`
 }
 

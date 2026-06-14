@@ -146,43 +146,74 @@ func reviewWorkerLabel(workerName string, cfg settings.ReviewConfig) string {
 	return strings.Join(parts, "")
 }
 
-// profileMasterIdentity resolves the master's agent name and model, and reports
-// whether the profile has a master at all. A standalone master (MasterAgent
-// set) wins and need not be one of the workers; otherwise the legacy worker
-// master (Master keying into Agents) is resolved.
-func profileMasterIdentity(profile settings.ReviewProfileConfig) (string, string, bool) {
-	if ma := strings.TrimSpace(profile.MasterAgent); ma != "" {
-		return ma, strings.TrimSpace(profile.MasterModel), true
-	}
-	workerName, cfg, err := selectProfileWorker(profile, profile.Master)
-	if err != nil {
-		return "", "", false
-	}
-	model := strings.TrimSpace(profile.MasterModel)
-	if model == "" {
-		model = strings.TrimSpace(cfg.Model)
-	}
-	return reviewAgentName(workerName, cfg), model, true
+// judgeSpec is one resolved judge: the agent that renders a verdict plus its
+// optional model.
+type judgeSpec struct {
+	agent string
+	model string
 }
 
-func resolveProfileMaster(profile settings.ReviewProfileConfig) (string, string) {
-	agentName, model, _ := profileMasterIdentity(profile)
-	return agentName, model
-}
-
-// masterDisplayLabel renders the master for UI/dump output: "agent · model" for
-// a standalone master, or the worker label for a legacy worker master.
-func masterDisplayLabel(profile settings.ReviewProfileConfig, agentName, model string) string {
-	if strings.TrimSpace(profile.MasterAgent) != "" {
-		if strings.TrimSpace(model) != "" {
-			return labelForSimpleAgent(agentName) + " · " + model
+// profileJudges resolves the panel of judges and the index of the chair (the
+// judge that merges a multi-judge panel; 0 for a single judge). Resolution
+// order: explicit Judges, then the legacy standalone MasterAgent, then the
+// legacy worker Master. Returns an empty slice when the profile has no judge.
+func profileJudges(profile settings.ReviewProfileConfig) ([]judgeSpec, int) {
+	if len(profile.Judges) > 0 {
+		judges := make([]judgeSpec, 0, len(profile.Judges))
+		for _, cfg := range profile.Judges {
+			name := strings.TrimSpace(cfg.Agent)
+			if name == "" {
+				continue
+			}
+			judges = append(judges, judgeSpec{agent: name, model: strings.TrimSpace(cfg.Model)})
 		}
-		return labelForSimpleAgent(agentName)
+		if len(judges) == 0 {
+			return nil, 0
+		}
+		chair := 0
+		if sel := strings.TrimSpace(profile.Chair); sel != "" {
+			for i, j := range judges {
+				if j.agent == sel || j.agent+":"+j.model == sel {
+					chair = i
+					break
+				}
+			}
+		}
+		return judges, chair
+	}
+	if ma := strings.TrimSpace(profile.MasterAgent); ma != "" {
+		return []judgeSpec{{agent: ma, model: strings.TrimSpace(profile.MasterModel)}}, 0
 	}
 	if workerName, cfg, err := selectProfileWorker(profile, profile.Master); err == nil {
-		return reviewWorkerLabel(workerName, cfg)
+		model := strings.TrimSpace(profile.MasterModel)
+		if model == "" {
+			model = strings.TrimSpace(cfg.Model)
+		}
+		return []judgeSpec{{agent: reviewAgentName(workerName, cfg), model: model}}, 0
 	}
-	return agentName
+	return nil, 0
+}
+
+// profileMasterIdentity reports the representative judge (the chair, or the
+// single judge) and whether the profile has any judge. Kept for callers that
+// need a single "who decides" identity (validation, labels, picker preselect).
+func profileMasterIdentity(profile settings.ReviewProfileConfig) (string, string, bool) {
+	judges, chair := profileJudges(profile)
+	if len(judges) == 0 {
+		return "", "", false
+	}
+	if chair < 0 || chair >= len(judges) {
+		chair = 0
+	}
+	return judges[chair].agent, judges[chair].model, true
+}
+
+// judgeLabel renders a judge for UI output: "agent" or "agent · model".
+func judgeLabel(j judgeSpec) string {
+	if strings.TrimSpace(j.model) != "" {
+		return labelForSimpleAgent(j.agent) + " · " + j.model
+	}
+	return labelForSimpleAgent(j.agent)
 }
 
 func selectProfileWorker(profile settings.ReviewProfileConfig, selector string) (string, settings.ReviewConfig, error) {

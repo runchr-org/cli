@@ -79,7 +79,8 @@ func NewCommand(deps Deps) *cobra.Command {
 	var listAgents bool
 	var listProfiles bool
 	var setAgents []string
-	var setMaster string
+	var setJudges []string
+	var setChair string
 	var setTask string
 	var setModels []string
 	var setSlots []string
@@ -111,7 +112,8 @@ Flags:
                  With --set-* flags it writes the profile non-interactively;
                  otherwise it opens the wizard (interactive) without starting agents.
   --set-agents   with --configure: comma-separated worker agents for the profile
-  --set-master   with --configure: master agent that writes the final report
+  --set-judge    with --configure: a judge as agent[=model] (repeatable; >1 = panel)
+  --set-chair    with --configure: the judge that merges a multi-judge panel
   --set-task     with --configure: the profile's canonical task text
   --set-model    with --configure: per-worker model as agent=model (repeatable)
   --set-slot     with --configure: a worker slot as agent[=model] (repeatable;
@@ -181,7 +183,8 @@ use 'entire attach --review <id>'.`,
 			if configure {
 				return runReviewConfigure(ctx, cmd, profileName, reviewConfigureOptions{
 					Agents: setAgents,
-					Master: setMaster,
+					Judges: setJudges,
+					Chair:  setChair,
 					Task:   setTask,
 					Models: setModels,
 					Slots:  setSlots,
@@ -199,7 +202,8 @@ use 'entire attach --review <id>'.`,
 	}
 	cmd.Flags().BoolVar(&configure, "configure", false, "set up a review profile; shows available agents and accepts --set-* flags for non-interactive config")
 	cmd.Flags().StringSliceVar(&setAgents, "set-agents", nil, "with --configure: worker agents for the profile (comma-separated)")
-	cmd.Flags().StringVar(&setMaster, "set-master", "", "with --configure: master agent that writes the final report")
+	cmd.Flags().StringArrayVar(&setJudges, "set-judge", nil, "with --configure: a judge as agent[=model] (repeatable; multiple judges form a panel)")
+	cmd.Flags().StringVar(&setChair, "set-chair", "", "with --configure: the judge (agent[=model]) that merges a multi-judge panel")
 	cmd.Flags().StringVar(&setTask, "set-task", "", "with --configure: the profile's canonical task text")
 	cmd.Flags().StringArrayVar(&setModels, "set-model", nil, "with --configure: per-worker model as agent=model (repeatable)")
 	cmd.Flags().StringArrayVar(&setSlots, "set-slot", nil, "with --configure: a worker slot as agent[=model] (repeatable; same agent/model may repeat)")
@@ -218,15 +222,16 @@ use 'entire attach --review <id>'.`,
 
 // reviewConfigureOptions carries the non-interactive `--configure` inputs.
 type reviewConfigureOptions struct {
-	Agents []string // worker agent names (--set-agents)
-	Master string   // master agent (--set-master)
+	Agents []string // inspector agent names (--set-agents)
+	Judges []string // judge slots as "agent[=model]" entries (--set-judge)
+	Chair  string   // chair judge as agent[=model] (--set-chair)
 	Task   string   // profile task text (--set-task)
-	Models []string // per-worker "agent=model" entries (--set-model)
-	Slots  []string // worker slots as "agent[=model]" entries (--set-slot)
+	Models []string // per-inspector "agent=model" entries (--set-model)
+	Slots  []string // inspector slots as "agent[=model]" entries (--set-slot)
 }
 
 func (o reviewConfigureOptions) scripted() bool {
-	return len(o.Agents) > 0 || o.Master != "" || o.Task != "" || len(o.Models) > 0 || len(o.Slots) > 0
+	return len(o.Agents) > 0 || len(o.Judges) > 0 || o.Chair != "" || o.Task != "" || len(o.Models) > 0 || len(o.Slots) > 0
 }
 
 func runReviewConfigure(ctx context.Context, cmd *cobra.Command, profileOverride string, opts reviewConfigureOptions, deps Deps) error {
@@ -516,7 +521,7 @@ func printReviewConfigCatalog(out io.Writer, profileName string, catalog []revie
 
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "Configure %q non-interactively, e.g.:\n", profileName)
-	fmt.Fprintf(out, "  entire inspect --configure --profile %s --set-agents %s --set-master <agent>\n",
+	fmt.Fprintf(out, "  entire inspect --configure --profile %s --set-agents %s --set-judge <agent>\n",
 		profileName, exampleAgentList(catalog))
 }
 
@@ -605,19 +610,35 @@ func buildConfiguredProfile(ctx context.Context, profileName string, opts review
 		profile.Task = profileTask(profileName, settings.ReviewProfileConfig{})
 	}
 
-	if opts.Master != "" {
-		profile.Master = opts.Master
-	}
-	if len(nonZeroAgentConfigs(profile.Agents)) > 1 {
-		if strings.TrimSpace(profile.MasterAgent) == "" {
-			if strings.TrimSpace(profile.Master) == "" {
-				profile.Master = defaultReviewMaster(ctx, profile.Agents)
+	// Judges: explicit --set-judge defines the panel; otherwise fall back to the
+	// legacy single-master default picked from the inspectors.
+	inspectorCount := len(nonZeroAgentConfigs(profile.Agents))
+	switch {
+	case len(opts.Judges) > 0:
+		judges := make([]settings.ReviewConfig, 0, len(opts.Judges))
+		for _, raw := range opts.Judges {
+			rawName, model, _ := strings.Cut(raw, "=")
+			name := strings.TrimSpace(rawName)
+			if name == "" {
+				continue
 			}
-			if _, _, masterErr := selectProfileWorker(profile, profile.Master); masterErr != nil {
-				return settings.ReviewProfileConfig{}, fmt.Errorf("master %q is not one of the profile workers (%s)", profile.Master, strings.Join(sortedProfileAgentNames(profile), ", "))
-			}
+			judges = append(judges, settings.ReviewConfig{Agent: name, Model: strings.TrimSpace(model)})
 		}
-	} else {
+		if len(judges) == 0 {
+			return settings.ReviewProfileConfig{}, errors.New("--set-judge listed no usable judges")
+		}
+		profile.Judges = judges
+		profile.Chair = strings.TrimSpace(opts.Chair)
+		profile.Master = ""
+		profile.MasterAgent = ""
+	case inspectorCount > 1 && len(profile.Judges) == 0 && strings.TrimSpace(profile.MasterAgent) == "":
+		if strings.TrimSpace(profile.Master) == "" {
+			profile.Master = defaultReviewMaster(ctx, profile.Agents)
+		}
+		if _, _, masterErr := selectProfileWorker(profile, profile.Master); masterErr != nil {
+			return settings.ReviewProfileConfig{}, fmt.Errorf("judge %q is not one of the profile inspectors (%s)", profile.Master, strings.Join(sortedProfileAgentNames(profile), ", "))
+		}
+	case inspectorCount <= 1:
 		profile.Master = ""
 	}
 	return profile, nil
@@ -791,23 +812,13 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride, modelOver
 			fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
 			return silentErr(err)
 		}
-		masterAgent, _, hasMaster := profileMasterIdentity(profile)
-		if !hasMaster {
+		// Require at least one judge. Judges that can't actually write a verdict
+		// (no text generation) are tolerated here and handled at synthesis time:
+		// a lone judge fails gracefully ("final report unavailable") and a panel
+		// simply drops the non-responding judge.
+		if judges, _ := profileJudges(profile); len(judges) == 0 {
 			cmd.SilenceUsage = true
-			err := fmt.Errorf("review profile %q has multiple workers but no master; set review_profiles.%s.master_agent", profileName, profileName)
-			fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
-			return silentErr(err)
-		}
-		if strings.TrimSpace(profile.MasterAgent) == "" {
-			if _, _, masterErr := selectProfileWorker(profile, profile.Master); masterErr != nil {
-				cmd.SilenceUsage = true
-				err := fmt.Errorf("review profile %q master is invalid: %w", profileName, masterErr)
-				fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
-				return silentErr(err)
-			}
-		} else if !agentSupportsTextGeneration(ctx, masterAgent) {
-			cmd.SilenceUsage = true
-			err := fmt.Errorf("review profile %q master %q cannot write the final report (no text generation)", profileName, masterAgent)
+			err := fmt.Errorf("review profile %q has multiple inspectors but no judge; set review_profiles.%s.judges", profileName, profileName)
 			fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
 			return silentErr(err)
 		}
@@ -1116,9 +1127,27 @@ func runMultiAgentPath(
 	}
 	aggregateOutput := ""
 
-	masterAgentName, masterModel := resolveProfileMaster(profile)
-	masterLabel := masterDisplayLabel(profile, masterAgentName, masterModel)
-	masterProvider := AgentSynthesisProvider{AgentName: masterAgentName, Model: masterModel}
+	// Build the judge panel. A single judge collapses to one verdict; multiple
+	// judges each render a verdict in parallel and the chair merges them.
+	judges, chairIdx := profileJudges(profile)
+	var synthProvider SynthesisProvider
+	masterLabel := ""
+	switch len(judges) {
+	case 0:
+		// Validation upstream guarantees at least one judge; nil = no synthesis.
+	case 1:
+		synthProvider = AgentSynthesisProvider{AgentName: judges[0].agent, Model: judges[0].model}
+		masterLabel = judgeLabel(judges[0])
+	default:
+		providers := make([]SynthesisProvider, len(judges))
+		labels := make([]string, len(judges))
+		for i, j := range judges {
+			providers[i] = AgentSynthesisProvider{AgentName: j.agent, Model: j.model}
+			labels[i] = judgeLabel(j)
+		}
+		synthProvider = PanelSynthesisProvider{Judges: providers, Labels: labels, ChairIdx: chairIdx}
+		masterLabel = fmt.Sprintf("%s (chair of %d judges)", labels[chairIdx], len(judges))
+	}
 	sinks := composeMultiAgentSinks(multiAgentSinkInputs{
 		out:               out,
 		isTTY:             interactive.IsTerminalWriter(out) && interactive.CanPromptInteractively(),
@@ -1126,7 +1155,7 @@ func runMultiAgentPath(
 		agentNames:        agentNames,
 		cancelRun:         cancelRun,
 		runContext:        runCtx,
-		synthesisProvider: masterProvider,
+		synthesisProvider: synthProvider,
 		perRunPrompt:      perRunPrompt,
 		profileName:       profileName,
 		task:              profile.Task,

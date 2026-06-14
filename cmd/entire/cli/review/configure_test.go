@@ -48,7 +48,7 @@ func TestBuildConfiguredProfile_FromFlags(t *testing.T) {
 		"general",
 		reviewConfigureOptions{
 			Agents: []string{"claude-code", "codex"},
-			Master: "codex",
+			Judges: []string{"codex"},
 			Models: []string{"claude-code=opus"},
 		},
 		&settings.EntireSettings{},
@@ -63,8 +63,11 @@ func TestBuildConfiguredProfile_FromFlags(t *testing.T) {
 	if got := profile.Agents["claude-code"].Model; got != "opus" {
 		t.Errorf("claude-code model = %q, want opus", got)
 	}
-	if profile.Master != "codex" {
-		t.Errorf("master = %q, want codex", profile.Master)
+	if len(profile.Judges) != 1 || profile.Judges[0].Agent != "codex" {
+		t.Errorf("judges = %#v, want one judge codex", profile.Judges)
+	}
+	if profile.Master != "" {
+		t.Errorf("legacy master should be cleared when judges are set, got %q", profile.Master)
 	}
 	if profile.Task == "" {
 		t.Error("task should default to the built-in general task")
@@ -133,6 +136,38 @@ func TestProfileMasterIdentity(t *testing.T) {
 	})
 }
 
+func TestBuildConfiguredProfile_JudgePanel(t *testing.T) {
+	deps := configureTestDeps("claude-code", "codex")
+	profile, err := buildConfiguredProfile(
+		context.Background(),
+		"general",
+		reviewConfigureOptions{
+			Agents: []string{tAgentClaude, tAgentCodex},
+			Judges: []string{tAgentClaude + "=" + tModelOpus, tAgentCodex + "=gpt-5"},
+			Chair:  tAgentClaude,
+		},
+		&settings.EntireSettings{},
+		deps,
+	)
+	if err != nil {
+		t.Fatalf("buildConfiguredProfile: %v", err)
+	}
+	if len(profile.Judges) != 2 {
+		t.Fatalf("judges = %#v, want 2", profile.Judges)
+	}
+	if profile.Judges[0].Agent != tAgentClaude || profile.Judges[0].Model != tModelOpus {
+		t.Errorf("judge[0] = %#v, want claude-code/opus", profile.Judges[0])
+	}
+	if profile.Chair != tAgentClaude {
+		t.Errorf("chair = %q, want claude-code", profile.Chair)
+	}
+	// profileJudges resolves the panel + chair index.
+	judges, chair := profileJudges(profile)
+	if len(judges) != 2 || chair != 0 {
+		t.Errorf("profileJudges = (%#v, %d), want 2 judges, chair 0", judges, chair)
+	}
+}
+
 func TestBuildConfiguredProfile_RejectsNonAdapterAgent(t *testing.T) {
 	deps := configureTestDeps("claude-code")
 	_, err := buildConfiguredProfile(
@@ -165,7 +200,7 @@ func TestBuildConfiguredProfile_PreservesExistingTaskAndMasterModel(t *testing.T
 	profile, err := buildConfiguredProfile(
 		context.Background(),
 		"general",
-		reviewConfigureOptions{Agents: []string{"claude-code", "codex"}, Master: "claude-code"},
+		reviewConfigureOptions{Agents: []string{"claude-code", "codex"}},
 		s,
 		deps,
 	)
