@@ -167,15 +167,23 @@ func newTrailListCmd() *cobra.Command {
 }
 
 func runTrailListAll(ctx context.Context, w, errW io.Writer, opts trailListOptions) error {
+	if err := validateTrailListOptions(opts); err != nil {
+		return err
+	}
 	return runAuthenticatedDataAPI(ctx, errW, opts.InsecureHTTP, func(ctx context.Context, client *api.Client) error {
 		return runTrailListAllWithClient(ctx, w, client, opts)
 	})
 }
 
-func runTrailListAllWithClient(ctx context.Context, w io.Writer, client *api.Client, opts trailListOptions) error {
+func validateTrailListOptions(opts trailListOptions) error {
 	if opts.Limit <= 0 {
 		return errors.New("limit must be greater than 0")
 	}
+	_, err := parseTrailStatusFilter(opts.Status)
+	return err
+}
+
+func runTrailListAllWithClient(ctx context.Context, w io.Writer, client *api.Client, opts trailListOptions) error {
 	statusFilters, err := parseTrailStatusFilter(opts.Status)
 	if err != nil {
 		return err

@@ -52,6 +52,35 @@ func TestRunTrailListAll_PrintsLoginHintWhenNotLoggedIn(t *testing.T) {
 	}
 }
 
+func TestRunTrailListAll_ValidatesOptionsBeforeAuth(t *testing.T) {
+	// No t.Parallel: SetManagerForTest mutates package-level auth state.
+	store := newAuthMemStore()
+	mgr := newResolveTestManager(t, store, func(context.Context, sts.ExchangeRequest) (*tokens.TokenSet, error) {
+		t.Fatal("exchange should not run for invalid local options")
+		return nil, errors.New("unreachable")
+	})
+	t.Cleanup(auth.SetManagerForTest(t, mgr))
+	t.Cleanup(auth.SetResolveContextForAPIForTest(t, auth.DiscoveryUnavailableForTest))
+
+	opts := defaultTrailListOptions(false)
+	opts.Limit = 0
+
+	var out, errOut bytes.Buffer
+	err := runTrailListAll(t.Context(), &out, &errOut, opts)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if errors.Is(err, auth.ErrNotLoggedIn) {
+		t.Fatalf("got auth error %v, want local validation error", err)
+	}
+	if got, want := err.Error(), "limit must be greater than 0"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+	if errOut.Len() != 0 {
+		t.Fatalf("errOut = %q, want no auth hint", errOut.String())
+	}
+}
+
 func TestTrailsBasePath(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
