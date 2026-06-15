@@ -81,6 +81,22 @@ func TestRunTrailListAll_ValidatesOptionsBeforeAuth(t *testing.T) {
 	}
 }
 
+func TestRunTrailListAllWithClient_ValidatesOptionsBeforeRepoLookup(t *testing.T) {
+	t.Parallel()
+
+	opts := defaultTrailListOptions(false)
+	opts.Limit = 0
+
+	var out bytes.Buffer
+	err := runTrailListAllWithClient(t.Context(), &out, nil, opts)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if got, want := err.Error(), "limit must be greater than 0"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
 func TestTrailsBasePath(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

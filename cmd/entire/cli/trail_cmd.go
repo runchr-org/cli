@@ -95,10 +95,15 @@ func defaultTrailListOptions(insecureHTTP bool) trailListOptions {
 
 // runTrailShow shows the trail for the current branch, or falls through to list.
 func runTrailShow(ctx context.Context, w, errW io.Writer, insecureHTTP bool) error {
+	listOpts := defaultTrailListOptions(insecureHTTP)
+	if err := validateTrailListOptions(listOpts); err != nil {
+		return err
+	}
+
 	return runAuthenticatedDataAPI(ctx, errW, insecureHTTP, func(ctx context.Context, client *api.Client) error {
 		branch, err := GetCurrentBranch(ctx)
 		if err != nil {
-			return runTrailListAllWithClient(ctx, w, client, defaultTrailListOptions(insecureHTTP))
+			return runTrailListAllWithClient(ctx, w, client, listOpts)
 		}
 
 		forge, owner, repo, err := resolveTrailRemote(ctx)
@@ -111,7 +116,7 @@ func runTrailShow(ctx context.Context, w, errW io.Writer, insecureHTTP bool) err
 			return err
 		}
 		if found == nil {
-			return runTrailListAllWithClient(ctx, w, client, defaultTrailListOptions(insecureHTTP))
+			return runTrailListAllWithClient(ctx, w, client, listOpts)
 		}
 
 		printTrailDetails(w, found.ToMetadata())
@@ -184,6 +189,10 @@ func validateTrailListOptions(opts trailListOptions) error {
 }
 
 func runTrailListAllWithClient(ctx context.Context, w io.Writer, client *api.Client, opts trailListOptions) error {
+	if err := validateTrailListOptions(opts); err != nil {
+		return err
+	}
+
 	statusFilters, err := parseTrailStatusFilter(opts.Status)
 	if err != nil {
 		return err
