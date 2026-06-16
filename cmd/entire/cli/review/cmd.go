@@ -788,13 +788,14 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride, modelOver
 		// can't actually write a verdict (no text generation) is tolerated here and
 		// handled at synthesis time, where it fails gracefully ("final report
 		// unavailable").
-		if _, ok := resolveJudge(ctx, profile); !ok {
+		judge, ok := resolveJudge(ctx, profile)
+		if !ok {
 			cmd.SilenceUsage = true
 			err := fmt.Errorf("review profile %q has multiple inspectors but no judge that can write a verdict; set review_profiles.%s.judge", profileName, profileName)
 			fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
 			return silentErr(err)
 		}
-		return runMultiAgentPath(ctx, cmd, profileName, profile, launchableEligible, baseOverride, perRunPrompt, deps, out)
+		return runMultiAgentPath(ctx, cmd, profileName, profile, launchableEligible, judge, baseOverride, perRunPrompt, deps, out)
 	}
 }
 
@@ -1022,6 +1023,7 @@ func runMultiAgentPath(
 	profileName string,
 	profile settings.ReviewProfileConfig,
 	launchableEligible []AgentChoice,
+	judge judgeSpec,
 	baseOverride string,
 	perRunPrompt string,
 	deps Deps,
@@ -1100,15 +1102,10 @@ func runMultiAgentPath(
 	}
 	aggregateOutput := ""
 
-	// Resolve the single consolidating judge (explicit or auto-selected) that
-	// turns the inspectors' reports into the final verdict. Validation upstream
-	// guarantees one resolves; a nil provider would simply skip synthesis.
-	var synthProvider SynthesisProvider
-	masterLabel := ""
-	if judge, ok := resolveJudge(ctx, profile); ok {
-		synthProvider = AgentSynthesisProvider{AgentName: judge.agent, Model: judge.model}
-		masterLabel = judgeLabel(judge)
-	}
+	// The single consolidating judge (resolved and validated by the caller)
+	// turns the inspectors' reports into the final verdict.
+	var synthProvider SynthesisProvider = AgentSynthesisProvider{AgentName: judge.agent, Model: judge.model}
+	masterLabel := judgeLabel(judge)
 	sinks := composeMultiAgentSinks(multiAgentSinkInputs{
 		out:               out,
 		isTTY:             interactive.IsTerminalWriter(out) && interactive.CanPromptInteractively(),
