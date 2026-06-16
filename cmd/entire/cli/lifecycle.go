@@ -373,34 +373,6 @@ func entireTrailContextInjection() string {
 	return "A trail ties together the context for a branch. Use `entire trail` to view, create, update, or watch it."
 }
 
-// trailsEnabledProbeTimeout bounds the once-per-session network probe that
-// checks whether trails are enabled for the repo, so a slow API can't stall the
-// agent's first turn.
-const trailsEnabledProbeTimeout = 3 * time.Second
-
-// trailsEnabledForRepo reports whether Entire trails are literally enabled for
-// this repo on the API. It resolves the origin remote to a supported forge and
-// probes the trails endpoint; a successful response means trails are
-// provisioned/enabled. Best-effort and bounded by a single short timeout that
-// covers every step — git remote resolution (a subprocess), client
-// construction (which may do /.well-known discovery and a token exchange), and
-// the probe. An unresolved remote, missing auth, or any API/transport error
-// reports false, so we never advertise trails we can't confirm are enabled.
-func trailsEnabledForRepo(ctx context.Context) bool {
-	probeCtx, cancel := context.WithTimeout(ctx, trailsEnabledProbeTimeout)
-	defer cancel()
-	forge, owner, repo, err := resolveTrailRemote(probeCtx)
-	if err != nil {
-		return false
-	}
-	client, err := NewAuthenticatedAPIClient(probeCtx, false)
-	if err != nil {
-		return false // not authenticated → trails aren't enabled for us
-	}
-	enabled, err := client.TrailsEnabled(probeCtx, forge, owner, repo)
-	return err == nil && enabled
-}
-
 // emitContextInjection writes ag's native context-injection payload to stdout
 // when ag injects at event.Type, trails are enabled for the repo on the API,
 // and this session has not been injected yet. Best-effort: an injection failure
@@ -414,11 +386,10 @@ func emitContextInjection(ctx context.Context, ag agent.Agent, event *agent.Even
 
 	// Decide once per session, recorded on the session state itself (not a
 	// separate marker file). Winning the check-and-set means this turn owns the
-	// decision; the trails-enabled probe (a network call) then runs at most once
-	// per session. This is intentionally synchronous so the hint can reach the
-	// first model call; trailsEnabledForRepo bounds the whole decision path to a
-	// short timeout. Marking "decided" before probing means transient probe
-	// failures fail closed (no hint for this session) rather than retrying/spamming.
+	// decision. trailsEnabledForRepo only reads clone-local cached enablement;
+	// the API refresh happens earlier on `entire enable`, outside the prompt path.
+	// Marking "decided" before checking the cache means a missing/stale false
+	// cache fails closed (no hint for this session) rather than retrying/spamming.
 	won := false
 	mutErr := strategy.MutateSessionState(ctx, event.SessionID, func(state *strategy.SessionState) error {
 		if state.ContextInjectionDecided {

@@ -60,41 +60,32 @@ func TestResolveTrailRemote_RejectsUnsupportedForge(t *testing.T) {
 	}
 }
 
-// TestTrailsEnabledForRepo covers the local fast-fail gating that returns before
-// any auth/network: an unresolved or unsupported origin must report "disabled"
-// without probing the API. The actual API enablement decision (2xx => enabled)
-// is covered by api.TestClient_TrailsEnabled.
+// TestTrailsEnabledForRepo_ReadsClonePreference verifies the prompt-path gate
+// is a local clone-preference read only. The API enablement decision itself
+// (2xx => enabled) is covered by api.TestClient_TrailsEnabled.
 //
-// Not parallel: uses t.Chdir() to point ResolveRemoteRepo at a fake repo.
-func TestTrailsEnabledForRepo_LocalFastFail(t *testing.T) {
-	addOrigin := func(t *testing.T, dir, url string) {
-		t.Helper()
-		cmd := exec.CommandContext(context.Background(), "git", "remote", "add", "origin", url)
-		cmd.Dir = dir
-		cmd.Env = testutil.GitIsolatedEnv()
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("git remote add: %v", err)
-		}
+// Not parallel: uses t.Chdir() to point clone preferences at a fake repo.
+func TestTrailsEnabledForRepo_ReadsClonePreference(t *testing.T) {
+	repoDir := t.TempDir()
+	testutil.InitRepo(t, repoDir)
+	t.Chdir(repoDir)
+	ctx := context.Background()
+
+	if trailsEnabledForRepo(ctx) {
+		t.Fatal("expected trails disabled when cache is absent")
 	}
-
-	t.Run("no origin remote", func(t *testing.T) {
-		repoDir := t.TempDir()
-		testutil.InitRepo(t, repoDir)
-		t.Chdir(repoDir)
-		if trailsEnabledForRepo(context.Background()) {
-			t.Fatal("expected trails disabled without an origin remote")
-		}
-	})
-
-	t.Run("unsupported forge origin", func(t *testing.T) {
-		repoDir := t.TempDir()
-		testutil.InitRepo(t, repoDir)
-		addOrigin(t, repoDir, "git@gitlab.com:acme/my-app.git")
-		t.Chdir(repoDir)
-		if trailsEnabledForRepo(context.Background()) {
-			t.Fatal("expected trails disabled for an unsupported forge")
-		}
-	})
+	if err := saveTrailsEnabledForRepo(ctx, false); err != nil {
+		t.Fatalf("save false cache: %v", err)
+	}
+	if trailsEnabledForRepo(ctx) {
+		t.Fatal("expected trails disabled when cache is false")
+	}
+	if err := saveTrailsEnabledForRepo(ctx, true); err != nil {
+		t.Fatalf("save true cache: %v", err)
+	}
+	if !trailsEnabledForRepo(ctx) {
+		t.Fatal("expected trails enabled when cache is true")
+	}
 }
 
 func TestTrailWatchDescription(t *testing.T) {

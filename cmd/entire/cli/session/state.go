@@ -227,10 +227,10 @@ type State struct {
 
 	// ContextInjectionDecided records that the once-per-session model-context
 	// injection (e.g. the `entire trail` pointer) has been handled for this
-	// session, so the dispatcher neither re-probes the API nor re-injects on
-	// later turns. Set on the first normal turn regardless of whether anything
-	// was injected: trail enablement is stable for the session, and transient
-	// probe failures fail closed (miss the hint) rather than retrying/spamming.
+	// session, so the dispatcher does not re-inject on later turns. Set on the
+	// first normal turn regardless of whether anything was injected: the prompt
+	// path reads only clone-local cached trail enablement, and a missing/stale
+	// false cache fails closed (miss the hint) rather than retrying/spamming.
 	// Review/investigate sessions leave this false because they skip injection.
 	ContextInjectionDecided bool `json:"context_injection_decided,omitempty"`
 
