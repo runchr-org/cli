@@ -4,19 +4,106 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/cmd/entire/cli/trail"
+	"github.com/entireio/cli/internal/entireclient/clusterdiscovery"
+	"github.com/entireio/cli/internal/entireclient/contexts"
+	"github.com/entireio/cli/internal/entireclient/tokenstore"
 )
 
 const (
 	trailListTestAuthorAlice = "alice"
 	trailListTestAuthorBob   = "bob"
 )
+
+func TestRunTrailListAll_PrintsLoginHintWhenNotLoggedIn(t *testing.T) {
+	// No t.Parallel: SetResolveContextForAPIForTest and
+	// tokenstore.UseFileBackendForTesting mutate package-level state.
+	//
+	// Discovery selects a context whose keyring slot holds nothing, so the
+	// per-context provider reports ErrNotLoggedIn.
+	t.Cleanup(tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json")))
+	c := &contexts.Context{Name: "me@core", CoreURL: "https://core.example", Handle: "me", KeychainService: "kc:me"}
+	t.Cleanup(auth.SetResolveContextForAPIForTest(t,
+		func(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, error) {
+			return c, nil
+		}))
+
+	var out, errOut bytes.Buffer
+	err := runTrailListAll(t.Context(), &out, &errOut, defaultTrailListOptions(false))
+	if err == nil {
+		t.Fatal("expected error when not logged in")
+	}
+	if !errors.Is(err, auth.ErrNotLoggedIn) {
+		t.Errorf("error chain missing ErrNotLoggedIn: %v", err)
+	}
+	var silent *SilentError
+	if !errors.As(err, &silent) {
+		t.Errorf("error = %v, want SilentError wrap", err)
+	}
+	if strings.Contains(out.String(), "No trails found") {
+		t.Errorf("stdout = %q, must not render logged-out state as an empty trail list", out.String())
+	}
+	wantHint := "Not logged in. Run 'entire login' to authenticate."
+	if got := errOut.String(); !strings.Contains(got, wantHint) {
+		t.Errorf("errOut = %q, want hint %q", got, wantHint)
+	}
+}
+
+func TestRunTrailListAll_ValidatesOptionsBeforeAuth(t *testing.T) {
+	// No t.Parallel: SetResolveContextForAPIForTest mutates package-level
+	// auth state.
+	//
+	// Discovery must never run for invalid local options: validation has to
+	// short-circuit before any auth resolution.
+	t.Cleanup(auth.SetResolveContextForAPIForTest(t,
+		func(context.Context, string, string, string, *http.Client, clusterdiscovery.DebugFunc) (*contexts.Context, error) {
+			t.Fatal("discovery should not run for invalid local options")
+			return nil, errors.New("unreachable")
+		}))
+
+	opts := defaultTrailListOptions(false)
+	opts.Limit = 0
+
+	var out, errOut bytes.Buffer
+	err := runTrailListAll(t.Context(), &out, &errOut, opts)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if errors.Is(err, auth.ErrNotLoggedIn) {
+		t.Fatalf("got auth error %v, want local validation error", err)
+	}
+	if got, want := err.Error(), "limit must be greater than 0"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+	if errOut.Len() != 0 {
+		t.Fatalf("errOut = %q, want no auth hint", errOut.String())
+	}
+}
+
+func TestRunTrailListAllWithClient_ValidatesOptionsBeforeRepoLookup(t *testing.T) {
+	t.Parallel()
+
+	opts := defaultTrailListOptions(false)
+	opts.Limit = 0
+
+	var out bytes.Buffer
+	err := runTrailListAllValidatedWithClient(t.Context(), &out, nil, opts)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if got, want := err.Error(), "limit must be greater than 0"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
 
 func TestTrailsBasePath(t *testing.T) {
 	t.Parallel()
