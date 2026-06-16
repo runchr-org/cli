@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 )
 
 // TrailsEnabled reports whether the trails feature is enabled for the repo on
@@ -16,7 +17,8 @@ import (
 // "couldn't reach the API" outcome is distinguishable from a definitive
 // "not enabled".
 func (c *Client) TrailsEnabled(ctx context.Context, forge, owner, repo string) (bool, error) {
-	resp, err := c.Get(ctx, fmt.Sprintf("/api/v1/trails/%s/%s/%s?limit=1", forge, owner, repo))
+	resp, err := c.Get(ctx, fmt.Sprintf("/api/v1/trails/%s/%s/%s?limit=1",
+		url.PathEscape(forge), url.PathEscape(owner), url.PathEscape(repo)))
 	if err != nil {
 		return false, fmt.Errorf("probe trails enablement: %w", err)
 	}

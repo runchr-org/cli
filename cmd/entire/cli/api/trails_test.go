@@ -7,6 +7,33 @@ import (
 	"testing"
 )
 
+func TestClient_TrailsEnabledEscapesPathComponents(t *testing.T) {
+	t.Parallel()
+
+	var gotURI string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURI = r.RequestURI
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"trails":[]}`)) //nolint:errcheck // test handler
+	}))
+	defer server.Close()
+
+	c := NewClient("tok")
+	c.baseURL = server.URL
+
+	ok, err := c.TrailsEnabled(context.Background(), "g/h", "acme?org", "repo#frag")
+	if err != nil {
+		t.Fatalf("TrailsEnabled: %v", err)
+	}
+	if !ok {
+		t.Fatal("enabled = false, want true")
+	}
+	want := "/api/v1/trails/g%2Fh/acme%3Forg/repo%23frag?limit=1"
+	if gotURI != want {
+		t.Errorf("request URI = %q, want %q", gotURI, want)
+	}
+}
+
 func TestClient_TrailsEnabled(t *testing.T) {
 	t.Parallel()
 
