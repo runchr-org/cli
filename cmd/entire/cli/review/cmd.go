@@ -621,6 +621,15 @@ func buildConfiguredProfile(ctx context.Context, profileName string, opts review
 		if name == "" {
 			return settings.ReviewProfileConfig{}, errors.New("--set-judge needs an agent name")
 		}
+		// A judge consolidates the inspectors' reports via text generation, so it
+		// must be a known agent that can write a verdict. Validate up front rather
+		// than failing at synthesis time.
+		if !agentSupportsTextGeneration(ctx, name) {
+			if _, getErr := agent.Get(types.AgentName(name)); getErr != nil {
+				return settings.ReviewProfileConfig{}, fmt.Errorf("--set-judge %q is not a known agent", name)
+			}
+			return settings.ReviewProfileConfig{}, fmt.Errorf("--set-judge %q cannot write a verdict (the agent has no text generation); choose an agent that supports text generation", name)
+		}
 		profile.Judge = &settings.ReviewConfig{Agent: name, Model: strings.TrimSpace(model)}
 	case inspectorCount > 1 && (profile.Judge == nil || profile.Judge.IsZero()):
 		if j, ok := defaultJudge(ctx, profile.Agents); ok {

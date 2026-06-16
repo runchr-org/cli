@@ -260,6 +260,21 @@ func TestBuildConfiguredProfile_InvalidOutput(t *testing.T) {
 	}
 }
 
+func TestBuildConfiguredProfile_RejectsUnknownJudge(t *testing.T) {
+	t.Parallel()
+	deps := configureTestDeps("claude-code")
+	_, err := buildConfiguredProfile(
+		context.Background(),
+		"general",
+		reviewConfigureOptions{Agents: []string{tAgentClaude}, Judge: "definitely-not-an-agent"},
+		&settings.EntireSettings{},
+		deps,
+	)
+	if err == nil {
+		t.Fatal("expected error for --set-judge naming an agent that cannot write a verdict")
+	}
+}
+
 func TestBuildConfiguredProfile_InvalidModelSpec(t *testing.T) {
 	t.Parallel()
 	deps := configureTestDeps("claude-code")
