@@ -762,9 +762,15 @@ func TestReviewRunModelMatches(t *testing.T) {
 		{"family matches resolved", "claude-sonnet", "claude-sonnet-4-5", true},
 		{"provider prefix and thinking suffix stripped", "anthropic/claude-sonnet:high", "claude-sonnet-4-5", true},
 		{"separator-insensitive", "claude_sonnet", "claude-sonnet-4-5", true},
-		{"same family more specific", "gpt-4", "gpt-4-turbo", true},
-		// The bug this guards against: partial component must not match.
+		{"numeric version suffix matches", "gpt-4o", "gpt-4o-2024-08-06", true},
+		{"minor version suffix matches", "claude-sonnet-4", "claude-sonnet-4-5", true},
+		// Partial component must not match.
 		{"gpt-4 must NOT match gpt-4o-mini", "gpt-4", "gpt-4o-mini", false},
+		// Variant suffix (a word, not a version) must not match.
+		{"gpt-4o must NOT match gpt-4o-mini", "gpt-4o", "gpt-4o-mini", false},
+		{"gpt-4 must NOT match gpt-4-turbo", "gpt-4", "gpt-4-turbo", false},
+		// Bare version fragments must not match a model that merely ends in them.
+		{"version fragment does not match", "4-5", "claude-sonnet-4-5", false},
 		{"different families do not match", "gpt-4o-mini", "claude-sonnet-4-5", false},
 		{"opus does not match sonnet", "opus", "claude-sonnet-4-5", false},
 	}

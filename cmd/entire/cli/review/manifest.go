@@ -435,15 +435,59 @@ func reviewRunModelMatches(want, got string) bool {
 	if want == got {
 		return true
 	}
-	// Boundary-aware containment: a less-specific id matches a more-specific one
-	// only when it aligns on "-"-delimited component boundaries. Padding both
-	// ends with "-" makes the substring test respect those boundaries, so a
-	// configured alias ("sonnet") or family ("claude-sonnet") still matches the
-	// resolved session model ("claude-sonnet-4-5"), while "gpt-4" does NOT match
-	// "gpt-4o-mini" (the partial "4"/"4o" component no longer counts).
-	wantPadded := "-" + want + "-"
-	gotPadded := "-" + got + "-"
-	return strings.Contains(gotPadded, wantPadded) || strings.Contains(wantPadded, gotPadded)
+	wantParts := strings.Split(want, "-")
+	gotParts := strings.Split(got, "-")
+	// A less-specific id matches a more-specific one only across a *version*
+	// boundary, not a *variant* one. This distinguishes "claude-sonnet" ->
+	// "claude-sonnet-4-5" (extra "4" is a version, so they are the same model)
+	// from "gpt-4o" -> "gpt-4o-mini" (extra "mini" is a variant word, so they are
+	// distinct models). Checked both directions so it does not matter whether
+	// the configured or the recorded model is the more specific one.
+	return modelComponentsMatch(wantParts, gotParts) || modelComponentsMatch(gotParts, wantParts)
+}
+
+// modelComponentsMatch reports whether the shorter component list `short`
+// identifies the same model as the longer `long`: `short` must appear as a
+// contiguous run of whole components in `long`, and the component immediately
+// after that run must be purely numeric (a version or date). Requiring a
+// numeric boundary is what lets "sonnet"/"claude-sonnet" match
+// "claude-sonnet-4-5" while rejecting variant suffixes like "gpt-4o-mini" and
+// bare version fragments like "4-5".
+func modelComponentsMatch(short, long []string) bool {
+	if len(short) == 0 || len(short) >= len(long) {
+		return false
+	}
+	for i := 0; i+len(short) <= len(long); i++ {
+		if !componentsEqualAt(long, short, i) {
+			continue
+		}
+		end := i + len(short)
+		if end < len(long) && isNumericComponent(long[end]) {
+			return true
+		}
+	}
+	return false
+}
+
+func componentsEqualAt(long, short []string, i int) bool {
+	for k := range short {
+		if long[i+k] != short[k] {
+			return false
+		}
+	}
+	return true
+}
+
+func isNumericComponent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // normalizeReviewModelID canonicalizes a model string for boundary-aware
