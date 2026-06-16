@@ -135,14 +135,11 @@ func RunReviewGuidedSetup(
 		profile.Task = customTask
 	}
 	if len(profile.Agents) > 1 {
-		judges, chair, err := promptForJudges(ctx, launchable, existing)
+		judge, err := promptForJudge(ctx, launchable, existing)
 		if err != nil {
 			return "", settings.ReviewProfileConfig{}, err
 		}
-		profile.Judges = judges
-		profile.Chair = chair
-		profile.Master = ""
-		profile.MasterAgent = ""
+		profile.Judge = judge
 	}
 	fmt.Fprintf(out, "Saved %q review profile with %s.\n", profileName, strings.Join(sortedProfileAgentNames(profile), ", "))
 	fmt.Fprintln(out)
@@ -437,7 +434,13 @@ func buildCrewProfile(ctx context.Context, profileName string, slots []crewSlot)
 		cfg.Model = s.model
 		profile.Agents[workerIDForAgentModel(s.agent, s.model, profile.Agents)] = cfg
 	}
-	profile.Master = defaultReviewMaster(ctx, profile.Agents)
+	// A default judge is only meaningful with more than one inspector;
+	// RunReviewGuidedSetup re-asks for the judge in that case anyway.
+	if len(profile.Agents) > 1 {
+		if j, ok := defaultJudge(ctx, profile.Agents); ok {
+			profile.Judge = &settings.ReviewConfig{Agent: j.agent, Model: j.model}
+		}
+	}
 	return profile
 }
 
@@ -603,11 +606,10 @@ func listAgentModelOptions(ctx context.Context, agentName string) []agent.ModelI
 	return models
 }
 
-// promptForJudges picks the panel of judges (each its own agent + model) that
-// evaluate the inspectors' reports, and the chair that merges a multi-judge
-// panel. Candidates are launchable agents that can write a verdict (text
-// generation). Returns (judges, chair).
-func promptForJudges(ctx context.Context, launchable []string, existing settings.ReviewProfileConfig) ([]settings.ReviewConfig, string, error) {
+// promptForJudge picks the single judge (agent + model) that consolidates the
+// inspectors' reports into the final verdict. Candidates are launchable agents
+// that can write a verdict (text generation).
+func promptForJudge(ctx context.Context, launchable []string, existing settings.ReviewProfileConfig) (*settings.ReviewConfig, error) {
 	candidates := make([]string, 0, len(launchable))
 	for _, name := range launchable {
 		if agentSupportsTextGeneration(ctx, name) {
@@ -615,58 +617,54 @@ func promptForJudges(ctx context.Context, launchable []string, existing settings
 		}
 	}
 	if len(candidates) == 0 {
-		return nil, "", errors.New("no installed agent can write a verdict")
+		return nil, errors.New("no installed agent can write a verdict")
 	}
 
-	// Seed from existing judges, else a single default judge.
-	var seed []crewSlot
-	if existJudges, _ := profileJudges(existing); len(existJudges) > 0 {
-		for _, j := range existJudges {
-			seed = append(seed, crewSlot(j))
+	seedAgent := candidates[0]
+	seedModel := ""
+	if j, ok := profileJudge(existing); ok {
+		seedAgent = j.agent
+		seedModel = j.model
+	}
+
+	agentName := candidates[0]
+	if len(candidates) > 1 {
+		options := make([]huh.Option[string], 0, len(candidates))
+		for _, name := range candidates {
+			options = append(options, huh.NewOption(labelForSimpleAgent(name), name))
 		}
-	} else {
-		seed = []crewSlot{{agent: candidates[0]}}
+		picked := candidates[0]
+		for _, name := range candidates {
+			if name == seedAgent {
+				picked = seedAgent
+				break
+			}
+		}
+		form := newAccessibleForm(huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Judge (writes the final verdict)").
+				Description("Consolidates the inspectors' reports into one verdict.").
+				Options(options...).
+				Height(reviewPickerHeight(len(options))).
+				Value(&picked),
+		))
+		if err := form.RunWithContext(ctx); err != nil {
+			return nil, fmt.Errorf("judge picker: %w", err)
+		}
+		agentName = picked
 	}
 
-	slots, err := pickSlotList(ctx, "Judges", "Each judge renders a verdict; with >1 a chair merges them. + Add to add a judge.", candidates, seed)
+	// Only carry the existing model forward when the judge agent is unchanged;
+	// models are agent-specific.
+	seededModel := ""
+	if agentName == seedAgent {
+		seededModel = seedModel
+	}
+	model, err := promptCrewModel(ctx, agentName, seededModel)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-
-	judges := make([]settings.ReviewConfig, len(slots))
-	for i, s := range slots {
-		judges[i] = settings.ReviewConfig{Agent: s.agent, Model: s.model}
-	}
-	if len(judges) < 2 {
-		return judges, "", nil
-	}
-
-	// Pick the chair from the panel.
-	options := make([]huh.Option[string], 0, len(judges))
-	for _, j := range judges {
-		options = append(options, huh.NewOption(judgeLabel(judgeSpec{agent: j.Agent, model: j.Model}), chairKey(j)))
-	}
-	picked := chairKey(judges[0])
-	form := newAccessibleForm(huh.NewGroup(
-		huh.NewSelect[string]().
-			Title("Chair (writes the final verdict)").
-			Description("Merges the panel's verdicts, surfacing agreement and dissent.").
-			Options(options...).
-			Height(reviewPickerHeight(len(options))).
-			Value(&picked),
-	))
-	if err := form.RunWithContext(ctx); err != nil {
-		return nil, "", fmt.Errorf("chair picker: %w", err)
-	}
-	return judges, picked, nil
-}
-
-// chairKey is the Chair selector for a judge: "agent" or "agent:model".
-func chairKey(j settings.ReviewConfig) string {
-	if strings.TrimSpace(j.Model) != "" {
-		return j.Agent + ":" + j.Model
-	}
-	return j.Agent
+	return &settings.ReviewConfig{Agent: agentName, Model: model}, nil
 }
 
 func ConfirmRunReviewNow(ctx context.Context, out io.Writer) (bool, error) {
@@ -745,13 +743,15 @@ func RunReviewProfileConfigPicker(ctx context.Context, out io.Writer, getInstall
 	// see why, but keep going with an empty prefill — runReview already
 	// surfaces the same error distinctly when it's the first load.
 	existing := map[string]settings.ReviewConfig{}
-	existingMaster := ""
+	existingJudge := ""
 	if s, err := settings.Load(ctx); err != nil {
 		logging.Warn(ctx, "settings.Load failed when pre-filling picker", slog.String("error", err.Error()))
 	} else if s != nil {
 		if profile, ok := s.ReviewProfiles[profileName]; ok {
 			existing = profile.Agents
-			existingMaster = profile.Master
+			if j, jok := profileJudge(profile); jok {
+				existingJudge = j.agent
+			}
 		}
 	}
 
@@ -844,11 +844,11 @@ func RunReviewProfileConfigPicker(ctx context.Context, out io.Writer, getInstall
 		return nil, errors.New("no review skills or prompt configured")
 	}
 
-	masterAgent, err := pickReviewMasterAgentPreference(ctx, merged, existingMaster)
+	judgeAgent, err := pickReviewJudgeAgentPreference(ctx, merged, existingJudge)
 	if err != nil {
 		return nil, err
 	}
-	if err := saveReviewProfileConfig(ctx, profileName, merged, masterAgent); err != nil {
+	if err := saveReviewProfileConfig(ctx, profileName, merged, judgeAgent); err != nil {
 		return nil, err
 	}
 	fmt.Fprintf(out, "Saved review profile %q to local review preferences. Edit later with `entire inspect --edit --profile %s`.\n", profileName, profileName)
@@ -876,7 +876,7 @@ func MergePickerResults(existing map[string]settings.ReviewConfig, offered map[s
 	return merged
 }
 
-func saveReviewProfileConfig(ctx context.Context, profileName string, agents map[string]settings.ReviewConfig, master string) error {
+func saveReviewProfileConfig(ctx context.Context, profileName string, agents map[string]settings.ReviewConfig, judgeAgent string) error {
 	prefs, err := settings.LoadClonePreferences(ctx)
 	if err != nil {
 		return fmt.Errorf("load review preferences before save: %w", err)
@@ -888,12 +888,16 @@ func saveReviewProfileConfig(ctx context.Context, profileName string, agents map
 		prefs.ReviewProfiles = map[string]settings.ReviewProfileConfig{}
 	}
 	// Merge into any existing profile so the advanced skills picker only
-	// rewrites what it actually edits (agents + master). Profile-level fields
-	// the picker never surfaces — custom `task` text and `master_model` — are
-	// preserved instead of being clobbered with built-in defaults.
+	// rewrites what it actually edits (agents + judge). Profile-level fields the
+	// picker never surfaces — custom `task` text — are preserved instead of being
+	// clobbered with built-in defaults.
 	profile := prefs.ReviewProfiles[profileName]
 	profile.Agents = agents
-	profile.Master = master
+	if strings.TrimSpace(judgeAgent) != "" {
+		profile.Judge = &settings.ReviewConfig{Agent: strings.TrimSpace(judgeAgent)}
+	} else {
+		profile.Judge = nil
+	}
 	if strings.TrimSpace(profile.Task) == "" {
 		profile.Task = profileTask(profileName, settings.ReviewProfileConfig{})
 	}
@@ -907,20 +911,20 @@ func saveReviewProfileConfig(ctx context.Context, profileName string, agents map
 	return nil
 }
 
-func pickReviewMasterAgentPreference(ctx context.Context, review map[string]settings.ReviewConfig, current string) (string, error) {
-	choices := reviewMasterAgentChoices(review)
+func pickReviewJudgeAgentPreference(ctx context.Context, review map[string]settings.ReviewConfig, current string) (string, error) {
+	choices := reviewJudgeAgentChoices(review)
 	switch len(choices) {
 	case 0:
 		return current, nil
 	case 1:
 		return choices[0].Name, nil
 	default:
-		return promptForReviewMasterAgent(ctx, choices, current)
+		return promptForReviewJudgeAgent(ctx, choices, current)
 	}
 }
 
 // defaultAgentPick returns the saved choice if it is still offered, otherwise
-// the first choice. Shared by the master picker.
+// the first choice. Shared by the judge picker.
 func defaultAgentPick(choices []AgentChoice, saved string) string {
 	if pick, ok := savedAgentPick(choices, saved); ok {
 		return pick
@@ -940,7 +944,7 @@ func savedAgentPick(choices []AgentChoice, saved string) (string, bool) {
 	return "", false
 }
 
-func reviewMasterAgentChoices(configured map[string]settings.ReviewConfig) []AgentChoice {
+func reviewJudgeAgentChoices(configured map[string]settings.ReviewConfig) []AgentChoice {
 	choices := make([]AgentChoice, 0, len(configured))
 	for name, cfg := range configured {
 		if cfg.IsZero() {
@@ -964,7 +968,7 @@ func reviewMasterAgentChoices(configured map[string]settings.ReviewConfig) []Age
 	return choices
 }
 
-func promptForReviewMasterAgent(ctx context.Context, choices []AgentChoice, saved string) (string, error) {
+func promptForReviewJudgeAgent(ctx context.Context, choices []AgentChoice, saved string) (string, error) {
 	options := make([]huh.Option[string], 0, len(choices))
 	for _, choice := range choices {
 		options = append(options, huh.NewOption(choice.Label, choice.Name))
@@ -972,14 +976,14 @@ func promptForReviewMasterAgent(ctx context.Context, choices []AgentChoice, save
 	picked := defaultAgentPick(choices, saved)
 	form := newAccessibleForm(huh.NewGroup(
 		huh.NewSelect[string]().
-			Title("Choose chair judge").
-			Description("The chair critically evaluates the inspectors' reports and writes the final verdict.").
+			Title("Choose judge").
+			Description("The judge critically evaluates the inspectors' reports and writes the final verdict.").
 			Options(options...).
 			Height(reviewPickerHeight(len(options))).
 			Value(&picked),
 	))
 	if err := form.RunWithContext(ctx); err != nil {
-		return "", fmt.Errorf("review master picker: %w", err)
+		return "", fmt.Errorf("review judge picker: %w", err)
 	}
 	return picked, nil
 }

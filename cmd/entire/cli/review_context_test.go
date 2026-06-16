@@ -501,7 +501,7 @@ func writeReviewContextSettings(t *testing.T, repoRoot string) {
 	if err := os.MkdirAll(entireDir, 0o750); err != nil {
 		t.Fatalf("create .entire dir: %v", err)
 	}
-	settingsJSON := `{"enabled":true,"review_default_profile":"general","review_profiles":{"general":{"task":"Test review task.","agents":{"claude-code":{"skills":["/review"]}},"master":"claude-code"}}}` + "\n"
+	settingsJSON := `{"enabled":true,"review_default_profile":"general","review_profiles":{"general":{"task":"Test review task.","agents":{"claude-code":{"skills":["/review"]}},"judge":{"agent":"claude-code"}}}}` + "\n"
 	if err := os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(settingsJSON), 0o600); err != nil {
 		t.Fatalf("write review settings: %v", err)
 	}

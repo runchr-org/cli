@@ -38,7 +38,7 @@ func TestBuildConfiguredProfile_FromFlags(t *testing.T) {
 		"general",
 		reviewConfigureOptions{
 			Agents: []string{"claude-code", "codex"},
-			Judges: []string{"codex"},
+			Judge:  "codex",
 			Models: []string{"claude-code=opus"},
 		},
 		&settings.EntireSettings{},
@@ -53,11 +53,8 @@ func TestBuildConfiguredProfile_FromFlags(t *testing.T) {
 	if got := profile.Agents["claude-code"].Model; got != "opus" {
 		t.Errorf("claude-code model = %q, want opus", got)
 	}
-	if len(profile.Judges) != 1 || profile.Judges[0].Agent != "codex" {
-		t.Errorf("judges = %#v, want one judge codex", profile.Judges)
-	}
-	if profile.Master != "" {
-		t.Errorf("legacy master should be cleared when judges are set, got %q", profile.Master)
+	if profile.Judge == nil || profile.Judge.Agent != "codex" {
+		t.Errorf("judge = %#v, want codex", profile.Judge)
 	}
 	if profile.Task == "" {
 		t.Error("task should default to the built-in general task")
@@ -95,43 +92,31 @@ func TestBuildConfiguredProfile_FromSlots_AllowsDuplicateAgents(t *testing.T) {
 	}
 }
 
-func TestProfileMasterIdentity(t *testing.T) {
+func TestProfileJudge(t *testing.T) {
 	t.Parallel()
-	t.Run("standalone master wins and need not be a worker", func(t *testing.T) {
+	t.Run("explicit judge resolves with model", func(t *testing.T) {
 		t.Parallel()
 		profile := settings.ReviewProfileConfig{
-			Agents:      map[string]settings.ReviewConfig{tAgentCodex: {Agent: tAgentCodex}},
-			MasterAgent: tAgentClaude,
-			MasterModel: tModelOpus,
+			Agents: map[string]settings.ReviewConfig{tAgentCodex: {Agent: tAgentCodex}},
+			Judge:  &settings.ReviewConfig{Agent: tAgentClaude, Model: tModelOpus},
 		}
-		name, model, ok := profileMasterIdentity(profile)
-		if !ok || name != tAgentClaude || model != tModelOpus {
-			t.Fatalf("got (%q,%q,%v), want (claude-code, opus, true)", name, model, ok)
-		}
-	})
-	t.Run("legacy worker master resolves from Agents", func(t *testing.T) {
-		t.Parallel()
-		profile := settings.ReviewProfileConfig{
-			Agents: map[string]settings.ReviewConfig{tAgentClaude: {Agent: tAgentClaude, Model: tModelSonnet}},
-			Master: tAgentClaude,
-		}
-		name, model, ok := profileMasterIdentity(profile)
-		if !ok || name != tAgentClaude || model != tModelSonnet {
-			t.Fatalf("got (%q,%q,%v), want (claude-code, sonnet, true)", name, model, ok)
+		j, ok := profileJudge(profile)
+		if !ok || j.agent != tAgentClaude || j.model != tModelOpus {
+			t.Fatalf("got (%#v,%v), want claude-code/opus, true", j, ok)
 		}
 	})
-	t.Run("no master", func(t *testing.T) {
+	t.Run("no judge", func(t *testing.T) {
 		t.Parallel()
 		profile := settings.ReviewProfileConfig{
 			Agents: map[string]settings.ReviewConfig{tAgentCodex: {Agent: tAgentCodex}},
 		}
-		if _, _, ok := profileMasterIdentity(profile); ok {
-			t.Fatal("expected ok=false when no master is set")
+		if _, ok := profileJudge(profile); ok {
+			t.Fatal("expected ok=false when no judge is set")
 		}
 	})
 }
 
-func TestBuildConfiguredProfile_JudgePanel(t *testing.T) {
+func TestBuildConfiguredProfile_Judge(t *testing.T) {
 	t.Parallel()
 	deps := configureTestDeps("claude-code", "codex")
 	profile, err := buildConfiguredProfile(
@@ -139,8 +124,7 @@ func TestBuildConfiguredProfile_JudgePanel(t *testing.T) {
 		"general",
 		reviewConfigureOptions{
 			Agents: []string{tAgentClaude, tAgentCodex},
-			Judges: []string{tAgentClaude + "=" + tModelOpus, tAgentCodex + "=gpt-5"},
-			Chair:  tAgentClaude,
+			Judge:  tAgentClaude + "=" + tModelOpus,
 		},
 		&settings.EntireSettings{},
 		deps,
@@ -148,19 +132,12 @@ func TestBuildConfiguredProfile_JudgePanel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildConfiguredProfile: %v", err)
 	}
-	if len(profile.Judges) != 2 {
-		t.Fatalf("judges = %#v, want 2", profile.Judges)
+	if profile.Judge == nil || profile.Judge.Agent != tAgentClaude || profile.Judge.Model != tModelOpus {
+		t.Fatalf("judge = %#v, want claude-code/opus", profile.Judge)
 	}
-	if profile.Judges[0].Agent != tAgentClaude || profile.Judges[0].Model != tModelOpus {
-		t.Errorf("judge[0] = %#v, want claude-code/opus", profile.Judges[0])
-	}
-	if profile.Chair != tAgentClaude {
-		t.Errorf("chair = %q, want claude-code", profile.Chair)
-	}
-	// profileJudges resolves the panel + chair index.
-	judges, chair := profileJudges(profile)
-	if len(judges) != 2 || chair != 0 {
-		t.Errorf("profileJudges = (%#v, %d), want 2 judges, chair 0", judges, chair)
+	j, ok := profileJudge(profile)
+	if !ok || j.agent != tAgentClaude || j.model != tModelOpus {
+		t.Errorf("profileJudge = (%#v,%v), want claude-code/opus, true", j, ok)
 	}
 }
 
@@ -179,22 +156,20 @@ func TestBuildConfiguredProfile_RejectsNonAdapterAgent(t *testing.T) {
 	}
 }
 
-func TestBuildConfiguredProfile_PreservesExistingTaskAndMasterModel(t *testing.T) {
+func TestBuildConfiguredProfile_PreservesExistingTask(t *testing.T) {
 	t.Parallel()
 	deps := configureTestDeps("claude-code", "codex")
 	s := &settings.EntireSettings{
 		ReviewProfiles: map[string]settings.ReviewProfileConfig{
 			"general": {
-				Task:        "Custom task text.",
-				MasterModel: "opus",
+				Task: "Custom task text.",
 				Agents: map[string]settings.ReviewConfig{
 					"claude-code": {Skills: []string{"/review"}},
 				},
-				Master: "claude-code",
 			},
 		},
 	}
-	// Only change the worker set; task + master_model must survive.
+	// Only change the worker set; the custom task must survive.
 	profile, err := buildConfiguredProfile(
 		context.Background(),
 		"general",
@@ -208,8 +183,9 @@ func TestBuildConfiguredProfile_PreservesExistingTaskAndMasterModel(t *testing.T
 	if profile.Task != "Custom task text." {
 		t.Errorf("task = %q, want preserved custom task", profile.Task)
 	}
-	if profile.MasterModel != "opus" {
-		t.Errorf("master_model = %q, want preserved opus", profile.MasterModel)
+	// Two inspectors with no explicit judge → one auto-selected.
+	if _, ok := profileJudge(profile); !ok {
+		t.Error("expected an auto-selected judge for a multi-inspector profile")
 	}
 }
 

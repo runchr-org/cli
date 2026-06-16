@@ -122,7 +122,7 @@ func TestReviewCommand_PassesReviewEnvToSpawnedAgentHook(t *testing.T) {
 						"skills": []string{"/review"},
 					},
 				},
-				"master": "claude-code",
+				"judge": map[string]any{"agent": "claude-code"},
 			},
 		},
 	})
@@ -247,7 +247,7 @@ func TestReview_MissingSkillAtSpawn_ErrorsCleanly(t *testing.T) {
 						"skills": []string{"/nonexistent:skill-xyz"},
 					},
 				},
-				"master": "claude-code",
+				"judge": map[string]any{"agent": "claude-code"},
 			},
 		},
 	})

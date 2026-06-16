@@ -146,66 +146,34 @@ func reviewWorkerLabel(workerName string, cfg settings.ReviewConfig) string {
 	return strings.Join(parts, "")
 }
 
-// judgeSpec is one resolved judge: the agent that renders a verdict plus its
-// optional model.
+// judgeSpec is the resolved consolidating judge: the agent that renders the
+// final verdict plus its optional model.
 type judgeSpec struct {
 	agent string
 	model string
 }
 
-// profileJudges resolves the panel of judges and the index of the chair (the
-// judge that merges a multi-judge panel; 0 for a single judge). Resolution
-// order: explicit Judges, then the legacy standalone MasterAgent, then the
-// legacy worker Master. Returns an empty slice when the profile has no judge.
-func profileJudges(profile settings.ReviewProfileConfig) ([]judgeSpec, int) {
-	if len(profile.Judges) > 0 {
-		judges := make([]judgeSpec, 0, len(profile.Judges))
-		for _, cfg := range profile.Judges {
-			name := strings.TrimSpace(cfg.Agent)
-			if name == "" {
-				continue
-			}
-			judges = append(judges, judgeSpec{agent: name, model: strings.TrimSpace(cfg.Model)})
-		}
-		if len(judges) == 0 {
-			return nil, 0
-		}
-		chair := 0
-		if sel := strings.TrimSpace(profile.Chair); sel != "" {
-			for i, j := range judges {
-				if j.agent == sel || j.agent+":"+j.model == sel {
-					chair = i
-					break
-				}
-			}
-		}
-		return judges, chair
+// profileJudge resolves the configured consolidating judge. ok is false when
+// the profile has no judge set (a single-inspector profile, or one left to the
+// runtime default); callers fall back to resolveJudge for the default pick.
+func profileJudge(profile settings.ReviewProfileConfig) (judgeSpec, bool) {
+	if profile.Judge == nil {
+		return judgeSpec{}, false
 	}
-	if ma := strings.TrimSpace(profile.MasterAgent); ma != "" {
-		return []judgeSpec{{agent: ma, model: strings.TrimSpace(profile.MasterModel)}}, 0
+	name := strings.TrimSpace(profile.Judge.Agent)
+	if name == "" {
+		return judgeSpec{}, false
 	}
-	if workerName, cfg, err := selectProfileWorker(profile, profile.Master); err == nil {
-		model := strings.TrimSpace(profile.MasterModel)
-		if model == "" {
-			model = strings.TrimSpace(cfg.Model)
-		}
-		return []judgeSpec{{agent: reviewAgentName(workerName, cfg), model: model}}, 0
-	}
-	return nil, 0
+	return judgeSpec{agent: name, model: strings.TrimSpace(profile.Judge.Model)}, true
 }
 
-// profileMasterIdentity reports the representative judge (the chair, or the
-// single judge) and whether the profile has any judge. Kept for callers that
-// need a single "who decides" identity (validation, labels, picker preselect).
-func profileMasterIdentity(profile settings.ReviewProfileConfig) (string, string, bool) {
-	judges, chair := profileJudges(profile)
-	if len(judges) == 0 {
-		return "", "", false
+// resolveJudge returns the judge to use for a fan-out run: the explicitly
+// configured judge, or an auto-selected text-gen inspector when none is set.
+func resolveJudge(ctx context.Context, profile settings.ReviewProfileConfig) (judgeSpec, bool) {
+	if j, ok := profileJudge(profile); ok {
+		return j, true
 	}
-	if chair < 0 || chair >= len(judges) {
-		chair = 0
-	}
-	return judges[chair].agent, judges[chair].model, true
+	return defaultJudge(ctx, profile.Agents)
 }
 
 // judgeLabel renders a judge for UI output: "agent" or "agent · model".
@@ -318,11 +286,14 @@ func defaultReviewProfileForInstalledAgents(
 	if len(agents) == 0 {
 		return settings.ReviewProfileConfig{}, errors.New("no agents with review runner adapters and hooks installed; run `entire configure --agent claude-code`, `entire configure --agent codex`, or `entire configure --agent gemini`")
 	}
-	return settings.ReviewProfileConfig{
+	profile := settings.ReviewProfileConfig{
 		Task:   profileTask(profileName, settings.ReviewProfileConfig{}),
 		Agents: agents,
-		Master: defaultReviewMaster(ctx, agents),
-	}, nil
+	}
+	if j, ok := defaultJudge(ctx, agents); ok {
+		profile.Judge = &settings.ReviewConfig{Agent: j.agent, Model: j.model}
+	}
+	return profile, nil
 }
 
 func defaultReviewAgentConfig(profileName, agentName string) settings.ReviewConfig {
@@ -357,21 +328,26 @@ func defaultProfileFocus(profileName string) string {
 	}
 }
 
-func defaultReviewMaster(ctx context.Context, configured map[string]settings.ReviewConfig) string {
+// defaultJudge auto-selects a consolidating judge from the configured
+// inspectors: it prefers claude-code, then codex, then gemini, and otherwise
+// takes the first inspector that can write a verdict (text generation). ok is
+// false when no inspector can.
+func defaultJudge(ctx context.Context, configured map[string]settings.ReviewConfig) (judgeSpec, bool) {
 	for _, preferred := range []string{string(agent.AgentNameClaudeCode), string(agent.AgentNameCodex), string(agent.AgentNameGemini)} {
 		for _, workerName := range sortedReviewConfigKeys(configured) {
 			cfg := configured[workerName]
 			if reviewAgentName(workerName, cfg) == preferred && agentSupportsTextGeneration(ctx, preferred) {
-				return workerName
+				return judgeSpec{agent: preferred, model: strings.TrimSpace(cfg.Model)}, true
 			}
 		}
 	}
 	for _, workerName := range sortedReviewConfigKeys(configured) {
-		if agentSupportsTextGeneration(ctx, reviewAgentName(workerName, configured[workerName])) {
-			return workerName
+		cfg := configured[workerName]
+		if name := reviewAgentName(workerName, cfg); agentSupportsTextGeneration(ctx, name) {
+			return judgeSpec{agent: name, model: strings.TrimSpace(cfg.Model)}, true
 		}
 	}
-	return ""
+	return judgeSpec{}, false
 }
 
 func sortedReviewConfigKeys(configured map[string]settings.ReviewConfig) []string {

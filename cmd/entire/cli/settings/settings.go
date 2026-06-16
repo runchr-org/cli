@@ -249,10 +249,10 @@ func (s *EntireSettings) SummaryTimeoutValue() time.Duration {
 }
 
 // ReviewProfileConfig is a named review setup. The profile-level Task is the
-// canonical task every worker agent is asked to run; per-agent ReviewConfig
+// canonical task every inspector agent is asked to run; per-agent ReviewConfig
 // entries adapt that task to agent-specific mechanics such as slash commands
-// or additional instructions. Master names the agent that consolidates worker
-// outputs into the final report.
+// or additional instructions. Judge names the single agent that consolidates
+// the inspectors' reports into the final verdict in a closing round.
 //
 // Example:
 //
@@ -261,43 +261,28 @@ func (s *EntireSettings) SummaryTimeoutValue() time.Duration {
 //	    "task": "Review this change for auth, injection, secrets, and privilege-boundary bugs.",
 //	    "agents": {
 //	      "claude-sonnet": {"agent": "claude-code", "model": "sonnet", "skills": ["/security-review"]},
-//	      "claude-opus": {"agent": "claude-code", "model": "opus", "skills": ["/security-review"]},
 //	      "codex": {"model": "gpt-5-codex", "skills": ["/review"], "prompt": "Focus on security."}
 //	    },
-//	    "master": "claude-sonnet"
+//	    "judge": {"agent": "claude-code", "model": "opus"}
 //	  }
 //	}
 //
-// MasterModel is an optional model hint passed to the master agent's text
-// generation API.
 // ReviewProfileConfig is intentionally small: the review package owns built-in
 // default task text for conventional profile names like "general".
 type ReviewProfileConfig struct {
 	Task   string                  `json:"task,omitempty"`
 	Agents map[string]ReviewConfig `json:"agents,omitempty"`
-	// Judges is the panel of judges (each an agent + model) that independently
-	// evaluate the inspectors' reports and render verdicts. Supersedes
-	// MasterAgent/Master. One judge = a single verdict; multiple judges = a
-	// panel reconciled by the Chair.
-	Judges []ReviewConfig `json:"judges,omitempty"`
-	// Chair, when set and there are >=2 judges, names the judge (by agent or
-	// agent:model) that merges the panel verdicts into the final verdict.
-	Chair string `json:"chair,omitempty"`
-	// Master is the legacy single-master selector: a worker key in Agents that
-	// also writes the final report. Superseded by Judges/MasterAgent; still
-	// honored when those are empty.
-	Master string `json:"master,omitempty"`
-	// MasterAgent is the legacy standalone single master. Superseded by Judges;
-	// still honored when Judges is empty.
-	MasterAgent string `json:"master_agent,omitempty"`
-	// MasterModel is the model for the legacy master (either form).
-	MasterModel string `json:"master_model,omitempty"`
+	// Judge is the single agent (plus optional model) that consolidates the
+	// inspectors' reports into the final verdict. It is optional: a
+	// one-inspector profile needs no judge (the lone report is the result),
+	// and a multi-inspector profile with no judge set falls back to an
+	// auto-selected inspector that can write a verdict.
+	Judge *ReviewConfig `json:"judge,omitempty"`
 }
 
 // IsZero reports whether the profile is effectively unset.
 func (c ReviewProfileConfig) IsZero() bool {
-	return c.Task == "" && len(c.Agents) == 0 && len(c.Judges) == 0 &&
-		c.Chair == "" && c.Master == "" && c.MasterAgent == "" && c.MasterModel == ""
+	return c.Task == "" && len(c.Agents) == 0 && (c.Judge == nil || c.Judge.IsZero())
 }
 
 // ReviewConfig holds one worker's configuration within a review profile.

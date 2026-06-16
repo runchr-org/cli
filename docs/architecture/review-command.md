@@ -3,10 +3,8 @@
 `entire inspect` (aliased as `entire review`) runs a named review profile. A
 profile defines one canonical task (for example `general`, `security`, or
 `accessibility`), a set of **inspector** agents that all run that task, and a
-panel of **judges** that evaluate the inspectors' reports. With one judge that
-judge writes the verdict; with two or more, each judge renders an independent
-verdict and the **chair** merges them into one final verdict, surfacing
-agreement and dissent. Inspector sessions are immutable facts attached to
+single **judge** that consolidates the inspectors' reports into the final
+verdict in a closing round. Inspector sessions are immutable facts attached to
 checkpoints; the final verdict is stored locally in the review manifest for
 findings/fix workflows.
 
@@ -16,11 +14,11 @@ findings/fix workflows.
 entire inspect                          # Interactive: pick a profile to run. Non-interactive: list profiles + error
 entire inspect security                 # Run a named profile
 entire inspect --profile accessibility  # Same, flag form
-entire inspect --list                   # List configured profiles (inspectors + judges), marking the default
+entire inspect --list                   # List configured profiles (inspectors + judge), marking the default
 entire inspect --configure                    # Interactive: guided wizard. Non-interactive: list agents + profiles
 entire inspect --configure --profile general --set-agents claude-code,codex --set-judge claude-code
                                                # Configure a profile non-interactively (no TUI)
-entire inspect --configure --profile sec --set-slot claude-code=opus --set-slot codex --set-judge claude-code=opus --set-judge codex=gpt-5 --set-chair claude-code=opus
+entire inspect --configure --profile sec --set-slot claude-code=opus --set-slot codex --set-judge claude-code=opus
 entire inspect --configure --profile general --set-model codex=gpt-5-codex --set-task "..."
 entire inspect --edit --profile general       # Advanced skill-level config (skill picker)
 entire inspect --agent <name>           # Run one inspector from the selected profile
@@ -44,14 +42,14 @@ When no profiles are configured, interactive `entire inspect` runs a guided
 setup: choose a review focus (or `Custom…` to write the task), build the
 inspector crew (a single-screen add/edit/remove slot list seeded with all
 launchable agents — the same agent may appear more than once on different or
-identical models), then choose the judges (another slot list) and, when there
-are ≥2, a chair. It saves the profile and asks before starting agents.
+identical models), then choose the judge that consolidates their reports. It
+saves the profile and asks before starting agents.
 
 `entire inspect --configure` is the configuration entry point:
-- With `--set-agents` / `--set-slot` / `--set-judge` / `--set-chair` /
-  `--set-task` / `--set-model agent=model`, it writes the profile
-  non-interactively (no TUI). `--set-*` writes preserve profile-level fields the
-  flags don't touch (custom `task`, etc.).
+- With `--set-agents` / `--set-slot` / `--set-judge` / `--set-task` /
+  `--set-model agent=model`, it writes the profile non-interactively (no TUI).
+  `--set-*` writes preserve profile-level fields the flags don't touch (custom
+  `task`, etc.).
 - With no `--set-*` flags in an interactive terminal, it opens the guided
   wizard (which already lists the selectable agents).
 - With no `--set-*` flags in a non-interactive context, it prints the discovery
@@ -63,9 +61,9 @@ are ≥2, a chair. It saves the profile and asks before starting agents.
 
 When two or more adapter-backed inspectors are configured and `--agent` is not
 set, `entire inspect` fans out to all configured inspectors. There is no per-run
-multi-picker: the profile is the fan-out contract. Multi-inspector profiles must
-resolve at least one judge; the judges run after inspectors finish and produce
-the final verdict.
+multi-picker: the profile is the fan-out contract. Multi-inspector profiles
+resolve one judge (explicit, or auto-selected from the inspectors); the judge
+runs after the inspectors finish and produces the final verdict.
 
 ## Settings Schema
 
@@ -82,7 +80,7 @@ Profiles are configured in clone-local preferences (or settings) under
         "claude-code": {"skills": ["/review"]},
         "codex": {"skills": ["/review"]}
       },
-      "judges": [{"agent": "claude-code", "model": "opus"}]
+      "judge": {"agent": "claude-code", "model": "opus"}
     },
     "security": {
       "task": "Review this change for auth, injection, secrets, and privilege-boundary bugs.",
@@ -90,11 +88,7 @@ Profiles are configured in clone-local preferences (or settings) under
         "claude-sonnet": {"agent": "claude-code", "model": "sonnet", "skills": ["/security-review"]},
         "codex": {"model": "gpt-5-codex", "skills": ["/review"], "prompt": "Focus on security."}
       },
-      "judges": [
-        {"agent": "claude-code", "model": "opus"},
-        {"agent": "codex", "model": "gpt-5"}
-      ],
-      "chair": "claude-code:opus"
+      "judge": {"agent": "claude-code", "model": "opus"}
     }
   }
 }
@@ -105,13 +99,11 @@ Profiles are configured in clone-local preferences (or settings) under
   the agent name; to run the same agent more than once, use aliases and set
   `agent` plus `model`. Per-inspector `skills`, `prompt`, and `model` adapt the
   task to agent-specific mechanics.
-- `judges` is the panel: each entry is an agent (+ optional model) that renders
-  a verdict. A judge need not be one of the inspectors. `chair` (an `agent` or
-  `agent:model` selector) names the judge that merges a ≥2-judge panel; it
-  defaults to the first judge.
-- **Back-compat:** the legacy `master` (an inspector id) and `master_agent` /
-  `master_model` fields are still honored as a single judge when `judges` is
-  empty. `entire inspect --configure` writes `judges`/`chair` going forward.
+- `judge` is the single agent (+ optional model) that consolidates the
+  inspectors' reports into the final verdict. It need not be one of the
+  inspectors. It is optional: a one-inspector profile needs none, and a
+  multi-inspector profile with no judge set auto-selects a text-gen-capable
+  inspector (preferring claude-code, then codex, then gemini).
 
 `entire inspect --models` lists the models each agent advertises via the
 optional `agent.ModelLister` capability (`cmd/entire/cli/agent/model_lister.go`).
@@ -141,9 +133,9 @@ Settings fields: `EntireSettings.ReviewProfiles` and
    a `PendingReviewMarker` file and prints guidance — the user opens the agent
    themselves and runs the skills, then tags it with `entire attach --review`.
 4. Inspectors run the selected profile's task; each session ends naturally.
-5. In multi-inspector profiles, the judge panel runs after inspectors finish
-   (see Multi-Agent UI). Each judge receives all inspector reports and renders a
-   verdict; the chair merges a ≥2-judge panel into the final verdict.
+5. In multi-inspector profiles, the judge runs after inspectors finish (see
+   Multi-Agent UI). It receives all inspector reports and consolidates them into
+   the final verdict.
 6. On the next `git commit`, the PostCommit hook condenses inspector sessions
    into the checkpoint on `entire/checkpoints/v1`, with `Kind`, `ReviewSkills`,
    and `ReviewPrompt` recorded in `CommittedMetadata`.
@@ -180,16 +172,14 @@ Review metadata is stored at two levels on `entire/checkpoints/v1`:
   goroutine; events fan into a single dispatch loop so the serial-dispatch
   contract holds. Per-inspector skills/prompts are injected via
   `perAgentConfiguredReviewer`.
-- **Judge resolution** (`profile.go`): `profileJudges` returns the resolved
-  panel `[]judgeSpec` and the chair index (explicit `judges`, else the legacy
-  `master_agent`, else the legacy worker `master`). `profileMasterIdentity`
-  reports the chair/single judge for callers that need one identity.
-- **Panel synthesis** (`synthesis_panel.go`): `PanelSynthesisProvider`
-  implements `SynthesisProvider`, so `SynthesisSink` consumes it unchanged. It
-  fans out to each judge in parallel; one judge collapses to that verdict; with
-  ≥2 the chair merges the verdicts (`composeChairPrompt`) and the individual
-  verdicts are appended as a `## Panel`. Failed judges are dropped; if all fail
-  the error surfaces as "final report unavailable".
+- **Judge resolution** (`profile.go`): `profileJudge` returns the explicitly
+  configured judge (`judge`); `resolveJudge` falls back to `defaultJudge`, which
+  auto-selects a text-gen-capable inspector (preferring claude-code, then codex,
+  then gemini) when none is set.
+- **Synthesis** (`synthesis_sink.go`): the single judge is an
+  `AgentSynthesisProvider` consumed by `SynthesisSink`. It receives all
+  inspector narratives and writes one verdict; provider failure surfaces as
+  "final report unavailable".
 - **Env-var contract** (`env.go`): single source of truth for `ENTIRE_REVIEW_*`.
 - **Scope detection** (`scope.go`): first existing of
   `origin/HEAD → origin/main → origin/master → main → master`, overridable via
@@ -206,10 +196,9 @@ When `RunMulti` is dispatched in a TTY, the sink slice is
   below rather than overlapping.
 - **`SynthesisSink`** (`synthesis_sink.go`): after the dump it composes an
   adjudication prompt from all inspector narratives + per-run prompt + profile
-  task and calls its `SynthesisProvider`. For a single judge that's an
-  `AgentSynthesisProvider`; for a panel it's a `PanelSynthesisProvider` (judges
-  in parallel → chair merge). Skipped when cancelled or fewer than 2 inspectors
-  produced usable output. Provider failures degrade gracefully.
+  task and calls its `SynthesisProvider` — an `AgentSynthesisProvider` for the
+  resolved judge. Skipped when cancelled or fewer than 2 inspectors produced
+  usable output. Provider failures degrade gracefully.
 - **Sink composition** (`composeMultiAgentSinks` in `cmd.go`): pure helper
   taking explicit `isTTY`/`canPrompt` so tests don't depend on real TTY
   detection.
@@ -233,20 +222,18 @@ commands/agents. `pickLatestVersion` picks ONE version directory per plugin
   parsers own their format; shared code only sees `Event` variants)
 - Fabricated "example" model lists for agents without an enumeration command
   (codex/gemini advertise nothing; Default + Custom only)
-- A single "master" that both reviews and adjudicates as a worker slot (judges
-  are a separate panel; a worker is never implicitly the judge)
+- A "master" worker slot that both reviews and adjudicates in one pass (the
+  judge is a separate consolidation round, even when auto-selected from the
+  inspectors)
 
 ## Key Files
 
 - `cmd/entire/cli/review/cmd.go` — `NewCommand()`, `runReview` dispatch fork,
-  `runReviewListProfiles` (`--list`), judge-panel wiring, `composeMultiAgentSinks`
+  `runReviewListProfiles` (`--list`), judge wiring, `composeMultiAgentSinks`
 - `cmd/entire/cli/review/picker.go` — guided setup, focus picker (presets +
-  custom task), `pickSlotList` (inspectors + judges), chair picker, profile
-  chooser
-- `cmd/entire/cli/review/profile.go` — profile resolution, `profileJudges`,
-  default tasks
-- `cmd/entire/cli/review/synthesis_panel.go` — `PanelSynthesisProvider` +
-  `composeChairPrompt`
+  custom task), `pickSlotList` (inspectors), `promptForJudge`, profile chooser
+- `cmd/entire/cli/review/profile.go` — profile resolution, `profileJudge` /
+  `resolveJudge` / `defaultJudge`, default tasks
 - `cmd/entire/cli/review/synthesis_sink.go` / `synthesis_prompt.go` — final
   verdict sink + adjudication prompt
 - `cmd/entire/cli/review/marker_fallback.go` — manual fallback for agents
@@ -266,4 +253,4 @@ commands/agents. `pickLatestVersion` picks ONE version directory per plugin
 - `cmd/entire/cli/attach.go` — `entire attach --review` (post-hoc tagging;
   consumes a pending-review marker)
 - `cmd/entire/cli/settings/settings.go` — `ReviewProfileConfig` (`Agents`,
-  `Judges`, `Chair`, legacy `Master`/`MasterAgent`/`MasterModel`)
+  `Judge`)

@@ -54,17 +54,20 @@ func seedReviewConfig(ctx context.Context, cfg map[string]settings.ReviewConfig)
 		prefs = &settings.ClonePreferences{}
 	}
 	prefs.ReviewDefaultProfile = review.DefaultProfileName
+	profile := settings.ReviewProfileConfig{
+		Task:   "Test review task.",
+		Agents: cfg,
+	}
+	if judge := defaultTestJudge(cfg); judge != "" {
+		profile.Judge = &settings.ReviewConfig{Agent: judge}
+	}
 	prefs.ReviewProfiles = map[string]settings.ReviewProfileConfig{
-		review.DefaultProfileName: {
-			Task:   "Test review task.",
-			Agents: cfg,
-			Master: defaultTestMaster(cfg),
-		},
+		review.DefaultProfileName: profile,
 	}
 	return settings.SaveClonePreferences(ctx, prefs)
 }
 
-func defaultTestMaster(cfg map[string]settings.ReviewConfig) string {
+func defaultTestJudge(cfg map[string]settings.ReviewConfig) string {
 	if _, ok := cfg[string(agent.AgentNameClaudeCode)]; ok {
 		return string(agent.AgentNameClaudeCode)
 	}
