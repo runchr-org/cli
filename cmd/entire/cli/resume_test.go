@@ -546,22 +546,6 @@ func writeCommittedResumeCheckpointWithTranscript(
 	}
 }
 
-func commitResumeTrailer(t *testing.T, worktree *git.Worktree, repoRoot, fileName, commitMessage string) {
-	t.Helper()
-
-	if err := os.WriteFile(filepath.Join(repoRoot, fileName), []byte("feature content"), 0o644); err != nil {
-		t.Fatalf("write feature file: %v", err)
-	}
-	if _, err := worktree.Add(fileName); err != nil {
-		t.Fatalf("add feature file: %v", err)
-	}
-	if _, err := worktree.Commit(commitMessage, &git.CommitOptions{
-		Author: &object.Signature{Name: "Test", Email: "test@example.com"},
-	}); err != nil {
-		t.Fatalf("commit trailer: %v", err)
-	}
-}
-
 // TestResolveLatestCheckpoint verifies that resolveLatestCheckpoint returns the
 // checkpoint with the newest CreatedAt, regardless of trailer order.
 func TestResolveLatestCheckpoint(t *testing.T) {
