@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -68,6 +69,9 @@ func repoRemoteURL(r coreapi.Repo) string {
 // server-provided value always wins. The field is omitted when the clone
 // coordinates aren't resolvable yet rather than emitted half-formed.
 func repoCreateOutput(r *coreapi.Repo) (any, error) {
+	if r == nil {
+		return nil, errors.New("nil repo")
+	}
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return nil, fmt.Errorf("encode repo: %w", err)

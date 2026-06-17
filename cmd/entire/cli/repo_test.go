@@ -128,6 +128,16 @@ func TestRepoCreateOutput_PreservesServerProvidedRemote(t *testing.T) {
 	}
 }
 
+func TestRepoCreateOutput_NilRepoErrors(t *testing.T) {
+	t.Parallel()
+	// Defends the contract rather than a real path (the caller only passes a
+	// repo after a nil-error create): a nil pointer must return an error, not
+	// panic on the later dereference.
+	if _, err := repoCreateOutput(nil); err == nil {
+		t.Fatal("expected an error for a nil repo, got nil")
+	}
+}
+
 func TestRepoCreateOutput_OmitsRemoteWhenUnresolvable(t *testing.T) {
 	t.Parallel()
 	// A still-provisioning repo may lack a path; omit the field rather than
