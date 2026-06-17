@@ -413,17 +413,26 @@ func FetchMetadataBranch(ctx context.Context) error {
 	return fetchMetadataFromOrigin(ctx, fetchMetadataOpts{NoFilter: true})
 }
 
-// FetchMetadataTreeOnly fetches just the tip of the entire/checkpoints/v1
-// branch (--depth=1). Used by resume/explain to resolve the latest checkpoint
-// cheaply without pulling the entire history. May leave .git/shallow set;
-// FetchMetadataBranch will undo that when full ancestry is later needed.
+// FetchMetadataTreeOnly fetches the entire/checkpoints/v1 commit+tree graph
+// from origin to resolve the latest checkpoint, relying on --filter=blob:none
+// (when filtered fetches are enabled) to skip blob content rather than on a
+// shallow --depth=1 fetch.
+//
+// It deliberately does NOT use --depth=1. A depth-1 fetch adds the fetched tip
+// to .git/shallow, and any ref pointing at a shallow commit (the durable
+// refs/remotes/origin/<branch> that git updates opportunistically, or the local
+// primary) can no longer be walked past that boundary. A later `git merge-base`
+// against it then falsely reports "no common ancestor", which makes push and
+// `entire doctor` treat an ordinary diverged-but-behind branch as disconnected
+// (see strategy.IsMetadataDisconnected). Fetching at full depth keeps the
+// remote-tracking ref connected; git fetches incrementally, so after the first
+// fetch only new commits/trees travel.
 func FetchMetadataTreeOnly(ctx context.Context) error {
-	return fetchMetadataFromOrigin(ctx, fetchMetadataOpts{Shallow: true})
+	return fetchMetadataFromOrigin(ctx, fetchMetadataOpts{})
 }
 
 type fetchMetadataOpts struct {
 	NoFilter  bool
-	Shallow   bool
 	Unshallow bool
 }
 
@@ -449,7 +458,6 @@ func fetchMetadataFromOrigin(ctx context.Context, fopts fetchMetadataOpts) error
 		RefSpecs:  []string{refSpec},
 		NoTags:    true,
 		NoFilter:  fopts.NoFilter,
-		Shallow:   fopts.Shallow,
 		Unshallow: fopts.Unshallow,
 	})
 	if fetchErr != nil {
