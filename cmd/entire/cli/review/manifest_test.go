@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -970,5 +971,75 @@ func TestBuildLocalReviewManifestFromSummary_ExplicitModelWithoutMatchingSession
 	}
 	if manifest.Sources[0].SessionID != "sess-default" || manifest.Sources[0].Output != "default finding" {
 		t.Errorf("source = %#v, want sess-default / 'default finding'", manifest.Sources[0])
+	}
+}
+
+// TestBuildLocalReviewManifestFromSummary_ExplicitEmptyModelIsDefault proves
+// that a JSON value of "model": "" is indistinguishable from an omitted model
+// once decoded into AgentRun.Model, and is therefore treated as a default-model
+// inspector (not as an explicit-model inspector) by matchSessionsToRuns.
+func TestBuildLocalReviewManifestFromSummary_ExplicitEmptyModelIsDefault(t *testing.T) {
+	const (
+		sessDefault = "sess-default"
+		sessOpus    = "sess-opus"
+	)
+	started := time.Date(2026, 5, 7, 10, 0, 0, 0, time.UTC)
+	type encodedRun struct {
+		Name      string                  `json:"name"`
+		AgentName string                  `json:"agent_name"`
+		Model     string                  `json:"model"`
+		Status    reviewtypes.AgentStatus `json:"status"`
+	}
+	var encoded []encodedRun
+	if err := json.Unmarshal([]byte(`[
+		{"name":"claude-code","agent_name":"claude-code","model":"","status":1},
+		{"name":"claude-code","agent_name":"claude-code","model":"opus","status":1}
+	]`), &encoded); err != nil {
+		t.Fatalf("unmarshal runs: %v", err)
+	}
+	runs := make([]reviewtypes.AgentRun, len(encoded))
+	for i, run := range encoded {
+		runs[i] = reviewtypes.AgentRun{
+			Name:      run.Name,
+			AgentName: run.AgentName,
+			Model:     run.Model,
+			Status:    run.Status,
+		}
+	}
+	if runs[0].Model != "" {
+		t.Fatalf("explicit empty JSON model decoded as %q, want empty string", runs[0].Model)
+	}
+	summary := reviewtypes.RunSummary{StartedAt: started, AgentRuns: runs}
+	states := []*session.State{
+		{
+			SessionID:    sessDefault,
+			Kind:         session.KindAgentReview,
+			WorktreePath: "/repo",
+			BaseCommit:   "abc123",
+			StartedAt:    started.Add(time.Second),
+			AgentType:    agenttypes.AgentType("Claude Code"),
+			ModelName:    "claude-sonnet-4-5",
+		},
+		{
+			SessionID:    sessOpus,
+			Kind:         session.KindAgentReview,
+			WorktreePath: "/repo",
+			BaseCommit:   "abc123",
+			StartedAt:    started.Add(2 * time.Second), // more recent, so a single-pass default match would steal it
+			AgentType:    agenttypes.AgentType("Claude Code"),
+			ModelName:    "claude-opus-4-1",
+		},
+	}
+
+	manifest := buildLocalReviewManifestFromSummary("/repo", "abc123", summary, states, "")
+
+	if len(manifest.Sources) != 2 {
+		t.Fatalf("sources = %d, want 2", len(manifest.Sources))
+	}
+	if manifest.Sources[0].SessionID != sessDefault {
+		t.Errorf("explicit-empty/default inspector linked to %q, want %s", manifest.Sources[0].SessionID, sessDefault)
+	}
+	if manifest.Sources[1].SessionID != sessOpus {
+		t.Errorf("opus inspector linked to %q, want %s", manifest.Sources[1].SessionID, sessOpus)
 	}
 }
