@@ -676,23 +676,28 @@ func saveClonePreferencesToFile(prefs *ClonePreferences, filePath string) error 
 	return nil
 }
 
-// mergeReviewProfiles overlays src review profiles onto base by name. A profile
-// from a higher-precedence layer overrides the same-named one from a lower
-// layer, but profiles unique to each layer are all preserved. This lets a team
-// keep shared profiles in .entire/settings.json while individuals add or
-// override profiles in clone-local preferences or .entire/settings.local.json,
-// without one layer hiding the others' profiles.
+// mergeReviewProfiles overlays src review profiles onto base by name, returning
+// a new map. A profile from a higher-precedence layer (src) overrides the
+// same-named one from a lower layer (base), but profiles unique to each layer
+// are all preserved. This lets a team keep shared profiles in
+// .entire/settings.json while individuals add or override profiles in
+// clone-local preferences or .entire/settings.local.json, without one layer
+// hiding the others' profiles.
+//
+// Neither input map is mutated: callers (and the maps they own, e.g. a freshly
+// loaded ClonePreferences) can rely on their maps being left untouched.
 func mergeReviewProfiles(base, src map[string]ReviewProfileConfig) map[string]ReviewProfileConfig {
-	if len(src) == 0 {
+	if len(base) == 0 && len(src) == 0 {
 		return base
 	}
-	if base == nil {
-		base = map[string]ReviewProfileConfig{}
+	out := make(map[string]ReviewProfileConfig, len(base)+len(src))
+	for name, cfg := range base {
+		out[name] = cfg
 	}
 	for name, cfg := range src {
-		base[name] = cfg
+		out[name] = cfg
 	}
-	return base
+	return out
 }
 
 func applyClonePreferences(settings *EntireSettings, prefs *ClonePreferences) {
