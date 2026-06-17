@@ -67,8 +67,24 @@ func postReviewToTrail(ctx context.Context, out io.Writer, profileName, verdict 
 		} else {
 			fmt.Fprintln(out, "Posted the review verdict to the trail as a finding.")
 		}
+		if link := trailWebURL(target); link != "" {
+			fmt.Fprintf(out, "View the trail: %s\n", link)
+		}
 		return nil
 	})
+}
+
+// trailWebURL builds the browser URL for a trail, matching the server's
+// `<base>/<forge>/<owner>/<repo>/trails/<number>/<branch>` layout (the web UI
+// shares the API origin). Returns "" when the target lacks the parts needed for
+// a stable link.
+func trailWebURL(target trailReviewTarget) string {
+	if target.Trail.Number <= 0 || target.Host == "" || target.Owner == "" || target.Repo == "" {
+		return ""
+	}
+	base := strings.TrimRight(api.BaseURL(), "/")
+	return fmt.Sprintf("%s/%s/%s/%s/trails/%d/%s",
+		base, target.Host, target.Owner, target.Repo, target.Trail.Number, target.Trail.Branch)
 }
 
 // launchableReviewerFor returns the AgentReviewer for agents with a review-runner
