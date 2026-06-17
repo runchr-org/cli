@@ -79,8 +79,11 @@ func buildLocalReviewManifestFromSummary(
 	matched := make([]*session.State, len(summary.AgentRuns))
 	matchInspectors := func(explicitModel bool) {
 		for i, run := range summary.AgentRuns {
-			if matched[i] != nil || (strings.TrimSpace(run.Model) != "") != explicitModel {
-				continue
+			if matched[i] != nil {
+				continue // already linked (kept index-aligned with summary.AgentRuns)
+			}
+			if (strings.TrimSpace(run.Model) != "") != explicitModel {
+				continue // belongs to the other pass
 			}
 			st := matchReviewSessionState(worktreeRoot, headSHA, summary.StartedAt, agentNameForRun(run), run.Model, states, usedSessions)
 			if st == nil || st.SessionID == "" {
@@ -485,12 +488,11 @@ func modelComponentsMatch(short, long []string) bool {
 	if len(short) == 0 || len(short) >= len(long) {
 		return false
 	}
-	for i := 0; i+len(short) <= len(long); i++ {
-		if !componentsEqualAt(long, short, i) {
-			continue
-		}
-		end := i + len(short)
-		if end < len(long) && isNumericComponent(long[end]) {
+	// Stop before the end-aligned window (i+len(short) < len(long)): a legitimate
+	// match needs a numeric component immediately AFTER the matched span (a
+	// version/date), so the span is always a strict, non-suffix subspan of long.
+	for i := 0; i+len(short) < len(long); i++ {
+		if componentsEqualAt(long, short, i) && isNumericComponent(long[i+len(short)]) {
 			return true
 		}
 	}

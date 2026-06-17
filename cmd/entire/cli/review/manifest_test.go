@@ -914,3 +914,50 @@ func TestBuildLocalReviewManifestFromSummary_ExplicitModelClaimedBeforeDefault(t
 		t.Errorf("opus inspector linked to %q, want sess-opus", manifest.Sources[1].SessionID)
 	}
 }
+
+// TestBuildLocalReviewManifestFromSummary_ExplicitModelWithoutMatchingSession
+// verifies that an explicit-model inspector with no matching session is left
+// unlinked (not force-attributed to the default-model session), and that the
+// matched slice stays index-aligned so the default inspector still links.
+func TestBuildLocalReviewManifestFromSummary_ExplicitModelWithoutMatchingSession(t *testing.T) {
+	started := time.Date(2026, 5, 7, 10, 0, 0, 0, time.UTC)
+	summary := reviewtypes.RunSummary{
+		StartedAt: started,
+		AgentRuns: []reviewtypes.AgentRun{
+			{ // explicit opus inspector, but only a sonnet session exists
+				Name:      "claude-code",
+				AgentName: "claude-code",
+				Model:     "opus",
+				Status:    reviewtypes.AgentStatusSucceeded,
+				Buffer:    []reviewtypes.Event{reviewtypes.AssistantText{Text: "opus finding"}},
+			},
+			{ // default inspector
+				Name:      "claude-code",
+				AgentName: "claude-code",
+				Model:     "",
+				Status:    reviewtypes.AgentStatusSucceeded,
+				Buffer:    []reviewtypes.Event{reviewtypes.AssistantText{Text: "default finding"}},
+			},
+		},
+	}
+	states := []*session.State{
+		{
+			SessionID:    "sess-default",
+			Kind:         session.KindAgentReview,
+			WorktreePath: "/repo",
+			BaseCommit:   "abc123",
+			StartedAt:    started.Add(time.Second),
+			AgentType:    agenttypes.AgentType("Claude Code"),
+			ModelName:    "claude-sonnet-4-5",
+		},
+	}
+
+	manifest := buildLocalReviewManifestFromSummary("/repo", "abc123", summary, states, "")
+
+	if len(manifest.Sources) != 1 {
+		t.Fatalf("sources = %d, want 1 (opus inspector unmatched, not misattributed)", len(manifest.Sources))
+	}
+	if manifest.Sources[0].SessionID != "sess-default" || manifest.Sources[0].Output != "default finding" {
+		t.Errorf("source = %#v, want sess-default / 'default finding'", manifest.Sources[0])
+	}
+}
