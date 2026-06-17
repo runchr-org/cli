@@ -410,7 +410,7 @@ func FetchAndCheckoutRemoteBranch(ctx context.Context, branchName string) error 
 // Does NOT --unshallow: --unshallow is a global property of the clone, so on
 // shallow checkpoint repos it would also deepen unrelated branches.
 func FetchMetadataBranch(ctx context.Context) error {
-	return fetchMetadataFromOrigin(ctx, fetchMetadataOpts{NoFilter: true})
+	return fetchMetadataFromOrigin(ctx, true /* noFilter */)
 }
 
 // FetchMetadataTreeOnly fetches the entire/checkpoints/v1 commit+tree graph
@@ -428,15 +428,10 @@ func FetchMetadataBranch(ctx context.Context) error {
 // remote-tracking ref connected; git fetches incrementally, so after the first
 // fetch only new commits/trees travel.
 func FetchMetadataTreeOnly(ctx context.Context) error {
-	return fetchMetadataFromOrigin(ctx, fetchMetadataOpts{})
+	return fetchMetadataFromOrigin(ctx, false /* noFilter */)
 }
 
-type fetchMetadataOpts struct {
-	NoFilter  bool
-	Unshallow bool
-}
-
-func fetchMetadataFromOrigin(ctx context.Context, fopts fetchMetadataOpts) error {
+func fetchMetadataFromOrigin(ctx context.Context, noFilter bool) error {
 	refs := checkpoint.ResolveCommittedRefs(ctx)
 	if !refs.Primary.IsBranch() {
 		return fmt.Errorf("primary metadata ref %s is not a branch", refs.Primary)
@@ -454,11 +449,10 @@ func fetchMetadataFromOrigin(ctx context.Context, fopts fetchMetadataOpts) error
 	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
 
 	output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
-		Remote:    fetchTarget,
-		RefSpecs:  []string{refSpec},
-		NoTags:    true,
-		NoFilter:  fopts.NoFilter,
-		Unshallow: fopts.Unshallow,
+		Remote:   fetchTarget,
+		RefSpecs: []string{refSpec},
+		NoTags:   true,
+		NoFilter: noFilter,
 	})
 	if fetchErr != nil {
 		if ctx.Err() == context.DeadlineExceeded {

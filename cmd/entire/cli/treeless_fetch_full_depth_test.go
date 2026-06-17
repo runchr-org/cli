@@ -1,10 +1,7 @@
 package cli
 
 import (
-	"context"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -52,7 +49,7 @@ func TestFetchMetadataTreeOnly_DoesNotShallowRepo(t *testing.T) {
 	runGit(t, localDir, "push", "origin", "HEAD:refs/heads/main", paths.MetadataBranchName)
 	runGit(t, bareDir, "symbolic-ref", "HEAD", "refs/heads/main")
 
-	originTip := gitRevParse(t, bareDir, "refs/heads/"+paths.MetadataBranchName)
+	originTip := gitOutput(t, bareDir, "rev-parse", "refs/heads/"+paths.MetadataBranchName)
 
 	clonedDir := filepath.Join(tmpDir, "cloned")
 	runGit(t, tmpDir, "clone", bareDir, clonedDir)
@@ -67,36 +64,19 @@ func TestFetchMetadataTreeOnly_DoesNotShallowRepo(t *testing.T) {
 
 	// The fix: the tip-read must not leave the repo shallow. Under the old
 	// --depth=1 behavior this would be "true".
-	if shallow := gitOut(t, clonedDir, "rev-parse", "--is-shallow-repository"); shallow != "false" {
+	if shallow := gitOutput(t, clonedDir, "rev-parse", "--is-shallow-repository"); shallow != "false" {
 		t.Errorf("repo is shallow after tree-only fetch (--is-shallow-repository=%q); the tip-read must not create a shallow boundary", shallow)
 	}
 
 	// The full metadata history is present (two commits), not truncated to one.
 	originRef := "refs/remotes/origin/" + paths.MetadataBranchName
-	if n := gitOut(t, clonedDir, "rev-list", "--count", originRef); n != "2" {
+	if n := gitOutput(t, clonedDir, "rev-list", "--count", originRef); n != "2" {
 		t.Errorf("origin metadata history has %s commit(s), want 2 (full depth)", n)
 	}
 
 	// The local primary ref is advanced to the tip so reads work.
 	localRef := "refs/heads/" + paths.MetadataBranchName
-	if got := gitRevParse(t, clonedDir, localRef); got != originTip {
+	if got := gitOutput(t, clonedDir, "rev-parse", localRef); got != originTip {
 		t.Errorf("local primary ref %s = %q, want origin tip %q", localRef, got, originTip)
 	}
-}
-
-func gitRevParse(t *testing.T, dir, rev string) string {
-	t.Helper()
-	return gitOut(t, dir, "rev-parse", rev)
-}
-
-func gitOut(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.CommandContext(context.Background(), "git", args...)
-	cmd.Dir = dir
-	cmd.Env = testutil.GitIsolatedEnv()
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("git %s in %s: %v", strings.Join(args, " "), dir, err)
-	}
-	return strings.TrimSpace(string(out))
 }
