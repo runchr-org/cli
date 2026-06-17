@@ -2,6 +2,7 @@
 package search
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -14,6 +15,10 @@ import (
 // whose forge prefix maps back to github.com. Remotes resolving to any other
 // host, or whose path holds extra segments beyond owner/repo, are rejected.
 func ParseGitHubRemote(remoteURL string) (owner, repo string, err error) {
+	remoteURL = strings.TrimSpace(remoteURL)
+	if remoteURL == "" {
+		return "", "", errors.New("empty remote URL")
+	}
 	info, err := gitremote.ParseURL(remoteURL)
 	if err != nil {
 		return "", "", fmt.Errorf("parsing remote URL: %w", err)

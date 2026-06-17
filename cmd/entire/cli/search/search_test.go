@@ -56,9 +56,9 @@ func TestParseGitHubRemote_HTTPSNoGit(t *testing.T) {
 
 func TestParseGitHubRemote_Invalid(t *testing.T) {
 	t.Parallel()
-	_, _, err := ParseGitHubRemote("")
-	if err == nil {
-		t.Error("expected error for empty URL")
+	_, _, err := ParseGitHubRemote("   ")
+	if err == nil || err.Error() != "empty remote URL" {
+		t.Errorf("expected 'empty remote URL' for blank input, got %v", err)
 	}
 
 	_, _, err = ParseGitHubRemote("not-a-url")
