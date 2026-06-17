@@ -108,20 +108,26 @@ func setupV1Repo(t *testing.T) (*git.Repository, plumbing.Hash) {
 	})
 	require.NoError(t, err)
 
+	tip := addV1Checkpoint(t, repo, "a1b2c3d4e5f6", "test-session", "Hello, PERSONABC asked", "Look up PERSONABC")
+	return repo, tip
+}
+
+func addV1Checkpoint(t *testing.T, repo *git.Repository, cpIDString, sessionID, transcript, prompt string) plumbing.Hash {
+	t.Helper()
 	store := checkpoint.NewGitStore(repo, checkpoint.DefaultV1Refs())
-	cpID := id.MustCheckpointID("a1b2c3d4e5f6")
+	cpID := id.MustCheckpointID(cpIDString)
 	require.NoError(t, store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
 		CheckpointID: cpID,
-		SessionID:    "test-session",
+		SessionID:    sessionID,
 		Strategy:     "manual-commit",
-		Transcript:   redact.AlreadyRedacted([]byte(`{"role":"user","content":"Hello, PERSONABC asked"}` + "\n")),
-		Prompts:      []string{"Look up PERSONABC"},
+		Transcript:   redact.AlreadyRedacted([]byte(fmt.Sprintf(`{"role":"user","content":%q}`+"\n", transcript))),
+		Prompts:      []string{prompt},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	}))
 	ref, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
 	require.NoError(t, err)
-	return repo, ref.Hash()
+	return ref.Hash()
 }
 
 // makeOrphanCommit writes a single v1 commit (no parents = orphan).
@@ -205,6 +211,42 @@ func TestRewriteUnpushedV1WithOPF_HappyPath_RewritesAndTagsApplied(t *testing.T)
 		}
 		return nil
 	}))
+}
+
+func TestRewriteUnpushedV1WithOPF_MultiCommitTipCarriesPriorRedactedShards(t *testing.T) {
+	configureFakeOPF(t, &fakeOPFForRewrite{})
+	repo, _ := setupV1Repo(t)
+	originalTip := addV1Checkpoint(t, repo, "b2c3d4e5f6a7", "test-session-2",
+		"Second checkpoint also mentions PERSONABC",
+		"Summarize the second PERSONABC mention",
+	)
+
+	newTip, err := RewriteUnpushedV1WithOPF(context.Background(), repo, "origin")
+	require.NoError(t, err)
+	require.NotEqual(t, originalTip, newTip, "rewrite should replace the local v1 tip")
+
+	newCommit, err := repo.CommitObject(newTip)
+	require.NoError(t, err)
+	tree, err := newCommit.Tree()
+	require.NoError(t, err)
+
+	var sentinelFiles []string
+	redactedFiles := 0
+	require.NoError(t, tree.Files().ForEach(func(f *object.File) error {
+		content, err := f.Contents()
+		if err != nil {
+			return err
+		}
+		if strings.Contains(content, "PERSONABC") {
+			sentinelFiles = append(sentinelFiles, f.Name)
+		}
+		if strings.Contains(content, "[REDACTED_PERSON]") {
+			redactedFiles++
+		}
+		return nil
+	}))
+	require.Empty(t, sentinelFiles, "final rewritten tip must not carry a prior commit's original shard")
+	require.GreaterOrEqual(t, redactedFiles, 4, "both commits' transcript and prompt blobs should be redacted")
 }
 
 // Idempotent re-run: a commit already tagged Entire-OPF-Applied is

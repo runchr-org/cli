@@ -4217,7 +4217,7 @@ func TestAddDirectoryToEntries_PathTraversal(t *testing.T) {
 	}
 
 	entries := make(map[string]object.TreeEntry)
-	err = addDirectoryToEntriesWithAbsPath(repo, metadataDir, ".entire/metadata/session", entries)
+	err = addDirectoryToEntriesWithAbsPath(context.Background(), repo, metadataDir, ".entire/metadata/session", entries)
 	if err != nil {
 		t.Fatalf("addDirectoryToEntriesWithAbsPath failed: %v", err)
 	}
@@ -4249,14 +4249,14 @@ func TestMetadataDirectoryWalkersAllowDotDotPrefixedNames(t *testing.T) {
 	expectedPath := filepath.ToSlash(filepath.Join("checkpoint", "..generated", "schema.json"))
 
 	entries := make(map[string]object.TreeEntry)
-	if err := addDirectoryToEntriesWithAbsPath(repo, metadataDir, "checkpoint", entries); err != nil {
+	if err := addDirectoryToEntriesWithAbsPath(context.Background(), repo, metadataDir, "checkpoint", entries); err != nil {
 		t.Fatalf("addDirectoryToEntriesWithAbsPath failed: %v", err)
 	}
 	if _, ok := entries[expectedPath]; !ok {
 		t.Fatalf("expected entry at %q, got entries: %v", expectedPath, entries)
 	}
 
-	changes, err := addDirectoryToChanges(repo, metadataDir, "checkpoint")
+	changes, err := addDirectoryToChanges(context.Background(), repo, metadataDir, "checkpoint")
 	if err != nil {
 		t.Fatalf("addDirectoryToChanges failed: %v", err)
 	}
@@ -4309,7 +4309,7 @@ func TestAddDirectoryToEntries_SkipsSymlinks(t *testing.T) {
 	}
 
 	entries := make(map[string]object.TreeEntry)
-	err = addDirectoryToEntriesWithAbsPath(repo, metadataDir, "checkpoint/", entries)
+	err = addDirectoryToEntriesWithAbsPath(context.Background(), repo, metadataDir, "checkpoint/", entries)
 	if err != nil {
 		t.Fatalf("addDirectoryToEntriesWithAbsPath failed: %v", err)
 	}
@@ -4365,7 +4365,7 @@ func TestAddDirectoryToEntries_SkipsSymlinkedDirectories(t *testing.T) {
 	}
 
 	entries := make(map[string]object.TreeEntry)
-	err = addDirectoryToEntriesWithAbsPath(repo, metadataDir, "checkpoint/", entries)
+	err = addDirectoryToEntriesWithAbsPath(context.Background(), repo, metadataDir, "checkpoint/", entries)
 	if err != nil {
 		t.Fatalf("addDirectoryToEntriesWithAbsPath failed: %v", err)
 	}

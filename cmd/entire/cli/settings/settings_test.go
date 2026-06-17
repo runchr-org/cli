@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -988,6 +989,32 @@ func TestLoadFromBytes_OPFSettings_PromptDefault(t *testing.T) {
 			}
 			if got := s.Redaction.OpenAIPrivacyFilter.PromptDefault; got != tc.wantVal {
 				t.Errorf("PromptDefault = %q, want %q", got, tc.wantVal)
+			}
+		})
+	}
+}
+
+func TestLoadFromBytes_OPFSettings_TimeoutValidation(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		value   int
+		wantErr bool
+	}{
+		{name: "positive_allowed", value: 45},
+		{name: "zero_allowed_as_default", value: 0},
+		{name: "negative_rejected", value: -1, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			body := []byte(`{"redaction":{"openai_privacy_filter":{"timeout_seconds":` + strconv.Itoa(tc.value) + `}}}`)
+			_, err := LoadFromBytes(body)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for timeout_seconds=%d, got nil", tc.value)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error for timeout_seconds=%d: %v", tc.value, err)
 			}
 		})
 	}

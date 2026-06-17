@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -52,14 +53,20 @@ func (e *shadowCleanupEnv) addShadowBranch(baseCommit, worktreeID string) string
 // addSessionState writes a session state file. If ended is non-nil the
 // session is treated as ended; pendingCheckpoints simulates the
 // mid-finalize race window.
-func (e *shadowCleanupEnv) addSessionState(sessionID, baseCommit, worktreeID string, ended *time.Time, pendingCheckpoints []string) {
+func (e *shadowCleanupEnv) addSessionState(sessionID, baseCommit, worktreeID string, ended *time.Time, pendingCheckpoints []string, fullyCondensed bool) {
 	e.t.Helper()
+	phase := session.PhaseActive
+	if ended != nil {
+		phase = session.PhaseEnded
+	}
 	state := &SessionState{
 		SessionID:         sessionID,
 		BaseCommit:        baseCommit,
 		WorktreeID:        worktreeID,
 		StartedAt:         time.Now().Add(-time.Hour),
 		EndedAt:           ended,
+		Phase:             phase,
+		FullyCondensed:    fullyCondensed,
 		TurnCheckpointIDs: pendingCheckpoints,
 	}
 	require.NoError(e.t, SaveSessionState(context.Background(), state))
@@ -81,14 +88,16 @@ func TestCleanupPushedShadowBranches_Predicate(t *testing.T) {
 		id                string
 		ended             *time.Time
 		pendingCheckpoint []string
+		fullyCondensed    bool
 	}
 	cases := []struct {
 		name        string
 		sessions    []sessionFixture
 		wantDeleted bool
 	}{
-		{name: "ended_no_pending_deleted", sessions: []sessionFixture{{id: "s1", ended: &ended}}, wantDeleted: true},
-		{name: "active_session_preserved", sessions: []sessionFixture{{id: "s1", ended: &ended}, {id: "s2", ended: nil}}, wantDeleted: false},
+		{name: "ended_fully_condensed_deleted", sessions: []sessionFixture{{id: "s1", ended: &ended, fullyCondensed: true}}, wantDeleted: true},
+		{name: "ended_not_fully_condensed_preserved", sessions: []sessionFixture{{id: "s1", ended: &ended}}, wantDeleted: false},
+		{name: "active_session_preserved", sessions: []sessionFixture{{id: "s1", ended: &ended, fullyCondensed: true}, {id: "s2", ended: nil}}, wantDeleted: false},
 		{name: "pending_turn_checkpoints_preserved", sessions: []sessionFixture{{id: "s1", ended: &ended, pendingCheckpoint: []string{"a1b2c3d4e5f6"}}}, wantDeleted: false},
 		{name: "orphaned_branch_no_sessions_deleted", sessions: nil, wantDeleted: true},
 	}
@@ -97,7 +106,7 @@ func TestCleanupPushedShadowBranches_Predicate(t *testing.T) {
 			env := newShadowCleanupEnv(t)
 			shadow := env.addShadowBranch(env.baseHash.String(), "")
 			for _, s := range tc.sessions {
-				env.addSessionState(s.id, env.baseHash.String(), "", s.ended, s.pendingCheckpoint)
+				env.addSessionState(s.id, env.baseHash.String(), "", s.ended, s.pendingCheckpoint, s.fullyCondensed)
 			}
 			deleted, err := CleanupPushedShadowBranches(context.Background())
 			require.NoError(t, err)
@@ -119,8 +128,8 @@ func TestCleanupPushedShadowBranches_MixedBranchesPartialDelete(t *testing.T) {
 	preserved := env.addShadowBranch(env.baseHash.String(), "wt1")
 	deletable := env.addShadowBranch(env.baseHash.String(), "wt2")
 	ended := time.Now().Add(-time.Minute)
-	env.addSessionState("s-active", env.baseHash.String(), "wt1", nil, nil)
-	env.addSessionState("s-ended", env.baseHash.String(), "wt2", &ended, nil)
+	env.addSessionState("s-active", env.baseHash.String(), "wt1", nil, nil, false)
+	env.addSessionState("s-ended", env.baseHash.String(), "wt2", &ended, nil, true)
 
 	deleted, err := CleanupPushedShadowBranches(context.Background())
 	require.NoError(t, err)
@@ -137,4 +146,27 @@ func TestCleanupPushedShadowBranches_NoBranches_NoOp(t *testing.T) {
 	deleted, err := CleanupPushedShadowBranches(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, 0, deleted)
+}
+
+func TestDeleteShadowBranchesIfUnchanged_PreservesMovedBranch(t *testing.T) {
+	env := newShadowCleanupEnv(t)
+	shadow := env.addShadowBranch(env.baseHash.String(), "")
+
+	emptyTree := plumbing.NewHash("4b825dc642cb6eb9a060e54bf8d69288fbee4904")
+	newHash, err := checkpoint.CreateCommit(context.Background(), env.repo, emptyTree, env.baseHash,
+		"new checkpoint", "test", "test@test.com")
+	require.NoError(t, err)
+	require.NoError(t, env.repo.Storer.SetReference(
+		plumbing.NewHashReference(plumbing.NewBranchReferenceName(shadow), newHash)))
+
+	deleted, failed := DeleteShadowBranchesIfUnchanged(context.Background(), map[string]plumbing.Hash{
+		shadow: env.baseHash,
+	})
+	require.Empty(t, deleted)
+	require.Equal(t, []string{shadow}, failed)
+	require.True(t, env.branchExists(shadow))
+
+	ref, err := env.repo.Reference(plumbing.NewBranchReferenceName(shadow), false)
+	require.NoError(t, err)
+	require.Equal(t, newHash, ref.Hash())
 }

@@ -298,12 +298,11 @@ func listUnpushedV1Commits(repo *git.Repository, localTip, remoteTip plumbing.Ha
 // commits keep their tree (idempotent); unapplied commits get an
 // OPF-redacted tree + Entire-OPF-Applied: true trailer.
 //
-// Performance: we only redact files inside THIS commit's shard
-// (sharded layout: <id[:2]>/<id[2:]>/*). Files outside that shard live
-// at the same tree because git trees accumulate parent content — they
-// belong to other commits and either are already redacted (prior
-// OPF-applied push) or never will be (this user opted out then in).
-// Walking them every push is O(N×commits) work for no privacy gain.
+// Correctness note: each v1 commit tree is cumulative. During a multi-commit
+// rewrite, the newest original commit can still contain older shards that were
+// 7-layer-only before this rewrite. Redacting the whole tree for every
+// unapplied commit is intentionally conservative so the final rewritten tip
+// cannot reintroduce an older un-OPF-redacted shard.
 func rebuildV1Commit(ctx context.Context, repo *git.Repository, oldCommit *object.Commit, parent plumbing.Hash) (plumbing.Hash, error) {
 	newTree := oldCommit.TreeHash
 	if !trailers.HasOPFApplied(oldCommit.Message) {
@@ -311,12 +310,7 @@ func rebuildV1Commit(ctx context.Context, repo *git.Repository, oldCommit *objec
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("load tree: %w", err)
 		}
-		// Parse the shard path from the commit subject. Falls back to
-		// "" (walk everything) for bootstrap commits and unrecognized
-		// subjects — the conservative default still produces correct
-		// output, just slower.
-		shardPath := parseShardPathFromCommitMessage(oldCommit.Message)
-		newTree, err = rebuildTreeWithOPF(ctx, repo, tree, "", shardPath)
+		newTree, err = rebuildTreeWithOPF(ctx, repo, tree, "", "")
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}

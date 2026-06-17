@@ -142,8 +142,8 @@ func persistOPFPromptDefaultAlways(ctx context.Context) error {
 	if raw == nil {
 		raw = map[string]json.RawMessage{}
 	}
-	redactionRaw := readSubObject(raw, "redaction")
-	opfRaw := readSubObject(redactionRaw, "openai_privacy_filter")
+	redactionRaw := readSubObject(ctx, raw, "redaction")
+	opfRaw := readSubObject(ctx, redactionRaw, "openai_privacy_filter")
 
 	val, err := json.Marshal(settings.OPFPromptAlways)
 	if err != nil {
@@ -163,7 +163,7 @@ func persistOPFPromptDefaultAlways(ctx context.Context) error {
 	return nil
 }
 
-func readSubObject(parent map[string]json.RawMessage, key string) map[string]json.RawMessage {
+func readSubObject(ctx context.Context, parent map[string]json.RawMessage, key string) map[string]json.RawMessage {
 	sub := map[string]json.RawMessage{}
 	data, ok := parent[key]
 	if !ok {
@@ -171,6 +171,10 @@ func readSubObject(parent map[string]json.RawMessage, key string) map[string]jso
 	}
 	// Malformed sub-object → fresh map (we'll overwrite the slot).
 	if err := json.Unmarshal(data, &sub); err != nil {
+		logging.Warn(ctx, "malformed OPF prompt settings object; overwriting with fresh object",
+			slog.String("key", key),
+			slog.String("error", err.Error()),
+		)
 		return map[string]json.RawMessage{}
 	}
 	return sub

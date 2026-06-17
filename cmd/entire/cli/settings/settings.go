@@ -989,6 +989,9 @@ func validateOPFSettings(opf *OPFSettings) error {
 			return fmt.Errorf("openai_privacy_filter.categories has unknown key %q (see docs/security-and-privacy.md for the supported set)", name)
 		}
 	}
+	if opf.TimeoutSeconds < 0 {
+		return fmt.Errorf("openai_privacy_filter.timeout_seconds must be greater than or equal to 0 (got %d)", opf.TimeoutSeconds)
+	}
 	switch opf.PromptDefault {
 	case "", OPFPromptAsk, OPFPromptAlways, OPFPromptNever:
 		// ok

@@ -221,11 +221,16 @@ func detectOPF(ctx context.Context, cfg *OPFConfig, s string) []taggedRegion {
 
 	fmt.Fprintln(opfStderr, "→ OpenAI Privacy Filter: scanning transcript…")
 	start := time.Now()
-	spans, err := cfg.runtime.Redact(ctx, s, cats)
+	batched, err := cfg.runtime.RedactBatch(ctx, []string{s}, cats)
 	if err != nil {
 		handleOPFFailure(ctx, cfg, err)
 		return nil
 	}
+	if len(batched) != 1 {
+		handleOPFFailure(ctx, cfg, fmt.Errorf("opf runtime returned %d span slices for 1 input", len(batched)))
+		return nil
+	}
+	spans := batched[0]
 	fmt.Fprintf(opfStderr, "✓ OpenAI Privacy Filter: done (%.1fs)\n", time.Since(start).Seconds())
 
 	out := make([]taggedRegion, 0, len(spans))
@@ -316,17 +321,20 @@ func (s *shellOut) Redact(ctx context.Context, text string, categories []string)
 		return nil, nil
 	}
 	batch, err := s.RedactBatch(ctx, []string{text}, categories)
-	if err != nil || len(batch) == 0 {
+	if err != nil {
 		return nil, err
+	}
+	if len(batch) != 1 {
+		return nil, fmt.Errorf("opf runtime returned %d span slices for 1 input", len(batch))
 	}
 	return batch[0], nil
 }
 
 // RedactBatch sends multiple inputs to opf as a single shell-out, joined
-// with opfBatchSeparator. Internal newlines in inputs are flattened to
-// spaces (1-byte → 1-byte, offsets stay valid). opf emits one JSON object
-// covering the whole concatenated text; spans are partitioned back per
-// input via partitionIndex. Spans crossing a separator boundary are dropped.
+// with opfBatchSeparator. Internal newlines and separator collisions in inputs
+// are flattened to spaces (1-byte → 1-byte, offsets stay valid). opf emits one
+// JSON object covering the whole concatenated text; spans are partitioned back
+// per input via partitionIndex. Spans crossing a separator boundary are dropped.
 //
 // Errors deliberately do NOT include stdout or stderr content — OPF can
 // echo input fragments to either stream when misconfigured, and the error
@@ -347,7 +355,7 @@ func (s *shellOut) RedactBatch(ctx context.Context, inputs []string, categories 
 			buf.WriteString(opfBatchSeparator)
 		}
 		starts[i] = buf.Len()
-		buf.WriteString(strings.ReplaceAll(in, "\n", " "))
+		buf.WriteString(sanitizeOPFBatchInput(in))
 	}
 	batched := buf.String()
 
@@ -411,6 +419,11 @@ func (s *shellOut) RedactBatch(ctx context.Context, inputs []string, categories 
 		})
 	}
 	return out, nil
+}
+
+func sanitizeOPFBatchInput(in string) string {
+	replacer := strings.NewReplacer("\n", " ", opfBatchSeparator, " ")
+	return replacer.Replace(in)
 }
 
 // charToByteOffset converts a 0-based rune offset into a byte offset within

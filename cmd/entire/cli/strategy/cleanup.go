@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -76,6 +78,19 @@ func IsShadowBranch(branchName string) bool {
 // The "entire/checkpoints/v1" branch is excluded as it stores permanent metadata.
 // Returns an empty slice (not nil) if no shadow branches exist.
 func ListShadowBranches(ctx context.Context) ([]string, error) {
+	heads, err := listShadowBranchHeads(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branches := make([]string, 0, len(heads))
+	for branch := range heads {
+		branches = append(branches, branch)
+	}
+	sort.Strings(branches)
+	return branches, nil
+}
+
+func listShadowBranchHeads(ctx context.Context) (map[string]plumbing.Hash, error) {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
@@ -87,7 +102,7 @@ func ListShadowBranches(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("failed to get references: %w", err)
 	}
 
-	var shadowBranches []string
+	shadowBranches := map[string]plumbing.Hash{}
 
 	err = refs.ForEach(func(ref *plumbing.Reference) error {
 		if err := ctx.Err(); err != nil {
@@ -102,7 +117,7 @@ func ListShadowBranches(ctx context.Context) ([]string, error) {
 		branchName := strings.TrimPrefix(ref.Name().String(), "refs/heads/")
 
 		if IsShadowBranch(branchName) {
-			shadowBranches = append(shadowBranches, branchName)
+			shadowBranches[branchName] = ref.Hash()
 		}
 		return nil
 	})
@@ -110,19 +125,16 @@ func ListShadowBranches(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("failed to iterate references: %w", err)
 	}
 
-	// Ensure we return empty slice, not nil
-	if shadowBranches == nil {
-		shadowBranches = []string{}
-	}
-
 	return shadowBranches, nil
 }
 
 // CleanupPushedShadowBranches deletes shadow branches whose sessions
-// have all ended cleanly (no active session referencing them, no
-// pending turn-checkpoints awaiting finalization). Intended to be
-// called only after a successful push so the caller knows any
-// condensed checkpoint data already reached the remote.
+// have fully condensed into committed checkpoint metadata (no active
+// session referencing them, no pending turn-checkpoints awaiting
+// finalization, and no ended-but-uncondensed session still relying on
+// shadow-only data). Intended to be called only after a successful push
+// so the caller knows any condensed checkpoint data already reached
+// the remote.
 //
 // Returns the count of branches deleted. Failures (e.g., one branch
 // fails to delete due to a stale lock) are logged but don't abort
@@ -133,16 +145,18 @@ func ListShadowBranches(ctx context.Context) ([]string, error) {
 //     == nil (still active).
 //   - Skips any shadow branch whose session has TurnCheckpointIDs
 //     pending (mid-finalize race window).
+//   - Skips ended sessions until PhaseEnded and FullyCondensed prove the
+//     shadow branch contents have been copied to committed metadata.
 //   - Multiple sessions can share the same shadow branch (same base
 //     commit + worktree); ALL must satisfy the criteria above.
 //   - Shadow branches with no associated session state are deleted
 //     (no session to lose data from).
 func CleanupPushedShadowBranches(ctx context.Context) (int, error) {
-	branches, err := ListShadowBranches(ctx)
+	branchHeads, err := listShadowBranchHeads(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("list shadow branches: %w", err)
 	}
-	if len(branches) == 0 {
+	if len(branchHeads) == 0 {
 		return 0, nil
 	}
 
@@ -155,31 +169,24 @@ func CleanupPushedShadowBranches(ctx context.Context) (int, error) {
 	// because at least one session still depends on them.
 	protected := map[string]bool{}
 	for _, s := range states {
-		if s.EndedAt != nil && len(s.TurnCheckpointIDs) == 0 {
+		if s.Phase == session.PhaseEnded && s.FullyCondensed && len(s.TurnCheckpointIDs) == 0 {
 			continue // safe — session ended cleanly and finalized
 		}
 		shadow := getShadowBranchNameForCommit(s.BaseCommit, s.WorktreeID)
 		protected[shadow] = true
 	}
 
-	var toDelete []string
-	for _, b := range branches {
+	toDelete := map[string]plumbing.Hash{}
+	for b, hash := range branchHeads {
 		if !protected[b] {
-			toDelete = append(toDelete, b)
+			toDelete[b] = hash
 		}
 	}
 	if len(toDelete) == 0 {
 		return 0, nil
 	}
 
-	deleted, failed, delErr := DeleteShadowBranches(ctx, toDelete)
-	if delErr != nil {
-		// DeleteShadowBranches signature returns an error for future
-		// extensibility but currently always returns nil; log defensively.
-		logging.Warn(ctx, "shadow branch deletion reported error",
-			slog.String("error", delErr.Error()),
-		)
-	}
+	deleted, failed := DeleteShadowBranchesIfUnchanged(ctx, toDelete)
 	if len(failed) > 0 {
 		logging.Warn(ctx, "some shadow branches failed to delete during post-push cleanup",
 			slog.Int("failed_count", len(failed)),
@@ -187,6 +194,35 @@ func CleanupPushedShadowBranches(ctx context.Context) (int, error) {
 		)
 	}
 	return len(deleted), nil
+}
+
+// DeleteShadowBranchesIfUnchanged deletes shadow branches only if each branch
+// still points at the hash observed by the caller. This avoids deleting a
+// branch that another session advanced after cleanup's initial scan.
+func DeleteShadowBranchesIfUnchanged(ctx context.Context, branches map[string]plumbing.Hash) (deleted []string, failed []string) {
+	if len(branches) == 0 {
+		return []string{}, []string{}
+	}
+	for branch, expected := range branches {
+		if !IsShadowBranch(branch) || expected.IsZero() {
+			failed = append(failed, branch)
+			continue
+		}
+		ref := "refs/heads/" + branch
+		cmd := exec.CommandContext(ctx, "git", "update-ref", "-d", ref, expected.String())
+		if output, runErr := cmd.CombinedOutput(); runErr != nil {
+			logging.Debug(ctx, "shadow branch unchanged-delete skipped",
+				slog.String("branch", branch),
+				slog.String("expected", expected.String()),
+				slog.String("output", strings.TrimSpace(string(output))),
+				slog.String("error", runErr.Error()),
+			)
+			failed = append(failed, branch)
+			continue
+		}
+		deleted = append(deleted, branch)
+	}
+	return deleted, failed
 }
 
 // DeleteShadowBranches deletes the specified branches from the repository.

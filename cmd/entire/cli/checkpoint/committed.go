@@ -1858,8 +1858,7 @@ func (s *GitStore) copyMetadataDir(ctx context.Context, metadataDir, basePath st
 		// tree, re-redacts these blobs with OPF when enabled, and
 		// rewrites entire/checkpoints/v1 into 8-layer commits before
 		// they leave the local machine.
-		_ = ctx // ctx not needed by the 7-layer path; kept on caller signature for future use
-		blobHash, mode, err := createRedactedBlobFromFile(s.repo, path, relPath)
+		blobHash, mode, err := createRedactedBlobFromFile(ctx, s.repo, path, relPath)
 		if err != nil {
 			return fmt.Errorf("failed to create blob for %s: %w", path, err)
 		}
@@ -1887,7 +1886,7 @@ func (s *GitStore) copyMetadataDir(ctx context.Context, metadataDir, basePath st
 // (strategy/manual_commit_opf_rewrite.go), which re-redacts the 7-layer
 // blobs into 8-layer commits before they leave the local machine.
 // JSONL files get JSONL-aware redaction; all other files get plain byte redaction.
-func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string) (plumbing.Hash, filemode.FileMode, error) {
+func createRedactedBlobFromFile(ctx context.Context, repo *git.Repository, filePath, treePath string) (plumbing.Hash, filemode.FileMode, error) {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return plumbing.ZeroHash, 0, fmt.Errorf("failed to stat file: %w", err)
@@ -1914,7 +1913,7 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string)
 		return hash, mode, nil
 	}
 
-	content = RedactBlobBytes(context.Background(), content, treePath, false)
+	content = RedactBlobBytes(ctx, content, treePath, false)
 
 	hash, err := CreateBlobFromContent(repo, content)
 	if err != nil {

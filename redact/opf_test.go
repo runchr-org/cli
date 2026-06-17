@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -119,8 +121,8 @@ func TestDetectOPF_DisabledReturnsNil(t *testing.T) {
 	if got := detectOPF(context.Background(), getOPFConfig(), "Alice met Bob"); got != nil {
 		t.Errorf("disabled OPF should return nil, got %v", got)
 	}
-	if fake.calls != 0 {
-		t.Errorf("disabled OPF invoked runtime %d times, want 0", fake.calls)
+	if fake.calls+fake.batchCalls != 0 {
+		t.Errorf("disabled OPF invoked runtime calls=%d batchCalls=%d, want 0", fake.calls, fake.batchCalls)
 	}
 }
 
@@ -201,12 +203,13 @@ func TestDetectOPF_SkipsNonProseStrings(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc, func(t *testing.T) {
-			callsBefore := fake.calls
+			callsBefore := fake.calls + fake.batchCalls
 			if got := detectOPF(context.Background(), getOPFConfig(), tc); got != nil {
 				t.Errorf("non-prose %q: want nil, got %v", tc, got)
 			}
-			if fake.calls != callsBefore {
-				t.Errorf("non-prose %q: runtime invoked (calls %d → %d)", tc, callsBefore, fake.calls)
+			if fake.calls+fake.batchCalls != callsBefore {
+				t.Errorf("non-prose %q: runtime invoked (calls %d → %d)",
+					tc, callsBefore, fake.calls+fake.batchCalls)
 			}
 		})
 	}
@@ -229,8 +232,8 @@ func TestDetectOPF_CircuitBreaker(t *testing.T) {
 	if got := detectOPF(context.Background(), getOPFConfig(), "Alice met Bob"); got != nil {
 		t.Fatalf("first call: want nil, got %v", got)
 	}
-	if fake.calls != 1 {
-		t.Fatalf("first call: want 1 invocation, got %d", fake.calls)
+	if fake.batchCalls != 1 {
+		t.Fatalf("first call: want 1 batch invocation, got %d", fake.batchCalls)
 	}
 
 	// Subsequent calls short-circuit before invoking the runtime.
@@ -239,8 +242,8 @@ func TestDetectOPF_CircuitBreaker(t *testing.T) {
 			t.Errorf("call %d after breaker: want nil, got %v", i+2, got)
 		}
 	}
-	if fake.calls != 1 {
-		t.Errorf("breaker did not engage: %d invocations, want 1", fake.calls)
+	if fake.batchCalls != 1 {
+		t.Errorf("breaker did not engage: %d batch invocations, want 1", fake.batchCalls)
 	}
 
 	// Reconfiguring resets the breaker.
@@ -251,8 +254,38 @@ func TestDetectOPF_CircuitBreaker(t *testing.T) {
 	if got := detectOPF(context.Background(), getOPFConfig(), "Eve walked home"); got != nil {
 		t.Fatal("after reconfigure: want nil (still failing fake), got non-nil")
 	}
-	if fake.calls != 2 {
-		t.Errorf("after reconfigure: want 2 total invocations, got %d", fake.calls)
+	if fake.batchCalls != 2 {
+		t.Errorf("after reconfigure: want 2 total batch invocations, got %d", fake.batchCalls)
+	}
+}
+
+type emptyBatchRuntime struct{}
+
+func (r *emptyBatchRuntime) Redact(_ context.Context, _ string, _ []string) ([]Span, error) {
+	return nil, nil
+}
+
+func (r *emptyBatchRuntime) RedactBatch(_ context.Context, _ []string, _ []string) ([][]Span, error) {
+	return nil, nil
+}
+
+func TestDetectOPF_SingleInputShortReturnTripsBreaker(t *testing.T) {
+	resetOPFConfig()
+	t.Cleanup(resetOPFConfig)
+	origStderr := opfStderr
+	opfStderr = io.Discard
+	t.Cleanup(func() { opfStderr = origStderr })
+
+	ConfigurePrivacyFilterWithRuntime(OPFConfig{
+		Enabled:    true,
+		Categories: map[string]bool{"private_person": true},
+	}, &emptyBatchRuntime{})
+
+	if got := detectOPF(context.Background(), getOPFConfig(), "Alice met Bob"); got != nil {
+		t.Fatalf("short return should fall back to nil regions, got %v", got)
+	}
+	if !opfBreakerTripped.Load() {
+		t.Error("single-input short return must trip the OPF breaker")
 	}
 }
 
@@ -278,6 +311,37 @@ func TestShellOut_BatchSingleInferencePass(t *testing.T) {
 	defer mu.Unlock()
 	if calls != 1 {
 		t.Errorf("want 1 shell-out for 2 inputs, got %d", calls)
+	}
+}
+
+func TestShellOut_RedactBatchSanitizesSeparatorCollisions(t *testing.T) {
+	t.Parallel()
+	capture := filepath.Join(t.TempDir(), "stdin")
+	rt := &shellOut{
+		command:        "opf",
+		timeoutSeconds: 5,
+		commandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, "sh", "-c", `cat > "$1"; printf '{"detected_spans":[]}'`, "sh", capture)
+		},
+	}
+
+	_, err := rt.RedactBatch(context.Background(),
+		[]string{"alpha" + opfBatchSeparator + "beta", "gamma delta"},
+		[]string{"private_person"},
+	)
+	if err != nil {
+		t.Fatalf("RedactBatch: %v", err)
+	}
+	data, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read captured stdin: %v", err)
+	}
+	got := string(data)
+	if count := strings.Count(got, opfBatchSeparator); count != 1 {
+		t.Fatalf("batched stdin should contain only the inter-input separator, got %d in %q", count, got)
+	}
+	if !strings.Contains(got, "alpha beta") {
+		t.Fatalf("input separator collision should be replaced with a space, got %q", got)
 	}
 }
 

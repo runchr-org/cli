@@ -69,7 +69,6 @@ var (
 	baseCommitTrailerRegex   = regexp.MustCompile(BaseCommitTrailerKey + `:\s*([a-f0-9]{40})`)
 	sessionTrailerRegex      = regexp.MustCompile(SessionTrailerKey + `:\s*(.+)`)
 	checkpointTrailerRegex   = regexp.MustCompile(CheckpointTrailerKey + `:\s*(` + checkpointID.Pattern + `)(?:\s|$)`)
-	opfAppliedTrailerRegex   = regexp.MustCompile(OPFAppliedTrailerKey + `:\s*(\S+)`)
 )
 
 // ParseMetadata extracts metadata dir from commit message.
@@ -292,11 +291,41 @@ func AppendCheckpointTrailer(message, checkpointID string) string {
 // "Entire-OPF-Applied: false" or "skipped" from accidentally meaning
 // "yes, applied."
 func HasOPFApplied(commitMessage string) bool {
-	matches := opfAppliedTrailerRegex.FindStringSubmatch(commitMessage)
-	if len(matches) < 2 {
-		return false
+	for _, line := range finalTrailerBlock(commitMessage) {
+		line = strings.TrimSpace(line)
+		key, value, ok := strings.Cut(line, ":")
+		if !ok || key != OPFAppliedTrailerKey {
+			continue
+		}
+		if strings.TrimSpace(value) == OPFAppliedTrailerValue {
+			return true
+		}
 	}
-	return strings.TrimSpace(matches[1]) == OPFAppliedTrailerValue
+	return false
+}
+
+func finalTrailerBlock(message string) []string {
+	trimmed := strings.TrimRight(message, "\n")
+	if trimmed == "" {
+		return nil
+	}
+	lines := strings.Split(trimmed, "\n")
+	i := len(lines) - 1
+	for i >= 0 && strings.TrimSpace(lines[i]) == "" {
+		i--
+	}
+	end := i + 1
+	for i >= 0 && IsTrailerLine(strings.TrimSpace(lines[i])) {
+		i--
+	}
+	start := i + 1
+	if start == end {
+		return nil
+	}
+	if i >= 0 && strings.TrimSpace(lines[i]) != "" {
+		return nil
+	}
+	return lines[start:end]
 }
 
 // AppendOPFAppliedTrailer appends `Entire-OPF-Applied: true` in
