@@ -119,3 +119,10 @@ type TrailUpdateRequest struct {
 type TrailUpdateResponse struct {
 	Trail TrailResource `json:"trail"`
 }
+
+// TrailDeleteResponse is the response from DELETE /api/v1/trails/:host/:owner/:repo/:number.
+// OK is the server's explicit success signal; a destructive delete should not be
+// reported as done unless it is true.
+type TrailDeleteResponse struct {
+	OK bool `json:"ok"`
+}

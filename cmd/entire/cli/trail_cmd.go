@@ -16,6 +16,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/gitremote"
+	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/trail"
 
@@ -62,6 +63,7 @@ func newTrailCmd() *cobra.Command {
 	cmd.AddCommand(newTrailListCmd())
 	cmd.AddCommand(newTrailCreateCmd())
 	cmd.AddCommand(newTrailUpdateCmd())
+	cmd.AddCommand(newTrailDeleteCmd())
 	cmd.AddCommand(newTrailFindingCmd())
 	cmd.AddCommand(newTrailWatchCmd())
 
@@ -860,7 +862,7 @@ func runTrailUpdate(ctx context.Context, w, errW io.Writer, insecureHTTP bool, i
 		if found.Number <= 0 {
 			return fmt.Errorf("trail for branch %q has no number yet; cannot update", branch)
 		}
-		resp, err := client.Patch(ctx, trailsBasePath(forge, owner, repoName)+"/"+strconv.Itoa(found.Number), updateReq)
+		resp, err := client.Patch(ctx, trailNumberPath(forge, owner, repoName, found.Number), updateReq)
 		if err != nil {
 			return fmt.Errorf("failed to update trail: %w", err)
 		}
@@ -934,6 +936,151 @@ func buildTrailUpdateRequest(current *api.TrailResource, inputs trailUpdateInput
 	}
 
 	return req
+}
+
+// parseTrailNumberArg parses an optional positional trail-number argument.
+// It returns 0 when no argument is supplied; a supplied value must be a
+// positive integer (the server keys single-trail endpoints by number).
+func parseTrailNumberArg(args []string) (int, error) {
+	if len(args) == 0 {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("invalid trail number %q", args[0])
+	}
+	return n, nil
+}
+
+func newTrailDeleteCmd() *cobra.Command {
+	var branch string
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "delete [<number>]",
+		Short: "Delete a trail",
+		Long: `Delete a trail by number, or the trail for a branch.
+
+If <number> is omitted, the trail for --branch (or the current branch) is used.
+Deletion is permanent; you are prompted to confirm unless --force is passed.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			number, err := parseTrailNumberArg(args)
+			if err != nil {
+				return err
+			}
+			if number > 0 && cmd.Flags().Changed("branch") {
+				return errors.New("cannot combine a trail <number> with --branch")
+			}
+			return runTrailDelete(cmd, number, branch, force)
+		},
+	}
+
+	cmd.Flags().StringVar(&branch, "branch", "", "Branch whose trail to delete (defaults to current)")
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip the confirmation prompt")
+
+	return cmd
+}
+
+func runTrailDelete(cmd *cobra.Command, number int, branch string, force bool) error {
+	ctx := cmd.Context()
+	w := cmd.OutOrStdout()
+
+	return runAuthenticatedDataAPI(ctx, cmd.ErrOrStderr(), trailInsecureHTTP(cmd), func(ctx context.Context, client *api.Client) error {
+		forge, owner, repo, err := resolveTrailRemote(ctx)
+		if err != nil {
+			return err
+		}
+
+		// Resolve the target trail. An explicit number is authoritative (a
+		// lookup is best-effort, only to label the confirmation); otherwise the
+		// branch's trail supplies the number.
+		title := ""
+		if number == 0 {
+			if branch == "" {
+				branch, err = GetCurrentBranch(ctx)
+				if err != nil {
+					return fmt.Errorf("failed to determine current branch: %w", err)
+				}
+			}
+			found, ferr := findTrailByBranch(ctx, client, forge, owner, repo, branch)
+			if ferr != nil {
+				return ferr
+			}
+			if found == nil {
+				return fmt.Errorf("no trail found for branch %q", branch)
+			}
+			if found.Number <= 0 {
+				return fmt.Errorf("trail for branch %q has no number yet; cannot delete", branch)
+			}
+			number = found.Number
+			title = found.Title
+		} else if found, ferr := findTrailByNumber(ctx, client, forge, owner, repo, number); ferr == nil && found != nil {
+			title = found.Title
+		}
+
+		proceed, err := confirmTrailDeletion(w, number, title, force, interactive.CanPromptInteractively())
+		if err != nil {
+			return err
+		}
+		if !proceed {
+			return nil
+		}
+
+		resp, err := client.Delete(ctx, trailNumberPath(forge, owner, repo, number))
+		if err != nil {
+			return fmt.Errorf("failed to delete trail: %w", err)
+		}
+		defer resp.Body.Close()
+		if err := checkTrailResponse(resp); err != nil {
+			return err
+		}
+
+		// Verify the server's success signal. CheckResponse accepts any 2xx and
+		// the body is otherwise never read, so a destructive delete could report
+		// success on an unexpected/incomplete 2xx; decoding guards that (and
+		// drains the body for connection reuse).
+		var delResp api.TrailDeleteResponse
+		if err := api.DecodeJSON(resp, &delResp); err != nil {
+			return fmt.Errorf("failed to decode delete response: %w", err)
+		}
+		if !delResp.OK {
+			return fmt.Errorf("trail API did not confirm deletion of trail #%d", number)
+		}
+
+		fmt.Fprintf(w, "Deleted trail #%d\n", number)
+		return nil
+	})
+}
+
+// confirmTrailDeletion decides whether a trail delete should proceed. With
+// force it proceeds silently. Otherwise it requires an interactive terminal:
+// when none is available it refuses (returns an error) rather than deleting
+// unprompted; when one is, it shows a confirmation form. canPrompt is passed in
+// (rather than queried) so the decision is unit-testable without a TTY.
+func confirmTrailDeletion(w io.Writer, number int, title string, force, canPrompt bool) (bool, error) {
+	if force {
+		return true, nil
+	}
+	if !canPrompt {
+		return false, fmt.Errorf("refusing to delete trail #%d without confirmation; pass --force", number)
+	}
+	prompt := fmt.Sprintf("Delete trail #%d?", number)
+	if title != "" {
+		prompt = fmt.Sprintf("Delete trail #%d (%s)?", number, title)
+	}
+	confirmed := false
+	form := NewAccessibleForm(
+		huh.NewGroup(huh.NewConfirm().Title(prompt).Value(&confirmed)),
+	)
+	if err := form.Run(); err != nil {
+		return false, handleFormCancellation(w, "Trail deletion", err)
+	}
+	if !confirmed {
+		fmt.Fprintln(w, "Trail deletion cancelled.")
+		return false, nil
+	}
+	return true, nil
 }
 
 // defaultBaseBranch is the fallback base branch name when it cannot be determined.
@@ -1117,6 +1264,13 @@ func trailListPageSignature(trails []api.TrailResource) string {
 // (e.g., "/api/v1/trails/gh/org/repo").
 func trailsBasePath(forge, owner, repo string) string {
 	return fmt.Sprintf("/api/v1/trails/%s/%s/%s", forge, owner, repo)
+}
+
+// trailNumberPath returns the single-trail API path keyed by integer trail
+// number (e.g. "/api/v1/trails/gh/acme/repo/575"). The server validates an
+// integer here and rejects the trail UUID, so callers must pass Number, not ID.
+func trailNumberPath(forge, owner, repo string, number int) string {
+	return trailsBasePath(forge, owner, repo) + "/" + strconv.Itoa(number)
 }
 
 // resolveTrailRemote resolves the origin remote and ensures the forge is
