@@ -485,30 +485,6 @@ func resolveTrailReviewTarget(ctx context.Context, client *api.Client, selector 
 	return trailReviewTarget{Host: host, Owner: owner, Repo: repo, Trail: *found}, nil
 }
 
-func findTrailBySelector(ctx context.Context, client *api.Client, host, owner, repo, selector string) (*api.TrailResource, error) {
-	selector = strings.TrimSpace(selector)
-	if selector == "" {
-		return nil, nil //nolint:nilnil // empty selector means not found for this helper
-	}
-	if n, ok := parseTrailReviewNumberSelector(selector); ok {
-		found, err := findTrailByNumber(ctx, client, host, owner, repo, n)
-		if err != nil || found != nil {
-			return found, err
-		}
-	}
-	return findTrail(ctx, client, host, owner, repo, func(t api.TrailResource) bool {
-		return t.ID == selector || t.Branch == selector
-	})
-}
-
-func parseTrailReviewNumberSelector(selector string) (int, bool) {
-	n, err := strconv.Atoi(strings.TrimSpace(selector))
-	if err != nil || n <= 0 {
-		return 0, false
-	}
-	return n, true
-}
-
 func normalizeTrailReviewListOptions(opts trailReviewListOptions) (trailReviewListOptions, error) {
 	if opts.Limit <= 0 {
 		return opts, errors.New("limit must be greater than 0")

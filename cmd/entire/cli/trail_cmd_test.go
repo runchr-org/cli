@@ -329,7 +329,7 @@ func TestFindTrailStopsWhenServerRepeatsUnpaginatedFullPage(t *testing.T) {
 	}
 }
 
-func TestFindTrailStopsOnSecondFullPageWithoutTotal(t *testing.T) {
+func TestFindTrailStopsAtMaxPagesWithoutTotal(t *testing.T) {
 	t.Parallel()
 	var requests int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -353,8 +353,8 @@ func TestFindTrailStopsOnSecondFullPageWithoutTotal(t *testing.T) {
 	if found != nil {
 		t.Fatalf("found = %#v, want nil", found)
 	}
-	if got := atomic.LoadInt32(&requests); got != 2 {
-		t.Fatalf("requests = %d, want 2", got)
+	if got := atomic.LoadInt32(&requests); got != trailFindMaxPages {
+		t.Fatalf("requests = %d, want %d", got, trailFindMaxPages)
 	}
 }
 

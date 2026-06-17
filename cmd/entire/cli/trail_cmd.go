@@ -34,7 +34,7 @@ const (
 	// trailListServerMaxLimit is the most trails the server returns per
 	// request (the list endpoint clamps limit to 200).
 	trailListServerMaxLimit = 200
-	trailFindMaxPages       = 100
+	trailFindMaxPages       = 10
 )
 
 func newTrailCmd() *cobra.Command {
@@ -1005,6 +1005,30 @@ func runTrailCreateInteractive(title, body, branch, statusStr *string) error {
 }
 
 // findTrailByBranch looks up a trail by branch name via the list API.
+func findTrailBySelector(ctx context.Context, client *api.Client, forge, owner, repo, selector string) (*api.TrailResource, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return nil, nil //nolint:nilnil // empty selector means not found for this helper
+	}
+	if n, ok := parseTrailNumberSelector(selector); ok {
+		found, err := findTrailByNumber(ctx, client, forge, owner, repo, n)
+		if err != nil || found != nil {
+			return found, err
+		}
+	}
+	return findTrail(ctx, client, forge, owner, repo, func(t api.TrailResource) bool {
+		return t.ID == selector || t.Branch == selector
+	})
+}
+
+func parseTrailNumberSelector(selector string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(selector))
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
 func findTrailByBranch(ctx context.Context, client *api.Client, forge, owner, repo, branch string) (*api.TrailResource, error) {
 	return findTrail(ctx, client, forge, owner, repo, func(t api.TrailResource) bool {
 		return t.Branch == branch
@@ -1055,9 +1079,6 @@ func findTrail(ctx context.Context, client *api.Client, forge, owner, repo strin
 			break
 		}
 		if listResp.Total == 0 {
-			if offset > 0 {
-				break
-			}
 			pageSignature := trailListPageSignature(listResp.Trails)
 			if pageSignature != "" && pageSignature == previousPageSignature {
 				break
@@ -1160,16 +1181,16 @@ func cleanupCreatedTrailBranch(repo *git.Repository, branchName string, localCre
 	if localCreated {
 		branchRef := plumbing.NewBranchReferenceName(branchName)
 		if head, err := repo.Head(); err == nil && head.Name() == branchRef {
-			fmt.Fprintf(errW, "Warning: not deleting local branch %s after trail creation failed because it is checked out\n", branchName)
+			fmt.Fprintf(errW, "Warning: not deleting local branch %s after trail creation failed because it is checked out; switch branches and run 'git branch -D %s' if you do not need it\n", branchName, branchName)
 		} else if err := repo.Storer.RemoveReference(branchRef); err != nil {
-			fmt.Fprintf(errW, "Warning: failed to delete local branch %s after trail creation failed: %v\n", branchName, err)
+			fmt.Fprintf(errW, "Warning: failed to delete local branch %s after trail creation failed: %v; run 'git branch -D %s' if you do not need it\n", branchName, err, branchName)
 		} else {
 			localRemoved = true
 		}
 	}
 	if remotePushed {
 		if !localRemoved {
-			fmt.Fprintf(errW, "Warning: not deleting remote branch %s after trail creation failed because local cleanup did not complete\n", branchName)
+			fmt.Fprintf(errW, "Warning: not deleting remote branch %s after trail creation failed because local cleanup did not complete; run 'git push origin --delete %s' if you do not need it\n", branchName, branchName)
 			return
 		}
 		if err := deleteBranchFromOrigin(branchName); err != nil {
