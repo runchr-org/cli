@@ -154,14 +154,21 @@ func RunMulti(
 			}
 			waitErr := p.Wait()
 			finishedAt := time.Now()
-			states[idx].waitErr = waitErr
-			states[idx].finishedAt = finishedAt
+			// waitErr, timedOut, and finishedAt are all written here, before this
+			// goroutine's deferred wg.Done(). The main goroutine reads them only
+			// after the dispatch loop ends, which is sequenced after
+			// wg.Wait() -> close(fanIn) by the close goroutine; that wg edge is the
+			// happens-before, so it covers these writes regardless of the fanIn
+			// sends below.
+			//
 			// ac.Err() is immutable once set, so DeadlineExceeded means THIS
 			// agent's deadline fired first; a parent cancellation (user Ctrl+C)
-			// propagates as Canceled instead. Reading only ac is race-free —
-			// also sampling the parent ctx could change between the two reads and
+			// propagates as Canceled instead. Reading only ac is race-free — also
+			// sampling the parent ctx could change between the two reads and
 			// misclassify a real timeout as a cancellation.
+			states[idx].waitErr = waitErr
 			states[idx].timedOut = ac.Err() == context.DeadlineExceeded
+			states[idx].finishedAt = finishedAt
 			if shouldEmitSyntheticRunError(ctx, waitErr) {
 				fanIn <- taggedEvent{agentIdx: idx, ev: reviewtypes.RunError{Err: waitErr}}
 			}
