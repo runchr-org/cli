@@ -8,6 +8,7 @@
 package review
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1274,9 +1275,13 @@ type singleAgentSinkInputs struct {
 //
 //   - Non-TTY: [DumpSink, SynthesisSink?] — narrative dump plus profile-native
 //     final report when autoSynthesis is enabled.
-//   - TTY: [TUISink, DumpSink, SynthesisSink?] — TUI owns the live dashboard;
-//     DumpSink renders the post-run narrative; SynthesisSink renders the final
-//     report after the TUI exits.
+//   - TTY + profile-native auto synthesis: [TUISink, buffered DumpSink,
+//     buffered SynthesisSink, TUI finalizer, buffer flusher]. The TUI stays up
+//     during the judge phase and post-run stdout is flushed after the alt-screen
+//     exits.
+//   - TTY without auto synthesis: [TUISink, TUI finalizer, DumpSink,
+//     SynthesisSink?]. Legacy prompted synthesis runs after the TUI exits so the
+//     prompt can safely use stdin/stdout.
 //
 // Prompted legacy synthesis is still only appended when canPrompt is true.
 // Profile-native auto synthesis does not need stdin, so it is available in
@@ -1284,8 +1289,54 @@ type singleAgentSinkInputs struct {
 func composeMultiAgentSinks(in multiAgentSinkInputs) []reviewtypes.Sink {
 	sinks := []reviewtypes.Sink{}
 	if in.isTTY {
-		sinks = append(sinks, NewTUISink(in.agentNames, in.cancelRun, in.out, os.Stdin))
+		tui := NewTUISink(in.agentNames, in.cancelRun, in.out, os.Stdin)
+		sinks = append(sinks, tui)
+		if in.autoSynthesis && in.synthesisProvider != nil {
+			postRunOut := &bytes.Buffer{}
+			sinks = append(sinks, DumpSink{W: postRunOut})
+			sinks = append(sinks, SynthesisSink{
+				Provider:     in.synthesisProvider,
+				Writer:       postRunOut,
+				InputTTY:     in.canPrompt,
+				PromptYN:     in.promptYN,
+				PerRunPrompt: in.perRunPrompt,
+				ProfileName:  in.profileName,
+				Task:         in.task,
+				MasterName:   in.masterName,
+				Auto:         true,
+				RunContext:   in.runContext,
+				OnResult:     in.onSynthesisResult,
+				OnStart: func() {
+					tui.FinalPhaseStarted(finalJudgeDisplayName(in.masterName))
+				},
+				OnComplete: func(err error) {
+					tui.FinalPhaseFinished(err)
+				},
+			})
+			sinks = append(sinks, tuiPostRunCompleteSink{tui: tui})
+			sinks = append(sinks, bufferFlushSink{buf: postRunOut, out: in.out})
+			return sinks
+		}
+		sinks = append(sinks, tuiPostRunCompleteSink{tui: tui})
+		sinks = append(sinks, DumpSink{W: in.out})
+		if in.synthesisProvider != nil && in.canPrompt {
+			sinks = append(sinks, SynthesisSink{
+				Provider:     in.synthesisProvider,
+				Writer:       in.out,
+				InputTTY:     in.canPrompt,
+				PromptYN:     in.promptYN,
+				PerRunPrompt: in.perRunPrompt,
+				ProfileName:  in.profileName,
+				Task:         in.task,
+				MasterName:   in.masterName,
+				Auto:         false,
+				RunContext:   in.runContext,
+				OnResult:     in.onSynthesisResult,
+			})
+		}
+		return sinks
 	}
+
 	sinks = append(sinks, DumpSink{W: in.out})
 	if in.synthesisProvider != nil && (in.autoSynthesis || in.canPrompt) {
 		sinks = append(sinks, SynthesisSink{
@@ -1303,6 +1354,14 @@ func composeMultiAgentSinks(in multiAgentSinkInputs) []reviewtypes.Sink {
 		})
 	}
 	return sinks
+}
+
+func finalJudgeDisplayName(masterName string) string {
+	masterName = strings.TrimSpace(masterName)
+	if masterName == "" {
+		return "final judge"
+	}
+	return "judge: " + masterName
 }
 
 // maybePostReviewToTrail delivers the final review output to the branch's trail

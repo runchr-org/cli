@@ -145,16 +145,11 @@ func (s *TUISink) AgentEvent(agent string, ev reviewtypes.Event) {
 	s.program.Send(agentEventMsg{agent: agent, ev: ev})
 }
 
-// RunFinished (Sink interface): mark the run complete and send the final
-// summary message. On completion the TUI exits on its own — it does NOT wait
-// for a keypress — so the judge (SynthesisSink) and the narrative dump run
-// automatically instead of forcing the user to press Enter to start the final
-// consolidation.
-//
-// RunFinished still blocks until the Bubble Tea program has exited so that
-// post-run sinks (DumpSink, SynthesisSink) render AFTER the TUI has torn down
-// the alt-screen and the terminal is back in normal mode; that block now ends
-// as soon as the run finishes rather than on an explicit dismissal key.
+// RunFinished (Sink interface): mark inspector execution complete and send the
+// final summary message. It does not block or exit the TUI: post-run sinks may
+// still run (for example the final judge), and they can update the dashboard via
+// FinalPhaseStarted/FinalPhaseFinished. A later PostRunComplete call exits the
+// TUI once buffered post-run output is ready to flush.
 func (s *TUISink) RunFinished(summary reviewtypes.RunSummary) {
 	s.mu.Lock()
 	if s.finished {
@@ -165,8 +160,44 @@ func (s *TUISink) RunFinished(summary reviewtypes.RunSummary) {
 	s.mu.Unlock()
 
 	s.program.Send(runFinishedMsg{summary: summary})
-	// Block until the Bubble Tea program exits — user pressed an explicit
-	// exit key (q/Esc/Enter/Ctrl+C) after seeing the final dashboard, or
-	// Ctrl+C was received during the run and the program already quit.
+}
+
+// FinalPhaseStarted updates the TUI with a visible post-run phase such as the
+// profile judge consolidating inspector reports.
+func (s *TUISink) FinalPhaseStarted(name string) {
+	s.mu.Lock()
+	ok := s.started
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	s.program.Send(finalPhaseStartedMsg{name: name})
+}
+
+// FinalPhaseFinished marks the visible post-run phase complete.
+func (s *TUISink) FinalPhaseFinished(err error) {
+	s.mu.Lock()
+	ok := s.started
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	msg := finalPhaseFinishedMsg{}
+	if err != nil {
+		msg.err = err.Error()
+	}
+	s.program.Send(msg)
+}
+
+// PostRunComplete exits the TUI and waits for the Bubble Tea program to finish.
+// Call after post-run sinks have produced any buffered output.
+func (s *TUISink) PostRunComplete() {
+	s.mu.Lock()
+	ok := s.started
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	s.program.Send(postRunCompleteMsg{})
 	s.Wait()
 }

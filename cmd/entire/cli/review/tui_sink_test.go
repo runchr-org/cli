@@ -5,35 +5,24 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
 )
 
 func finishAndDismissTUI(t *testing.T, sink *TUISink, summary reviewtypes.RunSummary) {
 	t.Helper()
+	sink.RunFinished(summary)
 
 	done := make(chan struct{})
 	go func() {
-		sink.RunFinished(summary)
+		sink.PostRunComplete()
 		close(done)
 	}()
 
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-
-	timeout := time.After(10 * time.Second)
-	for {
-		select {
-		case <-done:
-			return
-		case <-ticker.C:
-			// 'q' is an explicit post-finish exit key. (Any-key-quits was
-			// removed so the user can still Ctrl+O into completed output.)
-			sink.program.Send(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
-		case <-timeout:
-			t.Fatal("RunFinished() did not return within 10 seconds")
-		}
+	select {
+	case <-done:
+		return
+	case <-time.After(10 * time.Second):
+		t.Fatal("PostRunComplete() did not return within 10 seconds")
 	}
 }
 
@@ -48,7 +37,7 @@ func TestTUISink_StartIsIdempotent(t *testing.T) {
 	sink.Start()
 	sink.Start()
 
-	// Clean up: send RunFinished so the program exits, then Wait.
+	// Clean up: send RunFinished and then the explicit post-run completion signal.
 	finishAndDismissTUI(t, sink, reviewtypes.RunSummary{})
 
 	// Wait with a timeout to avoid hanging the test suite on failure.

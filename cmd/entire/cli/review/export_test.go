@@ -28,6 +28,8 @@ type SinkComposeInputs struct {
 	SynthesisProvider SynthesisProvider
 	PromptYN          func(ctx context.Context, question string, def bool) (bool, error)
 	PerRunPrompt      string
+	MasterName        string
+	AutoSynthesis     bool
 }
 
 type SingleAgentSinkComposeInputs struct {
@@ -49,6 +51,8 @@ func ExposedComposeMultiAgentSinks(in SinkComposeInputs) []reviewtypes.Sink {
 		synthesisProvider: in.SynthesisProvider,
 		promptYN:          in.PromptYN,
 		perRunPrompt:      in.PerRunPrompt,
+		masterName:        in.MasterName,
+		autoSynthesis:     in.AutoSynthesis,
 	})
 }
 

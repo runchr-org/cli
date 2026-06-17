@@ -77,6 +77,8 @@ type SynthesisSink struct {
 	RunContext      context.Context // optional; nil falls back to context.Background()
 	ProviderTimeout time.Duration   // optional; zero uses defaultSynthesisProviderTimeout
 	OnResult        func(result string)
+	OnStart         func()
+	OnComplete      func(error)
 }
 
 // Compile-time interface check.
@@ -143,12 +145,18 @@ func (s SynthesisSink) RunFinished(summary reviewtypes.RunSummary) {
 	} else {
 		fmt.Fprintln(s.Writer, "Generating summary...")
 	}
+	if s.OnStart != nil {
+		s.OnStart()
+	}
 	result, provErr := s.Provider.Synthesize(providerCtx, synthesisPrompt)
 	if provErr != nil {
 		if s.Auto {
 			fmt.Fprintf(s.Writer, "final report unavailable: %v\n", provErr)
 		} else {
 			fmt.Fprintf(s.Writer, "synthesis unavailable: %v\n", provErr)
+		}
+		if s.OnComplete != nil {
+			s.OnComplete(provErr)
 		}
 		return
 	}
@@ -168,6 +176,9 @@ func (s SynthesisSink) RunFinished(summary reviewtypes.RunSummary) {
 		rendered = result
 	}
 	fmt.Fprint(s.Writer, rendered)
+	if s.OnComplete != nil {
+		s.OnComplete(nil)
+	}
 }
 
 func (s SynthesisSink) runContext() context.Context {

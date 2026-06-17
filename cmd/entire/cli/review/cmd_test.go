@@ -895,14 +895,14 @@ func TestComposeMultiAgentSinks(t *testing.T) {
 			wantTotal: 1,
 		},
 		{
-			name:      "tty with provider and prompt appends synth",
+			name:      "tty with provider and prompt appends synth after tui finalizer",
 			isTTY:     true,
 			canPrompt: true,
 			provider:  provider,
 			wantTUI:   true,
 			wantDump:  true,
 			wantSynth: true,
-			wantTotal: 3,
+			wantTotal: 4,
 		},
 		{
 			name:      "tty without provider skips synth",
@@ -911,16 +911,16 @@ func TestComposeMultiAgentSinks(t *testing.T) {
 			provider:  nil,
 			wantTUI:   true,
 			wantDump:  true,
-			wantTotal: 2,
+			wantTotal: 3,
 		},
 		{
-			name:      "tty without prompt skips synth even with provider",
+			name:      "tty without prompt skips legacy synth even with provider",
 			isTTY:     true,
 			canPrompt: false,
 			provider:  provider,
 			wantTUI:   true,
 			wantDump:  true,
-			wantTotal: 2,
+			wantTotal: 3,
 		},
 	}
 
@@ -1055,17 +1055,17 @@ func TestComposeSinks_TUIWritersRunBeforePostRunWriters(t *testing.T) {
 		CancelRun:         func() {},
 		SynthesisProvider: provider,
 	})
-	if len(multi) != 3 {
-		t.Fatalf("multi sinks len = %d, want 3", len(multi))
+	if len(multi) != 4 {
+		t.Fatalf("multi sinks len = %d, want 4", len(multi))
 	}
 	if _, ok := multi[0].(*review.TUISink); !ok {
 		t.Fatalf("multi sink[0] = %T, want *TUISink", multi[0])
 	}
-	if _, ok := multi[1].(review.DumpSink); !ok {
-		t.Fatalf("multi sink[1] = %T, want DumpSink", multi[1])
+	if _, ok := multi[2].(review.DumpSink); !ok {
+		t.Fatalf("multi sink[2] = %T, want DumpSink", multi[2])
 	}
-	if _, ok := multi[2].(review.SynthesisSink); !ok {
-		t.Fatalf("multi sink[2] = %T, want SynthesisSink", multi[2])
+	if _, ok := multi[3].(review.SynthesisSink); !ok {
+		t.Fatalf("multi sink[3] = %T, want SynthesisSink", multi[3])
 	}
 
 	single := review.ExposedComposeSingleAgentSinks(review.SingleAgentSinkComposeInputs{
@@ -1169,5 +1169,40 @@ func TestDispatchFork_SingleAgentNoSynthesis(t *testing.T) {
 	}
 	if provider.called {
 		t.Error("synthesis provider should NOT be called on single-agent path")
+	}
+}
+
+func TestComposeMultiAgentSinks_TTYAutoSynthesisRunsBeforeTUIExit(t *testing.T) {
+	t.Parallel()
+	provider := &stubSynthesisProvider{}
+
+	sinks := review.ExposedComposeMultiAgentSinks(review.SinkComposeInputs{
+		Out:               &bytes.Buffer{},
+		IsTTY:             true,
+		CanPrompt:         true,
+		AgentNames:        []string{"a", "b"},
+		CancelRun:         func() {},
+		SynthesisProvider: provider,
+		MasterName:        testAgentName,
+		AutoSynthesis:     true,
+	})
+	if len(sinks) != 5 {
+		t.Fatalf("len(sinks) = %d, want 5", len(sinks))
+	}
+	if _, ok := sinks[0].(*review.TUISink); !ok {
+		t.Fatalf("sink[0] = %T, want *TUISink", sinks[0])
+	}
+	if _, ok := sinks[1].(review.DumpSink); !ok {
+		t.Fatalf("sink[1] = %T, want buffered DumpSink", sinks[1])
+	}
+	synth, ok := sinks[2].(review.SynthesisSink)
+	if !ok {
+		t.Fatalf("sink[2] = %T, want SynthesisSink", sinks[2])
+	}
+	if !synth.Auto || synth.MasterName != testAgentName {
+		t.Fatalf("synthesis sink = Auto:%v MasterName:%q, want true/%s", synth.Auto, synth.MasterName, testAgentName)
+	}
+	if synth.OnStart == nil || synth.OnComplete == nil {
+		t.Fatal("auto synthesis should notify the TUI when the final judge starts/completes")
 	}
 }

@@ -58,6 +58,19 @@ type runFinishedMsg struct {
 	summary reviewtypes.RunSummary
 }
 
+// finalPhaseStartedMsg is sent when post-run synthesis begins.
+type finalPhaseStartedMsg struct {
+	name string
+}
+
+// finalPhaseFinishedMsg is sent when post-run synthesis completes.
+type finalPhaseFinishedMsg struct {
+	err string
+}
+
+// postRunCompleteMsg tells the TUI all post-run sinks are done and it may exit.
+type postRunCompleteMsg struct{}
+
 // tickMsg triggers spinner and duration column updates.
 type tickMsg time.Time
 
@@ -81,6 +94,11 @@ type reviewTUIModel struct {
 
 	finished bool
 	summary  reviewtypes.RunSummary
+
+	finalPhaseName    string
+	finalPhaseRunning bool
+	finalPhaseDone    bool
+	finalPhaseErr     string
 
 	// cancelling tracks whether a Ctrl+C-initiated cancellation is in flight.
 	// Set true on the first Ctrl+C (in tandem with cancelOnce firing the shared
@@ -177,15 +195,26 @@ func (m reviewTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.rows[i].runEnd = now
 			}
 		}
-		// Exit as soon as the run completes — do NOT wait for a keypress. The
-		// judge (SynthesisSink) and the narrative dump run after the TUI tears
-		// down (they write to stdout, which can't happen over the alt-screen), so
-		// blocking here would force the user to press Enter just to start the
-		// final consolidation. The dump renders the same per-agent outcome below.
+		return m, nil
+
+	case finalPhaseStartedMsg:
+		m.finalPhaseName = strings.TrimSpace(msg.name)
+		m.finalPhaseRunning = true
+		m.finalPhaseDone = false
+		m.finalPhaseErr = ""
+		return m, tea.Batch(m.spinner.Tick, tickCmd())
+
+	case finalPhaseFinishedMsg:
+		m.finalPhaseRunning = false
+		m.finalPhaseDone = true
+		m.finalPhaseErr = strings.TrimSpace(msg.err)
+		return m, nil
+
+	case postRunCompleteMsg:
 		return m, tea.Quit
 
 	case tickMsg:
-		if m.finished {
+		if m.finished && !m.finalPhaseRunning {
 			return m, nil
 		}
 		var spinCmd tea.Cmd
@@ -193,7 +222,7 @@ func (m reviewTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(spinCmd, tickCmd())
 
 	case spinner.TickMsg:
-		if m.finished {
+		if m.finished && !m.finalPhaseRunning {
 			return m, nil
 		}
 		var spinCmd tea.Cmd
@@ -493,12 +522,18 @@ func (m reviewTUIModel) dashboardView() string {
 	for _, row := range m.rows {
 		m.writeDashboardLine(&b, m.renderRow(row))
 	}
+	if m.finalPhaseName != "" || m.finalPhaseRunning || m.finalPhaseDone {
+		m.writeDashboardLine(&b, m.renderFinalPhaseRow())
+	}
 	b.WriteString("\n")
 
 	switch {
+	case m.finished && m.finalPhaseRunning:
+		m.writeDashboardLine(&b, m.countsLine())
+		m.writeDashboardLine(&b, "Final judge is consolidating...")
 	case m.finished:
 		m.writeDashboardLine(&b, m.countsLine())
-		m.writeDashboardLine(&b, "Ctrl+O: drill in · q/Esc/Enter: exit")
+		m.writeDashboardLine(&b, "Finalizing output...")
 	case m.cancelling:
 		m.writeDashboardLine(&b, "Cancelling agents... · Ctrl+C again: force quit")
 	default:
@@ -580,6 +615,27 @@ func (m reviewTUIModel) renderRow(row agentRow) string {
 	}
 
 	return m.renderTableLine(name, statusStr, durStr, tokStr, preview)
+}
+
+func (m reviewTUIModel) renderFinalPhaseRow() string {
+	name := m.finalPhaseName
+	if name == "" {
+		name = "final judge"
+	}
+	status := "queued"
+	switch {
+	case m.finalPhaseRunning:
+		status = m.spinner.View() + " judging"
+	case m.finalPhaseErr != "":
+		status = "✗ failed"
+	case m.finalPhaseDone:
+		status = "✓ done"
+	}
+	preview := "consolidating inspector reports"
+	if m.finalPhaseErr != "" {
+		preview = m.finalPhaseErr
+	}
+	return m.renderTableLine(name, status, "", "", preview)
 }
 
 func formatErrorPreview(err error) string {
