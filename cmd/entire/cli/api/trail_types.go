@@ -81,7 +81,6 @@ type TrailCreateRequest struct {
 	BranchName string   `json:"branch_name"`
 	Base       string   `json:"base,omitempty"`
 	Status     string   `json:"status,omitempty"`
-	Phase      string   `json:"phase,omitempty"`
 	Assignees  []string `json:"assignees,omitempty"`
 	Labels     []string `json:"labels,omitempty"`
 	Priority   string   `json:"priority,omitempty"`
@@ -108,7 +107,6 @@ type TrailUpdateRequest struct {
 	Branch    *string   `json:"branch,omitempty"`
 	Base      *string   `json:"base,omitempty"`
 	Status    *string   `json:"status,omitempty"`
-	Phase     *string   `json:"phase,omitempty"`
 	Title     *string   `json:"title,omitempty"`
 	Body      *string   `json:"body,omitempty"`
 	Assignees *[]string `json:"assignees,omitempty"`

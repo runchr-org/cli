@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -261,18 +262,29 @@ func TestFindTrailPaginatesPastServerMax(t *testing.T) {
 	t.Parallel()
 	var offsets []int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		offsetStr := r.URL.Query().Get("offset")
+		offset := 0
+		if offsetStr != "" {
+			var err error
+			offset, err = strconv.Atoi(offsetStr)
+			if err != nil {
+				t.Fatalf("parse offset %q: %v", offsetStr, err)
+			}
+		}
 		offsets = append(offsets, offset)
 		trails := []api.TrailResource{}
-		if offset == 0 {
+		switch offset {
+		case 0:
 			trails = make([]api.TrailResource, trailListServerMaxLimit)
 			for i := range trails {
 				trails[i] = api.TrailResource{ID: "trl_first_" + strconv.Itoa(i), Number: i + 1, Branch: "old/" + strconv.Itoa(i)}
 			}
-		} else if offset == trailListServerMaxLimit {
+		case trailListServerMaxLimit:
 			trails = []api.TrailResource{{ID: "trl_target", Number: 201, Branch: "target"}}
 		}
-		_ = json.NewEncoder(w).Encode(api.TrailListResponse{Trails: trails, Total: trailListServerMaxLimit + 1})
+		if err := json.NewEncoder(w).Encode(api.TrailListResponse{Trails: trails, Total: trailListServerMaxLimit + 1}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -289,6 +301,63 @@ func TestFindTrailPaginatesPastServerMax(t *testing.T) {
 	}
 }
 
+func TestFindTrailStopsWhenServerRepeatsUnpaginatedFullPage(t *testing.T) {
+	t.Parallel()
+	var requests int32
+	trails := make([]api.TrailResource, trailListServerMaxLimit)
+	for i := range trails {
+		trails[i] = api.TrailResource{ID: "trl_repeat_" + strconv.Itoa(i), Number: i + 1, Branch: "old/" + strconv.Itoa(i)}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		if err := json.NewEncoder(w).Encode(api.TrailListResponse{Trails: trails}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	client := api.NewClientWithBaseURL("tok", srv.URL)
+	found, err := findTrailByBranch(context.Background(), client, "gh", "acme", "repo", "target")
+	if err != nil {
+		t.Fatalf("findTrailByBranch: %v", err)
+	}
+	if found != nil {
+		t.Fatalf("found = %#v, want nil", found)
+	}
+	if got := atomic.LoadInt32(&requests); got != 2 {
+		t.Fatalf("requests = %d, want 2", got)
+	}
+}
+
+func TestFindTrailStopsOnSecondFullPageWithoutTotal(t *testing.T) {
+	t.Parallel()
+	var requests int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestNumber := int(atomic.AddInt32(&requests, 1))
+		trails := make([]api.TrailResource, trailListServerMaxLimit)
+		for i := range trails {
+			trailNumber := (requestNumber-1)*trailListServerMaxLimit + i + 1
+			trails[i] = api.TrailResource{ID: "trl_" + strconv.Itoa(trailNumber), Number: trailNumber, Branch: "old/" + strconv.Itoa(trailNumber)}
+		}
+		if err := json.NewEncoder(w).Encode(api.TrailListResponse{Trails: trails}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	client := api.NewClientWithBaseURL("tok", srv.URL)
+	found, err := findTrailByBranch(context.Background(), client, "gh", "acme", "repo", "target")
+	if err != nil {
+		t.Fatalf("findTrailByBranch: %v", err)
+	}
+	if found != nil {
+		t.Fatalf("found = %#v, want nil", found)
+	}
+	if got := atomic.LoadInt32(&requests); got != 2 {
+		t.Fatalf("requests = %d, want 2", got)
+	}
+}
+
 func TestBuildTrailUpdateRequestCanClearBody(t *testing.T) {
 	t.Parallel()
 	req := buildTrailUpdateRequest(&api.TrailResource{Body: "old"}, trailUpdateInputs{BodyChanged: true, Body: ""})
@@ -297,14 +366,6 @@ func TestBuildTrailUpdateRequestCanClearBody(t *testing.T) {
 	}
 	if *req.Body != "" {
 		t.Fatalf("Body = %q, want empty string", *req.Body)
-	}
-}
-
-func TestBuildTrailUpdateRequestIncludesPhase(t *testing.T) {
-	t.Parallel()
-	req := buildTrailUpdateRequest(&api.TrailResource{}, trailUpdateInputs{PhaseChanged: true, Phase: "has_code"})
-	if req.Phase == nil || *req.Phase != "has_code" {
-		t.Fatalf("Phase = %#v, want has_code pointer", req.Phase)
 	}
 }
 
@@ -476,6 +537,22 @@ func TestPrintTrailListSingleStatusFilterOmitsStatusColumn(t *testing.T) {
 
 	if text := out.String(); strings.Contains(text, "STATUS") {
 		t.Fatalf("single-status list should not repeat the status as a column, got:\n%s", text)
+	}
+}
+
+func TestPrintTrailDetailsOmitsWhitespacePhase(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	printTrailDetails(&out, &trail.Metadata{
+		Title:  "Whitespace phase",
+		Branch: "feat/a",
+		Base:   "main",
+		Status: trail.StatusOpen,
+		Phase:  "   ",
+	})
+
+	if text := out.String(); strings.Contains(text, "Phase:") {
+		t.Fatalf("expected whitespace phase to be omitted, got:\n%s", text)
 	}
 }
 

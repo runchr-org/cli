@@ -34,6 +34,7 @@ const (
 	// trailListServerMaxLimit is the most trails the server returns per
 	// request (the list endpoint clamps limit to 200).
 	trailListServerMaxLimit = 200
+	trailFindMaxPages       = 100
 )
 
 func newTrailCmd() *cobra.Command {
@@ -160,7 +161,7 @@ func printTrailDetails(w io.Writer, m *trail.Metadata) {
 	fmt.Fprintf(w, "  Base:    %s\n", m.Base)
 	fmt.Fprintf(w, "  Status:  %s\n", m.Status)
 	fmt.Fprintf(w, "  Author:  %s\n", m.AuthorLogin())
-	if m.Phase != "" {
+	if strings.TrimSpace(m.Phase) != "" {
 		fmt.Fprintf(w, "  Phase:   %s\n", trailPhaseDisplay(m.Phase))
 	}
 	if m.Body != "" {
@@ -540,7 +541,7 @@ func pluralize(s string, count int) string {
 }
 
 func newTrailCreateCmd() *cobra.Command {
-	var title, body, base, branch, status, phase string
+	var title, body, base, branch, status string
 	var checkout bool
 
 	cmd := &cobra.Command{
@@ -548,7 +549,7 @@ func newTrailCreateCmd() *cobra.Command {
 		Short: "Create a trail for the current or a new branch",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runTrailCreate(cmd, title, body, base, branch, status, phase, checkout)
+			return runTrailCreate(cmd, title, body, base, branch, status, checkout)
 		},
 	}
 
@@ -557,14 +558,13 @@ func newTrailCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&base, "base", "", "Base branch (defaults to detected default branch)")
 	cmd.Flags().StringVar(&branch, "branch", "", "Branch for the trail (defaults to current branch)")
 	cmd.Flags().StringVar(&status, "status", "", "Initial status (defaults to draft)")
-	cmd.Flags().StringVar(&phase, "phase", "", "Initial trail phase (for example, whether the trail has code yet)")
 	cmd.Flags().BoolVar(&checkout, "checkout", false, "Check out the branch after creating it")
 
 	return cmd
 }
 
 //nolint:cyclop // sequential steps for creating a trail — splitting would obscure the flow
-func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr, phase string, checkout bool) error {
+func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr string, checkout bool) error {
 	ctx := cmd.Context()
 	w := cmd.OutOrStdout()
 	errW := cmd.ErrOrStderr()
@@ -608,7 +608,6 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr, ph
 	base = strings.TrimSpace(base)
 	branch = strings.TrimSpace(branch)
 	statusStr = strings.TrimSpace(statusStr)
-	phase = strings.TrimSpace(phase)
 	if title == "" {
 		return errors.New("trail title is required")
 	}
@@ -624,61 +623,62 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr, ph
 
 	needsCreation := branchNeedsCreation(repo, branch)
 
-	// Create the trail remotely before mutating the local worktree. This keeps
-	// auth/API failures from leaving behind local branches or attempted pushes.
-	var createResp api.TrailCreateResponse
-	if err := runAuthenticatedDataAPI(ctx, cmd.ErrOrStderr(), trailInsecureHTTP(cmd), func(ctx context.Context, client *api.Client) error {
-		forge, owner, repoName, err := resolveTrailRemote(ctx)
-		if err != nil {
-			return err
-		}
-
-		createReq := api.TrailCreateRequest{
-			Title:      title,
-			Body:       body,
-			BranchName: branch,
-			Base:       base,
-			Status:     statusStr,
-			Phase:      phase,
-		}
-
-		resp, err := client.Post(ctx, trailsBasePath(forge, owner, repoName), createReq)
-		if err != nil {
-			return fmt.Errorf("failed to create trail: %w", err)
-		}
-		defer resp.Body.Close()
-		if err := checkTrailResponse(resp); err != nil {
-			return err
-		}
-
-		if err := api.DecodeJSON(resp, &createResp); err != nil {
-			return fmt.Errorf("failed to decode create response: %w", err)
-		}
-		return nil
-	}); err != nil {
+	client, err := NewAuthenticatedAPIClient(ctx, trailInsecureHTTP(cmd))
+	if err != nil {
+		return renderDataAPIAuthError(cmd.ErrOrStderr(), err)
+	}
+	forge, owner, repoName, err := resolveTrailRemote(ctx)
+	if err != nil {
 		return err
 	}
 
-	fmt.Fprintf(w, "Created trail %q for branch %s (ID: %s)\n", createResp.Trail.Title, createResp.Trail.Branch, createResp.Trail.ID)
-
-	// Post-creation local operations. These are best-effort conveniences after
-	// the source of truth (the API trail) has been created successfully.
+	localBranchCreated := false
+	remoteBranchPushed := false
 	if needsCreation {
 		if err := createBranch(repo, branch); err != nil {
 			return fmt.Errorf("failed to create branch %q: %w", branch, err)
 		}
+		localBranchCreated = true
 		fmt.Fprintf(w, "Created branch %s\n", branch)
 	} else if currentBranch != branch {
-		fmt.Fprintf(w, "Note: trail was created for branch %q (not the current branch)\n", branch)
+		fmt.Fprintf(w, "Note: trail will be created for branch %q (not the current branch)\n", branch)
 	}
 
 	if needsCreation {
 		if err := pushBranchToOrigin(branch); err != nil {
-			fmt.Fprintf(errW, "Warning: failed to push branch: %v\n", err)
-		} else {
-			fmt.Fprintf(w, "Pushed branch %s to origin\n", branch)
+			cleanupCreatedTrailBranch(repo, branch, localBranchCreated, false, errW)
+			return fmt.Errorf("failed to push branch %q: %w", branch, err)
 		}
+		remoteBranchPushed = true
+		fmt.Fprintf(w, "Pushed branch %s to origin\n", branch)
 	}
+
+	createReq := api.TrailCreateRequest{
+		Title:      title,
+		Body:       body,
+		BranchName: branch,
+		Base:       base,
+		Status:     statusStr,
+	}
+
+	var createResp api.TrailCreateResponse
+	resp, err := client.Post(ctx, trailsBasePath(forge, owner, repoName), createReq)
+	if err != nil {
+		cleanupCreatedTrailBranch(repo, branch, localBranchCreated, remoteBranchPushed, errW)
+		return fmt.Errorf("failed to create trail: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkTrailResponse(resp); err != nil {
+		cleanupCreatedTrailBranch(repo, branch, localBranchCreated, remoteBranchPushed, errW)
+		return err
+	}
+
+	if err := api.DecodeJSON(resp, &createResp); err != nil {
+		cleanupCreatedTrailBranch(repo, branch, localBranchCreated, remoteBranchPushed, errW)
+		return fmt.Errorf("failed to decode create response: %w", err)
+	}
+
+	fmt.Fprintf(w, "Created trail %q for branch %s (ID: %s)\n", createResp.Trail.Title, createResp.Trail.Branch, createResp.Trail.ID)
 
 	if needsCreation && currentBranch != branch {
 		shouldCheckout := checkout
@@ -707,7 +707,7 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr, ph
 }
 
 func newTrailUpdateCmd() *cobra.Command {
-	var statusStr, title, body, branch, phase string
+	var statusStr, title, body, branch string
 	var labelAdd, labelRemove []string
 
 	cmd := &cobra.Command{
@@ -722,8 +722,6 @@ func newTrailUpdateCmd() *cobra.Command {
 				TitleChanged:  cmd.Flags().Changed("title"),
 				Body:          body,
 				BodyChanged:   cmd.Flags().Changed("body"),
-				Phase:         phase,
-				PhaseChanged:  cmd.Flags().Changed("phase"),
 				Branch:        branch,
 				LabelAdd:      labelAdd,
 				LabelRemove:   labelRemove,
@@ -734,7 +732,6 @@ func newTrailUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&statusStr, "status", "", "Update status")
 	cmd.Flags().StringVar(&title, "title", "", "Update title")
 	cmd.Flags().StringVar(&body, "body", "", "Update body")
-	cmd.Flags().StringVar(&phase, "phase", "", "Update phase (for example, whether the trail has code yet)")
 	cmd.Flags().StringVar(&branch, "branch", "", "Branch to update trail for (defaults to current)")
 	cmd.Flags().StringSliceVar(&labelAdd, "add-label", nil, "Add label(s)")
 	cmd.Flags().StringSliceVar(&labelRemove, "remove-label", nil, "Remove label(s)")
@@ -749,8 +746,6 @@ type trailUpdateInputs struct {
 	TitleChanged  bool
 	Body          string
 	BodyChanged   bool
-	Phase         string
-	PhaseChanged  bool
 	Branch        string
 	LabelAdd      []string
 	LabelRemove   []string
@@ -785,8 +780,7 @@ func runTrailUpdate(ctx context.Context, w, errW io.Writer, insecureHTTP bool, i
 		statusStr := inputs.Status
 		title := inputs.Title
 		body := inputs.Body
-		phase := inputs.Phase
-		noFlags := !inputs.StatusChanged && !inputs.TitleChanged && !inputs.BodyChanged && !inputs.PhaseChanged && inputs.LabelAdd == nil && inputs.LabelRemove == nil
+		noFlags := !inputs.StatusChanged && !inputs.TitleChanged && !inputs.BodyChanged && inputs.LabelAdd == nil && inputs.LabelRemove == nil
 		if noFlags {
 			metadata := found.ToMetadata()
 			// Build status options with current value as default.
@@ -804,7 +798,6 @@ func runTrailUpdate(ctx context.Context, w, errW io.Writer, insecureHTTP bool, i
 			statusStr = string(metadata.Status)
 			title = metadata.Title
 			body = metadata.Body
-			phase = metadata.Phase
 
 			form := NewAccessibleForm(
 				huh.NewGroup(
@@ -818,9 +811,6 @@ func runTrailUpdate(ctx context.Context, w, errW io.Writer, insecureHTTP bool, i
 					huh.NewText().
 						Title("Body").
 						Value(&body),
-					huh.NewInput().
-						Title("Phase").
-						Value(&phase),
 				),
 			)
 			if formErr := form.Run(); formErr != nil {
@@ -829,12 +819,10 @@ func runTrailUpdate(ctx context.Context, w, errW io.Writer, insecureHTTP bool, i
 			inputs.StatusChanged = true
 			inputs.TitleChanged = true
 			inputs.BodyChanged = true
-			inputs.PhaseChanged = true
 		}
 
 		statusStr = strings.TrimSpace(statusStr)
 		title = strings.TrimSpace(title)
-		phase = strings.TrimSpace(phase)
 		if err := validateTrailUpdateFields(trailUpdateInputs{
 			Status:        statusStr,
 			StatusChanged: inputs.StatusChanged,
@@ -852,8 +840,6 @@ func runTrailUpdate(ctx context.Context, w, errW io.Writer, insecureHTTP bool, i
 			TitleChanged:  inputs.TitleChanged,
 			Body:          body,
 			BodyChanged:   inputs.BodyChanged,
-			Phase:         strings.TrimSpace(phase),
-			PhaseChanged:  inputs.PhaseChanged,
 			LabelAdd:      inputs.LabelAdd,
 			LabelRemove:   inputs.LabelRemove,
 		})
@@ -907,9 +893,6 @@ func buildTrailUpdateRequest(current *api.TrailResource, inputs trailUpdateInput
 	}
 	if inputs.BodyChanged {
 		req.Body = &inputs.Body
-	}
-	if inputs.PhaseChanged {
-		req.Phase = &inputs.Phase
 	}
 
 	// Handle label changes: merge adds, remove removes.
@@ -1036,10 +1019,11 @@ func findTrailByNumber(ctx context.Context, client *api.Client, forge, owner, re
 }
 
 func findTrail(ctx context.Context, client *api.Client, forge, owner, repo string, match func(api.TrailResource) bool) (*api.TrailResource, error) {
-	// The list endpoint paginates; walk all pages so branch/number/id lookups do
+	// The list endpoint paginates; walk bounded pages so branch/number/id lookups do
 	// not silently miss older trails beyond the first server-max page.
 	offset := 0
-	for {
+	previousPageSignature := ""
+	for range trailFindMaxPages {
 		resp, err := client.Get(ctx, trailsBasePath(forge, owner, repo)+trailListQueryWithOffset(nil, "", trailListServerMaxLimit, offset))
 		if err != nil {
 			return nil, fmt.Errorf("list trails: %w", err)
@@ -1070,12 +1054,31 @@ func findTrail(ctx context.Context, client *api.Client, forge, owner, repo strin
 		if pageLen == 0 || pageLen < trailListServerMaxLimit {
 			break
 		}
+		if listResp.Total == 0 {
+			if offset > 0 {
+				break
+			}
+			pageSignature := trailListPageSignature(listResp.Trails)
+			if pageSignature != "" && pageSignature == previousPageSignature {
+				break
+			}
+			previousPageSignature = pageSignature
+		}
 		offset += pageLen
 		if listResp.Total > 0 && offset >= listResp.Total {
 			break
 		}
 	}
 	return nil, nil //nolint:nilnil // nil, nil means "not found" — callers check both
+}
+
+func trailListPageSignature(trails []api.TrailResource) string {
+	if len(trails) == 0 {
+		return ""
+	}
+	first := trails[0]
+	last := trails[len(trails)-1]
+	return fmt.Sprintf("%s/%d/%s:%s/%d/%s", first.ID, first.Number, first.Branch, last.ID, last.Number, last.Branch)
 }
 
 // trailsBasePath returns the API path prefix for trails endpoints
@@ -1152,6 +1155,29 @@ func createBranch(repo *git.Repository, branchName string) error {
 	return nil
 }
 
+func cleanupCreatedTrailBranch(repo *git.Repository, branchName string, localCreated, remotePushed bool, errW io.Writer) {
+	localRemoved := !localCreated
+	if localCreated {
+		branchRef := plumbing.NewBranchReferenceName(branchName)
+		if head, err := repo.Head(); err == nil && head.Name() == branchRef {
+			fmt.Fprintf(errW, "Warning: not deleting local branch %s after trail creation failed because it is checked out\n", branchName)
+		} else if err := repo.Storer.RemoveReference(branchRef); err != nil {
+			fmt.Fprintf(errW, "Warning: failed to delete local branch %s after trail creation failed: %v\n", branchName, err)
+		} else {
+			localRemoved = true
+		}
+	}
+	if remotePushed {
+		if !localRemoved {
+			fmt.Fprintf(errW, "Warning: not deleting remote branch %s after trail creation failed because local cleanup did not complete\n", branchName)
+			return
+		}
+		if err := deleteBranchFromOrigin(branchName); err != nil {
+			fmt.Fprintf(errW, "Warning: failed to delete remote branch %s after trail creation failed: %v\n", branchName, err)
+		}
+	}
+}
+
 // pushBranchToOrigin pushes a branch to the origin remote.
 func pushBranchToOrigin(branchName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -1159,6 +1185,20 @@ func pushBranchToOrigin(branchName string) error {
 	cmd := exec.CommandContext(ctx, "git", "push", "--no-verify", "-u", "origin", branchName)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %w", strings.TrimSpace(string(output)), err)
+	}
+	return nil
+}
+
+func deleteBranchFromOrigin(branchName string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "push", "--no-verify", "origin", "--delete", branchName)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		outputText := strings.TrimSpace(string(output))
+		if strings.Contains(outputText, "remote ref does not exist") {
+			return nil
+		}
+		return fmt.Errorf("%s: %w", outputText, err)
 	}
 	return nil
 }
