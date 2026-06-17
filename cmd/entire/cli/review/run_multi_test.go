@@ -624,3 +624,89 @@ func TestRunMulti_FallsBackToConfigModel(t *testing.T) {
 		t.Errorf("AgentRun.Model = %q, want fallback to cfg.Model %q", got, "claude-sonnet-4-5")
 	}
 }
+
+type startErrorContextReviewer struct {
+	name     string
+	startErr error
+	ctx      context.Context
+	started  chan struct{}
+}
+
+func (r *startErrorContextReviewer) Name() string { return r.name }
+
+func (r *startErrorContextReviewer) Start(ctx context.Context, _ reviewtypes.RunConfig) (reviewtypes.Process, error) {
+	r.ctx = ctx
+	close(r.started)
+	return nil, r.startErr
+}
+
+type blockingWaitReviewer struct {
+	name    string
+	release <-chan struct{}
+}
+
+func (r blockingWaitReviewer) Name() string { return r.name }
+
+func (r blockingWaitReviewer) Start(context.Context, reviewtypes.RunConfig) (reviewtypes.Process, error) {
+	return blockingWaitProcess{release: r.release}, nil
+}
+
+type blockingWaitProcess struct {
+	release <-chan struct{}
+}
+
+func (p blockingWaitProcess) Events() <-chan reviewtypes.Event {
+	ch := make(chan reviewtypes.Event)
+	close(ch)
+	return ch
+}
+
+func (p blockingWaitProcess) Wait() error {
+	<-p.release
+	return nil
+}
+
+func TestRunMulti_StartErrorCancelsAgentContextImmediately(t *testing.T) {
+	t.Parallel()
+	startErr := errors.New("start failed")
+	bad := &startErrorContextReviewer{
+		name:     "bad-start-agent",
+		startErr: startErr,
+		started:  make(chan struct{}),
+	}
+	releaseGood := make(chan struct{})
+	good := blockingWaitReviewer{name: "still-running-agent", release: releaseGood}
+	done := make(chan error, 1)
+	go func() {
+		_, err := RunMulti(context.Background(), []reviewtypes.AgentReviewer{bad, good}, reviewtypes.RunConfig{
+			InspectorTimeout: time.Hour,
+		}, nil)
+		done <- err
+	}()
+
+	select {
+	case <-bad.started:
+	case <-time.After(time.Second):
+		t.Fatal("bad reviewer did not start")
+	}
+	if bad.ctx == nil {
+		t.Fatal("bad reviewer did not capture context")
+	}
+	select {
+	case <-bad.ctx.Done():
+		// Correct: no process was returned, so the per-agent context is cleaned up
+		// immediately even though another agent is still running.
+	case <-time.After(time.Second):
+		t.Fatal("start-error agent context was not cancelled while sibling continued running")
+	}
+
+	close(releaseGood)
+	select {
+	case err := <-done:
+		if !errors.Is(err, startErr) {
+			t.Fatalf("RunMulti error = %v, want startErr", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunMulti did not finish after releasing sibling")
+	}
+}

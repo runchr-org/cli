@@ -39,9 +39,10 @@ type AgentReviewer interface {
 	// lifecycle hooks adopt the session as a review session.
 	//
 	// Errors from Start indicate failure to construct or launch the process
-	// (e.g., binary not on PATH at exec.Cmd.Start time, invalid argv). Once
-	// Start returns nil, errors during the run flow through Process.Events
-	// (as RunError) and Process.Wait.
+	// (e.g., binary not on PATH at exec.Cmd.Start time, invalid argv). On error,
+	// Start must not retain background work that depends on ctx; no Process exists
+	// for the orchestrator to drain. Once Start returns nil, errors during the
+	// run flow through Process.Events (as RunError) and Process.Wait.
 	Start(ctx context.Context, run RunConfig) (Process, error)
 }
 

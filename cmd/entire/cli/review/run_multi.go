@@ -148,6 +148,9 @@ func RunMulti(
 		}
 		proc, err := r.Start(agentCtx, cfg)
 		if err != nil {
+			// No Process exists, so there is no Events/Wait lifecycle to preserve.
+			// Cancel immediately to release the per-agent timeout timer while
+			// siblings continue running.
 			cancelAgent()
 			states[i].startErr = err
 			states[i].finishedAt = time.Now()
