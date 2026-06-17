@@ -62,6 +62,13 @@ type Process interface {
 	// after the Events channel has closed. Consumers must drain Events until
 	// close before calling Wait; otherwise an implementation that forwards
 	// parsed events from another goroutine may block while sending.
+	//
+	// When Wait returns, the process has exited and any goroutines the Process
+	// spawned (stdout parsers, event forwarders) have finished — implementations
+	// MUST NOT leave goroutines running past Wait. The orchestrator relies on
+	// this: it releases the run context (cancelling any per-inspector deadline)
+	// right after Wait returns, so a goroutine still bound to that context could
+	// otherwise be cancelled out from under it.
 	Wait() error
 }
 

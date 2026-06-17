@@ -843,16 +843,15 @@ func RunReviewProfileConfigPicker(ctx context.Context, out io.Writer, getInstall
 			existing[string(c.name)].Skills, curated, discovered,
 		)
 		prompt := existing[string(c.name)].Prompt
+		// Inspectors run on the agent's default model (guided setup no longer asks
+		// for one), so the advanced picker doesn't prompt for a model either. Any
+		// model set via scripted config is preserved untouched.
 		model := existing[string(c.name)].Model
 
 		fields := BuildReviewPickerFields(
 			string(c.name), curated, discovered, activeHints, prompt,
 			&builtinPicks, &discoveredPicks, &prompt,
 		)
-		fields = append(fields, huh.NewInput().
-			Title("Model (optional)").
-			Description("Leave blank to use the agent default; pass any model string accepted by the agent CLI.").
-			Value(&model))
 
 		// Prepend a non-blocking header Note so the agent being configured
 		// is always clearly visible.

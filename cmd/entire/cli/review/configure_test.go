@@ -347,3 +347,50 @@ func TestSaveReviewProfile_ScopeProjectVsLocal(t *testing.T) {
 		t.Error("project profile 'general' missing from project settings file")
 	}
 }
+
+func TestProfileJudge_ResolvesWorkerAlias(t *testing.T) {
+	t.Parallel()
+	// Judge names a worker alias; it must resolve to the underlying agent the
+	// synthesis provider can launch, inheriting the worker's model.
+	aliased := settings.ReviewProfileConfig{
+		Agents: map[string]settings.ReviewConfig{
+			"claude-opus": {Agent: tAgentClaude, Model: tModelOpus},
+		},
+		Judge: &settings.ReviewConfig{Agent: "claude-opus"},
+	}
+	if j, ok := profileJudge(aliased); !ok || j.agent != tAgentClaude || j.model != tModelOpus {
+		t.Errorf("aliased judge = (%#v, %v), want claude-code/opus, true", j, ok)
+	}
+
+	// A standalone judge (not a worker id) is used as-is.
+	standalone := settings.ReviewProfileConfig{
+		Agents: map[string]settings.ReviewConfig{tAgentCodex: {Agent: tAgentCodex}},
+		Judge:  &settings.ReviewConfig{Agent: tAgentClaude, Model: tModelOpus},
+	}
+	if j, ok := profileJudge(standalone); !ok || j.agent != tAgentClaude || j.model != tModelOpus {
+		t.Errorf("standalone judge = (%#v, %v), want claude-code/opus, true", j, ok)
+	}
+}
+
+func TestReviewWorkerLabel(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		worker string
+		cfg    settings.ReviewConfig
+		want   string
+	}{
+		{"plain", tAgentClaude, settings.ReviewConfig{}, "claude-code"},
+		{"model only", tAgentClaude, settings.ReviewConfig{Model: "opus"}, "claude-code  (model opus)"},
+		{"alias only", "claude-opus", settings.ReviewConfig{Agent: tAgentClaude}, "claude-opus  (claude-code)"},
+		{"alias and model", "claude-opus", settings.ReviewConfig{Agent: tAgentClaude, Model: "opus"}, "claude-opus  (claude-code, model opus)"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := reviewWorkerLabel(c.worker, c.cfg); got != c.want {
+				t.Errorf("reviewWorkerLabel(%q, %+v) = %q, want %q", c.worker, c.cfg, got, c.want)
+			}
+		})
+	}
+}

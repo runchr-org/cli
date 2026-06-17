@@ -68,34 +68,7 @@ func buildLocalReviewManifestFromSummary(
 		StartingSHA:     headSHA,
 		AggregateOutput: strings.TrimSpace(aggregateOutput),
 	}
-	// Match in two passes so inspectors with an explicit model claim their
-	// specific session before default-model inspectors take the leftovers. A
-	// default inspector has an empty model, which reviewRunModelMatches treats as
-	// matching any recorded model (necessary: the session records the resolved
-	// default the inspector never named) — so without this ordering a default
-	// inspector processed first could grab an explicit-model inspector's session.
-	// Sources are still emitted in the original agent-run order.
-	usedSessions := map[string]bool{}
-	matched := make([]*session.State, len(summary.AgentRuns))
-	matchInspectors := func(explicitModel bool) {
-		for i, run := range summary.AgentRuns {
-			if matched[i] != nil {
-				continue // already linked (kept index-aligned with summary.AgentRuns)
-			}
-			if (strings.TrimSpace(run.Model) != "") != explicitModel {
-				continue // belongs to the other pass
-			}
-			st := matchReviewSessionState(worktreeRoot, headSHA, summary.StartedAt, agentNameForRun(run), run.Model, states, usedSessions)
-			if st == nil || st.SessionID == "" {
-				continue
-			}
-			usedSessions[st.SessionID] = true
-			matched[i] = st
-		}
-	}
-	matchInspectors(true)  // explicit-model inspectors first
-	matchInspectors(false) // then default-model inspectors
-
+	matched := matchSessionsToRuns(worktreeRoot, headSHA, summary, states)
 	for i, run := range summary.AgentRuns {
 		st := matched[i]
 		if st == nil {
@@ -324,13 +297,12 @@ func hydrateReviewSummaryTokensFromStates(
 	states []*session.State,
 	lookup agentTypeLookup,
 ) reviewtypes.RunSummary {
-	usedSessions := map[string]bool{}
-	for i, run := range summary.AgentRuns {
-		st := matchReviewSessionState(worktreeRoot, headSHA, summary.StartedAt, agentNameForRun(run), run.Model, states, usedSessions)
-		if st == nil || st.SessionID == "" {
+	matched := matchSessionsToRuns(worktreeRoot, headSHA, summary, states)
+	for i := range summary.AgentRuns {
+		st := matched[i]
+		if st == nil {
 			continue
 		}
-		usedSessions[st.SessionID] = true
 		tokens := reviewTokensFromTokenUsage(reviewTokenUsageForSession(ctx, st, lookup))
 		if tokens.In == 0 && tokens.Out == 0 {
 			continue
@@ -338,6 +310,39 @@ func hydrateReviewSummaryTokensFromStates(
 		summary.AgentRuns[i].Tokens = tokens
 	}
 	return summary
+}
+
+// matchSessionsToRuns links each agent run in summary to a distinct session
+// state, returning a slice index-aligned with summary.AgentRuns (nil where no
+// session matched). It matches in two passes so inspectors with an explicit
+// model claim their specific session before default-model inspectors take the
+// leftovers: a default inspector has an empty model, which reviewRunModelMatches
+// treats as matching any recorded model (necessary — the session records the
+// resolved default the inspector never named), so without this ordering a
+// default inspector could grab an explicit-model inspector's session. Used by
+// both the local manifest and token hydration so attribution stays consistent.
+func matchSessionsToRuns(worktreeRoot, headSHA string, summary reviewtypes.RunSummary, states []*session.State) []*session.State {
+	usedSessions := map[string]bool{}
+	matched := make([]*session.State, len(summary.AgentRuns))
+	pass := func(explicitModel bool) {
+		for i, run := range summary.AgentRuns {
+			if matched[i] != nil {
+				continue // already linked
+			}
+			if (strings.TrimSpace(run.Model) != "") != explicitModel {
+				continue // belongs to the other pass
+			}
+			st := matchReviewSessionState(worktreeRoot, headSHA, summary.StartedAt, agentNameForRun(run), run.Model, states, usedSessions)
+			if st == nil || st.SessionID == "" {
+				continue
+			}
+			usedSessions[st.SessionID] = true
+			matched[i] = st
+		}
+	}
+	pass(true)  // explicit-model inspectors first
+	pass(false) // then default-model inspectors
+	return matched
 }
 
 func reviewTokenUsageForSession(ctx context.Context, st *session.State, lookup agentTypeLookup) *agent.TokenUsage {

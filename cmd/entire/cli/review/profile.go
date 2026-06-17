@@ -197,7 +197,19 @@ func profileJudge(profile settings.ReviewProfileConfig) (judgeSpec, bool) {
 	if name == "" {
 		return judgeSpec{}, false
 	}
-	return judgeSpec{agent: name, model: strings.TrimSpace(profile.Judge.Model)}, true
+	model := strings.TrimSpace(profile.Judge.Model)
+	// If the judge names one of the profile's worker ids (possibly an alias such
+	// as "claude-opus" for {agent: claude-code, model: opus}), resolve it to the
+	// underlying agent the synthesis provider can actually launch, inheriting the
+	// worker's model when the judge didn't specify one. Otherwise the judge is a
+	// standalone agent name and is used as-is.
+	if cfg, ok := profile.Agents[name]; ok && !cfg.IsZero() {
+		if model == "" {
+			model = strings.TrimSpace(cfg.Model)
+		}
+		name = reviewAgentName(name, cfg)
+	}
+	return judgeSpec{agent: name, model: model}, true
 }
 
 // resolveJudge returns the judge to use for a fan-out run: the explicitly
