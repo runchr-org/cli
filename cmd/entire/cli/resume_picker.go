@@ -120,12 +120,13 @@ func runResumePicker(ctx context.Context, cmd *cobra.Command, force bool) error 
 	}
 
 	// If the branch is already checked out in another worktree, git won't allow
-	// a second checkout here — point the user at that worktree instead.
+	// a second checkout here. Point the user at that worktree and tell them to
+	// re-run the picker there — that preserves the selected-session flow (the
+	// picker resumes the exact session by its checkpoint), whereas suggesting
+	// `entire resume <branch>` would resume the branch's latest checkpoint and
+	// pick the wrong session when several share the branch.
 	if otherPath, ok := branchCheckedOutElsewhere(ctx, chosen.branch); ok {
-		fmt.Fprintf(w, "Branch '%s' is already checked out in another worktree:\n", chosen.branch)
-		fmt.Fprintf(w, "  %s\n\n", otherPath)
-		fmt.Fprintln(w, "Resume it there with:")
-		fmt.Fprintf(w, "  cd %q && entire resume %s\n", otherPath, chosen.branch)
+		fmt.Fprint(w, worktreeClashMessage(chosen.branch, otherPath, chosen.state.LastPrompt))
 		return nil
 	}
 
@@ -328,6 +329,34 @@ func resumeOptionLabel(item resumableSession) string {
 		return fmt.Sprintf("(%s) · \"%s\" · %s · last active %s — can't resume", item.unresumableReason(), prompt, agentLabel, when)
 	}
 	return fmt.Sprintf("%s · \"%s\" · %s · last active %s", item.branch, prompt, agentLabel, when)
+}
+
+// shellQuote wraps a string in single quotes for safe inclusion in a copy-paste
+// /bin/sh command, escaping any embedded single quotes. Prevents shell
+// metacharacters in paths (or other interpolated values) from being executed.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// worktreeClashMessage builds the guidance shown when the chosen session's branch
+// is already checked out in another worktree. It steers the user to re-run the
+// picker in that worktree (which resumes the exact selected session by its
+// checkpoint) rather than `entire resume <branch>` (which would resume the
+// branch's latest checkpoint and pick the wrong session when several share it).
+// The only value placed in the copy-paste command is the worktree path, and it
+// is shell-quoted; the branch name appears only in non-executable prose.
+func worktreeClashMessage(branch, otherPath, lastPrompt string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Branch %q is already checked out in another worktree:\n", branch)
+	fmt.Fprintf(&b, "  %s\n", otherPath)
+	if prompt := strings.TrimSpace(lastPrompt); prompt != "" {
+		fmt.Fprintf(&b, "\nResume this session (%q) there by running the picker in that worktree:\n",
+			stringutil.TruncateRunes(stringutil.CollapseWhitespace(prompt), 50, "..."))
+	} else {
+		b.WriteString("\nResume this session there by running the picker in that worktree:\n")
+	}
+	fmt.Fprintf(&b, "  cd %s && entire session resume\n", shellQuote(otherPath))
+	return b.String()
 }
 
 // branchCheckedOutElsewhere reports whether branch is checked out in a worktree

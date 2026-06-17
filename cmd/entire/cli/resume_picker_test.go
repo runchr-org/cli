@@ -173,6 +173,87 @@ func TestResumableSession_RequiresCheckpoint(t *testing.T) {
 	}
 }
 
+func TestShellQuote(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"abc":          "'abc'",
+		"a b":          "'a b'",
+		"$(echo pwn)":  "'$(echo pwn)'",
+		"x;echo pwn":   "'x;echo pwn'",
+		"/tmp/o'brien": `'/tmp/o'\''brien'`,
+	}
+	for in, want := range cases {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// clashCommandLine returns the copy-paste command line from a clash message.
+func clashCommandLine(t *testing.T, msg string) string {
+	t.Helper()
+	for _, line := range strings.Split(msg, "\n") {
+		if strings.Contains(line, "entire session resume") {
+			return line
+		}
+	}
+	t.Fatalf("no command line found in message:\n%s", msg)
+	return ""
+}
+
+// TestWorktreeClashMessage covers both reviewer findings on the clash path:
+// the guidance must preserve the selected-session flow (point at the picker, not
+// `entire resume <branch>`), and the copy-paste command must not let a branch
+// name or path inject shell tokens.
+func TestWorktreeClashMessage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("points at the picker, not the branch-arg form", func(t *testing.T) {
+		t.Parallel()
+		msg := worktreeClashMessage("feat", "/work/wt", "do stuff")
+		cmd := clashCommandLine(t, msg)
+		if cmd != "  cd '/work/wt' && entire session resume" {
+			t.Errorf("unexpected command line: %q", cmd)
+		}
+		// Must NOT suggest the branch-arg form, which resumes the branch's latest
+		// checkpoint and would pick the wrong session.
+		if strings.Contains(msg, "entire resume feat") || strings.Contains(msg, "entire session resume feat") {
+			t.Errorf("message must not pass the branch as a resume argument:\n%s", msg)
+		}
+	})
+
+	t.Run("branch name cannot inject shell tokens", func(t *testing.T) {
+		t.Parallel()
+		msg := worktreeClashMessage("x;echo pwn", "/wt", "")
+		cmd := clashCommandLine(t, msg)
+		// The branch isn't part of the command at all, so its tokens can't run.
+		if cmd != "  cd '/wt' && entire session resume" {
+			t.Errorf("branch leaked into command line: %q", cmd)
+		}
+		if strings.Contains(cmd, "echo pwn") {
+			t.Errorf("command line must not contain branch tokens: %q", cmd)
+		}
+	})
+
+	t.Run("path metacharacters are shell-quoted", func(t *testing.T) {
+		t.Parallel()
+		// A command-substitution in the path stays inert inside single quotes.
+		msg := worktreeClashMessage("b", "/tmp/$(echo pwn)", "")
+		cmd := clashCommandLine(t, msg)
+		if cmd != "  cd '/tmp/$(echo pwn)' && entire session resume" {
+			t.Errorf("path not safely single-quoted: %q", cmd)
+		}
+
+		// An apostrophe in the path is escaped, not left dangling.
+		msg = worktreeClashMessage("b", "/tmp/o'brien", "")
+		cmd = clashCommandLine(t, msg)
+		if !strings.Contains(cmd, `cd '/tmp/o'\''brien'`) {
+			t.Errorf("apostrophe not escaped: %q", cmd)
+		}
+	})
+}
+
 // TestResolveResumableBranches_TwoSessionsSameBranch covers the reviewer's case:
 // two sessions sharing one branch must each carry their own checkpoint ID, so
 // selecting one resumes that session rather than the branch's latest.
