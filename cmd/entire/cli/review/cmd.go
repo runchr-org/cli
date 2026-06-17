@@ -88,6 +88,7 @@ func NewCommand(deps Deps) *cobra.Command {
 	var setAgents []string
 	var setJudge string
 	var setOutput string
+	var setLocal bool
 	var setTask string
 	var setModels []string
 	var setSlots []string
@@ -115,6 +116,8 @@ Flags:
   --set-agents   with --configure: comma-separated inspector agents for the profile
   --set-judge    with --configure: the consolidating judge as agent[=model]
   --set-output   with --configure: where the verdict goes — local (default) or trail
+  --local        with --configure: save to .entire/settings.local.json (just you)
+                 instead of .entire/settings.json (shared). Interactive setup asks.
   --set-task     with --configure: the profile's canonical task text
   --set-model    with --configure: per-inspector model as agent=model (repeatable)
   --set-slot     with --configure: an inspector slot as agent[=model] (repeatable;
@@ -186,6 +189,7 @@ use 'entire attach --review <id>'.`,
 					Agents: setAgents,
 					Judge:  setJudge,
 					Output: setOutput,
+					Local:  setLocal,
 					Task:   setTask,
 					Models: setModels,
 					Slots:  setSlots,
@@ -205,6 +209,7 @@ use 'entire attach --review <id>'.`,
 	cmd.Flags().StringSliceVar(&setAgents, "set-agents", nil, "with --configure: inspector agents for the profile (comma-separated)")
 	cmd.Flags().StringVar(&setJudge, "set-judge", "", "with --configure: the consolidating judge as agent[=model]")
 	cmd.Flags().StringVar(&setOutput, "set-output", "", "with --configure: where the verdict is delivered (local or trail)")
+	cmd.Flags().BoolVar(&setLocal, "local", false, "with --configure: save the profile to .entire/settings.local.json (per-developer) instead of .entire/settings.json")
 	cmd.Flags().StringVar(&setTask, "set-task", "", "with --configure: the profile's canonical task text")
 	cmd.Flags().StringArrayVar(&setModels, "set-model", nil, "with --configure: per-inspector model as agent=model (repeatable)")
 	cmd.Flags().StringArrayVar(&setSlots, "set-slot", nil, "with --configure: an inspector slot as agent[=model] (repeatable; same agent/model may repeat)")
@@ -230,6 +235,7 @@ type reviewConfigureOptions struct {
 	Agents []string // inspector agent names (--set-agents)
 	Judge  string   // consolidating judge as "agent[=model]" (--set-judge)
 	Output string   // output destination: local|trail (--set-output)
+	Local  bool     // save to local settings file instead of project (--local)
 	Task   string   // profile task text (--set-task)
 	Models []string // per-inspector "agent=model" entries (--set-model)
 	Slots  []string // inspector slots as "agent[=model]" entries (--set-slot)
@@ -265,7 +271,8 @@ func runReviewConfigure(ctx context.Context, cmd *cobra.Command, profileOverride
 	}
 	installed := deps.GetAgentsWithHooksInstalled(ctx)
 
-	// Scripted path: build + save the profile from --set-* flags, no TUI.
+	// Scripted path: build + save the profile from --set-* flags, no TUI. The
+	// destination is the --local flag (default: project settings).
 	if opts.scripted() {
 		profile, buildErr := buildConfiguredProfile(ctx, profileName, opts, s, deps)
 		if buildErr != nil {
@@ -273,10 +280,14 @@ func runReviewConfigure(ctx context.Context, cmd *cobra.Command, profileOverride
 			fmt.Fprintln(cmd.ErrOrStderr(), buildErr.Error())
 			return silentErr(buildErr)
 		}
-		if err := saveReviewProfile(ctx, profileName, profile, true); err != nil {
+		scope := reviewScopeProject
+		if opts.Local {
+			scope = reviewScopeLocal
+		}
+		if err := saveReviewProfile(ctx, profileName, profile, true, scope); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "Review profile %q saved with %s.\n", profileName, strings.Join(sortedProfileAgentNames(profile), ", "))
+		fmt.Fprintf(out, "Review profile %q saved to %s with %s.\n", profileName, scope.file(), strings.Join(sortedProfileAgentNames(profile), ", "))
 		fmt.Fprintf(out, "Run `entire inspect %s` to start.\n", profileName)
 		return nil
 	}
@@ -290,10 +301,14 @@ func runReviewConfigure(ctx context.Context, cmd *cobra.Command, profileOverride
 		if setupErr != nil {
 			return handlePickerError(cmd, silentErr, setupErr)
 		}
-		if err := saveReviewProfile(ctx, name, profile, true); err != nil {
+		scope, scopeErr := promptForSettingsScope(ctx, opts.Local)
+		if scopeErr != nil {
+			return handlePickerError(cmd, silentErr, scopeErr)
+		}
+		if err := saveReviewProfile(ctx, name, profile, true, scope); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "Review profile %q saved. Run `entire inspect`, or `entire inspect %s`, to start.\n", name, name)
+		fmt.Fprintf(out, "Review profile %q saved to %s. Run `entire inspect`, or `entire inspect %s`, to start.\n", name, scope.file(), name)
 		return nil
 	}
 
@@ -721,6 +736,9 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride, modelOver
 	if len(nonZeroProfiles(s.ReviewProfiles)) == 0 {
 		profileForSetup := profileOverride
 		var profile settings.ReviewProfileConfig
+		// Non-interactive first run writes the shared project settings; interactive
+		// setup asks the user where to save below.
+		saveScope := reviewScopeProject
 		guidedSetup := interactive.IsTerminalWriter(out) && interactive.CanPromptInteractively()
 		if guidedSetup {
 			var setupErr error
@@ -728,6 +746,11 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride, modelOver
 			if setupErr != nil {
 				return handlePickerError(cmd, silentErr, setupErr)
 			}
+			scope, scopeErr := promptForSettingsScope(ctx, false)
+			if scopeErr != nil {
+				return handlePickerError(cmd, silentErr, scopeErr)
+			}
+			saveScope = scope
 		} else {
 			if profileForSetup == "" {
 				profileForSetup = DefaultProfileName
@@ -743,7 +766,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, agentOverride, modelOver
 			fmt.Fprintln(out, "Configure later with `entire inspect --configure`.")
 			fmt.Fprintln(out)
 		}
-		if saveErr := saveDefaultReviewProfile(ctx, profileForSetup, profile); saveErr != nil {
+		if saveErr := saveDefaultReviewProfile(ctx, profileForSetup, profile, saveScope); saveErr != nil {
 			return saveErr
 		}
 		s.ReviewProfiles = map[string]settings.ReviewProfileConfig{profileForSetup: profile}

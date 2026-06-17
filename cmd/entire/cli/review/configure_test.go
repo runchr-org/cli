@@ -6,6 +6,7 @@ import (
 
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 const (
@@ -287,5 +288,62 @@ func TestBuildConfiguredProfile_InvalidModelSpec(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected error for malformed --set-model spec")
+	}
+}
+
+func TestSaveReviewProfile_ScopeProjectVsLocal(t *testing.T) {
+	tmp := t.TempDir()
+	testutil.InitRepo(t, tmp)
+	testutil.WriteFile(t, tmp, "f.txt", "x")
+	testutil.GitAdd(t, tmp, "f.txt")
+	testutil.GitCommit(t, tmp, "init")
+	t.Chdir(tmp)
+	ctx := context.Background()
+
+	projProfile := settings.ReviewProfileConfig{
+		Task:   "Project task.",
+		Agents: map[string]settings.ReviewConfig{tAgentClaude: {Skills: []string{"/review"}}},
+	}
+	if err := saveReviewProfile(ctx, "general", projProfile, true, reviewScopeProject); err != nil {
+		t.Fatalf("save project: %v", err)
+	}
+	localProfile := settings.ReviewProfileConfig{
+		Task:   "Local task.",
+		Agents: map[string]settings.ReviewConfig{tAgentCodex: {Skills: []string{"/review"}}},
+	}
+	if err := saveReviewProfile(ctx, "scratch", localProfile, false, reviewScopeLocal); err != nil {
+		t.Fatalf("save local: %v", err)
+	}
+
+	// Project file has only the project profile.
+	_, projRaw, projExists, err := settings.LoadProjectRaw(ctx)
+	if err != nil || !projExists {
+		t.Fatalf("project raw: exists=%v err=%v", projExists, err)
+	}
+	if _, ok := projRaw["review_profiles"]; !ok {
+		t.Fatal("project settings missing review_profiles")
+	}
+
+	// Both files merge through settings.Load.
+	s, err := settings.Load(ctx)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, ok := s.ReviewProfiles["general"]; !ok {
+		t.Errorf("merged settings missing project profile 'general': %#v", s.ReviewProfiles)
+	}
+	if _, ok := s.ReviewProfiles["scratch"]; !ok {
+		t.Errorf("merged settings missing local profile 'scratch': %#v", s.ReviewProfiles)
+	}
+	// The local-only profile must not be written to the shared project file.
+	projOnly, err := decodeRawReviewProfiles(projRaw)
+	if err != nil {
+		t.Fatalf("decode project review_profiles: %v", err)
+	}
+	if _, ok := projOnly["scratch"]; ok {
+		t.Error("local profile 'scratch' leaked into the shared project settings file")
+	}
+	if _, ok := projOnly["general"]; !ok {
+		t.Error("project profile 'general' missing from project settings file")
 	}
 }

@@ -2,8 +2,11 @@ package review
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -398,27 +401,118 @@ func agentSupportsTextGeneration(_ context.Context, name string) bool {
 	return ok
 }
 
-func saveDefaultReviewProfile(ctx context.Context, profileName string, profile settings.ReviewProfileConfig) error {
-	return saveReviewProfile(ctx, profileName, profile, false)
+// reviewSettingsScope selects which settings file a review profile is written
+// to. Both files are read and merged by settings.Load; the scope only decides
+// where new profiles are persisted.
+type reviewSettingsScope int
+
+const (
+	// reviewScopeProject writes to .entire/settings.json (shared, committed).
+	reviewScopeProject reviewSettingsScope = iota
+	// reviewScopeLocal writes to .entire/settings.local.json (per-developer).
+	reviewScopeLocal
+)
+
+// file returns the settings filename this scope writes to.
+func (s reviewSettingsScope) file() string {
+	if s == reviewScopeLocal {
+		return settings.EntireSettingsLocalFile
+	}
+	return settings.EntireSettingsFile
 }
 
-func saveReviewProfile(ctx context.Context, profileName string, profile settings.ReviewProfileConfig, makeDefault bool) error {
-	prefs, err := settings.LoadClonePreferences(ctx)
+func saveDefaultReviewProfile(ctx context.Context, profileName string, profile settings.ReviewProfileConfig, scope reviewSettingsScope) error {
+	return saveReviewProfile(ctx, profileName, profile, false, scope)
+}
+
+// saveReviewProfile persists one profile into the chosen settings file via a
+// raw read-modify-write so unrelated keys (and other profiles) are preserved.
+func saveReviewProfile(ctx context.Context, profileName string, profile settings.ReviewProfileConfig, makeDefault bool, scope reviewSettingsScope) error {
+	path, raw, err := loadReviewSettingsRaw(ctx, scope)
 	if err != nil {
-		return fmt.Errorf("load review preferences before save: %w", err)
+		return err
 	}
-	if prefs == nil {
-		prefs = &settings.ClonePreferences{}
+	profiles, err := decodeRawReviewProfiles(raw)
+	if err != nil {
+		return err
 	}
-	if prefs.ReviewProfiles == nil {
-		prefs.ReviewProfiles = map[string]settings.ReviewProfileConfig{}
+	profiles[profileName] = profile
+	defaultName := decodeRawString(raw, "review_default_profile")
+	if makeDefault || strings.TrimSpace(defaultName) == "" {
+		defaultName = profileName
 	}
-	prefs.ReviewProfiles[profileName] = profile
-	if makeDefault || prefs.ReviewDefaultProfile == "" {
-		prefs.ReviewDefaultProfile = profileName
+	return writeRawReviewProfiles(path, raw, profiles, defaultName)
+}
+
+// loadReviewSettingsRaw reads the raw JSON object for the chosen settings file.
+func loadReviewSettingsRaw(ctx context.Context, scope reviewSettingsScope) (string, map[string]json.RawMessage, error) {
+	var (
+		path string
+		raw  map[string]json.RawMessage
+		err  error
+	)
+	if scope == reviewScopeLocal {
+		path, raw, _, err = settings.LoadLocalRaw(ctx)
+	} else {
+		path, raw, _, err = settings.LoadProjectRaw(ctx)
 	}
-	if err := settings.SaveClonePreferences(ctx, prefs); err != nil {
-		return fmt.Errorf("save review preferences: %w", err)
+	if err != nil {
+		return "", nil, fmt.Errorf("load %s before save: %w", scope.file(), err)
+	}
+	if raw == nil {
+		raw = map[string]json.RawMessage{}
+	}
+	return path, raw, nil
+}
+
+func decodeRawReviewProfiles(raw map[string]json.RawMessage) (map[string]settings.ReviewProfileConfig, error) {
+	profiles := map[string]settings.ReviewProfileConfig{}
+	if msg, ok := raw["review_profiles"]; ok && len(msg) > 0 {
+		if err := json.Unmarshal(msg, &profiles); err != nil {
+			return nil, fmt.Errorf("parse existing review_profiles: %w", err)
+		}
+		if profiles == nil {
+			profiles = map[string]settings.ReviewProfileConfig{}
+		}
+	}
+	return profiles, nil
+}
+
+func decodeRawString(raw map[string]json.RawMessage, key string) string {
+	if msg, ok := raw[key]; ok && len(msg) > 0 {
+		var s string
+		if err := json.Unmarshal(msg, &s); err == nil {
+			return s
+		}
+	}
+	return ""
+}
+
+func writeRawReviewProfiles(path string, raw map[string]json.RawMessage, profiles map[string]settings.ReviewProfileConfig, defaultName string) error {
+	profilesJSON, err := json.Marshal(profiles)
+	if err != nil {
+		return fmt.Errorf("encode review_profiles: %w", err)
+	}
+	raw["review_profiles"] = profilesJSON
+	if strings.TrimSpace(defaultName) != "" {
+		defJSON, err := json.Marshal(defaultName)
+		if err != nil {
+			return fmt.Errorf("encode review_default_profile: %w", err)
+		}
+		raw["review_default_profile"] = defJSON
+	}
+	// SaveProjectRaw writes the given path atomically (temp file + rename in the
+	// same dir) but does not create the directory, so ensure .entire/ exists
+	// for repos that haven't been enabled yet.
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return fmt.Errorf("create settings dir %s: %w", dir, err)
+		}
+	}
+	// SaveProjectRaw is path-generic despite the name, so it also serves the
+	// local settings file.
+	if err := settings.SaveProjectRaw(path, raw); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil
 }

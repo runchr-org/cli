@@ -69,8 +69,14 @@ runs after the inspectors finish and produces the final verdict.
 
 ## Settings Schema
 
-Profiles are configured in clone-local preferences (or settings) under
-`review_profiles`:
+Profiles are configured under `review_profiles` in either the shared project
+settings (`.entire/settings.json`, committed) or the per-developer override
+(`.entire/settings.local.json`, git-ignored). Guided setup and `--configure`
+let the user pick the destination (`--local` for the scripted path); the
+non-interactive first run writes the project file. The two layers (plus legacy
+clone-local preferences) are **merged per profile name** by `settings.Load`, so
+a team can share profiles in the project file while individuals add or override
+profiles locally without hiding the shared set. Schema:
 
 ```json
 {

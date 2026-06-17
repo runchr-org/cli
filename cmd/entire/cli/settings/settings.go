@@ -676,12 +676,31 @@ func saveClonePreferencesToFile(prefs *ClonePreferences, filePath string) error 
 	return nil
 }
 
+// mergeReviewProfiles overlays src review profiles onto base by name. A profile
+// from a higher-precedence layer overrides the same-named one from a lower
+// layer, but profiles unique to each layer are all preserved. This lets a team
+// keep shared profiles in .entire/settings.json while individuals add or
+// override profiles in clone-local preferences or .entire/settings.local.json,
+// without one layer hiding the others' profiles.
+func mergeReviewProfiles(base, src map[string]ReviewProfileConfig) map[string]ReviewProfileConfig {
+	if len(src) == 0 {
+		return base
+	}
+	if base == nil {
+		base = map[string]ReviewProfileConfig{}
+	}
+	for name, cfg := range src {
+		base[name] = cfg
+	}
+	return base
+}
+
 func applyClonePreferences(settings *EntireSettings, prefs *ClonePreferences) {
 	if prefs == nil {
 		return
 	}
 	if prefs.ReviewProfiles != nil {
-		settings.ReviewProfiles = prefs.ReviewProfiles
+		settings.ReviewProfiles = mergeReviewProfiles(settings.ReviewProfiles, prefs.ReviewProfiles)
 	}
 	if prefs.ReviewDefaultProfile != "" {
 		settings.ReviewDefaultProfile = prefs.ReviewDefaultProfile
@@ -730,7 +749,9 @@ func mergeJSON(settings *EntireSettings, data []byte) error {
 		if err := json.Unmarshal(profilesRaw, &profiles); err != nil {
 			return fmt.Errorf("parsing review_profiles field: %w", err)
 		}
-		settings.ReviewProfiles = profiles
+		// Merge per-profile so a local override file adds to / overrides shared
+		// profiles by name rather than replacing the whole set.
+		settings.ReviewProfiles = mergeReviewProfiles(settings.ReviewProfiles, profiles)
 	}
 	if reviewRaw, ok := raw["review"]; ok {
 		var review map[string]ReviewConfig

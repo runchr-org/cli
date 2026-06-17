@@ -688,15 +688,39 @@ func promptForOutputMode(ctx context.Context, current string) (string, error) {
 	form := newAccessibleForm(huh.NewGroup(
 		huh.NewSelect[string]().
 			Title("Where should the verdict go?").
-			Description("Local keeps it on your machine; Trail also posts it as a finding on this branch's trail.").
+			Description("Local keeps it on this machine; Trail also posts it to this branch's trail.").
 			Options(
-				huh.NewOption("Local — print it and save to local findings", ReviewOutputLocal),
-				huh.NewOption("Trail — also post it to the trail (entire trail finding)", ReviewOutputTrail),
+				huh.NewOption("Local — printed and saved to local findings", ReviewOutputLocal),
+				huh.NewOption("Trail — also posted to this branch's trail as a finding", ReviewOutputTrail),
 			).
 			Value(&picked),
 	))
 	if err := form.RunWithContext(ctx); err != nil {
 		return "", fmt.Errorf("output destination picker: %w", err)
+	}
+	return picked, nil
+}
+
+// promptForSettingsScope asks where the profile should be saved: the shared
+// project settings file or the per-developer local file. preselectLocal seeds
+// the choice (e.g. when the user passed --local on an interactive run).
+func promptForSettingsScope(ctx context.Context, preselectLocal bool) (reviewSettingsScope, error) {
+	picked := reviewScopeProject
+	if preselectLocal {
+		picked = reviewScopeLocal
+	}
+	form := newAccessibleForm(huh.NewGroup(
+		huh.NewSelect[reviewSettingsScope]().
+			Title("Where should this profile be saved?").
+			Description("Project is shared with the team and committed; Local is just for you.").
+			Options(
+				huh.NewOption(settings.EntireSettingsFile+" — shared with the team (committed)", reviewScopeProject),
+				huh.NewOption(settings.EntireSettingsLocalFile+" — just you (git-ignored)", reviewScopeLocal),
+			).
+			Value(&picked),
+	))
+	if err := form.RunWithContext(ctx); err != nil {
+		return reviewScopeProject, fmt.Errorf("settings scope picker: %w", err)
 	}
 	return picked, nil
 }
@@ -882,10 +906,14 @@ func RunReviewProfileConfigPicker(ctx context.Context, out io.Writer, getInstall
 	if err != nil {
 		return nil, err
 	}
-	if err := saveReviewProfileConfig(ctx, profileName, merged, judgeAgent); err != nil {
+	scope, err := promptForSettingsScope(ctx, false)
+	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(out, "Saved review profile %q to local review preferences. Edit later with `entire inspect --edit --profile %s`.\n", profileName, profileName)
+	if err := saveReviewProfileConfig(ctx, profileName, merged, judgeAgent, scope); err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(out, "Saved review profile %q to %s. Edit later with `entire inspect --edit --profile %s`.\n", profileName, scope.file(), profileName)
 	return merged, nil
 }
 
@@ -910,22 +938,23 @@ func MergePickerResults(existing map[string]settings.ReviewConfig, offered map[s
 	return merged
 }
 
-func saveReviewProfileConfig(ctx context.Context, profileName string, agents map[string]settings.ReviewConfig, judgeAgent string) error {
-	prefs, err := settings.LoadClonePreferences(ctx)
+// saveReviewProfileConfig persists the advanced skills picker's result (agents
+// + judge) into the chosen settings file, preserving the profile's existing
+// task and any unrelated keys via a raw read-modify-write.
+func saveReviewProfileConfig(ctx context.Context, profileName string, agents map[string]settings.ReviewConfig, judgeAgent string, scope reviewSettingsScope) error {
+	path, raw, err := loadReviewSettingsRaw(ctx, scope)
 	if err != nil {
-		return fmt.Errorf("load review preferences before save: %w", err)
+		return err
 	}
-	if prefs == nil {
-		prefs = &settings.ClonePreferences{}
-	}
-	if prefs.ReviewProfiles == nil {
-		prefs.ReviewProfiles = map[string]settings.ReviewProfileConfig{}
+	profiles, err := decodeRawReviewProfiles(raw)
+	if err != nil {
+		return err
 	}
 	// Merge into any existing profile so the advanced skills picker only
 	// rewrites what it actually edits (agents + judge). Profile-level fields the
 	// picker never surfaces — custom `task` text — are preserved instead of being
 	// clobbered with built-in defaults.
-	profile := prefs.ReviewProfiles[profileName]
+	profile := profiles[profileName]
 	profile.Agents = agents
 	if strings.TrimSpace(judgeAgent) != "" {
 		profile.Judge = &settings.ReviewConfig{Agent: strings.TrimSpace(judgeAgent)}
@@ -935,14 +964,12 @@ func saveReviewProfileConfig(ctx context.Context, profileName string, agents map
 	if strings.TrimSpace(profile.Task) == "" {
 		profile.Task = profileTask(profileName, settings.ReviewProfileConfig{})
 	}
-	prefs.ReviewProfiles[profileName] = profile
-	if prefs.ReviewDefaultProfile == "" {
-		prefs.ReviewDefaultProfile = profileName
+	profiles[profileName] = profile
+	defaultName := decodeRawString(raw, "review_default_profile")
+	if strings.TrimSpace(defaultName) == "" {
+		defaultName = profileName
 	}
-	if err := settings.SaveClonePreferences(ctx, prefs); err != nil {
-		return fmt.Errorf("save review preferences: %w", err)
-	}
-	return nil
+	return writeRawReviewProfiles(path, raw, profiles, defaultName)
 }
 
 func pickReviewJudgeAgentPreference(ctx context.Context, review map[string]settings.ReviewConfig, current string) (string, error) {
