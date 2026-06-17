@@ -430,6 +430,57 @@ func TestBuildCheckpointBranchIndex_SkipsInternalRefs(t *testing.T) {
 	}
 }
 
+// TestBuildCheckpointBranchIndex_DefaultBranchCheckpoint covers the legacy
+// fallback for a pre-Branch-field session whose checkpoint was committed on the
+// default branch: it must map to the default branch, not to a feature branch
+// that merely contains the commit (which would check out the wrong branch).
+func TestBuildCheckpointBranchIndex_DefaultBranchCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	const featBranch = "feat-legacy"
+
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "base.txt", "base")
+	testutil.GitAdd(t, tmpDir, "base.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+
+	// A checkpoint committed on the default branch.
+	cpMain, err := id.Generate()
+	if err != nil {
+		t.Fatalf("generate checkpoint id: %v", err)
+	}
+	testutil.WriteFile(t, tmpDir, "m.txt", "m")
+	testutil.GitAdd(t, tmpDir, "m.txt")
+	testutil.GitCommit(t, tmpDir, "main work\n\nEntire-Checkpoint: "+cpMain.String())
+
+	// A feature branch off that commit, with its own checkpoint. Its history
+	// contains cpMain, so a naive walk would mis-attribute cpMain to it.
+	testutil.GitCheckoutNewBranch(t, tmpDir, featBranch)
+	cpFeat, err := id.Generate()
+	if err != nil {
+		t.Fatalf("generate checkpoint id: %v", err)
+	}
+	testutil.WriteFile(t, tmpDir, "f.txt", "f")
+	testutil.GitAdd(t, tmpDir, "f.txt")
+	testutil.GitCommit(t, tmpDir, "feat work\n\nEntire-Checkpoint: "+cpFeat.String())
+
+	repo, err := git.PlainOpen(tmpDir)
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	defer repo.Close()
+
+	defaultBranch := resolveDefaultBranchName(repo)
+	index := buildCheckpointBranchIndex(repo)
+	if got := index[cpMain.String()]; got != defaultBranch {
+		t.Errorf("default-branch checkpoint should map to default branch %q, got %q (index=%v)", defaultBranch, got, index)
+	}
+	if got := index[cpFeat.String()]; got != featBranch {
+		t.Errorf("feature-only checkpoint should map to %q, got %q (index=%v)", featBranch, got, index)
+	}
+}
+
 // TestBranchCheckedOutElsewhere verifies worktree awareness: a branch checked
 // out in another worktree is detected (with its path), while the current
 // worktree's own branch and unknown branches are not flagged.

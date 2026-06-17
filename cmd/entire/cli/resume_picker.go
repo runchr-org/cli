@@ -216,28 +216,38 @@ func branchExistsLocally(repo *git.Repository, name string) bool {
 	return err == nil
 }
 
-// buildCheckpointBranchIndex maps committed checkpoint IDs to the local branch
-// whose recent history carries them. Each non-default branch is walked from its
-// tip back a bounded depth; the default branch is skipped so the index favors
-// feature branches, and the first branch to claim a checkpoint wins.
+// Scan depths for buildCheckpointBranchIndex. The default branch is a single
+// branch, so it can be walked deeper; feature branches are bounded tighter since
+// there may be hundreds of them.
+const (
+	defaultBranchScanDepth = 500
+	featureBranchScanDepth = 50
+)
+
+// buildCheckpointBranchIndex maps committed checkpoint IDs to the branch whose
+// history carries them, for the legacy fallback that resolves a session with no
+// stored Branch. The default branch is indexed FIRST (so a checkpoint committed
+// to main/master maps to the default branch, not to some feature branch that
+// merely contains the commit), and its commit hashes seed a stop-set: feature
+// branch walks halt when they reach shared default history, so they only claim
+// their own branch-only checkpoints. First branch to claim a checkpoint wins.
 //
-// It deliberately does NOT compute merge bases to scope to branch-only commits:
-// go-git's MergeBase walks full history and, run once per branch, turns this into
-// an O(branches × history) operation that hangs on large repos. A session's last
-// checkpoint sits near its branch tip, so a shallow tip walk finds it; the only
-// cost of skipping merge-base scoping is that a checkpoint shared with the base
-// branch may be attributed to a feature branch, which is harmless for lookups
-// keyed on a specific session's checkpoint ID.
+// This deliberately avoids go-git's MergeBase (which walks full history and,
+// run once per branch, becomes O(branches × history) and hangs on large repos);
+// the precomputed default-commit set is a cheap stand-in for branch-only scoping.
+// Internal entire/ refs (checkpoint metadata + shadow branches) are never
+// indexed — they are not resumable and number in the hundreds.
 func buildCheckpointBranchIndex(repo *git.Repository) map[string]string {
 	index := map[string]string{}
 
-	defaultBranch := getDefaultBranchFromRemote(repo)
-	if defaultBranch == "" {
-		for _, name := range []string{defaultBaseBranch, masterBaseBranch} {
-			if _, err := repo.Reference(plumbing.NewBranchReferenceName(name), true); err == nil {
-				defaultBranch = name
-				break
-			}
+	defaultBranch := resolveDefaultBranchName(repo)
+
+	// Seed with the default branch's checkpoints and record its commit hashes so
+	// feature walks can stop at shared history.
+	defaultCommits := map[plumbing.Hash]bool{}
+	if defaultBranch != "" {
+		if c := resolveBranchCommit(repo, defaultBranch); c != nil {
+			indexBranchCheckpoints(c, defaultBranch, defaultBranchScanDepth, nil, defaultCommits, index)
 		}
 	}
 
@@ -247,11 +257,6 @@ func buildCheckpointBranchIndex(repo *git.Repository) map[string]string {
 	}
 	forEachErr := iter.ForEach(func(ref *plumbing.Reference) error {
 		branchName := ref.Name().Short()
-		// Skip the default branch and Entire's own internal refs (the
-		// entire/checkpoints/* metadata branches and the per-base shadow
-		// branches): they are not resumable user branches, and the shadow
-		// branches number in the hundreds — scanning them is wasted work and
-		// could mis-attribute a checkpoint to an internal ref.
 		if branchName == defaultBranch || strings.HasPrefix(branchName, "entire/") {
 			return nil
 		}
@@ -259,7 +264,7 @@ func buildCheckpointBranchIndex(repo *git.Repository) map[string]string {
 		if err != nil {
 			return nil //nolint:nilerr // skip unreadable branch, keep indexing others
 		}
-		indexBranchCheckpoints(headCommit, branchName, index)
+		indexBranchCheckpoints(headCommit, branchName, featureBranchScanDepth, defaultCommits, nil, index)
 		return nil
 	})
 	if forEachErr != nil {
@@ -269,12 +274,59 @@ func buildCheckpointBranchIndex(repo *git.Repository) map[string]string {
 	return index
 }
 
-// indexBranchCheckpoints walks history from start back a bounded depth and
-// records each checkpoint trailer it finds under branch (first writer wins).
-func indexBranchCheckpoints(start *object.Commit, branch string, index map[string]string) {
-	const maxCommits = 50
+// resolveDefaultBranchName returns the repo's default branch name (from origin's
+// HEAD when available, else the first of main/master that exists locally), or ""
+// if none can be determined.
+func resolveDefaultBranchName(repo *git.Repository) string {
+	if name := getDefaultBranchFromRemote(repo); name != "" {
+		return name
+	}
+	for _, name := range []string{defaultBaseBranch, masterBaseBranch} {
+		if _, err := repo.Reference(plumbing.NewBranchReferenceName(name), true); err == nil {
+			return name
+		}
+	}
+	return ""
+}
+
+// resolveBranchCommit returns the commit a branch points at, preferring the local
+// ref and falling back to origin's remote-tracking ref (the default branch may
+// not be checked out locally in a worktree-only setup).
+func resolveBranchCommit(repo *git.Repository, name string) *object.Commit {
+	for _, ref := range []plumbing.ReferenceName{
+		plumbing.NewBranchReferenceName(name),
+		plumbing.NewRemoteReferenceName("origin", name),
+	} {
+		if r, err := repo.Reference(ref, true); err == nil {
+			if c, err := repo.CommitObject(r.Hash()); err == nil {
+				return c
+			}
+		}
+	}
+	return nil
+}
+
+// indexBranchCheckpoints walks history from start back maxCommits commits,
+// recording each checkpoint trailer under branch (first writer wins). It stops
+// when it reaches a commit in stopAt (shared default history). When recordVisited
+// is non-nil, every visited commit hash is added to it (used while seeding the
+// default branch so feature walks can later stop at those commits).
+func indexBranchCheckpoints(
+	start *object.Commit,
+	branch string,
+	maxCommits int,
+	stopAt map[plumbing.Hash]bool,
+	recordVisited map[plumbing.Hash]bool,
+	index map[string]string,
+) {
 	current := start
 	for i := 0; current != nil && i < maxCommits; i++ {
+		if stopAt[current.Hash] {
+			return
+		}
+		if recordVisited != nil {
+			recordVisited[current.Hash] = true
+		}
 		for _, cpID := range trailers.ParseAllCheckpoints(current.Message) {
 			key := cpID.String()
 			if _, ok := index[key]; !ok {
