@@ -136,12 +136,13 @@ func Run(
 
 	waitErr := proc.Wait()
 	finished := time.Now()
-	// agentCtx.Err() is immutable once set, so DeadlineExceeded means this
-	// inspector's own deadline fired first; a parent cancellation (user Ctrl+C)
-	// propagates as Canceled instead. Reading only agentCtx is therefore
-	// race-free — no need to also sample the parent ctx, which could change
-	// between the two reads and misclassify a real timeout.
-	timedOut := agentCtx.Err() == context.DeadlineExceeded
+	// Classify from waitErr, the termination cause captured when Wait returned:
+	// the Process contract returns DeadlineExceeded when the process was killed
+	// by this inspector's deadline and Canceled on a parent cancellation (user
+	// Ctrl+C). Using waitErr instead of re-sampling agentCtx avoids a deadline
+	// firing in the gap after a natural completion (waitErr == nil) and producing
+	// a false timeout.
+	timedOut := errors.Is(waitErr, context.DeadlineExceeded)
 	if shouldEmitSyntheticRunError(ctx, waitErr) {
 		synthEvent := reviewtypes.RunError{Err: waitErr}
 		buffer = append(buffer, synthEvent)

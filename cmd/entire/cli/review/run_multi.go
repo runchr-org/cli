@@ -25,6 +25,7 @@ package review
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -146,7 +147,7 @@ func RunMulti(
 		}
 		states[i].proc = proc
 		wg.Add(1)
-		go func(idx int, p reviewtypes.Process, ac context.Context, cancel context.CancelFunc) {
+		go func(idx int, p reviewtypes.Process, cancel context.CancelFunc) {
 			defer wg.Done()
 			defer cancel()
 			for ev := range p.Events() {
@@ -161,13 +162,14 @@ func RunMulti(
 			// happens-before, so it covers these writes regardless of the fanIn
 			// sends below.
 			//
-			// ac.Err() is immutable once set, so DeadlineExceeded means THIS
-			// agent's deadline fired first; a parent cancellation (user Ctrl+C)
-			// propagates as Canceled instead. Reading only ac is race-free — also
-			// sampling the parent ctx could change between the two reads and
-			// misclassify a real timeout as a cancellation.
+			// Classify from waitErr (the cause captured when Wait returned): the
+			// Process contract returns DeadlineExceeded when killed by THIS agent's
+			// deadline and Canceled on a parent cancellation. Using waitErr instead
+			// of re-sampling the agent context avoids a deadline firing in the gap
+			// after a natural completion (waitErr == nil) and producing a false
+			// timeout.
 			states[idx].waitErr = waitErr
-			states[idx].timedOut = ac.Err() == context.DeadlineExceeded
+			states[idx].timedOut = errors.Is(waitErr, context.DeadlineExceeded)
 			states[idx].finishedAt = finishedAt
 			if shouldEmitSyntheticRunError(ctx, waitErr) {
 				fanIn <- taggedEvent{agentIdx: idx, ev: reviewtypes.RunError{Err: waitErr}}
@@ -180,7 +182,7 @@ func RunMulti(
 				Duration:  finishedAt.Sub(states[idx].startedAt),
 				Err:       waitErr,
 			})
-		}(i, proc, agentCtx, cancelAgent)
+		}(i, proc, cancelAgent)
 	}
 
 	// Close fanIn after all forwarding goroutines finish. This goroutine

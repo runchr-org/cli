@@ -624,3 +624,51 @@ func TestRun_ParentCancelIsNotTimeout(t *testing.T) {
 		t.Errorf("err = %v, must not be a timeout for a parent cancel", run.Err)
 	}
 }
+
+// lateNaturalReviewer's process ignores its context and completes naturally
+// (Wait returns nil) only after a delay — modeling an inspector that finishes
+// just as (or after) its deadline elapses. It exercises that timeout
+// classification keys off the wait error, not a late re-sample of the agent
+// context (which would already read DeadlineExceeded and falsely flag it).
+type lateNaturalReviewer struct {
+	name  string
+	delay time.Duration
+}
+
+func (r *lateNaturalReviewer) Name() string { return r.name }
+func (r *lateNaturalReviewer) Start(_ context.Context, _ reviewtypes.RunConfig) (reviewtypes.Process, error) {
+	return &lateNaturalProcess{delay: r.delay}, nil
+}
+
+type lateNaturalProcess struct{ delay time.Duration }
+
+func (p *lateNaturalProcess) Events() <-chan reviewtypes.Event {
+	ch := make(chan reviewtypes.Event)
+	close(ch)
+	return ch
+}
+func (p *lateNaturalProcess) Wait() error {
+	time.Sleep(p.delay)
+	return nil // completed cleanly, regardless of the (already-elapsed) deadline
+}
+
+func TestRun_NaturalCompletionPastDeadlineIsNotTimeout(t *testing.T) {
+	t.Parallel()
+	rec := &stubSinkRecorder{}
+	summary, err := Run(
+		context.Background(),
+		&lateNaturalReviewer{name: "claude-code", delay: 30 * time.Millisecond},
+		reviewtypes.RunConfig{InspectorTimeout: 5 * time.Millisecond}, // deadline elapses during Wait
+		[]reviewtypes.Sink{rec},
+	)
+	if err != nil && strings.Contains(err.Error(), "timed out") {
+		t.Errorf("err = %v, must not be a timeout for a natural completion", err)
+	}
+	run := summary.AgentRuns[0]
+	if run.Status != reviewtypes.AgentStatusSucceeded {
+		t.Errorf("status = %v, want Succeeded (clean completion, not a false timeout)", run.Status)
+	}
+	if run.Err != nil {
+		t.Errorf("run.Err = %v, want nil", run.Err)
+	}
+}
