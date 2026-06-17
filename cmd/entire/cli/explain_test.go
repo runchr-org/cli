@@ -1055,7 +1055,7 @@ func TestGenerateCheckpointSummary_AdvancesV1Metadata(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	require.NoError(t, generateCheckpointSummary(ctx, &stdout, &stderr, stores, cpID, cpSummary, content, false, 0))
+	require.NoError(t, generateCheckpointSummary(ctx, &stdout, &stderr, stores.Primary, cpID, cpSummary, content, false, 0))
 
 	v1After, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
 	require.NoError(t, err)

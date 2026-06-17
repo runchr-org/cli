@@ -117,8 +117,8 @@ func TestNewGitStore_UsesRefs(t *testing.T) {
 	assert.Equal(t, refs, store.Refs())
 }
 
-// Not parallel: uses t.Chdir() so settings.Load resolves the test repo.
-func TestNewGitStore_SelectsRefByVersion(t *testing.T) {
+// Not parallel: uses t.Chdir() to exercise on-disk settings being ignored.
+func TestNewGitStore_IgnoresCheckpointsVersion(t *testing.T) {
 	dir, repo, h := newTestRepo(t)
 	setRef(t, repo, v1BranchRef(), h)
 	t.Chdir(dir)

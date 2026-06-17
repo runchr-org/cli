@@ -7,7 +7,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
 
 // CommittedRefs is the committed-metadata ref topology.
@@ -46,10 +45,5 @@ func (r CommittedRefs) PrimaryAsRead() CommittedRefs {
 
 // ResolveCommittedRefs returns the committed metadata topology.
 func ResolveCommittedRefs(_ context.Context) CommittedRefs {
-	return DefaultV1Refs()
-}
-
-// ResolveCommittedRefsFromSettings returns the committed metadata topology.
-func ResolveCommittedRefsFromSettings(_ *settings.EntireSettings) CommittedRefs {
 	return DefaultV1Refs()
 }

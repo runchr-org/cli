@@ -6,11 +6,9 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/stretchr/testify/assert"
-
-	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
 
-// Not parallel: uses t.Chdir() so settings.Load resolves the test repo.
+// Not parallel: uses t.Chdir() to exercise on-disk settings being ignored.
 func TestResolveCommittedRefs(t *testing.T) {
 	v1 := v1BranchRef()
 	tests := []struct {
@@ -27,29 +25,6 @@ func TestResolveCommittedRefs(t *testing.T) {
 			t.Chdir(dir)
 			writeSettings(t, dir, tt.version)
 			assert.Equal(t, tt.want, ResolveCommittedRefs(context.Background()))
-		})
-	}
-}
-
-func TestResolveCommittedRefsFromSettings(t *testing.T) {
-	t.Parallel()
-	v1 := v1BranchRef()
-	settingsWithVersion := &settings.EntireSettings{
-		StrategyOptions: map[string]any{"checkpoints_version": "1.1"},
-	}
-	tests := []struct {
-		name     string
-		settings *settings.EntireSettings
-		want     CommittedRefs
-	}{
-		{"nil", nil, CommittedRefs{Primary: v1, Read: v1, Push: []plumbing.ReferenceName{v1}}},
-		{"empty", &settings.EntireSettings{}, CommittedRefs{Primary: v1, Read: v1, Push: []plumbing.ReferenceName{v1}}},
-		{"checkpoints version ignored", settingsWithVersion, CommittedRefs{Primary: v1, Read: v1, Push: []plumbing.ReferenceName{v1}}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tt.want, ResolveCommittedRefsFromSettings(tt.settings))
 		})
 	}
 }
