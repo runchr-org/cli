@@ -68,17 +68,39 @@ func buildLocalReviewManifestFromSummary(
 		StartingSHA:     headSHA,
 		AggregateOutput: strings.TrimSpace(aggregateOutput),
 	}
+	// Match in two passes so inspectors with an explicit model claim their
+	// specific session before default-model inspectors take the leftovers. A
+	// default inspector has an empty model, which reviewRunModelMatches treats as
+	// matching any recorded model (necessary: the session records the resolved
+	// default the inspector never named) — so without this ordering a default
+	// inspector processed first could grab an explicit-model inspector's session.
+	// Sources are still emitted in the original agent-run order.
 	usedSessions := map[string]bool{}
-	for _, run := range summary.AgentRuns {
-		agentName := agentNameForRun(run)
-		st := matchReviewSessionState(worktreeRoot, headSHA, summary.StartedAt, agentName, run.Model, states, usedSessions)
-		if st == nil || st.SessionID == "" {
+	matched := make([]*session.State, len(summary.AgentRuns))
+	matchInspectors := func(explicitModel bool) {
+		for i, run := range summary.AgentRuns {
+			if matched[i] != nil || (strings.TrimSpace(run.Model) != "") != explicitModel {
+				continue
+			}
+			st := matchReviewSessionState(worktreeRoot, headSHA, summary.StartedAt, agentNameForRun(run), run.Model, states, usedSessions)
+			if st == nil || st.SessionID == "" {
+				continue
+			}
+			usedSessions[st.SessionID] = true
+			matched[i] = st
+		}
+	}
+	matchInspectors(true)  // explicit-model inspectors first
+	matchInspectors(false) // then default-model inspectors
+
+	for i, run := range summary.AgentRuns {
+		st := matched[i]
+		if st == nil {
 			continue
 		}
-		usedSessions[st.SessionID] = true
 		manifest.Sources = append(manifest.Sources, ManifestSource{
 			SessionID: st.SessionID,
-			Agent:     agentName,
+			Agent:     agentNameForRun(run),
 			Label:     labelForReviewRun(run),
 			Status:    run.Status.String(),
 			Output:    agentRunOutput(run),

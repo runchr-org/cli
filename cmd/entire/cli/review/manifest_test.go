@@ -854,3 +854,63 @@ func TestBuildLocalReviewManifestFromSummary_DisambiguatesSameModelDifferentThin
 		t.Errorf("sessions = {%q, %q}, want the two distinct sessions sess-1 and sess-2", a, b)
 	}
 }
+
+// TestBuildLocalReviewManifestFromSummary_ExplicitModelClaimedBeforeDefault
+// pins the two-pass matching: a default-model inspector (empty model, which
+// matches any recorded model) must not grab an explicit-model inspector's
+// session, even when it appears first and the explicit session is more recent.
+func TestBuildLocalReviewManifestFromSummary_ExplicitModelClaimedBeforeDefault(t *testing.T) {
+	started := time.Date(2026, 5, 7, 10, 0, 0, 0, time.UTC)
+	summary := reviewtypes.RunSummary{
+		StartedAt: started,
+		AgentRuns: []reviewtypes.AgentRun{
+			{ // default-model inspector, listed first
+				Name:      "claude-code",
+				AgentName: "claude-code",
+				Model:     "",
+				Status:    reviewtypes.AgentStatusSucceeded,
+				Buffer:    []reviewtypes.Event{reviewtypes.AssistantText{Text: "default finding"}},
+			},
+			{ // explicit opus inspector
+				Name:      "claude-code",
+				AgentName: "claude-code",
+				Model:     "opus",
+				Status:    reviewtypes.AgentStatusSucceeded,
+				Buffer:    []reviewtypes.Event{reviewtypes.AssistantText{Text: "opus finding"}},
+			},
+		},
+	}
+	states := []*session.State{
+		{
+			SessionID:    "sess-default",
+			Kind:         session.KindAgentReview,
+			WorktreePath: "/repo",
+			BaseCommit:   "abc123",
+			StartedAt:    started.Add(1 * time.Second),
+			AgentType:    agenttypes.AgentType("Claude Code"),
+			ModelName:    "claude-sonnet-4-5",
+		},
+		{
+			SessionID:    "sess-opus",
+			Kind:         session.KindAgentReview,
+			WorktreePath: "/repo",
+			BaseCommit:   "abc123",
+			StartedAt:    started.Add(2 * time.Second), // more recent: a naive default match would grab this
+			AgentType:    agenttypes.AgentType("Claude Code"),
+			ModelName:    "claude-opus-4-1",
+		},
+	}
+
+	manifest := buildLocalReviewManifestFromSummary("/repo", "abc123", summary, states, "")
+
+	if len(manifest.Sources) != 2 {
+		t.Fatalf("sources = %d, want 2", len(manifest.Sources))
+	}
+	// Sources keep original run order: [default, opus].
+	if manifest.Sources[0].SessionID != "sess-default" {
+		t.Errorf("default inspector linked to %q, want sess-default", manifest.Sources[0].SessionID)
+	}
+	if manifest.Sources[1].SessionID != "sess-opus" {
+		t.Errorf("opus inspector linked to %q, want sess-opus", manifest.Sources[1].SessionID)
+	}
+}

@@ -216,7 +216,13 @@ func RunMulti(
 		}
 	}
 
-	// All goroutines have exited; all waitErr fields are set.
+	// The dispatch loop above returns only once fanIn is closed, which the close
+	// goroutine does after wg.Wait() — i.e. after every forwarding goroutine's
+	// deferred wg.Done(). Each goroutine writes waitErr/timedOut/finishedAt
+	// before that Done(), so reading those per-agent fields below is safe: the
+	// wg edge is the happens-before, regardless of when an inspector's deadline
+	// fired (`go test -race` covers this). The dispatch loop never reads these
+	// fields — only the event-driven ones (buffer/tokens/finishedSeen/...).
 	finished := time.Now()
 	cancelled := ctx.Err() != nil
 
