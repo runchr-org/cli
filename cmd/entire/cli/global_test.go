@@ -32,9 +32,6 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(fmt.Errorf("failed to create test isolation dir: %w", err))
 	}
-	defer func() {
-		_ = os.RemoveAll(isolationDir)
-	}()
 	os.Setenv("ENTIRE_TOKEN_STORE", "file")
 	os.Setenv("ENTIRE_TOKEN_STORE_PATH", filepath.Join(isolationDir, "tokenstore.json"))
 	os.Setenv("ENTIRE_TEST_AUTH_STORE_FILE", filepath.Join(isolationDir, "auth-tokens.json"))
