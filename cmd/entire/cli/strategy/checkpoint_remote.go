@@ -111,7 +111,7 @@ func FetchMetadataBranch(ctx context.Context, remoteURL string) error {
 	tmpRef := FetchTmpRefPrefix + branchName
 	srcRef := refs.Primary.String()
 
-	if err := fetchURLIntoTmpRef(ctx, remoteURL, srcRef, tmpRef, "metadata branch", true); err != nil {
+	if err := fetchURLIntoTmpRef(ctx, "", remoteURL, srcRef, tmpRef, "metadata branch", true); err != nil {
 		return err
 	}
 	if err := PromoteTmpRefSafely(ctx, plumbing.ReferenceName(tmpRef), refs.Primary, branchName); err != nil {
@@ -131,7 +131,7 @@ func FetchMetadataBranch(ctx context.Context, remoteURL string) error {
 // fetches are globally enabled. Use noFilter for operations that need blob
 // content (resume, explain) as opposed to sync operations (push recovery)
 // that only need tree structure.
-func fetchURLIntoTmpRef(ctx context.Context, remoteURL, srcRef, tmpRef, label string, noFilter bool) error {
+func fetchURLIntoTmpRef(ctx context.Context, dir, remoteURL, srcRef, tmpRef, label string, noFilter bool) error {
 	fetchCtx, cancel := context.WithTimeout(ctx, checkpointRemoteFetchTimeout)
 	defer cancel()
 
@@ -141,6 +141,7 @@ func fetchURLIntoTmpRef(ctx context.Context, remoteURL, srcRef, tmpRef, label st
 		RefSpecs: []string{refSpec},
 		NoTags:   true,
 		NoFilter: noFilter,
+		Dir:      dir,
 	})
 	if fetchErr == nil {
 		return nil

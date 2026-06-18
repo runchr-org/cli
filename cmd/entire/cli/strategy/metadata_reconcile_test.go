@@ -13,6 +13,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -632,6 +633,64 @@ func TestReconcileDisconnected_ModifiedEntries(t *testing.T) {
 	if !strings.Contains(content, `"session_count":2`) {
 		t.Errorf("metadata.json should have session_count:2 (modified value), got: %s", content)
 	}
+}
+
+// Not parallel: uses process-global OPF config.
+func TestReconcileDisconnected_PreservesOPFAppliedCommit(t *testing.T) {
+	configureFakeOPF(t, &fakeOPFForRewrite{})
+	repo, opfOriginalTip := setupV1Repo(t)
+
+	opfTip, err := RewriteUnpushedV1WithOPF(context.Background(), repo, "origin")
+	require.NoError(t, err)
+	require.NotEqual(t, opfOriginalTip, opfTip, "OPF rewrite should replace the local v1 tip")
+
+	opfCommit, err := repo.CommitObject(opfTip)
+	require.NoError(t, err)
+	require.True(t, trailers.HasOPFApplied(opfCommit.Message), "rewritten commit must carry OPF trailer before recovery")
+	assertNoOPFSentinel(t, opfCommit)
+
+	remoteTip := makeOrphanCommit(t, repo, emptyTreeHash(t, repo), nil, "remote metadata\n")
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(metadataOriginRemoteRef(), remoteTip)))
+
+	err = ReconcileDisconnectedMetadataRef(context.Background(), repo, metadataLocalRef(), metadataOriginRemoteRef(), io.Discard)
+	require.NoError(t, err)
+
+	localRef, err := repo.Reference(metadataLocalRef(), true)
+	require.NoError(t, err)
+	require.NotEqual(t, opfTip, localRef.Hash(), "recovery should create a re-parented cherry-pick commit")
+
+	recoveredCommit, err := repo.CommitObject(localRef.Hash())
+	require.NoError(t, err)
+	require.Len(t, recoveredCommit.ParentHashes, 1)
+	require.Equal(t, remoteTip, recoveredCommit.ParentHashes[0])
+	require.True(t, trailers.HasOPFApplied(recoveredCommit.Message), "recovery must preserve OPF trailer")
+	assertNoOPFSentinel(t, recoveredCommit)
+}
+
+func assertNoOPFSentinel(t *testing.T, commit *object.Commit) {
+	t.Helper()
+
+	tree, err := commit.Tree()
+	require.NoError(t, err)
+
+	redactedFiles := 0
+	require.NoError(t, tree.Files().ForEach(func(f *object.File) error {
+		if !strings.HasSuffix(f.Name, ".jsonl") && !strings.HasSuffix(f.Name, ".txt") {
+			return nil
+		}
+		content, err := f.Contents()
+		if err != nil {
+			return err
+		}
+		if strings.Contains(content, "PERSONABC") {
+			t.Errorf("%s still contains OPF sentinel after recovery", f.Name)
+		}
+		if strings.Contains(content, "[REDACTED_PERSON]") {
+			redactedFiles++
+		}
+		return nil
+	}))
+	require.Positive(t, redactedFiles, "expected at least one OPF-redacted metadata blob")
 }
 
 // TestCollectCommitChain_DepthLimit verifies that collectCommitChain returns an error

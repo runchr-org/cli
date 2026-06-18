@@ -110,7 +110,14 @@ func IsOnDefaultBranch(ctx context.Context) (bool, string, error) {
 		return false, "", fmt.Errorf("failed to open git repository: %w", err)
 	}
 	defer repo.Close()
+	return isOnDefaultBranchRepo(repo)
+}
 
+// isOnDefaultBranchRepo reports whether the repo's current branch is its default
+// branch, along with the current branch name (empty on a detached HEAD). It
+// operates on an already-open repository so callers that already hold one need
+// not reopen it.
+func isOnDefaultBranchRepo(repo *git.Repository) (bool, string, error) {
 	// Get current branch
 	head, err := repo.Head()
 	if err != nil {
@@ -345,6 +352,9 @@ func CheckoutBranch(ctx context.Context, ref string) error {
 // ValidateBranchName checks if a branch name is valid using git check-ref-format.
 // Returns an error if the name is invalid or contains unsafe characters.
 func ValidateBranchName(ctx context.Context, branchName string) error {
+	if strings.HasPrefix(branchName, "-") {
+		return fmt.Errorf("invalid branch name %q", branchName)
+	}
 	cmd := exec.CommandContext(ctx, "git", "check-ref-format", "--branch", branchName)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("invalid branch name %q", branchName)

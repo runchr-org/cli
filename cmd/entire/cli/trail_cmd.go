@@ -16,6 +16,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/gitremote"
+	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/trail"
 
@@ -62,6 +63,7 @@ func newTrailCmd() *cobra.Command {
 	cmd.AddCommand(newTrailListCmd())
 	cmd.AddCommand(newTrailCreateCmd())
 	cmd.AddCommand(newTrailUpdateCmd())
+	cmd.AddCommand(newTrailDeleteCmd())
 	cmd.AddCommand(newTrailFindingCmd())
 	cmd.AddCommand(newTrailWatchCmd())
 
@@ -557,7 +559,7 @@ func newTrailCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&body, "body", "", "Trail body")
 	cmd.Flags().StringVar(&base, "base", "", "Base branch (defaults to detected default branch)")
 	cmd.Flags().StringVar(&branch, "branch", "", "Branch for the trail (defaults to current branch)")
-	cmd.Flags().StringVar(&status, "status", "", "Initial status (defaults to draft)")
+	cmd.Flags().StringVar(&status, "status", "", "Initial status (defaults to open)")
 	cmd.Flags().BoolVar(&checkout, "checkout", false, "Check out the branch after creating it")
 
 	return cmd
@@ -583,7 +585,7 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 		}
 	}
 
-	_, currentBranch, _ := IsOnDefaultBranch(ctx) //nolint:errcheck // best-effort detection
+	_, currentBranch, _ := isOnDefaultBranchRepo(repo) //nolint:errcheck // best-effort; reuse the open repo for the current branch name
 	interactive := !cmd.Flags().Changed("title") && !cmd.Flags().Changed("branch")
 
 	if interactive {
@@ -592,14 +594,10 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 			return handleFormCancellation(w, "Trail creation", err)
 		}
 	} else {
-		// Non-interactive: derive missing values from provided flags.
-		if branch == "" {
-			if cmd.Flags().Changed("title") {
-				branch = slugifyTitle(title)
-			} else {
-				branch = currentBranch
-			}
-		}
+		// Non-interactive: derive missing values from provided flags. With
+		// --branch omitted, use the checked-out branch (a feature branch); only
+		// slug a new branch from the title when the checked-out branch is the base.
+		branch = resolveCreateBranch(branch, currentBranch, base, title, cmd.Flags().Changed("title"))
 		if title == "" {
 			title = trail.HumanizeBranchName(branch)
 		}
@@ -614,8 +612,11 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 	if branch == "" {
 		return errors.New("branch name is required")
 	}
+	if err := ValidateBranchName(ctx, branch); err != nil {
+		return err
+	}
 	if statusStr == "" {
-		statusStr = string(trail.StatusDraft)
+		statusStr = string(trail.StatusOpen)
 	}
 	if status := trail.Status(statusStr); !status.IsValid() {
 		return fmt.Errorf("invalid status %q: valid values are %s", statusStr, formatValidStatuses())
@@ -633,44 +634,46 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 	}
 
 	localBranchCreated := false
-	remoteBranchPushed := false
+	var remoteBranchPushed bool
+
+	// Don't delete a remote branch we didn't create during cleanup.
+	existedOnOrigin, existErr := branchExistsOnOrigin(branch)
+	if existErr != nil {
+		fmt.Fprintf(errW, "Warning: could not check whether branch %s already exists on origin: %v\n", branch, existErr)
+		existedOnOrigin = true
+	}
+
 	if needsCreation {
-		if err := createBranch(repo, branch); err != nil {
-			return fmt.Errorf("failed to create branch %q: %w", branch, err)
+		if existedOnOrigin {
+			if err := fetchBranchFromOrigin(branch); err != nil {
+				return fmt.Errorf("failed to fetch branch %q from origin: %w", branch, err)
+			}
+			localBranchCreated = true
+			fmt.Fprintf(w, "Fetched branch %s from origin\n", branch)
+		} else {
+			if err := createBranch(repo, branch); err != nil {
+				return fmt.Errorf("failed to create branch %q: %w", branch, err)
+			}
+			localBranchCreated = true
+			fmt.Fprintf(w, "Created branch %s\n", branch)
 		}
-		localBranchCreated = true
-		fmt.Fprintf(w, "Created branch %s\n", branch)
 	} else if currentBranch != branch {
 		fmt.Fprintf(w, "Note: trail will be created for branch %q (not the current branch)\n", branch)
 	}
 
-	if needsCreation {
-		// needsCreation is a local-only signal, so the branch may still exist on
-		// origin (e.g. a teammate pushed it and we never fetched). In that case the
-		// remote branch is not ours, and our push may merely fast-forward it; we
-		// must not delete it during cleanup. Only treat the remote branch as
-		// created-by-us when it did not already exist before our push.
-		existedOnOrigin, existErr := branchExistsOnOrigin(branch)
-		if existErr != nil {
-			// Be conservative: if we cannot tell, do not delete the remote branch.
-			fmt.Fprintf(errW, "Warning: could not check whether branch %s already exists on origin: %v\n", branch, existErr)
-			existedOnOrigin = true
-		}
+	// Always push the branch first: the trail binds to a remote branch, so
+	// deliver it before creating the trail rather than letting the server
+	// backfill it at the base tip.
+	{
 		if err := pushBranchToOrigin(branch); err != nil {
 			cleanupCreatedTrailBranch(repo, branch, localBranchCreated, false, errW)
-			return fmt.Errorf("failed to push branch %q: %w", branch, err)
+			return fmt.Errorf("failed to push branch %q to origin: %w\nhint: the trail was not created because its branch could not be delivered to the remote.\n  - if this is an auth error, link your GitHub account and retry\n  - if this is a non-fast-forward, update branch %q from origin and retry", branch, err, branch)
 		}
 		remoteBranchPushed = !existedOnOrigin
 		fmt.Fprintf(w, "Pushed branch %s to origin\n", branch)
 	}
 
-	createReq := api.TrailCreateRequest{
-		Title:      title,
-		Body:       body,
-		BranchName: branch,
-		Base:       base,
-		Status:     statusStr,
-	}
+	createReq := newTrailCreateRequest(title, body, branch, base, statusStr)
 
 	var createResp api.TrailCreateResponse
 	resp, err := client.Post(ctx, trailsBasePath(forge, owner, repoName), createReq)
@@ -715,6 +718,17 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 	}
 
 	return nil
+}
+
+func newTrailCreateRequest(title, body, branch, base, statusStr string) api.TrailCreateRequest {
+	return api.TrailCreateRequest{
+		Title:        title,
+		Body:         body,
+		BranchName:   branch,
+		BranchAction: "link",
+		Base:         base,
+		Status:       statusStr,
+	}
 }
 
 func newTrailUpdateCmd() *cobra.Command {
@@ -860,7 +874,7 @@ func runTrailUpdate(ctx context.Context, w, errW io.Writer, insecureHTTP bool, i
 		if found.Number <= 0 {
 			return fmt.Errorf("trail for branch %q has no number yet; cannot update", branch)
 		}
-		resp, err := client.Patch(ctx, trailsBasePath(forge, owner, repoName)+"/"+strconv.Itoa(found.Number), updateReq)
+		resp, err := client.Patch(ctx, trailNumberPath(forge, owner, repoName, found.Number), updateReq)
 		if err != nil {
 			return fmt.Errorf("failed to update trail: %w", err)
 		}
@@ -936,6 +950,167 @@ func buildTrailUpdateRequest(current *api.TrailResource, inputs trailUpdateInput
 	return req
 }
 
+// parseTrailNumberArg parses an optional positional trail-number argument.
+// It returns 0 when no argument is supplied; a supplied value must be a
+// positive integer (the server keys single-trail endpoints by number).
+func parseTrailNumberArg(args []string) (int, error) {
+	if len(args) == 0 {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("invalid trail number %q: expected a positive integer (see 'entire trail list')", args[0])
+	}
+	return n, nil
+}
+
+func newTrailDeleteCmd() *cobra.Command {
+	var branch string
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "delete [<number>]",
+		Short: "Delete a trail",
+		Long: `Delete a trail by number, or the trail for a branch.
+
+If <number> is omitted, the trail for --branch (or the current branch) is used.
+Deletion is permanent; you are prompted to confirm unless --force is passed.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			number, err := parseTrailNumberArg(args)
+			if err != nil {
+				return err
+			}
+			if number > 0 && cmd.Flags().Changed("branch") {
+				return errors.New("cannot combine a trail <number> with --branch")
+			}
+			return runTrailDelete(cmd, number, branch, force)
+		},
+	}
+
+	cmd.Flags().StringVar(&branch, "branch", "", "Branch whose trail to delete (defaults to current)")
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip the confirmation prompt")
+
+	return cmd
+}
+
+func runTrailDelete(cmd *cobra.Command, number int, branch string, force bool) error {
+	ctx := cmd.Context()
+	w := cmd.OutOrStdout()
+
+	return runAuthenticatedDataAPI(ctx, cmd.ErrOrStderr(), trailInsecureHTTP(cmd), func(ctx context.Context, client *api.Client) error {
+		forge, owner, repo, err := resolveTrailRemote(ctx)
+		if err != nil {
+			return err
+		}
+
+		// Resolve the target trail. An explicit number is authoritative (a
+		// lookup is best-effort, only to label the confirmation); otherwise the
+		// branch's trail supplies the number.
+		title := ""
+		if number == 0 {
+			if branch == "" {
+				branch, err = GetCurrentBranch(ctx)
+				if err != nil {
+					return fmt.Errorf("failed to determine current branch: %w", err)
+				}
+			}
+			found, ferr := findTrailByBranch(ctx, client, forge, owner, repo, branch)
+			if ferr != nil {
+				return ferr
+			}
+			if found == nil {
+				return fmt.Errorf("no trail found for branch %q", branch)
+			}
+			if found.Number <= 0 {
+				return fmt.Errorf("trail for branch %q has no number yet; cannot delete", branch)
+			}
+			number = found.Number
+			title = found.Title
+		} else if found, ferr := findTrailByNumber(ctx, client, forge, owner, repo, number); ferr == nil && found != nil {
+			title = found.Title
+		}
+
+		proceed, err := confirmTrailDeletion(ctx, w, number, title, force, interactive.CanPromptInteractively())
+		if err != nil {
+			return err
+		}
+		if !proceed {
+			return nil
+		}
+
+		if err := deleteTrailByNumber(ctx, client, forge, owner, repo, number); err != nil {
+			return err
+		}
+
+		fmt.Fprintf(w, "Deleted trail #%d\n", number)
+		return nil
+	})
+}
+
+// deleteTrailByNumber deletes the trail with the given integer number and
+// verifies the server's {ok:true} signal. CheckResponse accepts any 2xx and the
+// body is otherwise unread, so a destructive delete must confirm ok before
+// reporting success (decoding also drains the body for connection reuse).
+func deleteTrailByNumber(ctx context.Context, client *api.Client, forge, owner, repo string, number int) error {
+	resp, err := client.Delete(ctx, trailNumberPath(forge, owner, repo, number))
+	if err != nil {
+		return fmt.Errorf("failed to delete trail: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkTrailResponse(resp); err != nil {
+		return err
+	}
+	var delResp api.TrailDeleteResponse
+	if err := api.DecodeJSON(resp, &delResp); err != nil {
+		return fmt.Errorf("failed to decode delete response: %w", err)
+	}
+	if !delResp.OK {
+		return fmt.Errorf("trail API did not confirm deletion of trail #%d", number)
+	}
+	return nil
+}
+
+// confirmTrailDeletion decides whether a trail delete should proceed. With
+// force it proceeds silently. Otherwise it requires an interactive terminal:
+// when none is available it refuses (returns an error) rather than deleting
+// unprompted; when one is, it shows a confirmation form. canPrompt is passed in
+// (rather than queried) so the decision is unit-testable without a TTY.
+func confirmTrailDeletion(ctx context.Context, w io.Writer, number int, title string, force, canPrompt bool) (bool, error) {
+	if force {
+		return true, nil
+	}
+	if !canPrompt {
+		return false, fmt.Errorf("refusing to delete trail #%d without confirmation; pass --force", number)
+	}
+	// huh opens the TTY during form startup regardless of context state, so
+	// guard explicitly to honor an already-cancelled command context.
+	if ctx.Err() != nil {
+		return false, nil //nolint:nilerr // cancelled context is a clean skip, not an error
+	}
+	prompt := fmt.Sprintf("Delete trail #%d?", number)
+	if title != "" {
+		prompt = fmt.Sprintf("Delete trail #%d (%s)?", number, title)
+	}
+	confirmed := false
+	form := NewAccessibleForm(
+		huh.NewGroup(huh.NewConfirm().Title(prompt).Value(&confirmed)),
+	)
+	if err := form.RunWithContext(ctx); err != nil {
+		// A user abort (Esc) or context cancel (Ctrl+C) is a clean cancel, not
+		// an error — mirror confirmDoctorFix / uiform.PromptYN.
+		if errors.Is(err, huh.ErrUserAborted) || errors.Is(err, context.Canceled) {
+			return false, nil
+		}
+		return false, fmt.Errorf("trail deletion prompt: %w", err)
+	}
+	if !confirmed {
+		fmt.Fprintln(w, "Trail deletion cancelled.")
+		return false, nil
+	}
+	return true, nil
+}
+
 // defaultBaseBranch is the fallback base branch name when it cannot be determined.
 const defaultBaseBranch = "main"
 
@@ -990,7 +1165,7 @@ func runTrailCreateInteractive(title, body, branch, statusStr *string) error {
 		statusOptions = append(statusOptions, huh.NewOption(string(s), string(s)))
 	}
 	if *statusStr == "" {
-		*statusStr = string(trail.StatusDraft)
+		*statusStr = string(trail.StatusOpen)
 	}
 
 	form = NewAccessibleForm(
@@ -1119,6 +1294,13 @@ func trailsBasePath(forge, owner, repo string) string {
 	return fmt.Sprintf("/api/v1/trails/%s/%s/%s", forge, owner, repo)
 }
 
+// trailNumberPath returns the single-trail API path keyed by integer trail
+// number (e.g. "/api/v1/trails/gh/acme/repo/575"). The server validates an
+// integer here and rejects the trail UUID, so callers must pass Number, not ID.
+func trailNumberPath(forge, owner, repo string, number int) string {
+	return trailsBasePath(forge, owner, repo) + "/" + strconv.Itoa(number)
+}
+
 // resolveTrailRemote resolves the origin remote and ensures the forge is
 // known to the trails API. Without this guard, an unmapped host (e.g.
 // gitlab.com, or a misconfigured entire:// URL with no forge prefix)
@@ -1145,6 +1327,23 @@ func checkTrailResponse(resp *http.Response) error {
 		return fmt.Errorf("trail API: %w", err)
 	}
 	return nil
+}
+
+// resolveCreateBranch picks the branch a non-interactive `trail create` targets.
+// An explicit --branch always wins. Otherwise, on a feature branch it uses the
+// checked-out branch; when the checked-out branch IS the base (the trail's
+// target/default branch) — or HEAD is detached — it derives a new branch from
+// the title when one was given (starting fresh work), else falls back to current.
+// Comparing against the already-resolved base keeps this consistent with how
+// `base` itself was detected (avoids a second, divergent default-branch lookup).
+func resolveCreateBranch(branchFlag, currentBranch, base, title string, titleProvided bool) string {
+	if branchFlag != "" {
+		return branchFlag
+	}
+	if titleProvided && (currentBranch == base || currentBranch == "") {
+		return slugifyTitle(title)
+	}
+	return currentBranch
 }
 
 // slugifyTitle converts a title string into a branch-friendly slug.
@@ -1208,6 +1407,20 @@ func cleanupCreatedTrailBranch(repo *git.Repository, branchName string, localCre
 			fmt.Fprintf(errW, "Warning: failed to delete remote branch %s after trail creation failed: %v\n", branchName, err)
 		}
 	}
+}
+
+func fetchBranchFromOrigin(branchName string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := ValidateBranchName(ctx, branchName); err != nil {
+		return err
+	}
+	refspec := fmt.Sprintf("refs/heads/%s:refs/heads/%s", branchName, branchName)
+	cmd := exec.CommandContext(ctx, "git", "fetch", "--no-tags", "origin", refspec)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s: %w", strings.TrimSpace(string(output)), err)
+	}
+	return nil
 }
 
 // pushBranchToOrigin pushes a branch to the origin remote.

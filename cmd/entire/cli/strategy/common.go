@@ -440,6 +440,17 @@ func EnsureRedactionConfigured() {
 				Packs:  packs,
 			})
 		}
+
+		// OpenAI Privacy Filter (opt-in 8th layer).
+		if s.Redaction != nil && s.Redaction.OpenAIPrivacyFilter != nil {
+			opf := s.Redaction.OpenAIPrivacyFilter
+			redact.ConfigurePrivacyFilter(redact.OPFConfig{
+				Enabled:    opf.Enabled,
+				Categories: opf.Categories,
+				Command:    opf.Command,
+				Timeout:    opf.TimeoutSeconds,
+			})
+		}
 	})
 }
 

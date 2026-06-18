@@ -2780,6 +2780,9 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 	// (attribution, files touched, prompts). Hooks run without user interaction
 	// so there is no retry path — preserving partial metadata is better than
 	// losing everything. Persisting an unredacted transcript would be worse.
+	// Run the 7-layer pipeline over the transcript — OPF runs later in
+	// the pre-push rewrite path, which re-redacts these 7-layer blobs
+	// and produces 8-layer commits before the push goes out.
 	_, redactSpan := perf.Start(logCtx, "redact_transcript")
 	redactedTranscript, redactErr := redact.JSONLBytes(fullTranscript)
 	redactSpan.End()
@@ -2790,10 +2793,10 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		)
 		redactedTranscript = redact.RedactedBytes{}
 	}
-	for i, p := range prompts {
-		prompts[i] = redact.String(p)
-	}
 
+	// Post-commit emits 7-layer-only blobs; the writer joins + redacts
+	// via checkpoint.redactedJoinedPrompts. OPF runs later, once per
+	// push, in the pre-push rewrite path.
 	stores, err := checkpoint.Open(ctx, repo, checkpoint.OpenOptions{})
 	if err != nil {
 		logging.Warn(logCtx, "finalize: failed to open checkpoint store",

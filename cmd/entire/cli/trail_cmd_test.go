@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -23,13 +24,133 @@ import (
 	"github.com/entireio/cli/internal/entireclient/clusterdiscovery"
 	"github.com/entireio/cli/internal/entireclient/contexts"
 	"github.com/entireio/cli/internal/entireclient/tokenstore"
+	"github.com/go-git/go-git/v6"
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/require"
 )
 
 const (
 	trailListTestAuthorAlice = "alice"
 	trailListTestAuthorBob   = "bob"
 )
+
+func TestNewTrailCreateRequestUsesLinkBranchAction(t *testing.T) {
+	req := newTrailCreateRequest("title", "body", "feature/x", "main", "open")
+
+	require.Equal(t, api.TrailCreateRequest{
+		Title:        "title",
+		Body:         "body",
+		BranchName:   "feature/x",
+		BranchAction: "link",
+		Base:         "main",
+		Status:       "open",
+	}, req)
+}
+
+func TestCleanupCreatedTrailBranch(t *testing.T) {
+	cases := []struct {
+		name             string
+		localCreated     bool
+		remotePushed     bool
+		checkoutBranch   bool
+		wantLocalBranch  bool
+		wantRemoteBranch bool
+	}{
+		{
+			name:             "removes local branch only",
+			localCreated:     true,
+			remotePushed:     false,
+			wantLocalBranch:  false,
+			wantRemoteBranch: false,
+		},
+		{
+			name:             "removes local and pushed remote branch",
+			localCreated:     true,
+			remotePushed:     true,
+			wantLocalBranch:  false,
+			wantRemoteBranch: false,
+		},
+		{
+			name:             "does not delete remote when checked out branch cannot be removed locally",
+			localCreated:     true,
+			remotePushed:     true,
+			checkoutBranch:   true,
+			wantLocalBranch:  true,
+			wantRemoteBranch: true,
+		},
+		{
+			name:             "deletes remote when local was not created by cleanup owner",
+			localCreated:     false,
+			remotePushed:     true,
+			wantLocalBranch:  true,
+			wantRemoteBranch: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			branch := "cleanup-test"
+			localDir, originDir, repo := initTrailCleanupRepo(t)
+			defer repo.Close()
+			t.Chdir(localDir)
+
+			runGitTrailTest(t, localDir, "branch", branch)
+			if tc.remotePushed {
+				runGitTrailTest(t, localDir, "push", "origin", branch)
+			}
+			if tc.checkoutBranch {
+				runGitTrailTest(t, localDir, "checkout", branch)
+			}
+
+			var errBuf bytes.Buffer
+			cleanupCreatedTrailBranch(repo, branch, tc.localCreated, tc.remotePushed, &errBuf)
+
+			require.Equal(t, tc.wantLocalBranch, gitBranchExistsTrailTest(t, localDir, branch), "local branch mismatch; stderr: %s", errBuf.String())
+			require.Equal(t, tc.wantRemoteBranch, gitBranchExistsTrailTest(t, originDir, branch), "remote branch mismatch; stderr: %s", errBuf.String())
+			if tc.checkoutBranch {
+				require.Contains(t, errBuf.String(), "not deleting remote branch")
+			}
+		})
+	}
+}
+
+func initTrailCleanupRepo(t *testing.T) (localDir, originDir string, repo *git.Repository) {
+	t.Helper()
+
+	tmp := t.TempDir()
+	localDir = filepath.Join(tmp, "local")
+	originDir = filepath.Join(tmp, "origin.git")
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	runGitTrailTest(t, tmp, "init", "--bare", originDir)
+	repo = initOpenedTestRepo(t, localDir)
+	testutil.WriteFile(t, localDir, "README.md", "test\n")
+	runGitTrailTest(t, localDir, "add", "README.md")
+	runGitTrailTest(t, localDir, "commit", "-m", "initial")
+	runGitTrailTest(t, localDir, "remote", "add", "origin", originDir)
+	return localDir, originDir, repo
+}
+
+func runGitTrailTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))
+}
+
+func gitBranchExistsTrailTest(t *testing.T, repoDir, branch string) bool {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	cmd.Dir = repoDir
+	err := cmd.Run()
+	if err == nil {
+		return true
+	}
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	require.Equal(t, 1, exitErr.ExitCode())
+	return false
+}
 
 func TestRunTrailListAll_PrintsLoginHintWhenNotLoggedIn(t *testing.T) {
 	// No t.Parallel: SetResolveContextForAPIForTest and
@@ -152,6 +273,175 @@ func TestTrailsBasePath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTrailNumberPath(t *testing.T) {
+	t.Parallel()
+	got := trailNumberPath("gh", "acme", "repo", 575)
+	want := "/api/v1/trails/gh/acme/repo/575"
+	if got != want {
+		t.Fatalf("trailNumberPath = %q, want %q", got, want)
+	}
+	// Regression guard: the single-trail endpoint is keyed by the integer trail
+	// number, never the UUID id — the server's parseTrailNumber rejects a UUID
+	// (it starts with a non-[1-9] char), which previously surfaced as a 400.
+	if strings.Contains(got, "-") {
+		t.Fatalf("trailNumberPath must use the integer number, got %q", got)
+	}
+}
+
+func TestResolveCreateBranch(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		branchFlag    string
+		currentBranch string
+		base          string
+		title         string
+		titleProvided bool
+		want          string
+	}{
+		{"explicit --branch always wins", "feat/x", "main", "main", "My Title", true, "feat/x"},
+		{"feature branch uses current, not title slug", "", "alex/authz-read", "main", "Shared authz read client", true, "alex/authz-read"},
+		{"on base (main) slugs the title", "", "main", "main", "Add Auth System", true, "add-auth-system"},
+		{"non-standard default (develop==base) slugs the title", "", "develop", "develop", "Add Auth System", true, "add-auth-system"},
+		{"feature branch, no title, uses current", "", "alex/authz-read", "main", "", false, "alex/authz-read"},
+		{"on base, no title, falls back to current", "", "main", "main", "", false, "main"},
+		{"detached HEAD with title slugs the title", "", "", "main", "Add Auth System", true, "add-auth-system"},
+		{"detached HEAD, no title, returns empty (caller errors)", "", "", "main", "", false, ""},
+		{"unsluggable title yields empty (caller errors)", "", "main", "main", "!!!", true, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolveCreateBranch(tt.branchFlag, tt.currentBranch, tt.base, tt.title, tt.titleProvided)
+			if got != tt.want {
+				t.Fatalf("resolveCreateBranch(%q, %q, %q, %q, %v) = %q, want %q",
+					tt.branchFlag, tt.currentBranch, tt.base, tt.title, tt.titleProvided, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseTrailNumberArg(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		args    []string
+		want    int
+		wantErr bool
+	}{
+		{"no arg", nil, 0, false},
+		{"empty slice", []string{}, 0, false},
+		{"valid number", []string{"575"}, 575, false},
+		{"zero rejected", []string{"0"}, 0, true},
+		{"negative rejected", []string{"-3"}, 0, true},
+		{"non-numeric rejected", []string{"abc"}, 0, true},
+		{"uuid rejected", []string{"019ed3c9-7fd9-72d6-bd29-1130d2b2eec4"}, 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := parseTrailNumberArg(tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseTrailNumberArg(%v) err = %v, wantErr %v", tt.args, err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Fatalf("parseTrailNumberArg(%v) = %d, want %d", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfirmTrailDeletion(t *testing.T) {
+	t.Parallel()
+
+	// --force proceeds without prompting (no TTY needed).
+	var buf bytes.Buffer
+	proceed, err := confirmTrailDeletion(t.Context(), &buf, 575, "Some title", true, false)
+	if err != nil || !proceed {
+		t.Fatalf("force: got (proceed=%v, err=%v), want (true, nil)", proceed, err)
+	}
+
+	// Non-interactive without --force must refuse, not delete unprompted.
+	buf.Reset()
+	proceed, err = confirmTrailDeletion(t.Context(), &buf, 575, "Some title", false, false)
+	if err == nil {
+		t.Fatalf("non-interactive without --force: expected error, got nil (proceed=%v)", proceed)
+	}
+	if proceed {
+		t.Fatal("non-interactive without --force: must not proceed")
+	}
+	if !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("error should mention --force, got: %v", err)
+	}
+
+	// An already-cancelled context is a clean cancel: no prompt, no error.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	buf.Reset()
+	proceed, err = confirmTrailDeletion(ctx, &buf, 575, "Some title", false, true)
+	if err != nil || proceed {
+		t.Fatalf("cancelled ctx: got (proceed=%v, err=%v), want (false, nil)", proceed, err)
+	}
+}
+
+func TestDeleteTrailByNumber(t *testing.T) {
+	t.Parallel()
+
+	t.Run("deletes via the integer number path and accepts ok:true", func(t *testing.T) {
+		t.Parallel()
+		var gotMethod, gotPath string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotMethod, gotPath = r.Method, r.URL.Path
+			if err := json.NewEncoder(w).Encode(api.TrailDeleteResponse{OK: true}); err != nil {
+				t.Errorf("encode response: %v", err)
+			}
+		}))
+		defer srv.Close()
+
+		client := api.NewClientWithBaseURL("tok", srv.URL)
+		if err := deleteTrailByNumber(t.Context(), client, "gh", "acme", "repo", 575); err != nil {
+			t.Fatalf("deleteTrailByNumber: %v", err)
+		}
+		if gotMethod != http.MethodDelete {
+			t.Fatalf("method = %q, want DELETE", gotMethod)
+		}
+		if want := "/api/v1/trails/gh/acme/repo/575"; gotPath != want {
+			t.Fatalf("path = %q, want %q (integer number, not UUID)", gotPath, want)
+		}
+	})
+
+	t.Run("treats a 2xx without ok:true as failure", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if err := json.NewEncoder(w).Encode(api.TrailDeleteResponse{OK: false}); err != nil {
+				t.Errorf("encode response: %v", err)
+			}
+		}))
+		defer srv.Close()
+
+		client := api.NewClientWithBaseURL("tok", srv.URL)
+		if err := deleteTrailByNumber(t.Context(), client, "gh", "acme", "repo", 575); err == nil {
+			t.Fatal("expected error for 2xx without ok:true, got nil")
+		}
+	})
+
+	t.Run("surfaces a non-2xx status", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			if err := json.NewEncoder(w).Encode(map[string]string{"error": "Trail not found"}); err != nil {
+				t.Errorf("encode response: %v", err)
+			}
+		}))
+		defer srv.Close()
+
+		client := api.NewClientWithBaseURL("tok", srv.URL)
+		if err := deleteTrailByNumber(t.Context(), client, "gh", "acme", "repo", 999); err == nil {
+			t.Fatal("expected error for 404, got nil")
+		}
+	})
 }
 
 // Not parallel: uses t.Chdir() to point ResolveRemoteRepo at a fake repo.
