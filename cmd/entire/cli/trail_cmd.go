@@ -631,7 +631,7 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 	}
 
 	localBranchCreated := false
-	remoteBranchPushed := false
+	var remoteBranchPushed bool
 	if needsCreation {
 		if err := createBranch(repo, branch); err != nil {
 			return fmt.Errorf("failed to create branch %q: %w", branch, err)
