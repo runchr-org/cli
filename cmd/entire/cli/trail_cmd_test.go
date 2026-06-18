@@ -169,6 +169,38 @@ func TestTrailNumberPath(t *testing.T) {
 	}
 }
 
+func TestResolveCreateBranch(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		branchFlag    string
+		currentBranch string
+		title         string
+		onDefault     bool
+		titleProvided bool
+		want          string
+	}{
+		{"explicit --branch always wins", "feat/x", "main", "My Title", true, true, "feat/x"},
+		{"feature branch uses current, not title slug", "", "alex/authz-read", "Shared authz read client", false, true, "alex/authz-read"},
+		{"default branch slugs the title (start new work)", "", "main", "Add Auth System", true, true, "add-auth-system"},
+		{"feature branch, no title, uses current", "", "alex/authz-read", "", false, false, "alex/authz-read"},
+		{"default branch, no title, falls back to current", "", "main", "", true, false, "main"},
+		{"detached HEAD with title slugs the title", "", "", "Add Auth System", false, true, "add-auth-system"},
+		{"detached HEAD, no title, returns empty (caller errors)", "", "", "", false, false, ""},
+		{"unsluggable title yields empty (caller errors)", "", "main", "!!!", true, true, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolveCreateBranch(tt.branchFlag, tt.currentBranch, tt.title, tt.onDefault, tt.titleProvided)
+			if got != tt.want {
+				t.Fatalf("resolveCreateBranch(%q, %q, %q, %v, %v) = %q, want %q",
+					tt.branchFlag, tt.currentBranch, tt.title, tt.onDefault, tt.titleProvided, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseTrailNumberArg(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
