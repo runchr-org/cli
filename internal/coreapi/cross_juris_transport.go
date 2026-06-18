@@ -102,15 +102,15 @@ type cachedExchangedToken struct {
 // see the same latency as a cold cache.
 const cachedTokenTTL = 4 * time.Minute
 
-// crossJurisErrorBody is the wire shape the server emits for the
-// machine-readable 401. Mirrored from core/api/middleware.go.
+// crossJurisErrorBody is the wire shape entire-core's auth middleware
+// emits for the machine-readable 401.
 type crossJurisErrorBody struct {
 	Error            string `json:"error"`
 	TokenExchangeURL string `json:"token_exchange_url"`
 	Audience         string `json:"audience"`
 }
 
-// mirror421Body mirrors core/coreapi/mirrors.go's 421 envelope.
+// mirror421Body is entire-core's 421 cross-jurisdiction redirect envelope.
 type mirror421Body struct {
 	Error       string `json:"error"`
 	HomeCoreURL string `json:"home_core_url"`
