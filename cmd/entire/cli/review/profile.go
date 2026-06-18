@@ -49,9 +49,9 @@ func normalizeReviewOutput(raw string) (string, error) {
 }
 
 const (
-	defaultGeneralTask       = "Review this change for correctness, regressions, API design, missing tests, maintainability, and user-facing behavior changes. Report only actionable findings with concrete evidence."
-	defaultSecurityTask      = "Review this change for security vulnerabilities: authentication and authorization bugs, injection risks, secrets exposure, unsafe dependency or deserialization behavior, privilege-boundary mistakes, insecure defaults, and data leakage. Report only actionable findings with concrete evidence."
-	defaultAccessibilityTask = "Review this change for accessibility regressions: keyboard navigation, focus management, semantic markup, labels, ARIA correctness, color contrast, reduced-motion behavior, screen-reader behavior, and inclusive error states. Report only actionable findings with concrete evidence."
+	defaultGeneralTask       = "Review this change for correctness, regressions, API design, missing tests, maintainability, and user-facing behavior changes. Return only real, actionable defects with concrete evidence and an exact code pointer. No praise, summaries, speculation, style preferences, or nice-to-have refactors."
+	defaultSecurityTask      = "Review this change for security vulnerabilities: authentication and authorization bugs, injection risks, secrets exposure, unsafe dependency or deserialization behavior, privilege-boundary mistakes, insecure defaults, and data leakage. Return only exploitable or clearly risky defects with concrete evidence and an exact code pointer. No praise, summaries, speculation, or hardening wishlists."
+	defaultAccessibilityTask = "Review this change for accessibility regressions: keyboard navigation, focus management, semantic markup, labels, ARIA correctness, color contrast, reduced-motion behavior, screen-reader behavior, and inclusive error states. Return only concrete user-impacting defects with an exact code pointer. No praise, summaries, speculation, or generic best-practice advice."
 )
 
 // profileTask returns the configured task, or a built-in task for conventional

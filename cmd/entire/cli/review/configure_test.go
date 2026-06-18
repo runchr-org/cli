@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
@@ -390,6 +391,21 @@ func TestReviewWorkerLabel(t *testing.T) {
 			t.Parallel()
 			if got := reviewWorkerLabel(c.worker, c.cfg); got != c.want {
 				t.Errorf("reviewWorkerLabel(%q, %+v) = %q, want %q", c.worker, c.cfg, got, c.want)
+			}
+		})
+	}
+}
+
+func TestDefaultReviewTasksRejectSlop(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{DefaultProfileName, "security", "accessibility"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			task := profileTask(name, settings.ReviewProfileConfig{})
+			for _, want := range []string{"concrete", "code pointer", "No praise", "summaries", "speculation"} {
+				if !strings.Contains(task, want) {
+					t.Fatalf("task for %s missing %q:\n%s", name, want, task)
+				}
 			}
 		})
 	}
