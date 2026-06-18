@@ -36,6 +36,31 @@ func (p *ctxProcess) Wait() error {
 	return p.ctx.Err()
 }
 
+type stringWrappedCtxReviewer struct{ name string }
+
+func (r *stringWrappedCtxReviewer) Name() string { return r.name }
+func (r *stringWrappedCtxReviewer) Start(ctx context.Context, _ reviewtypes.RunConfig) (reviewtypes.Process, error) {
+	return &stringWrappedCtxProcess{ctx: ctx}, nil
+}
+
+type stringWrappedCtxProcess struct{ ctx context.Context }
+
+func (p *stringWrappedCtxProcess) Events() <-chan reviewtypes.Event {
+	out := make(chan reviewtypes.Event)
+	go func() {
+		<-p.ctx.Done()
+		close(out)
+	}()
+	return out
+}
+
+func (p *stringWrappedCtxProcess) Wait() error {
+	<-p.ctx.Done()
+	// Deliberately do NOT wrap with %w. This models an adapter that formats the
+	// context error and loses the context.DeadlineExceeded sentinel.
+	return errors.New("agent failed: " + p.ctx.Err().Error())
+}
+
 // stubReviewer is a test double for reviewtypes.AgentReviewer.
 type stubReviewer struct {
 	name     string
@@ -557,6 +582,28 @@ func TestRun_InspectorTimeout(t *testing.T) {
 	}
 }
 
+func TestRun_InspectorTimeoutWithStringWrappedContextError(t *testing.T) {
+	t.Parallel()
+	summary, err := Run(
+		context.Background(),
+		&stringWrappedCtxReviewer{name: "claude-code"},
+		reviewtypes.RunConfig{InspectorTimeout: 30 * time.Millisecond},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("err = %v, want a 'timed out' error", err)
+	}
+	if summary.Cancelled {
+		t.Error("Cancelled should be false for a per-inspector timeout")
+	}
+	if len(summary.AgentRuns) != 1 {
+		t.Fatalf("expected 1 AgentRun, got %d", len(summary.AgentRuns))
+	}
+	if run := summary.AgentRuns[0]; run.Status != reviewtypes.AgentStatusFailed || run.Err == nil || !strings.Contains(run.Err.Error(), "timed out") {
+		t.Fatalf("run = {Status:%v Err:%v}, want Failed with timed-out error", run.Status, run.Err)
+	}
+}
+
 func TestRunMulti_InspectorTimeoutIsolated(t *testing.T) {
 	t.Parallel()
 	// One inspector hangs (times out); a sibling finishes cleanly. The run is
@@ -596,6 +643,28 @@ func TestRunMulti_InspectorTimeoutIsolated(t *testing.T) {
 // the parent context is cancelled (user Ctrl+C) before an inspector's deadline
 // can fire, the inspector is classified Cancelled, not failed-by-timeout. The
 // detection reads only the agent context, whose Err() is immutable once set.
+func TestRunMulti_InspectorTimeoutWithStringWrappedContextError(t *testing.T) {
+	t.Parallel()
+	summary, err := RunMulti(
+		context.Background(),
+		[]reviewtypes.AgentReviewer{&stringWrappedCtxReviewer{name: "slow"}},
+		reviewtypes.RunConfig{InspectorTimeout: 30 * time.Millisecond},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("err = %v, want a 'timed out' error", err)
+	}
+	if summary.Cancelled {
+		t.Error("Cancelled should be false for a per-inspector timeout")
+	}
+	if len(summary.AgentRuns) != 1 {
+		t.Fatalf("expected 1 AgentRun, got %d", len(summary.AgentRuns))
+	}
+	if run := summary.AgentRuns[0]; run.Status != reviewtypes.AgentStatusFailed || run.Err == nil || !strings.Contains(run.Err.Error(), "timed out") {
+		t.Fatalf("run = {Status:%v Err:%v}, want Failed with timed-out error", run.Status, run.Err)
+	}
+}
+
 func TestRun_ParentCancelIsNotTimeout(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())

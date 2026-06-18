@@ -25,7 +25,6 @@ package review
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -158,7 +157,7 @@ func RunMulti(
 		}
 		states[i].proc = proc
 		wg.Add(1)
-		go func(idx int, p reviewtypes.Process, cancel context.CancelFunc) {
+		go func(idx int, p reviewtypes.Process, runCtx context.Context, cancel context.CancelFunc) {
 			defer wg.Done()
 			defer cancel()
 			for ev := range p.Events() {
@@ -179,15 +178,15 @@ func RunMulti(
 			})
 			// Hand the terminal result to the dispatch loop so perAgentState has a
 			// single writer. Classify the timeout from waitErr (the cause the
-			// Process captured at Wait): DeadlineExceeded means this agent's deadline
-			// fired; a parent cancel is Canceled; a natural completion is nil even if
-			// the deadline elapses a moment later.
+			// Process captured at Wait). If an implementation formats ctx.Err()
+			// without preserving the sentinel, fall back to the per-agent context only
+			// when Wait returned an error; nil Wait still means natural completion.
 			fanIn <- taggedEvent{agentIdx: idx, terminal: &agentTerminal{
 				waitErr:    waitErr,
 				finishedAt: finishedAt,
-				timedOut:   errors.Is(waitErr, context.DeadlineExceeded),
+				timedOut:   inspectorDeadlineFired(ctx, runCtx, waitErr),
 			}}
-		}(i, proc, cancelAgent)
+		}(i, proc, agentCtx, cancelAgent)
 	}
 
 	// Close fanIn after all forwarding goroutines finish. This goroutine

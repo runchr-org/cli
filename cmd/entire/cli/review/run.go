@@ -54,6 +54,24 @@ func inspectorTimeout(cfg reviewtypes.RunConfig) time.Duration {
 	}
 }
 
+func inspectorDeadlineFired(parentCtx, agentCtx context.Context, waitErr error) bool {
+	if waitErr == nil {
+		return false
+	}
+	if errors.Is(waitErr, context.DeadlineExceeded) {
+		return true
+	}
+	if !errors.Is(agentCtx.Err(), context.DeadlineExceeded) {
+		return false
+	}
+	agentDeadline, ok := agentCtx.Deadline()
+	if !ok {
+		return false
+	}
+	parentDeadline, parentHasDeadline := parentCtx.Deadline()
+	return !parentHasDeadline || agentDeadline.Before(parentDeadline)
+}
+
 // timedOutError reports the per-inspector timeout as a user-facing error.
 func timedOutError(agent string, timeout time.Duration) error {
 	return fmt.Errorf("review agent %s timed out after %s", agent, timeout)
@@ -152,10 +170,11 @@ func Run(
 	// Classify from waitErr, the termination cause captured when Wait returned:
 	// the Process contract returns DeadlineExceeded when the process was killed
 	// by this inspector's deadline and Canceled on a parent cancellation (user
-	// Ctrl+C). Using waitErr instead of re-sampling agentCtx avoids a deadline
-	// firing in the gap after a natural completion (waitErr == nil) and producing
-	// a false timeout.
-	timedOut := errors.Is(waitErr, context.DeadlineExceeded)
+	// Ctrl+C). If an implementation formats ctx.Err() without preserving the
+	// sentinel, fall back to the per-agent context only when Wait returned an
+	// error; this avoids a deadline firing after a natural completion (waitErr ==
+	// nil) and producing a false timeout.
+	timedOut := inspectorDeadlineFired(ctx, agentCtx, waitErr)
 	if shouldEmitSyntheticRunError(ctx, waitErr) {
 		synthEvent := reviewtypes.RunError{Err: waitErr}
 		buffer = append(buffer, synthEvent)
