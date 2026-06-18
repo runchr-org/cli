@@ -72,7 +72,7 @@ func New() (*Client, error) {
 		return nil, fmt.Errorf("resolve control-plane target: %w", err)
 	}
 	src := &providerSource{provide: target.TokenSource}
-	client, err := NewClient(strings.TrimRight(target.CoreURL, "/")+apiBasePath, src)
+	client, err := NewClient(strings.TrimRight(target.CoreURL, "/")+apiBasePath, src, WithClient(newCrossJurisHTTPClient()))
 	if err != nil {
 		return nil, fmt.Errorf("build Entire API client: %w", err)
 	}
@@ -86,7 +86,7 @@ func New() (*Client, error) {
 // that context's session token.
 func NewWithBearer(coreBaseURL, token string) (*Client, error) {
 	base := strings.TrimRight(coreBaseURL, "/")
-	client, err := NewClient(base+apiBasePath, staticBearer{token: token})
+	client, err := NewClient(base+apiBasePath, staticBearer{token: token}, WithClient(newCrossJurisHTTPClient()))
 	if err != nil {
 		return nil, fmt.Errorf("build Entire API client: %w", err)
 	}
