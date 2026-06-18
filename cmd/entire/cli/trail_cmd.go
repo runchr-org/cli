@@ -673,15 +673,7 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 		fmt.Fprintf(w, "Pushed branch %s to origin\n", branch)
 	}
 
-	createReq := api.TrailCreateRequest{
-		Title:      title,
-		Body:       body,
-		BranchName: branch,
-		// Branch already pushed above; link it instead of backfilling at base.
-		BranchAction: "link",
-		Base:         base,
-		Status:       statusStr,
-	}
+	createReq := newTrailCreateRequest(title, body, branch, base, statusStr)
 
 	var createResp api.TrailCreateResponse
 	resp, err := client.Post(ctx, trailsBasePath(forge, owner, repoName), createReq)
@@ -726,6 +718,17 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 	}
 
 	return nil
+}
+
+func newTrailCreateRequest(title, body, branch, base, statusStr string) api.TrailCreateRequest {
+	return api.TrailCreateRequest{
+		Title:        title,
+		Body:         body,
+		BranchName:   branch,
+		BranchAction: "link",
+		Base:         base,
+		Status:       statusStr,
+	}
 }
 
 func newTrailUpdateCmd() *cobra.Command {
