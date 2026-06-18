@@ -4198,7 +4198,7 @@ func TestResolveFilesTouched_PrefersStateFallsBackToTranscript(t *testing.T) {
 
 func TestCondenseSession_RedactionFailure_DropsTranscriptButWritesMetadata(t *testing.T) {
 	originalRedact := redactSessionJSONLBytes
-	redactSessionJSONLBytes = func([]byte) (redact.RedactedBytes, error) {
+	redactSessionJSONLBytes = func(context.Context, []byte) (redact.RedactedBytes, error) {
 		return redact.RedactedBytes{}, errors.New("forced redaction failure")
 	}
 	t.Cleanup(func() {
