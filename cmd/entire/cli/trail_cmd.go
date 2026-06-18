@@ -1071,6 +1071,11 @@ func confirmTrailDeletion(ctx context.Context, w io.Writer, number int, title st
 	if !canPrompt {
 		return false, fmt.Errorf("refusing to delete trail #%d without confirmation; pass --force", number)
 	}
+	// huh opens the TTY during form startup regardless of context state, so
+	// guard explicitly to honor an already-cancelled command context.
+	if ctx.Err() != nil {
+		return false, nil //nolint:nilerr // cancelled context is a clean skip, not an error
+	}
 	prompt := fmt.Sprintf("Delete trail #%d?", number)
 	if title != "" {
 		prompt = fmt.Sprintf("Delete trail #%d (%s)?", number, title)
@@ -1080,7 +1085,12 @@ func confirmTrailDeletion(ctx context.Context, w io.Writer, number int, title st
 		huh.NewGroup(huh.NewConfirm().Title(prompt).Value(&confirmed)),
 	)
 	if err := form.RunWithContext(ctx); err != nil {
-		return false, handleFormCancellation(w, "Trail deletion", err)
+		// A user abort (Esc) or context cancel (Ctrl+C) is a clean cancel, not
+		// an error — mirror confirmDoctorFix / uiform.PromptYN.
+		if errors.Is(err, huh.ErrUserAborted) || errors.Is(err, context.Canceled) {
+			return false, nil
+		}
+		return false, fmt.Errorf("trail deletion prompt: %w", err)
 	}
 	if !confirmed {
 		fmt.Fprintln(w, "Trail deletion cancelled.")

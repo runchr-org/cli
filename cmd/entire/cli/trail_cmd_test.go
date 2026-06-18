@@ -221,6 +221,15 @@ func TestConfirmTrailDeletion(t *testing.T) {
 	if !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("error should mention --force, got: %v", err)
 	}
+
+	// An already-cancelled context is a clean cancel: no prompt, no error.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	buf.Reset()
+	proceed, err = confirmTrailDeletion(ctx, &buf, 575, "Some title", false, true)
+	if err != nil || proceed {
+		t.Fatalf("cancelled ctx: got (proceed=%v, err=%v), want (false, nil)", proceed, err)
+	}
 }
 
 func TestDeleteTrailByNumber(t *testing.T) {
