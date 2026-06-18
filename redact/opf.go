@@ -183,7 +183,7 @@ func enabledCategories(cfg *OPFConfig) []string {
 
 // opfStderr is where progress and failure UX is written. OPF only runs
 // in the pre-push rewrite path (strategy/manual_commit_opf_rewrite.go),
-// whose hook is installed without an `2>/dev/null` redirect, so plain
+// whose hook is installed without a `2>/dev/null` redirect, so plain
 // stderr reaches the user's terminal during `git push`. Post-commit
 // condensation never invokes OPF (it calls the 7-layer functions
 // directly via RedactBlobBytes(..., usePrivacyFilter=false)), so the
