@@ -1186,8 +1186,8 @@ func TestComposeMultiAgentSinks_TTYAutoSynthesisRunsBeforeTUIExit(t *testing.T) 
 		MasterName:        testAgentName,
 		AutoSynthesis:     true,
 	})
-	if len(sinks) != 5 {
-		t.Fatalf("len(sinks) = %d, want 5", len(sinks))
+	if len(sinks) != 4 {
+		t.Fatalf("len(sinks) = %d, want 4", len(sinks))
 	}
 	if _, ok := sinks[0].(*review.TUISink); !ok {
 		t.Fatalf("sink[0] = %T, want *TUISink", sinks[0])

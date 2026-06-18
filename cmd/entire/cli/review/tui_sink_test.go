@@ -57,6 +57,31 @@ func TestTUISink_StartIsIdempotent(t *testing.T) {
 
 // TestTUISink_WaitBeforeStart_IsNoOp verifies that calling Wait before Start
 // returns immediately without blocking.
+func TestTUIPostRunCompleteSinkFlushesAfterExit(t *testing.T) {
+	t.Parallel()
+	var tuiOut bytes.Buffer
+	sink := NewTUISink([]string{"agent-a"}, func() {}, &tuiOut, bytes.NewReader(nil))
+	sink.Start()
+	sink.RunFinished(reviewtypes.RunSummary{})
+
+	var postRunOut bytes.Buffer
+	postRunBuf := bytes.NewBufferString("final verdict\n")
+	done := make(chan struct{})
+	go func() {
+		tuiPostRunCompleteSink{tui: sink, buf: postRunBuf, out: &postRunOut}.RunFinished(reviewtypes.RunSummary{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("post-run finalizer did not exit the TUI and flush output")
+	}
+	if got := postRunOut.String(); got != "final verdict\n" {
+		t.Fatalf("flushed output = %q, want final verdict", got)
+	}
+}
+
 func TestTUISink_WaitBeforeStart_IsNoOp(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer

@@ -1313,8 +1313,7 @@ func composeMultiAgentSinks(in multiAgentSinkInputs) []reviewtypes.Sink {
 					tui.FinalPhaseFinished(err)
 				},
 			})
-			sinks = append(sinks, tuiPostRunCompleteSink{tui: tui})
-			sinks = append(sinks, bufferFlushSink{buf: postRunOut, out: in.out})
+			sinks = append(sinks, tuiPostRunCompleteSink{tui: tui, buf: postRunOut, out: in.out})
 			return sinks
 		}
 		sinks = append(sinks, tuiPostRunCompleteSink{tui: tui})
