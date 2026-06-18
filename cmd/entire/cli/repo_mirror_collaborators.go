@@ -174,7 +174,7 @@ func newRepoMirrorCollaboratorsListCmd() *cobra.Command {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid <github-url>: %w", err)
 			}
-			clusterHost := clusterArg(args)
+			clusterHost := clusterArgAt(args, 1)
 			if err := validateClusterHost(clusterHost); err != nil {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid [cluster-host]: %w", err)
