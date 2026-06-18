@@ -64,8 +64,9 @@ func debugf(format string, args ...any) {
 // recursion is a server bug we want to surface, not paper over.
 //
 // Per-origin token cache lives on the transport instance, scoped to one
-// CLI invocation. TTL matches the foreign-session token's lifetime (5
-// minutes).
+// CLI invocation. A cached token's TTL honors the exchange response's
+// expires_in (minus a safety buffer), capped at cachedTokenTTL so we
+// never present a token near expiry.
 //
 // # Trust anchors for server-supplied URLs
 //
