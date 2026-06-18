@@ -38,11 +38,10 @@ func (s *ManualCommitStrategy) GetRewindPoints(ctx context.Context, limit int) (
 	}
 	defer repo.Close()
 
-	stores, err := s.getCheckpointStores(ctx, repo)
+	store, err := s.getTemporaryStore(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
-	store := stores.Temporary()
 
 	// Get current HEAD to find matching shadow branch
 	head, err := repo.Head()

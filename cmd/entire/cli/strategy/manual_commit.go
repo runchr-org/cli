@@ -60,6 +60,16 @@ func (s *ManualCommitStrategy) getCheckpointStore(ctx context.Context, repo *git
 	return stores.Primary, nil
 }
 
+// getTemporaryStore returns the git-backed shadow-branch store with the
+// strategy's blob fetcher wired in.
+func (s *ManualCommitStrategy) getTemporaryStore(ctx context.Context, repo *git.Repository) (checkpoint.TemporaryStore, error) { //nolint:ireturn // temporary store capability is the abstraction boundary
+	stores, err := s.getCheckpointStores(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	return stores.Temporary(), nil
+}
+
 // NewManualCommitStrategy creates a new manual-commit strategy instance.
 func NewManualCommitStrategy() *ManualCommitStrategy {
 	return &ManualCommitStrategy{}
