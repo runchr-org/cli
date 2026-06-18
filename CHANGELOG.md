@@ -9,14 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- `entire trail` (work in progress): trail context is now injected into the model when trails are enabled, an `entire trail delete` subcommand was added, and `trail create --branch` defaults to the checked-out branch, alongside command-behavior fixes ([#1435](https://github.com/entireio/cli/pull/1435), [#1455](https://github.com/entireio/cli/pull/1455), [#1456](https://github.com/entireio/cli/pull/1456), [#1447](https://github.com/entireio/cli/pull/1447))
+- `entire trail` (work in progress): trail context is now injected into the model when trails are enabled, an `entire trail delete` subcommand was added, and `entire trail create --branch` defaults to the checked-out branch, alongside command-behavior fixes ([#1435](https://github.com/entireio/cli/pull/1435), [#1455](https://github.com/entireio/cli/pull/1455), [#1456](https://github.com/entireio/cli/pull/1456), [#1447](https://github.com/entireio/cli/pull/1447))
 - Interactive resume picker for stopped/idle sessions ([#1445](https://github.com/entireio/cli/pull/1445))
 - `entire repo mirror collaborators` with `add`/`remove`/`list` subcommands ([#1458](https://github.com/entireio/cli/pull/1458))
 - `ENTIRE_TOKEN` support, along with git-remote-entire push reliability fixes ([#1438](https://github.com/entireio/cli/pull/1438))
 
 ### Changed
 
-- Auth was hardened by demolishing static fallbacks, the legacy store, and the v1 provider (COR-393) ([#1410](https://github.com/entireio/cli/pull/1410))
+- Auth was hardened by removing static fallbacks, the legacy store, and the v1 provider ([#1410](https://github.com/entireio/cli/pull/1410))
 - External agent transcripts are now compacted for `--full`/`--verbose` display ([#1421](https://github.com/entireio/cli/pull/1421))
 - Runner configs moved from `.entire/runners/v2` to `.entire/runners` ([#1442](https://github.com/entireio/cli/pull/1442))
 - `entire repo create` now stamps a usable `entire://` remote in its JSON output ([#1441](https://github.com/entireio/cli/pull/1441))
@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Housekeeping
 
-- Tests now isolate the token store and git config so spawned binaries skip the keychain, and the trail test build was repaired after the auth-fallback demolition ([#1450](https://github.com/entireio/cli/pull/1450), [#1448](https://github.com/entireio/cli/pull/1448), [#1436](https://github.com/entireio/cli/pull/1436))
+- Tests now isolate the token store and git config so spawned binaries skip the keychain, and the trail test build was repaired after the auth-fallback removal ([#1450](https://github.com/entireio/cli/pull/1450), [#1448](https://github.com/entireio/cli/pull/1448), [#1436](https://github.com/entireio/cli/pull/1436))
 - Parallelized pure agent tests and standardized git test repository setup ([#1406](https://github.com/entireio/cli/pull/1406), [#1390](https://github.com/entireio/cli/pull/1390))
 - Copilot E2E now detects the trust dialog case-insensitively ([#1446](https://github.com/entireio/cli/pull/1446))
 - Dependency bumps ([#1432](https://github.com/entireio/cli/pull/1432), [#1437](https://github.com/entireio/cli/pull/1437))
