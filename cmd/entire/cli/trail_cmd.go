@@ -642,12 +642,21 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 		fmt.Fprintf(w, "Note: trail will be created for branch %q (not the current branch)\n", branch)
 	}
 
-	if needsCreation {
-		// needsCreation is a local-only signal, so the branch may still exist on
-		// origin (e.g. a teammate pushed it and we never fetched). In that case the
-		// remote branch is not ours, and our push may merely fast-forward it; we
-		// must not delete it during cleanup. Only treat the remote branch as
-		// created-by-us when it did not already exist before our push.
+	// Delivering the branch to origin is a PRECONDITION for trail creation, not
+	// an optional follow-up. A trail binds to a *remote* branch; if the branch
+	// never reaches origin the server has nothing to anchor to and backfills it
+	// at the base tip, producing a trail whose backing branch does not reflect
+	// the user's work (local branch, remote branch, and actual work all differ).
+	// We therefore always push and hard-fail on error, regardless of whether we
+	// created the branch locally. (Previously this was gated on needsCreation,
+	// so `git checkout -b foo && entire trail create --branch foo` created the
+	// trail without ever pushing foo.)
+	{
+		// branchExistsOnOrigin tells us whether origin already has this branch
+		// (e.g. a teammate pushed it, or we pushed it on a previous run). In that
+		// case our push may merely fast-forward it and we must not delete it
+		// during cleanup. Only treat the remote branch as created-by-us when it
+		// did not already exist before our push.
 		existedOnOrigin, existErr := branchExistsOnOrigin(branch)
 		if existErr != nil {
 			// Be conservative: if we cannot tell, do not delete the remote branch.
@@ -656,7 +665,7 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 		}
 		if err := pushBranchToOrigin(branch); err != nil {
 			cleanupCreatedTrailBranch(repo, branch, localBranchCreated, false, errW)
-			return fmt.Errorf("failed to push branch %q: %w", branch, err)
+			return fmt.Errorf("failed to push branch %q to origin: %w\nhint: the trail was not created because its branch could not be delivered to the remote.\n  - if this is an auth error, link your GitHub account and retry\n  - if this is a non-fast-forward, update your base (git fetch && git rebase) and retry", branch, err)
 		}
 		remoteBranchPushed = !existedOnOrigin
 		fmt.Fprintf(w, "Pushed branch %s to origin\n", branch)
@@ -666,8 +675,11 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 		Title:      title,
 		Body:       body,
 		BranchName: branch,
-		Base:       base,
-		Status:     statusStr,
+		// We pushed the branch to origin above, so ask the server to link the
+		// already-delivered branch rather than backfill it at the base tip.
+		BranchAction: "link",
+		Base:         base,
+		Status:       statusStr,
 	}
 
 	var createResp api.TrailCreateResponse
