@@ -150,7 +150,8 @@ func writeDoctorBundle(ctx context.Context, repoRoot, outPath string, raw bool) 
 func entireRefsReport(ctx context.Context, repoRoot string) string {
 	var sb strings.Builder
 
-	// Broad globs on purpose: refs/heads/entire also catches shadow/trails branches.
+	// Broad globs on purpose: refs/heads/entire catches shadow/trails branches,
+	// and refs/entire captures custom or legacy Entire refs.
 	cmd := exec.CommandContext(ctx, "git", "for-each-ref", "--format=%(refname) %(objectname)",
 		"refs/heads/entire", "refs/entire", "refs/remotes/origin/entire")
 	cmd.Dir = repoRoot
