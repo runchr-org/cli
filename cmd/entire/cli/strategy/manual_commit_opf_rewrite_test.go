@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
@@ -26,19 +26,36 @@ import (
 
 // fakeOPFForRewrite tags any occurrence of "PERSONABC" as private_person.
 // Deterministic + offline; real OPF inference is not needed to exercise
-// the rewrite plumbing.
-type fakeOPFForRewrite struct{}
+// the rewrite plumbing. The batchCalls counter lets tests assert the
+// "exactly one OPF invocation per push" contract.
+type fakeOPFForRewrite struct {
+	mu         sync.Mutex
+	batchCalls int
+	calls      int
+}
 
 func (f *fakeOPFForRewrite) Redact(_ context.Context, text string, _ []string) ([]redact.Span, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
 	return findSentinelSpans(text), nil
 }
 
 func (f *fakeOPFForRewrite) RedactBatch(_ context.Context, inputs []string, _ []string) ([][]redact.Span, error) {
+	f.mu.Lock()
+	f.batchCalls++
+	f.mu.Unlock()
 	out := make([][]redact.Span, len(inputs))
 	for i, in := range inputs {
 		out[i] = findSentinelSpans(in)
 	}
 	return out, nil
+}
+
+func (f *fakeOPFForRewrite) batchCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.batchCalls
 }
 
 func findSentinelSpans(s string) []redact.Span {
@@ -385,72 +402,129 @@ func TestRewriteUnpushedV1WithOPF_BootstrapCap(t *testing.T) {
 	}
 }
 
-// Shard scoping: the rewrite only touches files inside the current
-// commit's own shard. Files belonging to other shards (sitting in the
-// cumulative tree because git trees accumulate) are copied verbatim,
-// so a push doesn't pay O(N) OPF cold-starts per commit.
-func TestParseShardPathFromCommitMessage(t *testing.T) {
-	t.Parallel()
+// Batching contract: across N unpushed commits with redactable blobs,
+// the rewrite must invoke OPF exactly once — the headline win the
+// pre-push refactor is built around. Without batching, this same
+// workload would shell out 3×blobs (one per commit, multiple times per
+// commit's shard), paying the model-load cost on every invocation.
+func TestRewriteUnpushedV1WithOPF_MultiCommit_SingleBatchCall(t *testing.T) {
+	fake := &fakeOPFForRewrite{}
+	configureFakeOPF(t, fake)
+	repo, _ := setupV1Repo(t) // first checkpoint, "PERSONABC" sentinel embedded
+	addV1Checkpoint(t, repo, "b2c3d4e5f6a1", "test-session-2",
+		`{"role":"user","content":"PERSONABC contacted again"}`+"\n", "Find PERSONABC")
+	addV1Checkpoint(t, repo, "c3d4e5f6a1b2", "test-session-3",
+		`{"role":"user","content":"PERSONABC said hello"}`+"\n", "Greet PERSONABC")
+
+	newTip, err := RewriteUnpushedV1WithOPF(context.Background(), repo, "origin")
+	require.NoError(t, err)
+	require.False(t, newTip.IsZero())
+
+	// The headline assertion: three commits with redactable content,
+	// one shell-out. If the refactor regresses to per-blob calls,
+	// this jumps to 3 (one per commit) or 9 (one per blob).
+	require.Equal(t, 1, fake.batchCallCount(),
+		"want exactly 1 RedactBatch call across all unpushed commits")
+}
+
+// Leaf-byte cap: the rewrite must refuse a push whose cumulative
+// prose-leaf bytes exceed ENTIRE_OPF_BATCH_LIMIT, returning a typed
+// error the pre-push hook can surface. Without this, a runaway push
+// (10MB+ of dense prose) would tie up the user's terminal for minutes
+// without warning.
+func TestRewriteUnpushedV1WithOPF_BatchCap(t *testing.T) {
 	cases := []struct {
-		name, msg, want string
+		name     string
+		envLimit string
+		wantErr  bool
 	}{
-		{name: "valid", msg: "Checkpoint: a1b2c3d4e5f6\n\nEntire-Session: s\n", want: "a1/b2c3d4e5f6"},
-		{name: "trailing_space", msg: "Checkpoint: a1b2c3d4e5f6   \n", want: "a1/b2c3d4e5f6"},
-		{name: "missing_prefix", msg: "Initialize sessions branch\n", want: ""},
-		{name: "too_short", msg: "Checkpoint: abc123\n", want: ""},
-		{name: "uppercase_rejected", msg: "Checkpoint: A1B2C3D4E5F6\n", want: ""},
-		{name: "non_hex", msg: "Checkpoint: gghhiijjkkll\n", want: ""},
-		{name: "empty_message", msg: "", want: ""},
+		{name: "over_limit_rejected", envLimit: "10", wantErr: true},
+		{name: "unlimited_allows_any_size", envLimit: "unlimited", wantErr: false},
+		{name: "env_override_allows_above_default", envLimit: "1000000", wantErr: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			require.Equal(t, tc.want, parseShardPathFromCommitMessage(tc.msg))
+			configureFakeOPF(t, &fakeOPFForRewrite{})
+			t.Setenv(batchEnvVar, tc.envLimit)
+			repo, originalTip := setupV1Repo(t) // ~50 bytes of prose-leaf content
+
+			newTip, err := RewriteUnpushedV1WithOPF(context.Background(), repo, "origin")
+			if !tc.wantErr {
+				require.NoError(t, err)
+				require.False(t, newTip.IsZero())
+				return
+			}
+			var tooLarge *OPFBatchTooLargeError
+			require.ErrorAs(t, err, &tooLarge)
+			require.Greater(t, tooLarge.LeafBytes, tooLarge.Limit,
+				"error should report leaf-byte count > the limit it tripped")
+
+			// CAS must not advance on cap rejection — the local v1 ref
+			// stays where it was, so a retry after `unset
+			// ENTIRE_OPF_BATCH_LIMIT` produces the same input set.
+			ref, refErr := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
+			require.NoError(t, refErr)
+			require.Equal(t, originalTip, ref.Hash(),
+				"local v1 ref must not move when batch cap rejects the push")
 		})
 	}
 }
 
-// Shard-scoping invariants: descend into ancestors-of, the target, and
-// descendants-of the target shard; copy everything else verbatim.
-func TestShouldDescendAndInsideShard(t *testing.T) {
+// OPFBatchTooLargeError message includes leaf-byte count, the limit
+// that tripped, and remediation pointing to ENTIRE_OPF_BATCH_LIMIT —
+// the user-facing message is the only thing they see when this fires.
+func TestOPFBatchTooLargeErrorMessage(t *testing.T) {
 	t.Parallel()
-	const shard = "a1/b2c3d4e5f6"
-	cases := []struct {
-		name    string
-		path    string
-		descend bool
-		inside  bool
-	}{
-		{name: "root_is_ancestor", path: "", descend: true, inside: false},
-		{name: "shard_prefix_is_ancestor", path: "a1", descend: true, inside: false},
-		{name: "shard_root_is_target", path: shard, descend: true, inside: true},
-		{name: "session_subdir_is_descendant", path: shard + "/0", descend: true, inside: true},
-		{name: "deeper_descendant", path: shard + "/0/tasks", descend: true, inside: true},
-		{name: "sibling_shard_prefix", path: "b2", descend: false, inside: false},
-		{name: "sibling_shard_full", path: "b2/c3d4e5f6a1a2", descend: false, inside: false},
-		{name: "partial_overlap_not_ancestor", path: "a1/zzz", descend: false, inside: false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			require.Equal(t, tc.descend, shouldDescend(tc.path, shard), "shouldDescend")
-			require.Equal(t, tc.inside, insideShard(tc.path, shard), "insideShard")
-		})
+	e := &OPFBatchTooLargeError{LeafBytes: 5_000_000, Limit: 2_097_152}
+	msg := e.Error()
+	for _, want := range []string{
+		"5000000",
+		"2097152",
+		batchEnvVar,
+		"unlimited",
+	} {
+		require.Contains(t, msg, want, "OPFBatchTooLargeError message should mention %q", want)
 	}
 }
 
-// TestRebuildTreeWithOPF_RedactsAllFileTypesInsideShard pins the
-// fail-closed file-type policy. Previously the walker only redacted
-// .jsonl / .txt / .json suffixes and copied everything else verbatim
-// inside the shard — a privacy hole for any future blob type (.md
-// prose, agent dumps, no-extension transcript files) that landed in a
-// checkpoint shard. After P3 the policy is inverted: every regular
-// file inside the shard except content_hash.txt flows through OPF.
+// TestRewriteUnpushedV1WithOPF_RawByteCap pins the RAM-ceiling check
+// that fires during the collect pass (before the leaf-byte inference
+// cap). A push of mostly-structural JSON has tiny prose-leaf content
+// but the loaded raw blob bytes can still OOM if cumulative size
+// blows up — without this cap, a 5 GiB paste would silently load
+// before the leaf-byte cap got a chance to fire.
 //
-// This test stands up a synthetic tree containing one .md and one
-// no-extension file with the OPF sentinel, runs the walker, and
-// asserts both files come out redacted.
-func TestRebuildTreeWithOPF_RedactsAllFileTypesInsideShard(t *testing.T) {
+// Setting ENTIRE_OPF_BATCH_LIMIT very low scales the raw ceiling
+// (raw = leaf × rawByteCapMultiplier) low enough that the standard
+// setupV1Repo fixture triggers it.
+func TestRewriteUnpushedV1WithOPF_RawByteCap(t *testing.T) {
+	configureFakeOPF(t, &fakeOPFForRewrite{})
+	// leaf cap = 1 → raw ceiling = 100 bytes; the setupV1Repo
+	// checkpoint writes far more than that across its shard blobs.
+	t.Setenv(batchEnvVar, "1")
+	repo, originalTip := setupV1Repo(t)
+
+	_, err := RewriteUnpushedV1WithOPF(context.Background(), repo, "origin")
+	var rawErr *OPFRawBytesTooLargeError
+	require.ErrorAs(t, err, &rawErr, "want OPFRawBytesTooLargeError, got %T: %v", err, err)
+	require.Greater(t, rawErr.RawBytes, rawErr.Limit,
+		"error should report raw byte count > limit")
+
+	// CAS must not advance on raw-byte rejection — same fail-closed
+	// shape as the leaf-byte cap.
+	ref, refErr := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
+	require.NoError(t, refErr)
+	require.Equal(t, originalTip, ref.Hash(),
+		"local v1 ref must not move when raw byte cap rejects the push")
+}
+
+// TestCollectTreeBlobs_RedactsAllFileTypes pins the fail-closed
+// file-type policy. The collect-pass walker must include .md,
+// no-extension, and other future blob types — anything except
+// content_hash.txt — so the apply walker has cached bytes for them.
+// Previously the predicate was a closed allowlist (.jsonl/.txt/.json)
+// and any other blob shipped verbatim with the OPF-applied trailer.
+func TestCollectTreeBlobs_RedactsAllFileTypes(t *testing.T) {
 	configureFakeOPF(t, &fakeOPFForRewrite{})
 	tempDir := t.TempDir()
 	testutil.InitRepo(t, tempDir)
@@ -469,65 +543,28 @@ func TestRebuildTreeWithOPF_RedactsAllFileTypesInsideShard(t *testing.T) {
 		require.NoError(t, err)
 		return hash
 	}
-	mdHash := writeBlob("Agent transcript: PERSONABC reported the issue")
-	rawHash := writeBlob("PERSONABC also appeared in this no-extension blob")
+	mdHash := writeBlob("notes md body")
+	rawHash := writeBlob("no extension body")
 	hashTxtHash := writeBlob("sha256:abcd")
 
-	// Entries must be sorted lexicographically per git's tree format.
+	// Lexicographically sorted entries (required by git tree format).
 	tree := &object.Tree{Entries: []object.TreeEntry{
 		{Name: paths.ContentHashFileName, Mode: filemode.Regular, Hash: hashTxtHash},
 		{Name: "notes.md", Mode: filemode.Regular, Hash: mdHash},
 		{Name: "transcript", Mode: filemode.Regular, Hash: rawHash},
 	}}
 
-	// Empty shardPath = "walk everything" (bootstrap fallback). With the
-	// inverted policy, both notes.md and transcript get redacted.
-	newTreeHash, err := rebuildTreeWithOPF(context.Background(), repo, tree, "", "")
-	require.NoError(t, err)
+	var blobs []redact.NamedBlob
+	var blobPaths []string
+	require.NoError(t, collectTreeBlobs(repo, tree, "", &blobs, &blobPaths))
 
-	newTree, err := repo.TreeObject(newTreeHash)
-	require.NoError(t, err)
-
-	readEntry := func(name string) string {
-		for _, e := range newTree.Entries {
-			if e.Name != name {
-				continue
-			}
-			blob, err := repo.BlobObject(e.Hash)
-			require.NoError(t, err)
-			r, err := blob.Reader()
-			require.NoError(t, err)
-			defer func() { _ = r.Close() }()
-			data, err := io.ReadAll(r)
-			require.NoError(t, err)
-			return string(data)
-		}
-		t.Fatalf("entry %q not in rebuilt tree", name)
-		return ""
+	collectedNames := make(map[string]bool, len(blobs))
+	for _, b := range blobs {
+		collectedNames[b.Name] = true
 	}
-
-	if strings.Contains(readEntry("notes.md"), "PERSONABC") {
-		t.Error(".md blob inside the shard must be redacted — slipped through verbatim")
-	}
-	if strings.Contains(readEntry("transcript"), "PERSONABC") {
-		t.Error("no-extension blob inside the shard must be redacted — slipped through verbatim")
-	}
-	// content_hash.txt is on the deferred path: since there's no
-	// transcript file (named full.jsonl) in this synthetic tree, the
-	// deferred recomputation keeps the original hash.
-	if got := readEntry(paths.ContentHashFileName); got != "sha256:abcd" {
-		t.Errorf("content_hash.txt should be preserved when no transcript exists, got %q", got)
-	}
-}
-
-// Empty shardPath = no scoping (bootstrap / unrecognized-subject
-// fallback): descend everywhere, redact everywhere.
-func TestShardScopeEmptyShardPathIsPermissive(t *testing.T) {
-	t.Parallel()
-	require.True(t, shouldDescend("anything/anywhere", ""))
-	require.True(t, insideShard("anything/anywhere", ""))
-	require.True(t, shouldDescend("", ""))
-	require.True(t, insideShard("", ""))
+	require.True(t, collectedNames["notes.md"], ".md blob must be collected for redaction (privacy contract)")
+	require.True(t, collectedNames["transcript"], "no-extension blob must be collected for redaction (privacy contract)")
+	require.False(t, collectedNames[paths.ContentHashFileName], "content_hash.txt must be excluded from collection (deferred path)")
 }
 
 // Fail-closed regression: when the OPF runtime fails and the breaker

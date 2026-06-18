@@ -104,13 +104,102 @@ func resolveBootstrapLimit() int {
 	case v == "":
 		return bootstrapDefaultLimit
 	case strings.EqualFold(v, "unlimited"):
-		return math.MaxInt32
+		return math.MaxInt
 	}
 	if n, err := strconv.Atoi(v); err == nil && n > 0 {
 		return n
 	}
 	return bootstrapDefaultLimit
 }
+
+// OPFBatchTooLargeError: a single push has more prose-leaf content
+// than ENTIRE_OPF_BATCH_LIMIT will allow OPF to chew through in one
+// inference call. Pushing under the limit yields a single ~10-30s
+// pause; without the cap, a 100MB-of-prose push could take an hour.
+//
+// The user-facing remediation is identical in shape to
+// BootstrapTooLargeError: bump the limit, push without OPF, or break
+// the push into smaller pieces.
+type OPFBatchTooLargeError struct {
+	LeafBytes int
+	Limit     int
+}
+
+func (e *OPFBatchTooLargeError) Error() string {
+	return fmt.Sprintf("OPF would run inference on %d prose-leaf bytes "+
+		"(limit %d). Set ENTIRE_OPF_BATCH_LIMIT=<bytes> or =unlimited to override, "+
+		"or push without OPF (ENTIRE_OPF=no git push) and let a smaller follow-up push run OPF",
+		e.LeafBytes, e.Limit)
+}
+
+const (
+	// batchDefaultLimit caps the cumulative prose-leaf bytes one push
+	// will hand to OPF. 2 MB at ~5.4s/100KB ≈ ~110s of inference, on
+	// the high end of what's acceptable as a single push pause but
+	// generous enough that any realistic push fits.
+	batchDefaultLimit = 2 * 1024 * 1024
+	batchEnvVar       = "ENTIRE_OPF_BATCH_LIMIT"
+)
+
+func resolveBatchLimit() int {
+	v := strings.TrimSpace(os.Getenv(batchEnvVar))
+	switch {
+	case v == "":
+		return batchDefaultLimit
+	case strings.EqualFold(v, "unlimited"):
+		return math.MaxInt
+	}
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		return n
+	}
+	return batchDefaultLimit
+}
+
+// scaleBatchLimit multiplies a batch-limit value by mult, saturating
+// at math.MaxInt to avoid signed-overflow when the limit is "unlimited"
+// (math.MaxInt) or a very large explicit value. Returns 0 if either
+// operand is non-positive, so the caller can treat 0 as "no cap" too.
+func scaleBatchLimit(limit, mult int) int {
+	if limit <= 0 || mult <= 0 {
+		return 0
+	}
+	if limit > math.MaxInt/mult {
+		return math.MaxInt
+	}
+	return limit * mult
+}
+
+// OPFRawBytesTooLargeError: the cumulative raw blob bytes the
+// collection pass loaded into memory exceeded the safety ceiling.
+// Unlike the leaf-byte cap, this is about RAM headroom rather than
+// inference wall-clock — a 200 MiB push of mostly-structural JSON has
+// tiny leaf content but huge raw bytes, and would OOM the user's
+// shell before the leaf-byte cap got a chance to fire.
+//
+// The raw ceiling is derived from ENTIRE_OPF_BATCH_LIMIT (raw =
+// leaf × rawByteCapMultiplier) so a user bumping the leaf cap
+// proportionally bumps the raw ceiling and doesn't need a second
+// env var.
+type OPFRawBytesTooLargeError struct {
+	RawBytes int
+	Limit    int
+}
+
+func (e *OPFRawBytesTooLargeError) Error() string {
+	return fmt.Sprintf("OPF rewrite would buffer %d raw blob bytes across "+
+		"all unpushed commits (limit %d, ~%d× the prose-leaf cap as a RAM ceiling). "+
+		"Bump ENTIRE_OPF_BATCH_LIMIT (the raw ceiling scales with it) "+
+		"or push without OPF (ENTIRE_OPF=no git push) and let a smaller "+
+		"follow-up push run OPF",
+		e.RawBytes, e.Limit, rawByteCapMultiplier)
+}
+
+// rawByteCapMultiplier ties the raw-byte RAM ceiling to the leaf-byte
+// inference cap. 100× means: leaf cap 2 MiB → raw ceiling 200 MiB.
+// Picked to comfortably exceed any realistic JSON-scaffolding ratio
+// (a 10 MiB JSONL with 300 KB of leaves still fits) while preventing
+// pathological RAM blowups (a 5 GiB pasted dump aborts before loading).
+const rawByteCapMultiplier = 100
 
 // RewriteUnpushedV1WithOPF re-redacts unpushed entire/checkpoints/v1
 // commits with OPF, builds new commits carrying Entire-OPF-Applied:
@@ -157,20 +246,101 @@ func RewriteUnpushedV1WithOPF(ctx context.Context, repo *git.Repository, target 
 		}
 	}
 
-	parent := remoteTip
+	// Fail-closed defense: if OPF is already broken at the start of
+	// this push (an earlier process step tripped the breaker), abort
+	// before tagging any commits as OPF-applied. Without this, the
+	// per-blob fallback inside the no-OPF cases of BatchBytesWithPrivacyFilter
+	// could let 7-layer content slip out with the trailer attached.
+	if redact.OPFBreakerTripped() {
+		return plumbing.ZeroHash, &OPFRuntimeFailedError{OPFCommand: redact.OPFCommand()}
+	}
+
+	// Pass 1: collect every redactable blob from every unpushed commit
+	// that still needs OPF. Already-applied commits get re-parented
+	// later without collecting (their tree stays as-is). We also track
+	// each blob's source commit + tree path so we can route the redacted
+	// bytes back during apply.
+	type pendingCommit struct {
+		commit *object.Commit
+		// blobs and paths are parallel slices; len(paths)==len(blobs).
+		// startIdx is this commit's offset into the global redacted slice.
+		blobs    []redact.NamedBlob
+		paths    []string
+		startIdx int
+	}
+	var globalBlobs []redact.NamedBlob
+	pendings := make([]pendingCommit, 0, len(unpushed))
+	// Bound raw-bytes-in-memory incrementally so a pathological push
+	// (e.g. 5 GiB of pasted dumps) aborts before exhausting the user's
+	// shell RAM. The leaf-byte cap downstream is about inference cost;
+	// this one is about memory ceiling and fires earlier. scaleBatchLimit
+	// saturates at math.MaxInt so "unlimited" actually means unlimited
+	// — without saturation, "unlimited" × 100 overflows int and the cap
+	// trips on every push.
+	rawCap := scaleBatchLimit(resolveBatchLimit(), rawByteCapMultiplier)
+	var rawBytesSoFar int
 	for _, c := range unpushed {
-		newHash, err := rebuildV1Commit(ctx, repo, c, parent)
+		pc := pendingCommit{commit: c}
+		if !trailers.HasOPFApplied(c.Message) {
+			tree, err := repo.TreeObject(c.TreeHash)
+			if err != nil {
+				return plumbing.ZeroHash, fmt.Errorf("load tree for %s: %w", c.Hash.String()[:7], err)
+			}
+			pc.startIdx = len(globalBlobs)
+			// Whole-tree redaction: each v1 commit tree is cumulative, so the
+			// newest commit can still carry older shards that were 7-layer-only
+			// before this rewrite. Redacting the whole tree for every unapplied
+			// commit keeps the final rewritten tip from reintroducing an
+			// un-OPF-redacted older shard. collect and apply walk the tree the
+			// same way so the cached keys line up.
+			if err := collectTreeBlobs(repo, tree, "", &pc.blobs, &pc.paths); err != nil {
+				return plumbing.ZeroHash, fmt.Errorf("collect blobs %s: %w", c.Hash.String()[:7], err)
+			}
+			for _, b := range pc.blobs {
+				rawBytesSoFar += len(b.Content)
+			}
+			if rawBytesSoFar > rawCap {
+				return plumbing.ZeroHash, &OPFRawBytesTooLargeError{RawBytes: rawBytesSoFar, Limit: rawCap}
+			}
+			globalBlobs = append(globalBlobs, pc.blobs...)
+		}
+		pendings = append(pendings, pc)
+	}
+
+	// Pass 2: enforce the leaf-byte cap, then make exactly ONE OPF
+	// shell-out for the whole push. The cap runs before the shell-out
+	// so a too-large push fails fast with a clear remediation message.
+	var globalRedacted [][]byte
+	if len(globalBlobs) > 0 {
+		leafBytes := redact.SumProseLeafBytes(globalBlobs)
+		if limit := resolveBatchLimit(); leafBytes > limit {
+			return plumbing.ZeroHash, &OPFBatchTooLargeError{LeafBytes: leafBytes, Limit: limit}
+		}
+		globalRedacted, err = redact.BatchBytesWithPrivacyFilter(ctx, globalBlobs)
 		if err != nil {
-			return plumbing.ZeroHash, fmt.Errorf("rebuild commit %s: %w", c.Hash.String()[:7], err)
+			return plumbing.ZeroHash, &OPFRuntimeFailedError{OPFCommand: redact.OPFCommand()}
+		}
+	}
+
+	// Pass 3: rebuild each commit. For OPF-applied commits, this is
+	// just a re-parent (no tree changes). For unapplied commits, the
+	// per-commit redaction map routes cached bytes by tree path.
+	parent := remoteTip
+	for _, pc := range pendings {
+		var redactedByPath map[string][]byte
+		if len(pc.blobs) > 0 {
+			redactedByPath = make(map[string][]byte, len(pc.blobs))
+			for i, path := range pc.paths {
+				redactedByPath[path] = globalRedacted[pc.startIdx+i]
+			}
+		}
+		newHash, err := rebuildV1Commit(ctx, repo, pc.commit, parent, redactedByPath)
+		if err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("rebuild commit %s: %w", pc.commit.Hash.String()[:7], err)
 		}
 		parent = newHash
 	}
 
-	// Fail-closed: if OPF tripped its breaker mid-rewrite, some blobs
-	// got 7-layer fallback. Don't CAS — the orphan commits get GC'd.
-	if redact.OPFBreakerTripped() {
-		return plumbing.ZeroHash, &OPFRuntimeFailedError{OPFCommand: redact.OPFCommand()}
-	}
 	if err := atomicSetV1Ref(repo, localTip, parent); err != nil {
 		return plumbing.ZeroHash, err
 	}
@@ -298,22 +468,29 @@ func listUnpushedV1Commits(repo *git.Repository, localTip, remoteTip plumbing.Ha
 }
 
 // rebuildV1Commit re-parents the commit onto parent. Already-applied
-// commits keep their tree (idempotent); unapplied commits get an
-// OPF-redacted tree + Entire-OPF-Applied: true trailer.
+// commits keep their tree (idempotent); unapplied commits get a tree
+// rebuilt from redactedByPath (precomputed by the orchestrator's single
+// OPF batch call) plus an Entire-OPF-Applied: true trailer.
+//
+// redactedByPath maps each redactable blob's full tree path (e.g.
+// "ab/cd.../0/full.jsonl") to its OPF-redacted bytes. Only required for
+// unapplied commits; pass nil for already-applied ones.
 //
 // Correctness note: each v1 commit tree is cumulative. During a multi-commit
 // rewrite, the newest original commit can still contain older shards that were
-// 7-layer-only before this rewrite. Redacting the whole tree for every
-// unapplied commit is intentionally conservative so the final rewritten tip
-// cannot reintroduce an older un-OPF-redacted shard.
-func rebuildV1Commit(ctx context.Context, repo *git.Repository, oldCommit *object.Commit, parent plumbing.Hash) (plumbing.Hash, error) {
+// 7-layer-only before this rewrite. The collect/apply walkers redact the whole
+// tree for every unapplied commit so the final rewritten tip cannot
+// reintroduce an older un-OPF-redacted shard.
+func rebuildV1Commit(ctx context.Context, repo *git.Repository, oldCommit *object.Commit, parent plumbing.Hash, redactedByPath map[string][]byte) (plumbing.Hash, error) {
 	newTree := oldCommit.TreeHash
 	if !trailers.HasOPFApplied(oldCommit.Message) {
 		tree, err := repo.TreeObject(oldCommit.TreeHash)
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("load tree: %w", err)
 		}
-		newTree, err = rebuildTreeWithOPF(ctx, repo, tree, "", "")
+		// Whole-tree redaction — see the collect pass in
+		// RewriteUnpushedV1WithOPF for why we never scope to a single shard.
+		newTree, err = rebuildTreeWithCachedRedaction(repo, tree, "", redactedByPath)
 		if err != nil {
 			return plumbing.ZeroHash, err
 		}
@@ -347,52 +524,92 @@ func rebuildV1Commit(ctx context.Context, repo *git.Repository, oldCommit *objec
 	return hash, nil
 }
 
-// parseShardPathFromCommitMessage extracts the sharded path
-// "<id[:2]>/<id[2:]>" from a "Checkpoint: <id>" subject line.
-// Returns "" when the subject doesn't match (bootstrap commits, or
-// historical commits with a different format) — callers walk the
-// whole tree in that case.
-func parseShardPathFromCommitMessage(message string) string {
-	firstLine, _, _ := strings.Cut(message, "\n")
-	const prefix = "Checkpoint: "
-	if !strings.HasPrefix(firstLine, prefix) {
-		return ""
-	}
-	id := strings.TrimSpace(firstLine[len(prefix):])
-	if len(id) != 12 {
-		return ""
-	}
-	for _, c := range id {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return ""
-		}
-	}
-	return id[:2] + "/" + id[2:]
+// isRedactableBlobName reports whether a file at the given name should
+// flow through OPF. The policy is fail-closed: every regular file
+// inside the shard is redacted EXCEPT content_hash.txt, which is
+// recomputed against the new full.jsonl in a deferred pass.
+//
+// Why an open policy: a closed allowlist (.jsonl/.txt/.json only)
+// would silently skip any future blob type that lands in a shard
+// — .md prose, agent dumps, no-extension transcript blobs — and ship
+// it verbatim with the Entire-OPF-Applied trailer attached. Inverting
+// to "redact everything except the deferred file" means new types are
+// covered by default; opting out requires an explicit code change.
+//
+// RedactBlobBytes itself handles arbitrary content: .jsonl/.json go
+// through JSON-aware leaf redaction; anything else gets byte
+// redaction over the raw content. The OPF has-space gate excludes
+// binary blobs from paying inference cost.
+func isRedactableBlobName(name string) bool {
+	return name != paths.ContentHashFileName
 }
 
-// rebuildTreeWithOPF walks a tree and produces a new tree with
-// OPF-redacted file blobs. content_hash.txt files are recomputed in a
-// second pass against the new full.jsonl in the same directory.
+// collectTreeBlobs walks the whole tree and appends every redactable
+// blob's content + full tree path to the parallel output slices. It
+// walks the entire tree (no shard scoping — see RewriteUnpushedV1WithOPF
+// for why); rebuildTreeWithCachedRedaction applies the same walk so the
+// cached keys line up.
 //
-// shardPath scopes the walk: only files at paths starting with
-// shardPath get redacted; other shards (and the root-level entries
-// outside the shard) are copied verbatim. Empty shardPath means walk
-// everything (used for bootstrap/unknown-subject commits).
+// blobs[i] and paths[i] correspond: paths[i] is the full path within
+// the tree (e.g. "ab/cd.../0/full.jsonl"), used later by the apply
+// walker to find each blob's redacted bytes in the cached map.
+func collectTreeBlobs(repo *git.Repository, tree *object.Tree, pathPrefix string, blobs *[]redact.NamedBlob, paths *[]string) error {
+	for _, e := range tree.Entries {
+		switch e.Mode { //nolint:exhaustive // non-tree/blob modes are unreachable here
+		case filemode.Dir:
+			subPath := e.Name
+			if pathPrefix != "" {
+				subPath = pathPrefix + "/" + e.Name
+			}
+			subTree, err := repo.TreeObject(e.Hash)
+			if err != nil {
+				return fmt.Errorf("load subtree %s/%s: %w", pathPrefix, e.Name, err)
+			}
+			if err := collectTreeBlobs(repo, subTree, subPath, blobs, paths); err != nil {
+				return err
+			}
+		case filemode.Regular, filemode.Executable:
+			if !isRedactableBlobName(e.Name) {
+				continue
+			}
+			content, err := readBlob(repo, e.Hash)
+			if err != nil {
+				return fmt.Errorf("read blob %s/%s: %w", pathPrefix, e.Name, err)
+			}
+			fullPath := e.Name
+			if pathPrefix != "" {
+				fullPath = pathPrefix + "/" + e.Name
+			}
+			*blobs = append(*blobs, redact.NamedBlob{Name: e.Name, Content: content})
+			*paths = append(*paths, fullPath)
+		}
+	}
+	return nil
+}
+
+// rebuildTreeWithCachedRedaction walks the whole tree and produces a new
+// tree using the precomputed redactedByPath map for redactable blobs.
+// content_hash.txt files are recomputed in a second pass against the
+// new full.jsonl in the same directory.
 //
-// Path-specific behavior (when in the target shard):
+// Path-specific behavior:
 //   - content_hash.txt → SHA256 of the sibling full.jsonl's new bytes
 //     (deferred; not redacted itself)
-//   - everything else → redacted via checkpoint.RedactBlobBytes (OPF on).
-//     The fail-closed policy intentionally redacts ANY regular file
-//     inside the shard, not just a closed allowlist of suffixes — a
-//     future blob type (e.g. .md prose, agent dumps, no-extension
-//     transcript blobs) is redacted by default rather than slipping
-//     through. RedactBlobBytes itself dispatches: .jsonl/.json get
-//     JSON-aware leaf redaction (so free-form fields like Summary.Intent
-//     / ReviewPrompt are scrubbed); other files get byte redaction. The
-//     has-space gate inside OPF naturally excludes binary blobs from
-//     paying the model cost.
-func rebuildTreeWithOPF(ctx context.Context, repo *git.Repository, tree *object.Tree, pathPrefix, shardPath string) (plumbing.Hash, error) {
+//   - everything else → bytes looked up in redactedByPath. The
+//     fail-closed policy redacts ANY regular file except content_hash.txt,
+//     not just a closed allowlist of suffixes — a future blob type
+//     (.md prose, agent dumps, no-extension transcript blobs) is
+//     covered by default rather than slipping through. The collect
+//     pass (collectTreeBlobs) populated redactedByPath using the same
+//     "everything except content_hash.txt" predicate so the keys
+//     match.
+//
+// A redactable blob missing from redactedByPath is either a
+// programmer error (collect-pass / apply-pass walks went out of sync)
+// OR a concurrent storage mutation that changed the tree between
+// passes; we abort the rewrite rather than silently shipping
+// unredacted content with the OPF-applied trailer.
+func rebuildTreeWithCachedRedaction(repo *git.Repository, tree *object.Tree, pathPrefix string, redactedByPath map[string][]byte) (plumbing.Hash, error) {
 	entries := make([]object.TreeEntry, 0, len(tree.Entries))
 	// deferredHashes records indexes of content_hash.txt entries we
 	// need to recompute after the full.jsonl in the same dir is built.
@@ -411,44 +628,40 @@ func rebuildTreeWithOPF(ctx context.Context, repo *git.Repository, tree *object.
 			if pathPrefix != "" {
 				subPath = pathPrefix + "/" + e.Name
 			}
-			// Shard-scoping: only descend into directories that lead
-			// to the target shard, the shard itself, or its
-			// descendants. Other shard subtrees stay byte-identical.
-			if !shouldDescend(subPath, shardPath) {
-				entries = append(entries, e)
-				continue
-			}
 			subTree, err := repo.TreeObject(e.Hash)
 			if err != nil {
 				return plumbing.ZeroHash, fmt.Errorf("load subtree %s/%s: %w", pathPrefix, e.Name, err)
 			}
-			newSub, err := rebuildTreeWithOPF(ctx, repo, subTree, subPath, shardPath)
+			newSub, err := rebuildTreeWithCachedRedaction(repo, subTree, subPath, redactedByPath)
 			if err != nil {
 				return plumbing.ZeroHash, err
 			}
 			entries = append(entries, object.TreeEntry{Name: e.Name, Mode: e.Mode, Hash: newSub})
 
 		case filemode.Regular, filemode.Executable:
-			// Outside the target shard: copy verbatim. Inside (or when
-			// shardPath is empty for the bootstrap fallback): redact
-			// per file type.
-			if !insideShard(pathPrefix, shardPath) {
-				entries = append(entries, e)
-				continue
-			}
 			switch e.Name {
 			case paths.ContentHashFileName:
 				deferredHashes = append(deferredHashes, deferred{idx: len(entries), entryName: e.Name, entryMode: e.Mode})
 				entries = append(entries, e) // placeholder; fixed in second pass
 			default:
-				content, err := readBlob(repo, e.Hash)
-				if err != nil {
-					return plumbing.ZeroHash, fmt.Errorf("read blob %s/%s: %w", pathPrefix, e.Name, err)
+				// Inverted policy: every regular file except
+				// content_hash.txt expects redacted bytes from the
+				// collect pass. A missing key means the collect pass
+				// didn't visit this path — either the storage changed
+				// between passes or the two walkers disagree on which
+				// files to include. Fail-closed.
+				fullPath := e.Name
+				if pathPrefix != "" {
+					fullPath = pathPrefix + "/" + e.Name
 				}
-				newBytes := checkpoint.RedactBlobBytes(ctx, content, e.Name, true)
+				newBytes, ok := redactedByPath[fullPath]
+				if !ok {
+					return plumbing.ZeroHash, fmt.Errorf("redacted bytes missing for %s "+
+						"(collect/apply walk drift or concurrent storage mutation)", fullPath)
+				}
 				newHash, err := checkpoint.CreateBlobFromContent(repo, newBytes)
 				if err != nil {
-					return plumbing.ZeroHash, fmt.Errorf("write redacted blob %s/%s: %w", pathPrefix, e.Name, err)
+					return plumbing.ZeroHash, fmt.Errorf("write redacted blob %s: %w", fullPath, err)
 				}
 				entries = append(entries, object.TreeEntry{Name: e.Name, Mode: e.Mode, Hash: newHash})
 				if e.Name == paths.TranscriptFileName {
@@ -486,40 +699,6 @@ func rebuildTreeWithOPF(ctx context.Context, repo *git.Repository, tree *object.
 		return plumbing.ZeroHash, fmt.Errorf("store tree: %w", err)
 	}
 	return hash, nil
-}
-
-// shouldDescend reports whether the walker should recurse into a
-// directory at path. With an empty shardPath we descend everywhere
-// (bootstrap fallback). Otherwise we descend only into the target
-// shard, its ancestors (so we can reach it), and its descendants.
-func shouldDescend(path, shardPath string) bool {
-	if shardPath == "" || path == "" {
-		// shardPath="" means "no scoping" (bootstrap fallback);
-		// path=="" is the root, which is the ancestor of every shard.
-		return true
-	}
-	if path == shardPath {
-		return true
-	}
-	// ancestor of shardPath: shardPath starts with path + "/"
-	if strings.HasPrefix(shardPath+"/", path+"/") {
-		return true
-	}
-	// descendant of shardPath: path starts with shardPath + "/"
-	return strings.HasPrefix(path+"/", shardPath+"/")
-}
-
-// insideShard reports whether file blobs at pathPrefix should be
-// redacted. Empty shardPath means "redact everywhere"; otherwise the
-// path must equal shardPath or be a descendant of it.
-func insideShard(pathPrefix, shardPath string) bool {
-	if shardPath == "" {
-		return true
-	}
-	if pathPrefix == shardPath {
-		return true
-	}
-	return strings.HasPrefix(pathPrefix+"/", shardPath+"/")
 }
 
 func readBlob(repo *git.Repository, hash plumbing.Hash) ([]byte, error) {
