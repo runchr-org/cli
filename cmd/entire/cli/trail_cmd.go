@@ -1019,7 +1019,7 @@ func runTrailDelete(cmd *cobra.Command, number int, branch string, force bool) e
 			title = found.Title
 		}
 
-		proceed, err := confirmTrailDeletion(w, number, title, force, interactive.CanPromptInteractively())
+		proceed, err := confirmTrailDeletion(ctx, w, number, title, force, interactive.CanPromptInteractively())
 		if err != nil {
 			return err
 		}
@@ -1058,7 +1058,7 @@ func runTrailDelete(cmd *cobra.Command, number int, branch string, force bool) e
 // when none is available it refuses (returns an error) rather than deleting
 // unprompted; when one is, it shows a confirmation form. canPrompt is passed in
 // (rather than queried) so the decision is unit-testable without a TTY.
-func confirmTrailDeletion(w io.Writer, number int, title string, force, canPrompt bool) (bool, error) {
+func confirmTrailDeletion(ctx context.Context, w io.Writer, number int, title string, force, canPrompt bool) (bool, error) {
 	if force {
 		return true, nil
 	}
@@ -1073,7 +1073,7 @@ func confirmTrailDeletion(w io.Writer, number int, title string, force, canPromp
 	form := NewAccessibleForm(
 		huh.NewGroup(huh.NewConfirm().Title(prompt).Value(&confirmed)),
 	)
-	if err := form.Run(); err != nil {
+	if err := form.RunWithContext(ctx); err != nil {
 		return false, handleFormCancellation(w, "Trail deletion", err)
 	}
 	if !confirmed {

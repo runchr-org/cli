@@ -204,14 +204,14 @@ func TestConfirmTrailDeletion(t *testing.T) {
 
 	// --force proceeds without prompting (no TTY needed).
 	var buf bytes.Buffer
-	proceed, err := confirmTrailDeletion(&buf, 575, "Some title", true, false)
+	proceed, err := confirmTrailDeletion(t.Context(), &buf, 575, "Some title", true, false)
 	if err != nil || !proceed {
 		t.Fatalf("force: got (proceed=%v, err=%v), want (true, nil)", proceed, err)
 	}
 
 	// Non-interactive without --force must refuse, not delete unprompted.
 	buf.Reset()
-	proceed, err = confirmTrailDeletion(&buf, 575, "Some title", false, false)
+	proceed, err = confirmTrailDeletion(t.Context(), &buf, 575, "Some title", false, false)
 	if err == nil {
 		t.Fatalf("non-interactive without --force: expected error, got nil (proceed=%v)", proceed)
 	}
