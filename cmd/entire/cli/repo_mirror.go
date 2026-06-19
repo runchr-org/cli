@@ -145,7 +145,7 @@ func newRepoMirrorCreateCmd() *cobra.Command {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid [cluster-host]: %w", err)
 			}
-			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
+			return runCoreForCluster(cmd, clusterHost, func(ctx context.Context, c *coreapi.Client) error {
 				created, err := c.CreateMirror(ctx, &coreapi.CreateMirrorInputBody{
 					Provider:    coreapi.CreateMirrorInputBodyProviderGithub,
 					Owner:       owner,
@@ -302,7 +302,7 @@ func newRepoMirrorRemoveCmd() *cobra.Command {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid [cluster-host]: %w", err)
 			}
-			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
+			return runCoreForCluster(cmd, clusterHost, func(ctx context.Context, c *coreapi.Client) error {
 				// Delete by upstream coords in one call. A 404 is a real
 				// error here, not idempotent success: the server only
 				// answers 204 when it actually removed a placement, so a
