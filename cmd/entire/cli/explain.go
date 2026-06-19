@@ -889,7 +889,7 @@ func newExplainCheckpointLookup(ctx context.Context) (*explainCheckpointLookup, 
 }
 
 type checkpointSummaryUpdater interface {
-	UpdateSummary(ctx context.Context, checkpointID id.CheckpointID, summary *checkpoint.Summary) error
+	Write(ctx context.Context, req checkpoint.WriteRequest) error
 }
 
 // generateCheckpointSummary generates an AI summary for a checkpoint and persists it.
@@ -946,7 +946,7 @@ func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, store che
 	}
 	elapsed := time.Since(start)
 
-	if err := store.UpdateSummary(ctx, checkpointID, summary); err != nil {
+	if err := store.Write(ctx, checkpoint.BackfillSummary{CheckpointID: checkpointID, Summary: summary}); err != nil {
 		return fmt.Errorf("failed to save summary: %w", err)
 	}
 
