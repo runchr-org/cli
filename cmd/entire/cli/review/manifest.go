@@ -499,21 +499,27 @@ func modelComponentsMatch(short, long []string) bool {
 		return false
 	}
 	// Visit every start offset whose matched span still has a following
-	// component. i+len(short) < len(long) keeps long[i+len(short)] in bounds, so
-	// even at the largest offset the span is followed by long's LAST element —
-	// the span is never a suffix. A match requires that following component to be
-	// purely numeric (a version/date), the boundary that confirms the same model.
+	// component. The computed follow index is both the bounds check and the
+	// boundary component inspected below. At the largest valid offset,
+	// follow == len(long)-1, so the following component is exactly long's last
+	// element; that case is intentionally allowed because the span is still not a
+	// suffix and the last element can supply the required numeric version/date
+	// boundary.
 	//
-	// Suffix windows (i+len(short) == len(long)) are intentionally excluded: with
-	// no following component there's no boundary to tell a real less-specific id
-	// from a bare fragment, so allowing them would let "mini" match "gpt-4o-mini"
-	// or "4-5" match "claude-sonnet-4-5". The cost is that a rare family+version
-	// tail like "sonnet-4" won't match "claude-sonnet-4"; realistic configured
-	// models (aliases like "sonnet", families like "claude-sonnet", or full names)
-	// still match because the recorded model carries a trailing version (e.g.
-	// "sonnet" matches "claude-sonnet-4-5").
-	for i := 0; i+len(short) < len(long); i++ {
-		if componentsEqualAt(long, short, i) && isNumericComponent(long[i+len(short)]) {
+	// Suffix windows (follow == len(long)) are intentionally excluded: with no
+	// following component there's no boundary to tell a real less-specific id from
+	// a bare fragment, so allowing them would let "mini" match "gpt-4o-mini" or
+	// "4-5" match "claude-sonnet-4-5". The cost is that a rare family+version tail
+	// like "sonnet-4" won't match "claude-sonnet-4"; realistic configured models
+	// (aliases like "sonnet", families like "claude-sonnet", or full names) still
+	// match because the recorded model carries a trailing version (e.g. "sonnet"
+	// matches "claude-sonnet-4-5").
+	for i := 0; ; i++ {
+		follow := i + len(short)
+		if follow >= len(long) {
+			break
+		}
+		if componentsEqualAt(long, short, i) && isNumericComponent(long[follow]) {
 			return true
 		}
 	}

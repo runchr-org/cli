@@ -802,6 +802,21 @@ func TestReviewRunModelMatches(t *testing.T) {
 	}
 }
 
+func TestModelComponentsMatchLastComponentBoundary(t *testing.T) {
+	t.Parallel()
+	long := []string{"anthropic", "claude", "sonnet", "4"}
+
+	if !modelComponentsMatch([]string{"claude", "sonnet"}, long) {
+		t.Fatal("span followed by long's last component should match when that component is numeric")
+	}
+	if modelComponentsMatch([]string{"sonnet", "4"}, long) {
+		t.Fatal("suffix span should not match because it has no following boundary component")
+	}
+	if modelComponentsMatch([]string{"claude", "sonnet"}, []string{"anthropic", "claude", "sonnet", "mini"}) {
+		t.Fatal("last-component boundary should not match when the following component is non-numeric")
+	}
+}
+
 // TestBuildLocalReviewManifestFromSummary_DisambiguatesSameModelDifferentThinking
 // pins the used-session tracking: two reviewers on the same agent whose models
 // normalize identically (claude-sonnet:high / :low -> claude-sonnet), with
