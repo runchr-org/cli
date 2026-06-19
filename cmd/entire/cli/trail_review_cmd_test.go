@@ -38,6 +38,9 @@ func TestTrailCommandSurfaceUsesFindings(t *testing.T) {
 	if children["review"] != nil {
 		t.Fatal("trail command should not register review subcommand")
 	}
+	if children["watch"] == nil {
+		t.Fatal("trail command should register watch subcommand")
+	}
 
 	subcommands := map[string]bool{}
 	for _, child := range findingCmd.Commands() {
