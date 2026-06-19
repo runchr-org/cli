@@ -93,7 +93,7 @@ func newRepoMirrorCollaboratorsAddCmd() *cobra.Command {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid [cluster-host]: %w", err)
 			}
-			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
+			return runCoreForCluster(cmd, clusterHost, func(ctx context.Context, c *coreapi.Client) error {
 				granted, err := c.GrantMirrorCollaborator(ctx, &coreapi.GrantMirrorCollaboratorInputBody{
 					Provider:    coreapi.GrantMirrorCollaboratorInputBodyProviderGithub,
 					Owner:       owner,
@@ -141,7 +141,7 @@ func newRepoMirrorCollaboratorsRemoveCmd() *cobra.Command {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid [cluster-host]: %w", err)
 			}
-			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
+			return runCoreForCluster(cmd, clusterHost, func(ctx context.Context, c *coreapi.Client) error {
 				if err := c.RevokeMirrorCollaborator(ctx, coreapi.RevokeMirrorCollaboratorParams{
 					Provider:    coreapi.RevokeMirrorCollaboratorProviderGithub,
 					Owner:       owner,
@@ -179,7 +179,7 @@ func newRepoMirrorCollaboratorsListCmd() *cobra.Command {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid [cluster-host]: %w", err)
 			}
-			return runCoreList(cmd, mirrorCollaboratorColumns, mirrorCollaboratorRow, func(ctx context.Context, c *coreapi.Client) ([]coreapi.MirrorCollaborator, error) {
+			return runCoreListForCluster(cmd, clusterHost, mirrorCollaboratorColumns, mirrorCollaboratorRow, func(ctx context.Context, c *coreapi.Client) ([]coreapi.MirrorCollaborator, error) {
 				out, err := c.ListMirrorCollaborators(ctx, coreapi.ListMirrorCollaboratorsParams{
 					Provider:    coreapi.ListMirrorCollaboratorsProviderGithub,
 					Owner:       owner,
