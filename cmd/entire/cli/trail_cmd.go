@@ -46,8 +46,7 @@ func newTrailCmd() *cobra.Command {
 		Short:  "Manage trails for your branches",
 		Hidden: true,
 		Args:   cobra.NoArgs,
-		Long: `Trails are branch-centric work tracking abstractions. They describe the
-"why" and "what" of your work, while checkpoints capture the "how" and "when".`,
+		Long:   "A trail ties together the context for a branch. Use `entire trail` to view, create, update, or watch it.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
