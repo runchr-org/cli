@@ -51,11 +51,7 @@ func ResolveControlPlaneTarget() (ControlPlaneTarget, error) {
 		}
 	}
 
-	src, err := NewRefreshingLoginProvider(c, nil, insecureHTTPEnabled() || isLoopbackHTTP(c.CoreURL))
-	if err != nil {
-		return ControlPlaneTarget{}, fmt.Errorf("build token source for context %q: %w", c.Name, err)
-	}
-	return ControlPlaneTarget{CoreURL: strings.TrimRight(c.CoreURL, "/"), TokenSource: src}, nil
+	return targetForContext(c)
 }
 
 // ResolveControlPlaneTargetForCluster chooses which core a *resource-provider*
@@ -86,6 +82,14 @@ func ResolveControlPlaneTargetForCluster(ctx context.Context, clusterHost string
 	if err != nil {
 		return ControlPlaneTarget{}, err
 	}
+	return targetForContext(c)
+}
+
+// targetForContext builds the ControlPlaneTarget for an already-chosen context:
+// a refreshing login provider (silent JWT re-mint from the stored refresh
+// token) bound to that context's core. Shared by the active-context and
+// cluster-addressed resolvers, which differ only in how they pick c.
+func targetForContext(c *contexts.Context) (ControlPlaneTarget, error) {
 	src, err := NewRefreshingLoginProvider(c, nil, insecureHTTPEnabled() || isLoopbackHTTP(c.CoreURL))
 	if err != nil {
 		return ControlPlaneTarget{}, fmt.Errorf("build token source for context %q: %w", c.Name, err)
