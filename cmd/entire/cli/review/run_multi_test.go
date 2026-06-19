@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -143,6 +144,41 @@ func TestRunMulti_StartErrorForOneAgent(t *testing.T) {
 				t.Errorf("bad-start-agent: Err = %v, want startErr", r.Err)
 			}
 		}
+	}
+}
+
+func TestRunMulti_StartErrorsAndEventBurstStillDrain(t *testing.T) {
+	t.Parallel()
+	events := make([]reviewtypes.Event, 0, 400)
+	for range 399 {
+		events = append(events, reviewtypes.AssistantText{Text: "event"})
+	}
+	events = append(events, reviewtypes.Finished{Success: true})
+	reviewers := []reviewtypes.AgentReviewer{&stubReviewer{name: "noisy", events: events}}
+	for i := range 40 {
+		reviewers = append(reviewers, &stubReviewer{name: fmt.Sprintf("bad-%02d", i), startErr: errors.New("start failed")})
+	}
+	type result struct {
+		summary reviewtypes.RunSummary
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		summary, err := RunMulti(context.Background(), reviewers, reviewtypes.RunConfig{}, nil)
+		done <- result{summary: summary, err: err}
+	}()
+
+	select {
+	case res := <-done:
+		if res.err == nil {
+			t.Fatal("RunMulti error = nil, want one of the start errors")
+		}
+		summary := res.summary
+		if len(summary.AgentRuns) != len(reviewers) {
+			t.Fatalf("AgentRuns = %d, want %d", len(summary.AgentRuns), len(reviewers))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunMulti deadlocked with start-failure terminals plus event burst")
 	}
 }
 

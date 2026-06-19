@@ -131,9 +131,10 @@ func RunMulti(
 	}
 
 	// fanIn carries tagged events from N agent goroutines into the single
-	// dispatch loop. Buffer of len(reviewers)*16 amortises goroutine
-	// scheduling jitter without holding an unbounded queue.
-	fanIn := make(chan taggedEvent, len(reviewers)*16)
+	// dispatch loop. Reserve len(reviewers)*16 slots for event-burst jitter plus
+	// one terminal-marker slot per reviewer, so queued Start-failure terminals
+	// cannot consume the event-burst slack before the dispatch loop starts.
+	fanIn := make(chan taggedEvent, len(reviewers)*17)
 
 	// Each inspector runs under its own deadline (unless inspectorTimeout returns
 	// 0, meaning disabled) so a stuck agent is cancelled without hanging the run;
