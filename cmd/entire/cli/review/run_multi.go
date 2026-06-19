@@ -35,15 +35,14 @@ import (
 
 // perAgentState tracks the accumulation for one agent during a multi-agent run.
 //
-// Concurrency: perAgentState has a single writer. The immutable fields
-// (name/agentName/model/startedAt) and startErr/finishedAt for agents whose
-// Start failed are set in the setup loop; every other field is written by the
-// dispatch loop as events — and a final terminal marker carrying
-// waitErr/finishedAt/timedOut — arrive over fanIn. Both run on the RunMulti
-// goroutine. The per-agent forwarding goroutines NEVER touch perAgentState;
-// they only send on fanIn. So there is no cross-goroutine field sharing, and
-// the post-loop accounting reads are safe by construction (the dispatch loop
-// has already returned).
+// Concurrency: perAgentState has a single writer after initialization. The
+// immutable fields (name/agentName/model/startedAt) are set before launch; all
+// terminal state (startErr/waitErr/finishedAt/timedOut) and event-derived state
+// are written by the dispatch loop as events and terminal markers arrive over
+// fanIn. The per-agent forwarding goroutines NEVER touch perAgentState; they
+// only send on fanIn. So there is no cross-goroutine field sharing, and the
+// post-loop accounting reads are safe by construction (the dispatch loop has
+// already returned).
 type perAgentState struct {
 	name         string
 	agentName    string
@@ -71,9 +70,11 @@ type taggedEvent struct {
 	terminal *agentTerminal
 }
 
-// agentTerminal carries an agent's end-of-run results from its forwarding
-// goroutine to the dispatch loop, which writes them into perAgentState.
+// agentTerminal carries an agent's end-of-run results to the dispatch loop,
+// which writes them into perAgentState. Forwarding goroutines send this after
+// Wait; the setup loop queues the same marker shape for Start failures.
 type agentTerminal struct {
+	startErr   error
 	waitErr    error
 	finishedAt time.Time
 	timedOut   bool
@@ -139,6 +140,7 @@ func RunMulti(
 	// siblings and the judge proceed.
 	timeout := inspectorTimeout(cfg)
 	var wg sync.WaitGroup
+	startTerminals := make([]taggedEvent, 0)
 	for i, r := range reviewers {
 		agentCtx := ctx
 		var cancelAgent context.CancelFunc = func() {}
@@ -149,10 +151,13 @@ func RunMulti(
 		if err != nil {
 			// No Process exists, so there is no Events/Wait lifecycle to preserve.
 			// Cancel immediately to release the per-agent timeout timer while
-			// siblings continue running.
+			// siblings continue running. Queue the terminal marker so the dispatch
+			// loop remains the single writer of perAgentState terminal fields.
 			cancelAgent()
-			states[i].startErr = err
-			states[i].finishedAt = time.Now()
+			startTerminals = append(startTerminals, taggedEvent{agentIdx: i, terminal: &agentTerminal{
+				startErr:   err,
+				finishedAt: time.Now(),
+			}})
 			continue
 		}
 		states[i].proc = proc
@@ -189,10 +194,15 @@ func RunMulti(
 		}(i, proc, agentCtx, cancelAgent)
 	}
 
-	// Close fanIn after all forwarding goroutines finish. This goroutine
-	// must be launched AFTER all wg.Add calls above so the WaitGroup
-	// counter is correct before Wait is called.
+	// Close fanIn after queued Start-failure markers are delivered and all
+	// forwarding goroutines finish. This goroutine must be launched AFTER all
+	// wg.Add calls above so the WaitGroup counter is correct before Wait is
+	// called. Sending startTerminals here (instead of from the setup loop) avoids
+	// blocking setup if an early-started agent fills fanIn before dispatch begins.
 	go func() {
+		for _, tagged := range startTerminals {
+			fanIn <- tagged
+		}
 		wg.Wait()
 		close(fanIn)
 	}()
@@ -206,6 +216,7 @@ func RunMulti(
 		if tagged.terminal != nil {
 			// End-of-run marker (internal): record terminal fields, don't forward
 			// to sinks.
+			st.startErr = tagged.terminal.startErr
 			st.waitErr = tagged.terminal.waitErr
 			st.finishedAt = tagged.terminal.finishedAt
 			st.timedOut = tagged.terminal.timedOut

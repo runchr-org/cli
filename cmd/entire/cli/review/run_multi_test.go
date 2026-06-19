@@ -146,6 +146,39 @@ func TestRunMulti_StartErrorForOneAgent(t *testing.T) {
 	}
 }
 
+func TestRunMulti_AllStartErrorsStillFinish(t *testing.T) {
+	t.Parallel()
+	firstErr := errors.New("first start failed")
+	secondErr := errors.New("second start failed")
+	rec := &stubSinkRecorder{}
+
+	summary, err := RunMulti(context.Background(), []reviewtypes.AgentReviewer{
+		&stubReviewer{name: "first", startErr: firstErr},
+		&stubReviewer{name: "second", startErr: secondErr},
+	}, reviewtypes.RunConfig{}, []reviewtypes.Sink{rec})
+
+	if !errors.Is(err, firstErr) {
+		t.Fatalf("RunMulti error = %v, want first start error", err)
+	}
+	if len(summary.AgentRuns) != 2 {
+		t.Fatalf("AgentRuns = %d, want 2", len(summary.AgentRuns))
+	}
+	for _, run := range summary.AgentRuns {
+		if run.Status != reviewtypes.AgentStatusFailed {
+			t.Fatalf("%s status = %v, want Failed", run.Name, run.Status)
+		}
+		if run.Duration < 0 {
+			t.Fatalf("%s duration = %v, want non-negative", run.Name, run.Duration)
+		}
+	}
+	if !errors.Is(summary.AgentRuns[0].Err, firstErr) || !errors.Is(summary.AgentRuns[1].Err, secondErr) {
+		t.Fatalf("AgentRun errors = %v / %v, want start errors", summary.AgentRuns[0].Err, summary.AgentRuns[1].Err)
+	}
+	if len(rec.finishedCalls) != 1 {
+		t.Fatalf("RunFinished calls = %d, want 1", len(rec.finishedCalls))
+	}
+}
+
 // TestRunMulti_ContextCancellation verifies that context cancellation causes
 // summary.Cancelled=true and all AgentRuns to have status Cancelled.
 func TestRunMulti_ContextCancellation(t *testing.T) {
