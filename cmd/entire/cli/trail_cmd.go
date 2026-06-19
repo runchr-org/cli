@@ -559,7 +559,7 @@ func newTrailCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&body, "body", "", "Trail body")
 	cmd.Flags().StringVar(&base, "base", "", "Base branch (defaults to detected default branch)")
 	cmd.Flags().StringVar(&branch, "branch", "", "Branch for the trail (defaults to current branch)")
-	cmd.Flags().StringVar(&status, "status", "", "Initial status (defaults to draft)")
+	cmd.Flags().StringVar(&status, "status", "", "Initial status (defaults to open)")
 	cmd.Flags().BoolVar(&checkout, "checkout", false, "Check out the branch after creating it")
 
 	return cmd
@@ -612,8 +612,11 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 	if branch == "" {
 		return errors.New("branch name is required")
 	}
+	if err := ValidateBranchName(ctx, branch); err != nil {
+		return err
+	}
 	if statusStr == "" {
-		statusStr = string(trail.StatusDraft)
+		statusStr = string(trail.StatusOpen)
 	}
 	if status := trail.Status(statusStr); !status.IsValid() {
 		return fmt.Errorf("invalid status %q: valid values are %s", statusStr, formatValidStatuses())
@@ -631,44 +634,46 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 	}
 
 	localBranchCreated := false
-	remoteBranchPushed := false
+	var remoteBranchPushed bool
+
+	// Don't delete a remote branch we didn't create during cleanup.
+	existedOnOrigin, existErr := branchExistsOnOrigin(branch)
+	if existErr != nil {
+		fmt.Fprintf(errW, "Warning: could not check whether branch %s already exists on origin: %v\n", branch, existErr)
+		existedOnOrigin = true
+	}
+
 	if needsCreation {
-		if err := createBranch(repo, branch); err != nil {
-			return fmt.Errorf("failed to create branch %q: %w", branch, err)
+		if existedOnOrigin {
+			if err := fetchBranchFromOrigin(branch); err != nil {
+				return fmt.Errorf("failed to fetch branch %q from origin: %w", branch, err)
+			}
+			localBranchCreated = true
+			fmt.Fprintf(w, "Fetched branch %s from origin\n", branch)
+		} else {
+			if err := createBranch(repo, branch); err != nil {
+				return fmt.Errorf("failed to create branch %q: %w", branch, err)
+			}
+			localBranchCreated = true
+			fmt.Fprintf(w, "Created branch %s\n", branch)
 		}
-		localBranchCreated = true
-		fmt.Fprintf(w, "Created branch %s\n", branch)
 	} else if currentBranch != branch {
 		fmt.Fprintf(w, "Note: trail will be created for branch %q (not the current branch)\n", branch)
 	}
 
-	if needsCreation {
-		// needsCreation is a local-only signal, so the branch may still exist on
-		// origin (e.g. a teammate pushed it and we never fetched). In that case the
-		// remote branch is not ours, and our push may merely fast-forward it; we
-		// must not delete it during cleanup. Only treat the remote branch as
-		// created-by-us when it did not already exist before our push.
-		existedOnOrigin, existErr := branchExistsOnOrigin(branch)
-		if existErr != nil {
-			// Be conservative: if we cannot tell, do not delete the remote branch.
-			fmt.Fprintf(errW, "Warning: could not check whether branch %s already exists on origin: %v\n", branch, existErr)
-			existedOnOrigin = true
-		}
+	// Always push the branch first: the trail binds to a remote branch, so
+	// deliver it before creating the trail rather than letting the server
+	// backfill it at the base tip.
+	{
 		if err := pushBranchToOrigin(branch); err != nil {
 			cleanupCreatedTrailBranch(repo, branch, localBranchCreated, false, errW)
-			return fmt.Errorf("failed to push branch %q: %w", branch, err)
+			return fmt.Errorf("failed to push branch %q to origin: %w\nhint: the trail was not created because its branch could not be delivered to the remote.\n  - if this is an auth error, link your GitHub account and retry\n  - if this is a non-fast-forward, update branch %q from origin and retry", branch, err, branch)
 		}
 		remoteBranchPushed = !existedOnOrigin
 		fmt.Fprintf(w, "Pushed branch %s to origin\n", branch)
 	}
 
-	createReq := api.TrailCreateRequest{
-		Title:      title,
-		Body:       body,
-		BranchName: branch,
-		Base:       base,
-		Status:     statusStr,
-	}
+	createReq := newTrailCreateRequest(title, body, branch, base, statusStr)
 
 	var createResp api.TrailCreateResponse
 	resp, err := client.Post(ctx, trailsBasePath(forge, owner, repoName), createReq)
@@ -713,6 +718,17 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 	}
 
 	return nil
+}
+
+func newTrailCreateRequest(title, body, branch, base, statusStr string) api.TrailCreateRequest {
+	return api.TrailCreateRequest{
+		Title:        title,
+		Body:         body,
+		BranchName:   branch,
+		BranchAction: "link",
+		Base:         base,
+		Status:       statusStr,
+	}
 }
 
 func newTrailUpdateCmd() *cobra.Command {
@@ -1149,7 +1165,7 @@ func runTrailCreateInteractive(title, body, branch, statusStr *string) error {
 		statusOptions = append(statusOptions, huh.NewOption(string(s), string(s)))
 	}
 	if *statusStr == "" {
-		*statusStr = string(trail.StatusDraft)
+		*statusStr = string(trail.StatusOpen)
 	}
 
 	form = NewAccessibleForm(
@@ -1391,6 +1407,20 @@ func cleanupCreatedTrailBranch(repo *git.Repository, branchName string, localCre
 			fmt.Fprintf(errW, "Warning: failed to delete remote branch %s after trail creation failed: %v\n", branchName, err)
 		}
 	}
+}
+
+func fetchBranchFromOrigin(branchName string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := ValidateBranchName(ctx, branchName); err != nil {
+		return err
+	}
+	refspec := fmt.Sprintf("refs/heads/%s:refs/heads/%s", branchName, branchName)
+	cmd := exec.CommandContext(ctx, "git", "fetch", "--no-tags", "origin", refspec)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s: %w", strings.TrimSpace(string(output)), err)
+	}
+	return nil
 }
 
 // pushBranchToOrigin pushes a branch to the origin remote.

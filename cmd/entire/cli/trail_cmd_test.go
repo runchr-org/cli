@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -23,13 +24,133 @@ import (
 	"github.com/entireio/cli/internal/entireclient/clusterdiscovery"
 	"github.com/entireio/cli/internal/entireclient/contexts"
 	"github.com/entireio/cli/internal/entireclient/tokenstore"
+	"github.com/go-git/go-git/v6"
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/require"
 )
 
 const (
 	trailListTestAuthorAlice = "alice"
 	trailListTestAuthorBob   = "bob"
 )
+
+func TestNewTrailCreateRequestUsesLinkBranchAction(t *testing.T) {
+	req := newTrailCreateRequest("title", "body", "feature/x", "main", "open")
+
+	require.Equal(t, api.TrailCreateRequest{
+		Title:        "title",
+		Body:         "body",
+		BranchName:   "feature/x",
+		BranchAction: "link",
+		Base:         "main",
+		Status:       "open",
+	}, req)
+}
+
+func TestCleanupCreatedTrailBranch(t *testing.T) {
+	cases := []struct {
+		name             string
+		localCreated     bool
+		remotePushed     bool
+		checkoutBranch   bool
+		wantLocalBranch  bool
+		wantRemoteBranch bool
+	}{
+		{
+			name:             "removes local branch only",
+			localCreated:     true,
+			remotePushed:     false,
+			wantLocalBranch:  false,
+			wantRemoteBranch: false,
+		},
+		{
+			name:             "removes local and pushed remote branch",
+			localCreated:     true,
+			remotePushed:     true,
+			wantLocalBranch:  false,
+			wantRemoteBranch: false,
+		},
+		{
+			name:             "does not delete remote when checked out branch cannot be removed locally",
+			localCreated:     true,
+			remotePushed:     true,
+			checkoutBranch:   true,
+			wantLocalBranch:  true,
+			wantRemoteBranch: true,
+		},
+		{
+			name:             "deletes remote when local was not created by cleanup owner",
+			localCreated:     false,
+			remotePushed:     true,
+			wantLocalBranch:  true,
+			wantRemoteBranch: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			branch := "cleanup-test"
+			localDir, originDir, repo := initTrailCleanupRepo(t)
+			defer repo.Close()
+			t.Chdir(localDir)
+
+			runGitTrailTest(t, localDir, "branch", branch)
+			if tc.remotePushed {
+				runGitTrailTest(t, localDir, "push", "origin", branch)
+			}
+			if tc.checkoutBranch {
+				runGitTrailTest(t, localDir, "checkout", branch)
+			}
+
+			var errBuf bytes.Buffer
+			cleanupCreatedTrailBranch(repo, branch, tc.localCreated, tc.remotePushed, &errBuf)
+
+			require.Equal(t, tc.wantLocalBranch, gitBranchExistsTrailTest(t, localDir, branch), "local branch mismatch; stderr: %s", errBuf.String())
+			require.Equal(t, tc.wantRemoteBranch, gitBranchExistsTrailTest(t, originDir, branch), "remote branch mismatch; stderr: %s", errBuf.String())
+			if tc.checkoutBranch {
+				require.Contains(t, errBuf.String(), "not deleting remote branch")
+			}
+		})
+	}
+}
+
+func initTrailCleanupRepo(t *testing.T) (localDir, originDir string, repo *git.Repository) {
+	t.Helper()
+
+	tmp := t.TempDir()
+	localDir = filepath.Join(tmp, "local")
+	originDir = filepath.Join(tmp, "origin.git")
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	runGitTrailTest(t, tmp, "init", "--bare", originDir)
+	repo = initOpenedTestRepo(t, localDir)
+	testutil.WriteFile(t, localDir, "README.md", "test\n")
+	runGitTrailTest(t, localDir, "add", "README.md")
+	runGitTrailTest(t, localDir, "commit", "-m", "initial")
+	runGitTrailTest(t, localDir, "remote", "add", "origin", originDir)
+	return localDir, originDir, repo
+}
+
+func runGitTrailTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))
+}
+
+func gitBranchExistsTrailTest(t *testing.T, repoDir, branch string) bool {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	cmd.Dir = repoDir
+	err := cmd.Run()
+	if err == nil {
+		return true
+	}
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	require.Equal(t, 1, exitErr.ExitCode())
+	return false
+}
 
 func TestRunTrailListAll_PrintsLoginHintWhenNotLoggedIn(t *testing.T) {
 	// No t.Parallel: SetResolveContextForAPIForTest and

@@ -145,7 +145,7 @@ func newRepoMirrorCreateCmd() *cobra.Command {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid [cluster-host]: %w", err)
 			}
-			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
+			return runCoreForCluster(cmd, clusterHost, func(ctx context.Context, c *coreapi.Client) error {
 				created, err := c.CreateMirror(ctx, &coreapi.CreateMirrorInputBody{
 					Provider:    coreapi.CreateMirrorInputBodyProviderGithub,
 					Owner:       owner,
@@ -239,6 +239,19 @@ func newRepoMirrorListCmd() *cobra.Command {
 		Short: "List mirrors you can see",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// mirror list is identity-scoped: it shows the mirrors visible from
+			// the active login's federation, so name that login server. It makes
+			// a surprising empty result legible — e.g. mirrors that live in a
+			// different deployment than the active context (--cluster is a filter,
+			// not a router). Reuses the same target coreapi.New dials. Best-effort:
+			// no header rather than a hard failure if the active context can't be
+			// resolved. Skipped for --json to keep machine output clean; on stderr
+			// so it never lands in a piped table.
+			if !jsonRequested(cmd) {
+				if t, err := auth.ResolveControlPlaneTarget(); err == nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Listing mirrors on %s\n", t.CoreURL)
+				}
+			}
 			return runCoreList(cmd, mirrorColumns, mirrorRow, func(ctx context.Context, c *coreapi.Client) ([]coreapi.Mirror, error) {
 				var params coreapi.ListMirrorsParams
 				if cluster != "" {
@@ -302,7 +315,7 @@ func newRepoMirrorRemoveCmd() *cobra.Command {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid [cluster-host]: %w", err)
 			}
-			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
+			return runCoreForCluster(cmd, clusterHost, func(ctx context.Context, c *coreapi.Client) error {
 				// Delete by upstream coords in one call. A 404 is a real
 				// error here, not idempotent success: the server only
 				// answers 204 when it actually removed a placement, so a

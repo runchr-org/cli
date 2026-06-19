@@ -352,6 +352,9 @@ func CheckoutBranch(ctx context.Context, ref string) error {
 // ValidateBranchName checks if a branch name is valid using git check-ref-format.
 // Returns an error if the name is invalid or contains unsafe characters.
 func ValidateBranchName(ctx context.Context, branchName string) error {
+	if strings.HasPrefix(branchName, "-") {
+		return fmt.Errorf("invalid branch name %q", branchName)
+	}
 	cmd := exec.CommandContext(ctx, "git", "check-ref-format", "--branch", branchName)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("invalid branch name %q", branchName)
@@ -478,11 +481,6 @@ func fetchMetadataFromOrigin(ctx context.Context, fopts fetchMetadataOpts) error
 	}
 	if err := strategy.SafelyAdvanceLocalRef(ctx, repo, refs.Primary, remoteRef.Hash()); err != nil {
 		return fmt.Errorf("failed to advance local %s branch: %w", branchName, err)
-	}
-	if err := strategy.MirrorCommittedMetadataRef(ctx, repo, refs); err != nil && !errors.Is(err, strategy.ErrPrimaryMetadataMissing) {
-		logging.Warn(ctx, "committed-ref mirror failed after origin fetch",
-			slog.String("ref", refs.Mirror.String()),
-			slog.String("error", err.Error()))
 	}
 	return nil
 }
