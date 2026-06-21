@@ -11,7 +11,7 @@ func TestDialTimeout(t *testing.T) {
 		env  string
 		want time.Duration
 	}{
-		{"unset uses default", "", DefaultDialTimeout},
+		{"blank uses default", "", DefaultDialTimeout},
 		{"valid seconds", "10", 10 * time.Second},
 		{"single second", "1", 1 * time.Second},
 		{"non-integer falls back", "abc", DefaultDialTimeout},
@@ -35,7 +35,7 @@ func TestDiscoveryDialTimeout(t *testing.T) {
 		env  string
 		want time.Duration
 	}{
-		{"unset uses discovery default", "", DefaultDiscoveryDialTimeout},
+		{"blank uses discovery default", "", DefaultDiscoveryDialTimeout},
 		{"override below default still wins", "2", 2 * time.Second},
 		{"override equal to default", "10", 10 * time.Second},
 		{"larger override wins", "20", 20 * time.Second},
