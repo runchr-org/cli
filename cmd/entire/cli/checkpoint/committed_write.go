@@ -7,9 +7,9 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 )
 
-// WriteRequest is a single committed-store write command. The set is closed:
-// the only implementations are the request types in this file, sealed via the
-// unexported isWriteRequest marker. A store dispatches on the concrete type;
+// WriteRequest is a single committed-store write command. The set is closed to
+// other packages: only types in package checkpoint can implement it, sealed via
+// the unexported isWriteRequest marker. A store dispatches on the concrete type;
 // a mirror/fan-out store forwards the same value to each backend's Write.
 //
 // This replaces the four separate writer methods (WriteCommitted /
