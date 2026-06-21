@@ -28,3 +28,26 @@ func TestDialTimeout(t *testing.T) {
 		})
 	}
 }
+
+func TestDiscoveryDialTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want time.Duration
+	}{
+		{"unset uses discovery default", "", DefaultDiscoveryDialTimeout},
+		{"override below default still wins", "2", 2 * time.Second},
+		{"override equal to default", "10", 10 * time.Second},
+		{"larger override wins", "20", 20 * time.Second},
+		{"invalid falls back to discovery default", "abc", DefaultDiscoveryDialTimeout},
+		{"zero falls back to discovery default", "0", DefaultDiscoveryDialTimeout},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ENTIRE_CONNECT_TIMEOUT_SECONDS", tc.env)
+			if got := DiscoveryDialTimeout(); got != tc.want {
+				t.Fatalf("DiscoveryDialTimeout()=%s, want %s", got, tc.want)
+			}
+		})
+	}
+}
