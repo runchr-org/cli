@@ -81,6 +81,15 @@ Events emitted by the server:
 	return cmd
 }
 
+func runTrailReviewWatch(cmd *cobra.Command, selector string, jsonOutput, showPings, once bool) error {
+	client, target, err := authenticatedTrailReviewTarget(cmd, selector)
+	if err != nil {
+		return err
+	}
+	description := trailWatchDescription(target.Host, target.Owner, target.Repo, target.Trail.Number, target.Trail.ID)
+	return runTrailWatchResolved(cmd, client, target.Trail.ID, description, jsonOutput, showPings, once)
+}
+
 func runTrailWatchResolved(cmd *cobra.Command, client *api.Client, trailID, description string, jsonOutput, showPings, once bool) error {
 	ctx := cmd.Context()
 	w := cmd.OutOrStdout()
