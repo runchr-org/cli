@@ -131,21 +131,29 @@ func runTrailShow(ctx context.Context, w, errW io.Writer, insecureHTTP bool, sel
 		// rendered description (trail.body_document.text_snapshot) the list
 		// omits, and surface a browser URL. The detail fetch is best-effort:
 		// the core metadata already came from the list, so a detail failure
-		// degrades to "no description" with a warning rather than failing.
+		// falls back to the list body with a warning rather than failing.
 		m := found.ToMetadata()
 		webURL := ""
-		// The description lives only in the detail response (the list omits the
-		// body), so it's only known when the detail fetch below succeeds.
-		bodyText := ""
-		descriptionLoaded := false
+		// Seed the description from the list body so a failed (or skipped)
+		// detail fetch still shows something; a successful detail fetch
+		// supersedes it with the richer body_document text below.
+		bodyText := found.Body
+		descriptionLoaded := strings.TrimSpace(found.Body) != ""
 		if found.Number > 0 {
 			webURL = trailWebURL(api.BaseURL(), forge, owner, repo, found.Number)
 			if bt, derr := fetchTrailDescription(ctx, client, forge, owner, repo, found.Number); derr == nil {
-				bodyText = bt
+				// A successful fetch means we authoritatively consulted the
+				// description, but it only supersedes the seeded list body when
+				// it actually carries text: an older/partial server that omits
+				// body_document returns "" here and must not blank out a list
+				// body that is present.
 				descriptionLoaded = true
+				if strings.TrimSpace(bt) != "" {
+					bodyText = bt
+				}
 			} else {
-				// Best-effort: warn but still render metadata + URL rather than
-				// failing the whole command.
+				// Best-effort: warn but still render metadata + URL (and the
+				// list body) rather than failing the whole command.
 				fmt.Fprintf(errW, "Warning: could not load trail description: %v\n", derr)
 			}
 		}
@@ -234,8 +242,10 @@ func trailDescriptionForDisplay(bodyText string, loaded bool) string {
 }
 
 // trailWebURL builds the browser URL for a trail:
-// <web-origin>/<forge>/<owner>/<repo>/trails/<number>. The web app is co-hosted
-// with the data API, so the API base URL is the web origin.
+// <web-origin>/<forge>/<owner>/<repo>/trails/<number>. In production the web app
+// is served from the same origin as the data API, so the API base URL doubles
+// as the web origin. A split local-dev setup (API and frontend on different
+// ports) would point this at the API port rather than the dev frontend.
 func trailWebURL(base, forge, owner, repo string, number int) string {
 	return strings.TrimRight(base, "/") + "/" + forge + "/" + owner + "/" + repo + "/trails/" + strconv.Itoa(number)
 }

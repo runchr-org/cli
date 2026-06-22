@@ -323,7 +323,7 @@ func TestTrailDescriptionForDisplay(t *testing.T) {
 	}
 }
 
-func TestFetchTrailDetail_ReadsNestedBodyDocument(t *testing.T) {
+func TestFetchTrailDescription_ReadsNestedBodyDocument(t *testing.T) {
 	t.Parallel()
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
