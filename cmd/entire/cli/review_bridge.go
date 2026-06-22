@@ -94,7 +94,7 @@ func reviewTrailFindingInputs(profileName, verdict string) []api.TrailReviewComm
 		return inputs
 	}
 	items := splitReviewVerdictFindings(verdict)
-	if len(items) <= 1 {
+	if len(items) == 0 {
 		// The verdict spans the whole change, so it uses "verdict" kind:
 		// the API requires a valid granularity and rejects an empty value.
 		return []api.TrailReviewCommentInput{reviewTrailFindingInputWithKind(profileName, verdict, "verdict")}
@@ -211,7 +211,7 @@ func lastNonEmptyLine(s string) string {
 	return ""
 }
 
-var reviewTrailLocationPattern = regexp.MustCompile(`(?:^|\s|\()([A-Za-z0-9_./-]+\.[A-Za-z0-9_+-]+):(\d+)`)
+var reviewTrailLocationPattern = regexp.MustCompile("(?:^|[\\s(`])([A-Za-z0-9_./-]+\\.[A-Za-z0-9_+-]+):(\\d+)")
 
 func inferReviewTrailLocation(body string) (api.TrailReviewLocationCreateRequest, bool) {
 	match := reviewTrailLocationPattern.FindStringSubmatch(body)
@@ -275,6 +275,11 @@ func splitReviewVerdictFindings(verdict string) []string {
 			current.WriteString(item)
 			continue
 		}
+		if item, ok := topLevelMarkedFindingText(line); ok {
+			flush()
+			current.WriteString(item)
+			continue
+		}
 		if current.Len() == 0 {
 			continue
 		}
@@ -308,6 +313,38 @@ func topLevelBulletText(line string) (string, bool) {
 		return "", false
 	}
 	return "", false
+}
+
+func topLevelMarkedFindingText(line string) (string, bool) {
+	trimmedRight := strings.TrimRight(line, " \t")
+	leading := len(trimmedRight) - len(strings.TrimLeft(trimmedRight, " \t"))
+	if leading != 0 {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(trimmedRight)
+	if !startsWithReviewSeverityMarker(trimmed) {
+		return "", false
+	}
+	return trimmed, true
+}
+
+func startsWithReviewSeverityMarker(s string) bool {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "**")
+	s = strings.TrimPrefix(s, "__")
+	s = strings.TrimSpace(s)
+	lower := strings.ToLower(s)
+	for _, marker := range []string{"[critical]", "[high]", "[medium]", "[low]", "[p0]", "[p1]", "[p2]", "[p3]", "[nit]"} {
+		if strings.HasPrefix(lower, marker) {
+			return true
+		}
+	}
+	for _, marker := range []string{"critical", "high", "medium", "low", "p0", "p1", "p2", "p3", "nit"} {
+		if strings.HasPrefix(lower, marker+" —") || strings.HasPrefix(lower, marker+" -") || strings.HasPrefix(lower, marker+":") {
+			return true
+		}
+	}
+	return false
 }
 
 // trailWebURL builds the browser URL for a trail, matching the server's

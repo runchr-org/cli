@@ -83,6 +83,27 @@ func TestComposeSynthesisPrompt_ExcludesEmptyNarrativeAgents(t *testing.T) {
 	}
 }
 
+func TestComposeSynthesisPrompt_ExcludesFailedReviewerNarratives(t *testing.T) {
+	t.Parallel()
+	summary := makeSummaryWithNarratives([]struct {
+		name      string
+		narrative string
+		status    reviewtypes.AgentStatus
+	}{
+		{"claude-code", "Actionable finding.", reviewtypes.AgentStatusSucceeded},
+		{"gemini", "Partial output before quota failure.", reviewtypes.AgentStatusFailed},
+	})
+
+	prompt := review.ExposedComposeSynthesisPrompt(summary, "")
+
+	if strings.Contains(prompt, "gemini") || strings.Contains(prompt, "Partial output before quota failure") {
+		t.Errorf("prompt should exclude failed reviewer output\nfull prompt:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "claude-code") || !strings.Contains(prompt, "Actionable finding.") {
+		t.Errorf("prompt should keep successful reviewer output\nfull prompt:\n%s", prompt)
+	}
+}
+
 // TestComposeSynthesisPrompt_PerRunPromptAppended verifies the per-run prompt
 // is appended at the end when non-empty.
 func TestComposeSynthesisPrompt_PerRunPromptAppended(t *testing.T) {
@@ -171,6 +192,9 @@ func TestComposeSynthesisPrompt_MinimalVerdictInstructions(t *testing.T) {
 		"actionable findings",
 		"nothing else",
 		"no filler",
+		"Each actionable finding MUST be its own separate top-level Markdown bullet",
+		"- [high] file:line",
+		"Do not combine multiple defects",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing expected instruction %q\nfull prompt:\n%s", want, prompt)

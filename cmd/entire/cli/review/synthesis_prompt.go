@@ -39,11 +39,11 @@ import (
 // The judge writes a verdict and only the findings that matter, proportional
 // to the change.
 //
-// Reviewers with no usable narrative (empty AssistantText) are filtered out
-// upstream by usableAgentRuns, so the header count and the body are both
-// scoped to reviewers that produced narrative output. SynthesisSink already
-// guards on len(usable) >= 2 before calling, so the empty case won't reach
-// the LLM in production.
+// Reviewers that failed/cancelled or have no usable narrative (empty
+// AssistantText) are filtered out upstream by usableAgentRuns, so the header
+// count and the body are both scoped to successful reviewers that produced
+// narrative output. SynthesisSink already guards on len(usable) >= 2 before
+// calling, so the empty case won't reach the LLM in production.
 func composeSynthesisPrompt(summary reviewtypes.RunSummary, perRunPrompt string, profileName string, task string) string {
 	usable := usableAgentRuns(summary)
 	if len(usable) == 0 {
@@ -82,7 +82,13 @@ Consolidate the reviewer reports into one verdict. Be strict and brief.
 
 Output exactly this, nothing else:
   - One line: verdict (approve / approve with nits / request changes) plus a short reason.
-  - Then bullets for actionable findings only, most important first. One defect per bullet. Start each bullet with [high], [medium], or [low]. Include file:line when possible. State the bug, impact, and fix in one concise sentence. Omit bullets entirely when nothing is actionable.
+  - Then actionable findings only, most important first.
+  - Each actionable finding MUST be its own separate top-level Markdown bullet using this shape: - [high] file:line — bug; impact; fix.
+  - Start every finding bullet with exactly one of [high], [medium], or [low].
+  - Include file:line when possible. State one defect, its impact, and the fix in one concise paragraph.
+  - Do not combine multiple defects in one bullet or paragraph.
+  - Do not use headings, bold severity paragraphs, numbered sections, or grouped severity sections for findings.
+  - Omit bullets entirely when nothing is actionable.
 
 No preamble, no headings, no summaries, no praise, no restating the diff or task, no filler. A clean change is one line.`)
 
@@ -94,16 +100,17 @@ No preamble, no headings, no summaries, no praise, no restating the diff or task
 	return b.String()
 }
 
-// usableAgentRuns returns agent runs that have non-empty AssistantText
-// narrative in their event buffer, in the original order from the summary.
-// The filter is on narrative content alone — Status is not checked. In
-// practice this drops most cancelled and errored runs (they typically don't
-// produce assistant output before exiting), but a cancelled agent that
-// emitted text mid-stream is still considered usable. The synthesis prompt
-// uses what the agent actually said, regardless of how the run terminated.
+// usableAgentRuns returns successful agent runs that have non-empty
+// AssistantText narrative in their event buffer, in the original order from
+// the summary. Failed reviewer output is terminal diagnostics only: it must not
+// feed the judge prompt or trail findings, because quota/auth/tool failures are
+// not review evidence.
 func usableAgentRuns(summary reviewtypes.RunSummary) []reviewtypes.AgentRun {
 	var result []reviewtypes.AgentRun
 	for _, run := range summary.AgentRuns {
+		if run.Status != reviewtypes.AgentStatusSucceeded {
+			continue
+		}
 		if joinAssistantText(run.Buffer) == "" {
 			continue
 		}

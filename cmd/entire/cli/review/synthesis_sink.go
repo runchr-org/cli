@@ -3,8 +3,8 @@
 // synthesis_sink.go provides SynthesisSink, the master adjudication phase of a
 // multi-agent review: after all worker agents finish, it asks a configured
 // provider to consolidate the per-agent narratives into a final report.
-// Skipped silently on cancellation or when fewer than 2 agents produced
-// usable output. The report runs unconditionally (no y/N prompt) and works in
+// Skipped silently on cancellation or when fewer than 2 successful agents
+// produced usable output. The report runs unconditionally (no y/N prompt) and works in
 // both TTY and redirected/CI output.
 //
 // Composition: appended AFTER DumpSink in the multi-agent sink slice, so the
@@ -86,8 +86,7 @@ func (SynthesisSink) AgentEvent(_ string, _ reviewtypes.Event) {}
 //
 // Skip silently when:
 //   - the run was cancelled (summary.Cancelled)
-//   - fewer than 2 agents produced usable output (status Succeeded or Failed
-//     with non-empty narrative buffer)
+//   - fewer than 2 successful agents produced usable output
 //
 // The master phase is mandatory and runs without a y/N prompt, in TTY and
 // redirected output alike. On provider failure: print "final report

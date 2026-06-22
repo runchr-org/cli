@@ -514,9 +514,38 @@ func (p *stubDispatchProcess) Events() <-chan reviewtypes.Event {
 
 func (p *stubDispatchProcess) Wait() error { return nil }
 
+type scriptedDispatchReviewer struct {
+	name    string
+	events  []reviewtypes.Event
+	waitErr error
+}
+
+func (r *scriptedDispatchReviewer) Name() string { return r.name }
+func (r *scriptedDispatchReviewer) Start(context.Context, reviewtypes.RunConfig) (reviewtypes.Process, error) {
+	return &scriptedDispatchProcess{events: r.events, waitErr: r.waitErr}, nil
+}
+
+type scriptedDispatchProcess struct {
+	events  []reviewtypes.Event
+	waitErr error
+}
+
+func (p *scriptedDispatchProcess) Events() <-chan reviewtypes.Event {
+	ch := make(chan reviewtypes.Event, len(p.events))
+	for _, ev := range p.events {
+		ch <- ev
+	}
+	close(ch)
+	return ch
+}
+
+func (p *scriptedDispatchProcess) Wait() error { return p.waitErr }
+
 // Compile-time interface check.
 var _ reviewtypes.AgentReviewer = (*stubDispatchReviewer)(nil)
 var _ reviewtypes.Process = (*stubDispatchProcess)(nil)
+var _ reviewtypes.AgentReviewer = (*scriptedDispatchReviewer)(nil)
+var _ reviewtypes.Process = (*scriptedDispatchProcess)(nil)
 
 type captureRunConfigReviewer struct {
 	name   string
@@ -606,6 +635,102 @@ func TestDispatchFork_TwoLaunchableNoOverride(t *testing.T) {
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDispatchFork_MultiAgentIgnoresFailedSiblingWhenAnotherSucceeds(t *testing.T) {
+	setupCmdTestRepo(t)
+
+	if err := seedReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		"agent-a": {Prompt: "review"},
+		"agent-b": {Prompt: "review"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	quotaErr := errors.New("quota exhausted")
+	reviewers := map[string]reviewtypes.AgentReviewer{
+		"agent-a": &scriptedDispatchReviewer{
+			name: "agent-a",
+			events: []reviewtypes.Event{
+				reviewtypes.Started{},
+				reviewtypes.Finished{Success: false},
+			},
+			waitErr: quotaErr,
+		},
+		"agent-b": &scriptedDispatchReviewer{
+			name: "agent-b",
+			events: []reviewtypes.Event{
+				reviewtypes.Started{},
+				reviewtypes.AssistantText{Text: "agent-b found no blockers."},
+				reviewtypes.Finished{Success: true},
+			},
+		},
+	}
+	deps := newDispatchTestDeps(t, []types.AgentName{"agent-a", "agent-b"}, []string{"agent-a", "agent-b"})
+	deps.ReviewerFor = func(agentName string) reviewtypes.AgentReviewer { return reviewers[agentName] }
+
+	buf := &bytes.Buffer{}
+	cmd := review.NewCommand(deps)
+	cmd.SetOut(buf)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"general"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("partial reviewer failure should not fail command: %v\nOutput:\n%s", err, buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "2 agent(s) done — 1 succeeded, 1 failed") {
+		t.Fatalf("output missing partial-failure counts:\n%s", out)
+	}
+	if !strings.Contains(out, "agent-b found no blockers") {
+		t.Fatalf("output missing successful reviewer narrative:\n%s", out)
+	}
+}
+
+func TestDispatchFork_MultiAgentFailsWhenAllReviewersFail(t *testing.T) {
+	setupCmdTestRepo(t)
+
+	if err := seedReviewConfig(context.Background(), map[string]settings.ReviewConfig{
+		"agent-a": {Prompt: "review"},
+		"agent-b": {Prompt: "review"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	reviewers := map[string]reviewtypes.AgentReviewer{
+		"agent-a": &scriptedDispatchReviewer{
+			name: "agent-a",
+			events: []reviewtypes.Event{
+				reviewtypes.Started{},
+				reviewtypes.Finished{Success: false},
+			},
+			waitErr: errors.New("agent-a quota exhausted"),
+		},
+		"agent-b": &scriptedDispatchReviewer{
+			name: "agent-b",
+			events: []reviewtypes.Event{
+				reviewtypes.Started{},
+				reviewtypes.Finished{Success: false},
+			},
+			waitErr: errors.New("agent-b quota exhausted"),
+		},
+	}
+	deps := newDispatchTestDeps(t, []types.AgentName{"agent-a", "agent-b"}, []string{"agent-a", "agent-b"})
+	deps.ReviewerFor = func(agentName string) reviewtypes.AgentReviewer { return reviewers[agentName] }
+
+	buf := &bytes.Buffer{}
+	cmd := review.NewCommand(deps)
+	cmd.SetOut(buf)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"general"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatalf("expected error when all reviewers fail\nOutput:\n%s", buf.String())
+	}
+	if !strings.Contains(err.Error(), "review run") {
+		t.Fatalf("error should identify review run failure, got %v", err)
 	}
 }
 

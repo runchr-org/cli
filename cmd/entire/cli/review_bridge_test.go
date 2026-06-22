@@ -80,6 +80,34 @@ func TestReviewTrailFindingInputsSplitsTopLevelBullets(t *testing.T) {
 	}
 }
 
+func TestReviewTrailFindingInputsSplitsTopLevelMarkedFindings(t *testing.T) {
+	verdict := "request changes\n\n" +
+		"**[HIGH] Lifecycle events silently dropped** — `api/src/lib/planetscale/trails.ts:657–668`. Fix it.\n\n" +
+		"Additional detail for the first issue.\n\n" +
+		"**[MEDIUM] PATCH thread route missing requestBody** — `api/src/routes/trails.ts:2802`. Generated clients cannot send updates.\n"
+
+	inputs := reviewTrailFindingInputs("general", verdict)
+	if len(inputs) != 2 {
+		t.Fatalf("inputs = %d, want 2", len(inputs))
+	}
+	bodies := []string{*inputs[0].Body, *inputs[1].Body}
+	if !strings.Contains(bodies[0], "Review finding (profile: general)") || !strings.Contains(bodies[0], "Lifecycle events") || !strings.Contains(bodies[0], "Additional detail") {
+		t.Fatalf("first body did not preserve first marked finding: %q", bodies[0])
+	}
+	if strings.Contains(bodies[0], "PATCH thread route") || !strings.Contains(bodies[1], "PATCH thread route") {
+		t.Fatalf("marked findings were not split cleanly: %#v", bodies)
+	}
+	if inputs[0].Severity == nil || *inputs[0].Severity != "high" {
+		t.Fatalf("severity[0] = %v, want high", inputs[0].Severity)
+	}
+	if inputs[1].Severity == nil || *inputs[1].Severity != "medium" {
+		t.Fatalf("severity[1] = %v, want medium", inputs[1].Severity)
+	}
+	if inputs[0].Location.Granularity != "line" || inputs[0].Location.FilePath == nil || *inputs[0].Location.FilePath != "api/src/lib/planetscale/trails.ts" || inputs[0].Location.StartLine == nil || *inputs[0].Location.StartLine != 657 {
+		t.Fatalf("location[0] = %+v, want trails.ts:657", inputs[0].Location)
+	}
+}
+
 func TestReviewTrailFindingInputsAcceptsRunnerStyleJSONLastLine(t *testing.T) {
 	verdict := `Intermediate prose that should be ignored for posting.
 {"summary":"","comments":[{"severity":"high","confidence":0.92,"body":"` + "`" + `daytona.ts` + "`" + ` rejects public repos without a token; allow public clones or mint a token.","location":{"granularity":"line","file_path":"daytona.ts","start_line":901}},{"severity":"P2","confidence":0.7,"body":"Delete failures are swallowed, orphaning provider snapshots.","location":{"granularity":"range","file_path":"daytona.ts","start_line":966,"end_line":970}}]}`

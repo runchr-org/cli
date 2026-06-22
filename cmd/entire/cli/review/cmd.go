@@ -1211,11 +1211,11 @@ func runMultiAgentPath(
 		EnrichAgentRun:  reviewAgentRunTokenEnricher(worktreeRoot, headSHA),
 		ReviewerTimeout: timeout,
 	}, sinks)
+	if shouldAbortMultiReview(summary, waitErr) && runCtx.Err() == nil && ctx.Err() == nil {
+		return multiReviewFailureError(waitErr)
+	}
 	writePostReviewManifest(ctx, out, worktreeRoot, headSHA, summary, aggregateOutput)
 	maybePostReviewToTrail(ctx, out, deps, outputMode, profileName, summary, aggregateOutput)
-	if waitErr != nil && runCtx.Err() == nil && ctx.Err() == nil {
-		return fmt.Errorf("review run: %w", waitErr)
-	}
 	return nil
 }
 
@@ -1328,6 +1328,39 @@ func finalJudgeDisplayName(masterName string) string {
 		return "final judge"
 	}
 	return "judge: " + masterName
+}
+
+// shouldAbortMultiReview reports whether the profile-native fan-out produced no
+// successful reviewer at all. Individual reviewer infrastructure failures (for
+// example quota/auth/tool failures) should not fail the entire review when at
+// least one sibling produced a usable review; the failed reviewer remains
+// visible in terminal output only. With zero successful reviewers, there is no
+// review result to manifest or post, so the command fails loudly.
+func shouldAbortMultiReview(summary reviewtypes.RunSummary, waitErr error) bool {
+	if len(summary.AgentRuns) == 0 {
+		return waitErr != nil
+	}
+	for _, run := range summary.AgentRuns {
+		if run.Status == reviewtypes.AgentStatusSucceeded {
+			return false
+		}
+	}
+	if waitErr != nil {
+		return true
+	}
+	for _, run := range summary.AgentRuns {
+		if run.Status == reviewtypes.AgentStatusFailed {
+			return true
+		}
+	}
+	return false
+}
+
+func multiReviewFailureError(waitErr error) error {
+	if waitErr != nil {
+		return fmt.Errorf("review run: %w", waitErr)
+	}
+	return errors.New("review run: all reviewers failed")
 }
 
 // maybePostReviewToTrail delivers the final review output to the branch's trail
