@@ -2,7 +2,6 @@ package checkpoint
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -10,11 +9,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/redact"
-
-	// Registers the Claude Code and Codex agents so compactAgentName resolves
-	// their slugs instead of falling back to the raw agent type.
-	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
-	_ "github.com/entireio/cli/cmd/entire/cli/agent/codex"
 )
 
 // claudeStyleTranscript returns a Claude Code-format JSONL transcript with two
@@ -48,28 +42,6 @@ func readBranchFile(t *testing.T, store *GitStore, path string) (string, bool) {
 	return content, true
 }
 
-// compactTranscriptLine is the subset of the compact transcript line format
-// asserted in these tests.
-type compactTranscriptLine struct {
-	V       int             `json:"v"`
-	Agent   string          `json:"agent"`
-	Type    string          `json:"type"`
-	Content json.RawMessage `json:"content"`
-}
-
-func parseCompactLines(t *testing.T, content string) []compactTranscriptLine {
-	t.Helper()
-	var lines []compactTranscriptLine
-	for _, raw := range strings.Split(strings.TrimSpace(content), "\n") {
-		var line compactTranscriptLine
-		if err := json.Unmarshal([]byte(raw), &line); err != nil {
-			t.Fatalf("compact transcript line is not valid JSON: %v\nline: %s", err, raw)
-		}
-		lines = append(lines, line)
-	}
-	return lines
-}
-
 func TestWriteCommitted_WritesCompactTranscript(t *testing.T) {
 	t.Parallel()
 	repo, _ := setupTestRepo(t)
@@ -97,25 +69,12 @@ func TestWriteCommitted_WritesCompactTranscript(t *testing.T) {
 		t.Error("full.jsonl missing from checkpoint tree")
 	}
 
-	// transcript.jsonl holds the compact format.
+	// transcript.jsonl is written with compact content derived from the
+	// transcript. The compact format itself is covered by transcript/compact;
+	// here we only assert the store persisted non-empty derived content.
 	compactContent, ok := readBranchFile(t, store, sessionPath+paths.CompactTranscriptFileName)
 	if !ok {
 		t.Fatal("transcript.jsonl missing from checkpoint tree")
-	}
-	lines := parseCompactLines(t, compactContent)
-	if len(lines) != 4 {
-		t.Fatalf("compact transcript line count = %d, want 4\ncontent: %s", len(lines), compactContent)
-	}
-	for i, line := range lines {
-		if line.V != 1 {
-			t.Errorf("line %d: v = %d, want 1", i, line.V)
-		}
-		if line.Agent != "claude-code" {
-			t.Errorf("line %d: agent = %q, want %q", i, line.Agent, "claude-code")
-		}
-	}
-	if lines[0].Type != "user" || lines[1].Type != "assistant" {
-		t.Errorf("unexpected line types: %q, %q", lines[0].Type, lines[1].Type)
 	}
 	if !strings.Contains(compactContent, "reply two") {
 		t.Error("compact transcript missing assistant content")
