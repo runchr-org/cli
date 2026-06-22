@@ -738,11 +738,12 @@ func TestRun_ReviewerTimeout(t *testing.T) {
 
 func TestRun_ReviewerTimeoutWithStringWrappedContextError(t *testing.T) {
 	t.Parallel()
+	rec := &stubSinkRecorder{}
 	summary, err := Run(
 		context.Background(),
 		&stringWrappedCtxReviewer{name: "claude-code"},
 		reviewtypes.RunConfig{ReviewerTimeout: 30 * time.Millisecond},
-		nil,
+		[]reviewtypes.Sink{rec},
 	)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("err = %v, want a 'timed out' error", err)
@@ -755,6 +756,11 @@ func TestRun_ReviewerTimeoutWithStringWrappedContextError(t *testing.T) {
 	}
 	if run := summary.AgentRuns[0]; run.Status != reviewtypes.AgentStatusFailed || run.Err == nil || !strings.Contains(run.Err.Error(), "timed out") {
 		t.Fatalf("run = {Status:%v Err:%v}, want Failed with timed-out error", run.Status, run.Err)
+	}
+	for _, evt := range rec.agentEvents {
+		if _, ok := evt.ev.(reviewtypes.RunError); ok {
+			t.Fatalf("timeout with string-formatted context error should not also emit synthetic RunError, got %+v", evt.ev)
+		}
 	}
 }
 
@@ -861,11 +867,12 @@ func TestRunMulti_ReviewerTimeoutIsolated(t *testing.T) {
 // detection reads only the agent context, whose Err() is immutable once set.
 func TestRunMulti_ReviewerTimeoutWithStringWrappedContextError(t *testing.T) {
 	t.Parallel()
+	rec := &stubSinkRecorder{}
 	summary, err := RunMulti(
 		context.Background(),
 		[]reviewtypes.AgentReviewer{&stringWrappedCtxReviewer{name: "slow"}},
 		reviewtypes.RunConfig{ReviewerTimeout: 30 * time.Millisecond},
-		nil,
+		[]reviewtypes.Sink{rec},
 	)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("err = %v, want a 'timed out' error", err)
@@ -878,6 +885,11 @@ func TestRunMulti_ReviewerTimeoutWithStringWrappedContextError(t *testing.T) {
 	}
 	if run := summary.AgentRuns[0]; run.Status != reviewtypes.AgentStatusFailed || run.Err == nil || !strings.Contains(run.Err.Error(), "timed out") {
 		t.Fatalf("run = {Status:%v Err:%v}, want Failed with timed-out error", run.Status, run.Err)
+	}
+	for _, evt := range rec.agentEvents {
+		if _, ok := evt.ev.(reviewtypes.RunError); ok {
+			t.Fatalf("timeout with string-formatted context error should not also emit synthetic RunError, got %+v", evt.ev)
+		}
 	}
 }
 

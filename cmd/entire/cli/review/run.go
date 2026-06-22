@@ -206,7 +206,7 @@ func Run(
 	// error; this avoids a deadline firing after a natural completion (waitErr ==
 	// nil) and producing a false timeout.
 	timedOut := reviewerDeadlineFired(ctx, agentCtx, waitErr)
-	if shouldEmitSyntheticRunError(ctx, waitErr) {
+	if shouldEmitSyntheticRunError(agentCtx, waitErr) {
 		synthEvent := reviewtypes.RunError{Err: waitErr}
 		buffer = append(buffer, synthEvent)
 		sawRunError = true

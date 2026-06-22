@@ -173,7 +173,7 @@ func RunMulti(
 			}
 			waitErr := p.Wait()
 			finishedAt := time.Now()
-			if shouldEmitSyntheticRunError(ctx, waitErr) {
+			if shouldEmitSyntheticRunError(runCtx, waitErr) {
 				fanIn <- taggedEvent{agentIdx: idx, ev: reviewtypes.RunError{Err: waitErr}}
 			}
 			emitEnrichedAgentTokens(ctx, cfg, fanIn, idx, reviewtypes.AgentRun{
