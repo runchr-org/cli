@@ -876,11 +876,11 @@ func maybeCheckoutTrailCreateBranch(ctx context.Context, cmd *cobra.Command, w i
 					Value(&shouldCheckout),
 			),
 		)
-		if formErr := form.Run(); formErr == nil && shouldCheckout {
-			checkout = true
+		if formErr := form.Run(); formErr != nil {
+			shouldCheckout = false
 		}
 	}
-	if !checkout {
+	if !shouldCheckout {
 		return nil
 	}
 	if err := CheckoutBranch(ctx, branch); err != nil {
@@ -1394,6 +1394,8 @@ func formatValidStatuses() string {
 	return strings.Join(names, ", ")
 }
 
+var runTrailCreateForm = func(form *huh.Form) error { return form.Run() }
+
 // runTrailCreateInteractive runs the interactive form for trail creation.
 // Prompts for title, body, branch (derived from title, unless branchless), and status.
 func runTrailCreateInteractive(title, body, branch, statusStr *string, noBranch bool) error {
@@ -1409,7 +1411,7 @@ func runTrailCreateInteractive(title, body, branch, statusStr *string, noBranch 
 				Value(body),
 		),
 	)
-	if err := form.Run(); err != nil {
+	if err := runTrailCreateForm(form); err != nil {
 		return fmt.Errorf("form cancelled: %w", err)
 	}
 	*title = strings.TrimSpace(*title)
@@ -1439,7 +1441,7 @@ func runTrailCreateInteractive(title, body, branch, statusStr *string, noBranch 
 					Value(statusStr),
 			),
 		)
-		if err := form.Run(); err != nil {
+		if err := runTrailCreateForm(form); err != nil {
 			return fmt.Errorf("form cancelled: %w", err)
 		}
 		return nil
@@ -1461,7 +1463,7 @@ func runTrailCreateInteractive(title, body, branch, statusStr *string, noBranch 
 				Value(statusStr),
 		),
 	)
-	if err := form.Run(); err != nil {
+	if err := runTrailCreateForm(form); err != nil {
 		return fmt.Errorf("form cancelled: %w", err)
 	}
 	*branch = strings.TrimSpace(*branch)
