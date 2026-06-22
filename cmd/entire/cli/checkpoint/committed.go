@@ -936,7 +936,7 @@ type taskCheckpointData struct {
 	AgentID        string `json:"agent_id,omitempty"`
 }
 
-// ReadCommitted reads a committed checkpoint's summary by ID from the entire/checkpoints/v1 branch.
+// Read reads a committed checkpoint's summary by ID from the entire/checkpoints/v1 branch.
 // Returns only the CheckpointSummary (paths + aggregated stats), not actual content.
 // Use ReadSessionContent to read actual transcript/prompts/context.
 // Returns nil, nil if the checkpoint doesn't exist.
@@ -950,7 +950,7 @@ type taskCheckpointData struct {
 //	│   └── full.jsonl     # Transcript
 //	├── 1/                 # Second session
 //	└── ...
-func (s *GitStore) ReadCommitted(ctx context.Context, checkpointID id.CheckpointID) (*CheckpointSummary, error) {
+func (s *GitStore) Read(ctx context.Context, checkpointID id.CheckpointID) (*CheckpointSummary, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err //nolint:wrapcheck // Propagating context cancellation
 	}
@@ -1161,7 +1161,7 @@ func (s *GitStore) ReadSessionContent(ctx context.Context, checkpointID id.Check
 // ReadLatestSessionContent is a convenience method that reads the latest session's content.
 // This is equivalent to ReadSessionContent(ctx, checkpointID, len(summary.Sessions)-1).
 func (s *GitStore) ReadLatestSessionContent(ctx context.Context, checkpointID id.CheckpointID) (*SessionContent, error) {
-	summary, err := s.ReadCommitted(ctx, checkpointID)
+	summary, err := s.Read(ctx, checkpointID)
 	if err != nil {
 		return nil, err
 	}
@@ -1181,7 +1181,7 @@ func (s *GitStore) ReadLatestSessionContent(ctx context.Context, checkpointID id
 // Returns ErrCheckpointNotFound if the checkpoint doesn't exist.
 // Returns an error if no session with the given ID exists in the checkpoint.
 func (s *GitStore) ReadSessionContentByID(ctx context.Context, checkpointID id.CheckpointID, sessionID string) (*SessionContent, error) {
-	summary, err := s.ReadCommitted(ctx, checkpointID)
+	summary, err := s.Read(ctx, checkpointID)
 	if err != nil {
 		return nil, err
 	}
@@ -1203,11 +1203,11 @@ func (s *GitStore) ReadSessionContentByID(ctx context.Context, checkpointID id.C
 	return nil, fmt.Errorf("session %q not found in checkpoint %s", sessionID, checkpointID)
 }
 
-// ListCommitted lists all committed checkpoints from the entire/checkpoints/v1 branch.
+// List lists all committed checkpoints from the entire/checkpoints/v1 branch.
 // Scans sharded paths: <id[:2]>/<id[2:]>/ directories containing metadata.json.
 //
 
-func (s *GitStore) ListCommitted(ctx context.Context) ([]CheckpointInfo, error) {
+func (s *GitStore) List(ctx context.Context) ([]CheckpointInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err //nolint:wrapcheck // Propagating context cancellation
 	}

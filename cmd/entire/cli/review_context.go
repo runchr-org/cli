@@ -120,7 +120,7 @@ func reviewCommittedCheckpointContext(ctx context.Context, worktreeRoot string, 
 				continue
 			}
 
-			summary, err := checkpoint.ReadCommittedCheckpoint(ctx, store, cpID)
+			summary, err := checkpoint.ReadCheckpoint(ctx, store, cpID)
 			if err != nil {
 				lines = append(lines, fmt.Sprintf("- %s: checkpoint metadata unavailable", cpID))
 				continue

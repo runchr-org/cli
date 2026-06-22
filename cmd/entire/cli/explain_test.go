@@ -1021,7 +1021,7 @@ func TestGenerateCheckpointSummary_AdvancesV1Metadata(t *testing.T) {
 		AuthorEmail:  "test@test.com",
 		Agent:        agent.AgentTypeClaudeCode,
 	}))
-	cpSummary, err := checkpoint.ReadCommittedCheckpoint(ctx, store, cpID)
+	cpSummary, err := checkpoint.ReadCheckpoint(ctx, store, cpID)
 	require.NoError(t, err)
 	content, err := checkpoint.ReadLatestSessionContent(ctx, store, cpID, cpSummary)
 	require.NoError(t, err)
@@ -2137,7 +2137,7 @@ func TestRunExplainCheckpoint_GenerateV1ModeUsesSelectedStore(t *testing.T) {
 		AuthorEmail: "test@example.com",
 		Agent:       agent.AgentTypeClaudeCode,
 	}))
-	summary, err := checkpoint.ReadCommittedCheckpoint(ctx, store, cpID)
+	summary, err := checkpoint.ReadCheckpoint(ctx, store, cpID)
 	require.NoError(t, err)
 	require.Len(t, summary.Sessions, 1)
 
@@ -2786,7 +2786,7 @@ func TestListCommittedForExplain_ReturnsV1Only(t *testing.T) {
 
 	store := checkpoint.NewGitStore(repo, checkpoint.DefaultV1Refs())
 
-	results, err := store.ListCommitted(ctx)
+	results, err := store.List(ctx)
 	require.NoError(t, err)
 
 	foundIDs := make(map[id.CheckpointID]bool)

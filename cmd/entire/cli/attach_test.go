@@ -339,9 +339,9 @@ func TestAttach_AppendsAsAdditionalSessionWhenIDDiffers(t *testing.T) {
 	}
 
 	store := cpkg.NewGitStore(repo, cpkg.DefaultV1Refs())
-	summary, err := store.ReadCommitted(context.Background(), checkpointID)
+	summary, err := store.Read(context.Background(), checkpointID)
 	if err != nil {
-		t.Fatalf("ReadCommitted(%s): %v", checkpointID, err)
+		t.Fatalf("Read(%s): %v", checkpointID, err)
 	}
 	if summary == nil {
 		t.Fatalf("checkpoint %s summary nil after two attaches", checkpointID)
@@ -397,9 +397,9 @@ func TestAttach_RefusesWhenCheckpointMissingFromLocalBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := cpkg.NewGitStore(repo, cpkg.DefaultV1Refs())
-	summary, err := store.ReadCommitted(context.Background(), "ffffffffeeee")
+	summary, err := store.Read(context.Background(), "ffffffffeeee")
 	if err != nil {
-		t.Fatalf("ReadCommitted: %v", err)
+		t.Fatalf("Read: %v", err)
 	}
 	if summary != nil {
 		t.Errorf("attach should NOT have created checkpoint ffffffffeeee locally; found %+v", summary)
@@ -409,7 +409,7 @@ func TestAttach_RefusesWhenCheckpointMissingFromLocalBranch(t *testing.T) {
 // Regression for https://github.com/entireio/cli/pull/1014#pullrequestreview-copilot:
 // Bob clones a repo where Alice's checkpoint is on the remote-tracking ref
 // (refs/remotes/origin/entire/checkpoints/v1) but the local branch doesn't
-// exist yet. ReadCommitted falls back to the remote-tracking tree, so a naive
+// exist yet. Read falls back to the remote-tracking tree, so a naive
 // "read and check" guard would think all is well. But WriteCommitted would
 // then create a *fresh* orphan local branch, and Bob's push would clobber
 // Alice's data on origin. Attach must refuse in this shape.
@@ -1111,9 +1111,9 @@ func TestAttach_ReviewAppendsAsAdditionalSessionWhenIDDiffers(t *testing.T) {
 	// losing the original attach. The summary has only one session entry
 	// despite two attach calls with different IDs.
 	store := cpkg.NewGitStore(repo, cpkg.DefaultV1Refs())
-	summary, err := store.ReadCommitted(context.Background(), checkpointID)
+	summary, err := store.Read(context.Background(), checkpointID)
 	if err != nil {
-		t.Fatalf("ReadCommitted(%s): %v", checkpointID, err)
+		t.Fatalf("Read(%s): %v", checkpointID, err)
 	}
 	if summary == nil {
 		t.Fatalf("checkpoint %s summary nil after two attaches", checkpointID)
@@ -1187,9 +1187,9 @@ func TestAttach_ReviewRefusesWhenCheckpointMissingFromLocalBranch(t *testing.T) 
 		t.Fatal(err)
 	}
 	store := cpkg.NewGitStore(repo, cpkg.DefaultV1Refs())
-	summary, err := store.ReadCommitted(context.Background(), "ffffffffeeee")
+	summary, err := store.Read(context.Background(), "ffffffffeeee")
 	if err != nil {
-		t.Fatalf("ReadCommitted: %v", err)
+		t.Fatalf("Read: %v", err)
 	}
 	if summary != nil {
 		t.Errorf("attach should NOT have created checkpoint ffffffffeeee locally; found %+v", summary)

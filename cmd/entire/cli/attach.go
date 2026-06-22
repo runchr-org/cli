@@ -370,7 +370,7 @@ func checkpointHasSessionMetadata(ctx context.Context, repo *git.Repository, ref
 	if err != nil {
 		return false, err
 	}
-	summary, err := store.ReadCommitted(ctx, checkpointID)
+	summary, err := store.Read(ctx, checkpointID)
 	if err != nil {
 		return false, fmt.Errorf("read checkpoint summary: %w", err)
 	}
@@ -473,7 +473,7 @@ func checkpointPresentLocally(ctx context.Context, repo *git.Repository, refs cp
 	if err != nil {
 		return false, err
 	}
-	summary, err := store.ReadCommitted(ctx, checkpointID)
+	summary, err := store.Read(ctx, checkpointID)
 	if err != nil {
 		return false, err //nolint:wrapcheck // Caller wraps with checkpoint ID context
 	}

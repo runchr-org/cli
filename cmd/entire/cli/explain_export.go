@@ -261,7 +261,7 @@ func runExplainStreamTranscript(ctx context.Context, w, errW io.Writer, opts exp
 	defer lookup.Close()
 
 	store := lookup.store
-	summary, err := checkpoint.ReadCommittedCheckpoint(ctx, store, cpID)
+	summary, err := checkpoint.ReadCheckpoint(ctx, store, cpID)
 	if err != nil {
 		return fmt.Errorf("failed to read checkpoint: %w", err)
 	}
@@ -355,7 +355,7 @@ func runExplainCheckpointJSON(ctx context.Context, w, errW io.Writer, opts expla
 	defer lookup.Close()
 
 	store := lookup.store
-	summary, err := checkpoint.ReadCommittedCheckpoint(ctx, store, cpID)
+	summary, err := checkpoint.ReadCheckpoint(ctx, store, cpID)
 	if err != nil {
 		return fmt.Errorf("failed to read checkpoint: %w", err)
 	}

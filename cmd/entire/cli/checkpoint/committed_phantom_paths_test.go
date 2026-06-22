@@ -51,7 +51,7 @@ func TestWriteCommitted_EmptyTranscript_NoPhantomPaths(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read back the checkpoint summary and verify no phantom paths
-	summary, err := store.ReadCommitted(context.Background(), cpID)
+	summary, err := store.Read(context.Background(), cpID)
 	require.NoError(t, err)
 	require.NotNil(t, summary)
 	require.Len(t, summary.Sessions, 1)
@@ -97,7 +97,7 @@ func TestWriteCommitted_WithTranscript_PathsPopulated(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read back and verify paths are populated
-	summary, err := store.ReadCommitted(context.Background(), cpID)
+	summary, err := store.Read(context.Background(), cpID)
 	require.NoError(t, err)
 	require.NotNil(t, summary)
 	require.Len(t, summary.Sessions, 1)

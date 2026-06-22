@@ -38,7 +38,7 @@ func TestWrite_DispatchesEachRequest(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Write(WriteSession) error = %v", err)
 	}
-	summary, err := store.ReadCommitted(ctx, cpID)
+	summary, err := store.Read(ctx, cpID)
 	if err != nil || summary == nil {
 		t.Fatalf("checkpoint not created by WriteSession: summary=%v err=%v", summary, err)
 	}
@@ -78,9 +78,9 @@ func TestWrite_DispatchesEachRequest(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Write(BackfillAttribution) error = %v", err)
 	}
-	rootSummary, err := store.ReadCommitted(ctx, cpID)
+	rootSummary, err := store.Read(ctx, cpID)
 	if err != nil {
-		t.Fatalf("ReadCommitted() error = %v", err)
+		t.Fatalf("Read() error = %v", err)
 	}
 	if rootSummary.CombinedAttribution == nil || rootSummary.CombinedAttribution.AgentLines != 42 {
 		t.Errorf("BackfillAttribution not applied: %+v", rootSummary.CombinedAttribution)

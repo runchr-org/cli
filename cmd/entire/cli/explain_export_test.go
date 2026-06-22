@@ -498,7 +498,7 @@ type stubCommittedReader struct {
 	err      error                              // err returned for indexes not in contents
 }
 
-func (s *stubCommittedReader) ReadCommitted(_ context.Context, _ id.CheckpointID) (*checkpoint.CheckpointSummary, error) {
+func (s *stubCommittedReader) Read(_ context.Context, _ id.CheckpointID) (*checkpoint.CheckpointSummary, error) {
 	return s.summary, nil
 }
 

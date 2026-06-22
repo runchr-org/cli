@@ -460,7 +460,7 @@ type countingReviewContextReader struct {
 	promptCalls   int
 }
 
-func (r *countingReviewContextReader) ReadCommitted(
+func (r *countingReviewContextReader) Read(
 	context.Context,
 	checkpointid.CheckpointID,
 ) (*checkpoint.CheckpointSummary, error) {

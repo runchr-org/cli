@@ -647,7 +647,7 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 		return nil, fmt.Errorf("open checkpoint store: %w", err)
 	}
 	store := stores.Primary
-	summary, err := cpkg.ReadCommittedCheckpoint(ctx, store, point.CheckpointID)
+	summary, err := cpkg.ReadCheckpoint(ctx, store, point.CheckpointID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read checkpoint: %w", err)
 	}

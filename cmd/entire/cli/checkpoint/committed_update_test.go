@@ -326,9 +326,9 @@ func TestUpdateCommitted_SummaryPreserved(t *testing.T) {
 	_, store, cpID := setupRepoForUpdate(t)
 
 	// Verify the root-level CheckpointSummary is preserved after update
-	summaryBefore, err := store.ReadCommitted(context.Background(), cpID)
+	summaryBefore, err := store.Read(context.Background(), cpID)
 	if err != nil {
-		t.Fatalf("ReadCommitted() before error = %v", err)
+		t.Fatalf("Read() before error = %v", err)
 	}
 
 	err = store.UpdateCommitted(context.Background(), UpdateOptions{
@@ -340,9 +340,9 @@ func TestUpdateCommitted_SummaryPreserved(t *testing.T) {
 		t.Fatalf("UpdateCommitted() error = %v", err)
 	}
 
-	summaryAfter, err := store.ReadCommitted(context.Background(), cpID)
+	summaryAfter, err := store.Read(context.Background(), cpID)
 	if err != nil {
-		t.Fatalf("ReadCommitted() after error = %v", err)
+		t.Fatalf("Read() after error = %v", err)
 	}
 
 	if summaryAfter.CheckpointID != summaryBefore.CheckpointID {

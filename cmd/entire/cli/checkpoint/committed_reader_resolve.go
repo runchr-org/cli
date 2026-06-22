@@ -9,14 +9,14 @@ import (
 
 // PersistentReader provides read access to committed checkpoint data.
 type PersistentReader interface {
-	ReadCommitted(ctx context.Context, checkpointID id.CheckpointID) (*CheckpointSummary, error)
+	Read(ctx context.Context, checkpointID id.CheckpointID) (*CheckpointSummary, error)
 	ReadSessionContent(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*SessionContent, error)
 }
 
 // PersistentListReader provides read and list access to committed checkpoint data.
 type PersistentListReader interface {
 	PersistentReader
-	ListCommitted(ctx context.Context) ([]CheckpointInfo, error)
+	List(ctx context.Context) ([]CheckpointInfo, error)
 	ReadSessionMetadata(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*Metadata, error)
 	ReadSessionPrompts(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (string, error)
 }
@@ -36,14 +36,14 @@ type AuthorReader interface {
 	GetCheckpointAuthor(ctx context.Context, checkpointID id.CheckpointID) (Author, error)
 }
 
-// ReadCommittedCheckpoint reads a committed checkpoint summary and normalizes
+// ReadCheckpoint reads a committed checkpoint summary and normalizes
 // a nil store response into ErrCheckpointNotFound.
-func ReadCommittedCheckpoint(ctx context.Context, reader PersistentReader, checkpointID id.CheckpointID) (*CheckpointSummary, error) {
+func ReadCheckpoint(ctx context.Context, reader PersistentReader, checkpointID id.CheckpointID) (*CheckpointSummary, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err //nolint:wrapcheck // Propagating context cancellation
 	}
 
-	summary, err := reader.ReadCommitted(ctx, checkpointID)
+	summary, err := reader.Read(ctx, checkpointID)
 	if err != nil {
 		return nil, fmt.Errorf("read committed checkpoint: %w", err)
 	}
@@ -72,7 +72,7 @@ func ReadRawSessionLogForCheckpoint(ctx context.Context, reader PersistentReader
 		return nil, "", err //nolint:wrapcheck // Propagating context cancellation
 	}
 
-	summary, err := ReadCommittedCheckpoint(ctx, reader, checkpointID)
+	summary, err := ReadCheckpoint(ctx, reader, checkpointID)
 	if err != nil {
 		return nil, "", err
 	}

@@ -1067,7 +1067,7 @@ func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(
 	}
 	store := stores.Primary
 
-	summary, err := store.ReadCommitted(ctx, checkpointID)
+	summary, err := store.Read(ctx, checkpointID)
 	if err != nil {
 		return fmt.Errorf("reading checkpoint summary: %w", err)
 	}

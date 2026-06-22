@@ -390,7 +390,7 @@ type attributionCheckpointReaderStub struct {
 	content *checkpoint.SessionContent
 }
 
-func (s *attributionCheckpointReaderStub) ReadCommitted(context.Context, checkpointid.CheckpointID) (*checkpoint.CheckpointSummary, error) {
+func (s *attributionCheckpointReaderStub) Read(context.Context, checkpointid.CheckpointID) (*checkpoint.CheckpointSummary, error) {
 	return s.summary, nil
 }
 

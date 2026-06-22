@@ -628,7 +628,7 @@ type resumeCheckpointInfoReaderStub struct {
 	metadata  map[id.CheckpointID][]checkpoint.Metadata
 }
 
-func (r *resumeCheckpointInfoReaderStub) ReadCommitted(_ context.Context, checkpointID id.CheckpointID) (*checkpoint.CheckpointSummary, error) {
+func (r *resumeCheckpointInfoReaderStub) Read(_ context.Context, checkpointID id.CheckpointID) (*checkpoint.CheckpointSummary, error) {
 	return r.summaries[checkpointID], nil
 }
 

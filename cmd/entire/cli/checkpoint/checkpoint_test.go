@@ -845,7 +845,7 @@ func TestUpdateSummary_NotFound(t *testing.T) {
 	}
 }
 
-// TestListCommitted_FallsBackToRemote verifies that ListCommitted can find
+// TestListCommitted_FallsBackToRemote verifies that List can find
 // checkpoints when only origin/entire/checkpoints/v1 exists (simulating post-clone state).
 func TestListCommitted_FallsBackToRemote(t *testing.T) {
 	// Create "remote" repo (non-bare, so we can make commits)
@@ -921,17 +921,17 @@ func TestListCommitted_FallsBackToRemote(t *testing.T) {
 		t.Fatalf("origin/entire/checkpoints/v1 should exist: %v", err)
 	}
 
-	// ListCommitted should find the checkpoint by falling back to remote
+	// List should find the checkpoint by falling back to remote
 	localStore := NewGitStore(localRepo, DefaultV1Refs())
-	checkpoints, err := localStore.ListCommitted(context.Background())
+	checkpoints, err := localStore.List(context.Background())
 	if err != nil {
-		t.Fatalf("ListCommitted() error = %v", err)
+		t.Fatalf("List() error = %v", err)
 	}
 	if len(checkpoints) != 1 {
-		t.Errorf("ListCommitted() returned %d checkpoints, want 1", len(checkpoints))
+		t.Errorf("List() returned %d checkpoints, want 1", len(checkpoints))
 	}
 	if len(checkpoints) > 0 && checkpoints[0].CheckpointID.String() != cpID.String() {
-		t.Errorf("ListCommitted() checkpoint ID = %q, want %q", checkpoints[0].CheckpointID, cpID)
+		t.Errorf("List() checkpoint ID = %q, want %q", checkpoints[0].CheckpointID, cpID)
 	}
 }
 
@@ -1063,12 +1063,12 @@ func TestWriteCommitted_MultipleSessionsSameCheckpoint(t *testing.T) {
 	}
 
 	// Read the checkpoint summary
-	summary, err := store.ReadCommitted(context.Background(), checkpointID)
+	summary, err := store.Read(context.Background(), checkpointID)
 	if err != nil {
-		t.Fatalf("ReadCommitted() error = %v", err)
+		t.Fatalf("Read() error = %v", err)
 	}
 	if summary == nil {
-		t.Fatal("ReadCommitted() returned nil summary")
+		t.Fatal("Read() returned nil summary")
 		return
 	}
 
@@ -1152,12 +1152,12 @@ func TestWriteCommitted_Aggregation(t *testing.T) {
 	}
 
 	// Read the checkpoint summary
-	summary, err := store.ReadCommitted(context.Background(), checkpointID)
+	summary, err := store.Read(context.Background(), checkpointID)
 	if err != nil {
-		t.Fatalf("ReadCommitted() error = %v", err)
+		t.Fatalf("Read() error = %v", err)
 	}
 	if summary == nil {
-		t.Fatal("ReadCommitted() returned nil summary")
+		t.Fatal("Read() returned nil summary")
 		return
 	}
 
@@ -1195,7 +1195,7 @@ func TestWriteCommitted_Aggregation(t *testing.T) {
 	}
 }
 
-// TestReadCommitted_ReturnsCheckpointSummary verifies that ReadCommitted returns
+// TestReadCommitted_ReturnsCheckpointSummary verifies that Read returns
 // a CheckpointSummary with the correct structure including Sessions array.
 func TestReadCommitted_ReturnsCheckpointSummary(t *testing.T) {
 	repo, _ := setupBranchTestRepo(t)
@@ -1221,12 +1221,12 @@ func TestReadCommitted_ReturnsCheckpointSummary(t *testing.T) {
 	}
 
 	// Read the checkpoint summary
-	summary, err := store.ReadCommitted(context.Background(), checkpointID)
+	summary, err := store.Read(context.Background(), checkpointID)
 	if err != nil {
-		t.Fatalf("ReadCommitted() error = %v", err)
+		t.Fatalf("Read() error = %v", err)
 	}
 	if summary == nil {
-		t.Fatal("ReadCommitted() returned nil summary")
+		t.Fatal("Read() returned nil summary")
 		return
 	}
 
@@ -1481,7 +1481,7 @@ func TestReadSessionContentByID_NotFound(t *testing.T) {
 	}
 }
 
-// TestListCommitted_MultiSessionInfo verifies that ListCommitted returns correct
+// TestListCommitted_MultiSessionInfo verifies that List returns correct
 // information for checkpoints with multiple sessions.
 func TestListCommitted_MultiSessionInfo(t *testing.T) {
 	repo, _ := setupBranchTestRepo(t)
@@ -1507,9 +1507,9 @@ func TestListCommitted_MultiSessionInfo(t *testing.T) {
 	}
 
 	// List all checkpoints
-	checkpoints, err := store.ListCommitted(context.Background())
+	checkpoints, err := store.List(context.Background())
 	if err != nil {
-		t.Fatalf("ListCommitted() error = %v", err)
+		t.Fatalf("List() error = %v", err)
 	}
 
 	// Find our checkpoint
@@ -1521,7 +1521,7 @@ func TestListCommitted_MultiSessionInfo(t *testing.T) {
 		}
 	}
 	if found == nil {
-		t.Fatal("checkpoint not found in ListCommitted() results")
+		t.Fatal("checkpoint not found in List() results")
 		return
 	}
 
@@ -1659,9 +1659,9 @@ func TestWriteCommitted_ThreeSessions(t *testing.T) {
 	}
 
 	// Read summary
-	summary, err := store.ReadCommitted(context.Background(), checkpointID)
+	summary, err := store.Read(context.Background(), checkpointID)
 	if err != nil {
-		t.Fatalf("ReadCommitted() error = %v", err)
+		t.Fatalf("Read() error = %v", err)
 	}
 
 	// Verify 3 sessions
@@ -1702,7 +1702,7 @@ func TestWriteCommitted_ThreeSessions(t *testing.T) {
 	}
 }
 
-// TestReadCommitted_NonexistentCheckpoint verifies that ReadCommitted returns
+// TestReadCommitted_NonexistentCheckpoint verifies that Read returns
 // nil (not an error) when the checkpoint doesn't exist.
 func TestReadCommitted_NonexistentCheckpoint(t *testing.T) {
 	repo, _ := setupBranchTestRepo(t)
@@ -1716,12 +1716,12 @@ func TestReadCommitted_NonexistentCheckpoint(t *testing.T) {
 
 	// Try to read non-existent checkpoint
 	checkpointID := id.MustCheckpointID("ffffffffffff")
-	summary, err := store.ReadCommitted(context.Background(), checkpointID)
+	summary, err := store.Read(context.Background(), checkpointID)
 	if err != nil {
-		t.Errorf("ReadCommitted() error = %v, want nil", err)
+		t.Errorf("Read() error = %v, want nil", err)
 	}
 	if summary != nil {
-		t.Errorf("ReadCommitted() = %v, want nil for non-existent checkpoint", summary)
+		t.Errorf("Read() = %v, want nil for non-existent checkpoint", summary)
 	}
 }
 
@@ -3141,11 +3141,11 @@ func TestWriteCommitted_DuplicateSessionIDUpdatesInPlace(t *testing.T) {
 	}
 
 	// Read the checkpoint summary
-	summary, err := store.ReadCommitted(context.Background(), checkpointID)
+	summary, err := store.Read(context.Background(), checkpointID)
 	if err != nil {
-		t.Fatalf("ReadCommitted() error = %v", err)
+		t.Fatalf("Read() error = %v", err)
 	}
-	require.NotNil(t, summary, "ReadCommitted() returned nil summary")
+	require.NotNil(t, summary, "Read() returned nil summary")
 
 	// Should have 2 sessions, not 3
 	if len(summary.Sessions) != 2 {
@@ -3246,11 +3246,11 @@ func TestWriteCommitted_DuplicateSessionIDSingleSession(t *testing.T) {
 	}
 
 	// Read the checkpoint summary
-	summary, err := store.ReadCommitted(context.Background(), checkpointID)
+	summary, err := store.Read(context.Background(), checkpointID)
 	if err != nil {
-		t.Fatalf("ReadCommitted() error = %v", err)
+		t.Fatalf("Read() error = %v", err)
 	}
-	require.NotNil(t, summary, "ReadCommitted() returned nil summary")
+	require.NotNil(t, summary, "Read() returned nil summary")
 
 	// Should have 1 session, not 2
 	if len(summary.Sessions) != 1 {
@@ -3333,9 +3333,9 @@ func TestWriteCommitted_DuplicateSessionIDReusesIndex(t *testing.T) {
 		t.Fatalf("WriteCommitted() session A v2 error = %v", err)
 	}
 
-	summary, err := store.ReadCommitted(context.Background(), checkpointID)
+	summary, err := store.Read(context.Background(), checkpointID)
 	if err != nil {
-		t.Fatalf("ReadCommitted() error = %v", err)
+		t.Fatalf("Read() error = %v", err)
 	}
 
 	// Must still be 2 sessions

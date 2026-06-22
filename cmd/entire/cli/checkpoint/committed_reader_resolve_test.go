@@ -16,7 +16,7 @@ func TestReadCommittedCheckpointNormalizesNilSummary(t *testing.T) {
 	t.Parallel()
 
 	reader := &committedReaderStub{}
-	summary, err := ReadCommittedCheckpoint(context.Background(), reader, id.MustCheckpointID("111111111111"))
+	summary, err := ReadCheckpoint(context.Background(), reader, id.MustCheckpointID("111111111111"))
 	require.Nil(t, summary)
 	require.ErrorIs(t, err, ErrCheckpointNotFound)
 }
@@ -26,7 +26,7 @@ func TestReadCommittedCheckpointWrapsReaderError(t *testing.T) {
 
 	readerErr := errors.New("boom")
 	reader := &committedReaderStub{readErr: readerErr}
-	summary, err := ReadCommittedCheckpoint(context.Background(), reader, id.MustCheckpointID("111111111111"))
+	summary, err := ReadCheckpoint(context.Background(), reader, id.MustCheckpointID("111111111111"))
 	require.Nil(t, summary)
 	require.ErrorIs(t, err, readerErr)
 	require.ErrorContains(t, err, "read committed checkpoint")
@@ -84,7 +84,7 @@ type committedReaderStub struct {
 	readErr error
 }
 
-func (s *committedReaderStub) ReadCommitted(context.Context, id.CheckpointID) (*CheckpointSummary, error) {
+func (s *committedReaderStub) Read(context.Context, id.CheckpointID) (*CheckpointSummary, error) {
 	if s.readErr != nil {
 		return nil, s.readErr
 	}

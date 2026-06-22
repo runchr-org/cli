@@ -4196,7 +4196,7 @@ func TestCondenseSession_RedactionFailure_DropsTranscriptButWritesMetadata(t *te
 
 	store := checkpoint.NewGitStore(repo, checkpoint.DefaultV1Refs())
 
-	committed, err := store.ListCommitted(context.Background())
+	committed, err := store.List(context.Background())
 	require.NoError(t, err)
 	require.NotEmpty(t, committed)
 

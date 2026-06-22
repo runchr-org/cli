@@ -355,7 +355,7 @@ type checkpointInfoReader interface {
 }
 
 func readCheckpointInfoFromStore(ctx context.Context, store checkpointInfoReader, checkpointID id.CheckpointID) (*strategy.CheckpointInfo, error) {
-	summary, err := checkpoint.ReadCommittedCheckpoint(ctx, store, checkpointID)
+	summary, err := checkpoint.ReadCheckpoint(ctx, store, checkpointID)
 	if err != nil {
 		return nil, fmt.Errorf("read checkpoint: %w", err)
 	}

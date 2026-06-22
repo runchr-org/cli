@@ -115,7 +115,7 @@ type attributionSummary struct {
 }
 
 type attributionCheckpointReader interface {
-	ReadCommitted(ctx context.Context, checkpointID id.CheckpointID) (*checkpoint.CheckpointSummary, error)
+	Read(ctx context.Context, checkpointID id.CheckpointID) (*checkpoint.CheckpointSummary, error)
 	ReadSessionMetadataAndPrompts(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*checkpoint.SessionContent, error)
 }
 
@@ -493,7 +493,7 @@ func readAttributionCheckpointSummary(ctx context.Context, reader attributionChe
 	if err := ctx.Err(); err != nil {
 		return nil, err //nolint:wrapcheck // Propagating context cancellation
 	}
-	summary, err := reader.ReadCommitted(ctx, cpID)
+	summary, err := reader.Read(ctx, cpID)
 	if err != nil {
 		return nil, fmt.Errorf("read committed checkpoint: %w", err)
 	}

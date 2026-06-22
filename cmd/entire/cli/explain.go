@@ -750,7 +750,7 @@ func loadCheckpointForExplain(ctx context.Context, lookup *explainCheckpointLook
 	prefetchCheckpointBlobs(ctx, lookup.repo, cpID)
 
 	store := lookup.store
-	summary, err := checkpoint.ReadCommittedCheckpoint(ctx, store, cpID)
+	summary, err := checkpoint.ReadCheckpoint(ctx, store, cpID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read checkpoint: %w", err)
 	}
@@ -879,7 +879,7 @@ func newExplainCheckpointLookup(ctx context.Context) (*explainCheckpointLookup, 
 		store: store,
 	}
 
-	committed, err := store.ListCommitted(ctx)
+	committed, err := store.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list checkpoints: %w", err)
 	}
@@ -2042,7 +2042,7 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 	store := stores.Primary
 
 	// Get all committed checkpoints for lookup.
-	committedInfos, err := store.ListCommitted(ctx)
+	committedInfos, err := store.List(ctx)
 	if err != nil {
 		committedInfos = nil // Continue without committed checkpoints
 	}
