@@ -61,8 +61,7 @@ const (
 
 // EphemeralStore provides the production shadow-branch checkpoint surface.
 type EphemeralStore interface {
-	WriteTemporary(ctx context.Context, opts WriteEphemeralOptions) (WriteEphemeralResult, error)
-	WriteTemporaryTask(ctx context.Context, opts WriteEphemeralTaskOptions) (plumbing.Hash, error)
+	Write(ctx context.Context, req EphemeralWriteRequest) (WriteEphemeralResult, error)
 	Read(ctx context.Context, baseCommit, worktreeID string) (*ReadEphemeralResult, error)
 	List(ctx context.Context) ([]EphemeralInfo, error)
 	ListCheckpoints(ctx context.Context, baseCommit, worktreeID, sessionID string, limit int) ([]EphemeralCheckpointInfo, error)

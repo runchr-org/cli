@@ -49,12 +49,12 @@ func HashWorktreeID(worktreeID string) string {
 	return hex.EncodeToString(h[:])[:WorktreeIDHashLength]
 }
 
-// WriteTemporary writes a temporary checkpoint to a shadow branch.
+// writeCheckpoint writes a temporary checkpoint to a shadow branch.
 // Shadow branches are named entire/<base-commit-short-hash>.
 // Returns the result containing commit hash and whether it was skipped.
 // If the new tree hash matches the last checkpoint's tree hash, the checkpoint
 // is skipped to avoid duplicate commits (deduplication).
-func (s *ephemeralStore) WriteTemporary(ctx context.Context, opts WriteEphemeralOptions) (WriteEphemeralResult, error) {
+func (s *ephemeralStore) writeCheckpoint(ctx context.Context, opts WriteEphemeralOptions) (WriteEphemeralResult, error) {
 	// Validate base commit - required for shadow branch naming
 	if opts.BaseCommit == "" {
 		return WriteEphemeralResult{}, errors.New("BaseCommit is required for temporary checkpoint")
@@ -270,10 +270,10 @@ func (s *ephemeralStore) List(ctx context.Context) ([]EphemeralInfo, error) {
 	return results, nil
 }
 
-// WriteTemporaryTask writes a task checkpoint to a shadow branch.
+// writeTask writes a task checkpoint to a shadow branch.
 // Task checkpoints include both code changes and task-specific metadata.
 // Returns the commit hash of the created checkpoint.
-func (s *ephemeralStore) WriteTemporaryTask(ctx context.Context, opts WriteEphemeralTaskOptions) (plumbing.Hash, error) {
+func (s *ephemeralStore) writeTask(ctx context.Context, opts WriteEphemeralTaskOptions) (plumbing.Hash, error) {
 	// Validate base commit - required for shadow branch naming
 	if opts.BaseCommit == "" {
 		return plumbing.ZeroHash, errors.New("BaseCommit is required for task checkpoint")

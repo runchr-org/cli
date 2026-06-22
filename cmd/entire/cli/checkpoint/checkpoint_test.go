@@ -350,7 +350,7 @@ func TestWriteTemporary_Deduplication(t *testing.T) {
 
 	// First checkpoint should be created
 	baseCommit := initialCommit.String()
-	result1, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	result1, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{"test.go"},
@@ -372,7 +372,7 @@ func TestWriteTemporary_Deduplication(t *testing.T) {
 	}
 
 	// Second checkpoint with identical content should be skipped
-	result2, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	result2, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{"test.go"},
@@ -399,7 +399,7 @@ func TestWriteTemporary_Deduplication(t *testing.T) {
 		t.Fatalf("failed to modify test file: %v", err)
 	}
 
-	result3, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	result3, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{"test.go"},
@@ -1803,7 +1803,7 @@ func TestWriteTemporary_FirstCheckpoint_CapturesModifiedTrackedFiles(t *testing.
 	store := newEphemeralStore(repo, DefaultV1Refs())
 	baseCommit := initialCommit.String()
 
-	result, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	result, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{}, // Agent hasn't modified anything
@@ -1931,7 +1931,7 @@ func TestWriteTemporary_PathNormalizationAndSkipping(t *testing.T) {
 			}
 
 			store := newEphemeralStore(repo, DefaultV1Refs())
-			result, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+			result, err := store.Write(context.Background(), WriteCheckpoint{
 				SessionID:      "test-session",
 				BaseCommit:     initialCommit.String(),
 				ModifiedFiles:  tt.modifiedFiles(tempDir, mainFile),
@@ -2033,7 +2033,7 @@ func TestWriteTemporary_FirstCheckpoint_CapturesUntrackedFiles(t *testing.T) {
 	store := newEphemeralStore(repo, DefaultV1Refs())
 	baseCommit := initialCommit.String()
 
-	result, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	result, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{},
@@ -2149,7 +2149,7 @@ func TestWriteTemporary_PreservesSymlinkWithoutReadingTarget(t *testing.T) {
 			}
 
 			store := newEphemeralStore(repo, DefaultV1Refs())
-			result, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+			result, err := store.Write(context.Background(), WriteCheckpoint{
 				SessionID:         "test-session",
 				BaseCommit:        initialCommit.String(),
 				NewFiles:          newFiles,
@@ -2266,7 +2266,7 @@ func TestWriteTemporary_FirstCheckpoint_ExcludesGitIgnoredFiles(t *testing.T) {
 	store := newEphemeralStore(repo, DefaultV1Refs())
 	baseCommit := initialCommit.String()
 
-	result, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	result, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{},
@@ -2367,7 +2367,7 @@ func TestWriteTemporary_SubsequentCheckpoint_ExcludesGitIgnoredModifiedFiles(t *
 	baseCommit := initialCommit.String()
 
 	// Write first checkpoint to establish the shadow branch
-	firstResult, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	firstResult, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{},
@@ -2386,7 +2386,7 @@ func TestWriteTemporary_SubsequentCheckpoint_ExcludesGitIgnoredModifiedFiles(t *
 	// Now write a subsequent checkpoint where the agent reports .env and db.secret
 	// as modified files (e.g., agent touched them during its turn).
 	// These gitignored files must NOT appear in the checkpoint tree.
-	result, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	result, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{"main.go", ".env", "db.secret"}, // Agent reports these
@@ -2488,7 +2488,7 @@ func TestWriteTemporary_SubsequentCheckpoint_ExcludesGitIgnoredNewFiles(t *testi
 	baseCommit := initialCommit.String()
 
 	// First checkpoint
-	firstResult, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	firstResult, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		MetadataDir:       ".entire/metadata/test-session",
@@ -2504,7 +2504,7 @@ func TestWriteTemporary_SubsequentCheckpoint_ExcludesGitIgnoredNewFiles(t *testi
 	require.False(t, firstResult.Skipped)
 
 	// Subsequent checkpoint with .env reported as a new file
-	result, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	result, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{},
@@ -2599,7 +2599,7 @@ func TestWriteTemporary_SubsequentCheckpoint_ExcludesNestedGitIgnoredFiles(t *te
 	baseCommit := initialCommit.String()
 
 	// First checkpoint
-	firstResult, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	firstResult, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		MetadataDir:       ".entire/metadata/test-session",
@@ -2615,7 +2615,7 @@ func TestWriteTemporary_SubsequentCheckpoint_ExcludesNestedGitIgnoredFiles(t *te
 	require.False(t, firstResult.Skipped)
 
 	// Subsequent checkpoint with node_modules file reported as modified
-	result, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	result, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{"index.js", "node_modules/pkg/index.js"},
@@ -2722,7 +2722,7 @@ func TestWriteTemporary_FirstCheckpoint_UserAndAgentChanges(t *testing.T) {
 	store := newEphemeralStore(repo, DefaultV1Refs())
 	baseCommit := initialCommit.String()
 
-	result, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	result, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{"main.go"}, // Only agent-modified file in list
@@ -2837,7 +2837,7 @@ func TestWriteTemporary_FirstCheckpoint_CapturesUserDeletedFiles(t *testing.T) {
 	store := newEphemeralStore(repo, DefaultV1Refs())
 	baseCommit := initialCommit.String()
 
-	result, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	result, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{},
@@ -2936,7 +2936,7 @@ func TestWriteTemporary_FirstCheckpoint_CapturesRenamedFiles(t *testing.T) {
 	store := newEphemeralStore(repo, DefaultV1Refs())
 	baseCommit := initialCommit.String()
 
-	result, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	result, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{},
@@ -3033,7 +3033,7 @@ func TestWriteTemporary_FirstCheckpoint_FilenamesWithSpaces(t *testing.T) {
 	store := newEphemeralStore(repo, DefaultV1Refs())
 	baseCommit := initialCommit.String()
 
-	result, err := store.WriteTemporary(context.Background(), WriteEphemeralOptions{
+	result, err := store.Write(context.Background(), WriteCheckpoint{
 		SessionID:         "test-session",
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{},
@@ -4140,7 +4140,7 @@ func TestWriteTemporaryTask_SubagentTranscript_RedactsSecrets(t *testing.T) {
 	store := newEphemeralStore(repo, DefaultV1Refs())
 	baseCommit := initialCommit.String()
 
-	_, err = store.WriteTemporaryTask(context.Background(), WriteEphemeralTaskOptions{
+	_, err = store.Write(context.Background(), WriteTask{
 		SessionID:              "test-session",
 		BaseCommit:             baseCommit,
 		ToolUseID:              "toolu_test456",
@@ -4428,7 +4428,7 @@ func TestWriteTemporaryTask_PreservesSymlinkWithoutReadingTarget(t *testing.T) {
 	t.Chdir(tempDir)
 
 	store := newEphemeralStore(repo, DefaultV1Refs())
-	commitHash, err := store.WriteTemporaryTask(context.Background(), WriteEphemeralTaskOptions{
+	writeRes, err := store.Write(context.Background(), WriteTask{
 		SessionID:      "test-session",
 		BaseCommit:     initialCommit.String(),
 		ToolUseID:      "toolu_symlink123",
@@ -4443,7 +4443,7 @@ func TestWriteTemporaryTask_PreservesSymlinkWithoutReadingTarget(t *testing.T) {
 		t.Fatalf("WriteTemporaryTask() error = %v", err)
 	}
 
-	commit, err := repo.CommitObject(commitHash)
+	commit, err := repo.CommitObject(writeRes.CommitHash)
 	if err != nil {
 		t.Fatalf("failed to get commit object: %v", err)
 	}
@@ -4535,7 +4535,7 @@ func TestWriteTemporaryTask_ExcludesGitIgnoredFiles(t *testing.T) {
 	baseCommit := initialCommit.String()
 
 	// Write task checkpoint where subagent reports .env as modified
-	commitHash, err := store.WriteTemporaryTask(context.Background(), WriteEphemeralTaskOptions{
+	writeRes, err := store.Write(context.Background(), WriteTask{
 		SessionID:              "test-session",
 		BaseCommit:             baseCommit,
 		ToolUseID:              "toolu_test789",
@@ -4553,7 +4553,7 @@ func TestWriteTemporaryTask_ExcludesGitIgnoredFiles(t *testing.T) {
 		t.Fatalf("WriteTemporaryTask() error = %v", err)
 	}
 
-	commit, err := repo.CommitObject(commitHash)
+	commit, err := repo.CommitObject(writeRes.CommitHash)
 	if err != nil {
 		t.Fatalf("failed to get commit object: %v", err)
 	}

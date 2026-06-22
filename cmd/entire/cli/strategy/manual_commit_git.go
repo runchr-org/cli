@@ -79,7 +79,7 @@ func (s *ManualCommitStrategy) SaveStep(ctx context.Context, step StepContext) e
 
 		_, writeCheckpointSpan := perf.Start(ctx, "write_temporary_checkpoint")
 		isFirstCheckpointOfSession := state.StepCount == 0
-		result, err := store.WriteTemporary(ctx, checkpoint.WriteEphemeralOptions{
+		result, err := store.Write(ctx, checkpoint.WriteCheckpoint{
 			SessionID:         sessionID,
 			BaseCommit:        state.BaseCommit,
 			WorktreeID:        state.WorktreeID,
@@ -220,7 +220,7 @@ func (s *ManualCommitStrategy) SaveTaskStep(ctx context.Context, step TaskStepCo
 			step.SessionID,
 		)
 
-		if _, err := store.WriteTemporaryTask(ctx, checkpoint.WriteEphemeralTaskOptions{
+		if _, err := store.Write(ctx, checkpoint.WriteTask{
 			SessionID:              step.SessionID,
 			BaseCommit:             state.BaseCommit,
 			WorktreeID:             state.WorktreeID,

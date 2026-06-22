@@ -361,7 +361,7 @@ func (br *BenchRepo) SeedShadowBranch(b *testing.B, sessionID string, checkpoint
 			b.Fatalf("write transcript: %v", err)
 		}
 
-		_, err := br.Ephemeral.WriteTemporary(context.Background(), checkpoint.WriteEphemeralOptions{
+		_, err := br.Ephemeral.Write(context.Background(), checkpoint.WriteCheckpoint{
 			SessionID:         sessionID,
 			BaseCommit:        br.HeadHash,
 			WorktreeID:        br.WorktreeID,
