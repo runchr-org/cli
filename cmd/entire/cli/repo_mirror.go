@@ -35,6 +35,19 @@ func mirrorRow(m coreapi.Mirror) []string {
 	return []string{repo, cloneURL, private}
 }
 
+// availableMirrorColumns is the view of a repo you *could* mirror: the
+// scannable repo name, your effective GitHub access, and whether it's
+// onboardable. STATUS is "available" (run `entire repo mirror create` to
+// onboard), "mirrored" (already done — `entire repo mirror list` shows the
+// clone URL), or "owner-only" (a personal repo of another user; only its
+// owner may mirror it). No clone URL column: an un-onboarded repo doesn't
+// have one yet.
+var availableMirrorColumns = []string{"REPO", "ACCESS", "STATUS"}
+
+func availableMirrorRow(m coreapi.AvailableMirror) []string {
+	return []string{m.Owner + "/" + m.Repo, string(m.Access), string(m.Status)}
+}
+
 // defaultClusterHost is the cluster the mirror commands target when the
 // caller omits the <cluster-host> argument. A pragmatic single-region
 // default for now — once multi-cluster selection lands this should come
@@ -145,7 +158,7 @@ func newRepoMirrorCreateCmd() *cobra.Command {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid [cluster-host]: %w", err)
 			}
-			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
+			return runCoreForCluster(cmd, clusterHost, func(ctx context.Context, c *coreapi.Client) error {
 				created, err := c.CreateMirror(ctx, &coreapi.CreateMirrorInputBody{
 					Provider:    coreapi.CreateMirrorInputBodyProviderGithub,
 					Owner:       owner,
@@ -234,12 +247,46 @@ func finishMirrorCreate(out, errW io.Writer, created *coreapi.CreatedMirror, noW
 
 func newRepoMirrorListCmd() *cobra.Command {
 	var cluster, provider, owner string
+	var showAvailable bool
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List mirrors you can see",
+		Short: "List mirrors you can see (or, with --show-available, repos you could mirror)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if showAvailable {
+				return runCoreList(cmd, availableMirrorColumns, availableMirrorRow, func(ctx context.Context, c *coreapi.Client) ([]coreapi.AvailableMirror, error) {
+					// Computed live from GitHub using your own login, so name the
+					// core being dialled (same rationale as the existing-mirror
+					// banner). --cluster/--provider don't apply here: the
+					// onboardable set is cluster-agnostic and GitHub-only.
+					if !jsonRequested(cmd) {
+						fmt.Fprintf(cmd.ErrOrStderr(), "Listing repos you could mirror, via %s\n", c.CoreOrigin())
+					}
+					var params coreapi.ListAvailableMirrorsParams
+					if owner != "" {
+						params.Owner = coreapi.NewOptString(owner)
+					}
+					out, err := c.ListAvailableMirrors(ctx, params)
+					if err != nil {
+						return nil, err
+					}
+					return out.Available, nil
+				})
+			}
 			return runCoreList(cmd, mirrorColumns, mirrorRow, func(ctx context.Context, c *coreapi.Client) ([]coreapi.Mirror, error) {
+				// mirror list is identity-scoped: it shows the mirrors visible
+				// from the active login's federation, so naming that login server
+				// makes a surprising empty result legible — e.g. mirrors in a
+				// different deployment than the active context (--cluster is a
+				// filter, not a router). Name the core the client actually dials
+				// (c.CoreOrigin) so the banner can never diverge from where the
+				// request goes — in particular it reflects ENTIRE_TOKEN's aud,
+				// which a separately-resolved ResolveControlPlaneTarget would miss.
+				// On stderr so it never lands in a piped table; skipped for --json
+				// to keep machine output clean.
+				if !jsonRequested(cmd) {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Listing mirrors on %s\n", c.CoreOrigin())
+				}
 				var params coreapi.ListMirrorsParams
 				if cluster != "" {
 					params.Cluster = coreapi.NewOptString(cluster)
@@ -261,6 +308,7 @@ func newRepoMirrorListCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cluster, "cluster", "", "filter by cluster public host")
 	cmd.Flags().StringVar(&provider, "provider", "", "filter by upstream provider (e.g. github)")
 	cmd.Flags().StringVar(&owner, "owner", "", "filter by upstream owner login")
+	cmd.Flags().BoolVar(&showAvailable, "show-available", false, "instead of existing mirrors, list GitHub repos you could onboard as mirrors (ignores --cluster/--provider)")
 	return cmd
 }
 
@@ -302,7 +350,7 @@ func newRepoMirrorRemoveCmd() *cobra.Command {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("invalid [cluster-host]: %w", err)
 			}
-			return runCore(cmd, func(ctx context.Context, c *coreapi.Client) error {
+			return runCoreForCluster(cmd, clusterHost, func(ctx context.Context, c *coreapi.Client) error {
 				// Delete by upstream coords in one call. A 404 is a real
 				// error here, not idempotent success: the server only
 				// answers 204 when it actually removed a placement, so a
