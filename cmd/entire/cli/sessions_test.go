@@ -1549,7 +1549,9 @@ func TestCheckpointTokensCmd_JSONOutput(t *testing.T) {
 	}
 }
 
-func TestCheckpointTokensReport_UsesRootSummaryWhenSessionMetadataIncomplete(t *testing.T) {
+func TestCheckpointTokensReport_UsesReadableMetadataWhenSessionMetadataIncomplete(t *testing.T) {
+	t.Parallel()
+
 	cpID := id.MustCheckpointID("abc123abc123")
 	report := buildCheckpointTokensReport(
 		cpID,
@@ -1579,8 +1581,8 @@ func TestCheckpointTokensReport_UsesRootSummaryWhenSessionMetadataIncomplete(t *
 	if report.Tokens == nil {
 		t.Fatalf("expected token data, got nil")
 	}
-	if report.Tokens.Total != 1500 {
-		t.Fatalf("expected root summary total 1500, got %+v", report.Tokens)
+	if report.Tokens.Total != 100 {
+		t.Fatalf("expected readable session metadata total 100, got %+v", report.Tokens)
 	}
 	if len(report.Limitations) == 0 || !strings.Contains(report.Limitations[0], "1 checkpoint session metadata file could not be read") {
 		t.Fatalf("expected incomplete metadata limitation, got %+v", report.Limitations)
