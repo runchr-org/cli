@@ -840,7 +840,9 @@ func compactAgentName(agentType types.AgentType) string {
 // compact transcript.jsonl format, scoped to this checkpoint via startLine,
 // and records it at sessionPath in the tree. Best-effort: the compact
 // transcript is derived data, so failures are logged and never fail the
-// checkpoint write.
+// checkpoint write. transcriptBytes must already be sanitized for the agent
+// (e.g. Codex portable-transcript sanitization); callers sanitize before
+// calling so the expensive pass runs exactly once.
 func (s *GitStore) writeCompactTranscript(ctx context.Context, agentType types.AgentType, startLine int, transcriptBytes []byte, sessionPath string, entries map[string]object.TreeEntry) {
 	compactCtx, compactSpan := perf.Start(ctx, "write_compact_transcript")
 	defer compactSpan.End()
@@ -1769,8 +1771,15 @@ func (s *GitStore) replaceTranscript(ctx context.Context, transcript redact.Reda
 
 	// Regenerate the compact transcript from the new content so the pushed
 	// transcript.jsonl stays current. Best-effort: on generation failure the
-	// previous transcript.jsonl entry (if any) is left in place.
-	s.writeCompactTranscript(ctx, agentType, startLine, transcript.Bytes(), sessionPath, entries)
+	// previous transcript.jsonl entry (if any) is left in place. Codex
+	// transcripts are sanitized first to match the initial-write path
+	// (writeTranscript), which sanitizes before compaction; this finalize path
+	// otherwise passes raw bytes.
+	compactBytes := transcript.Bytes()
+	if agentType == agent.AgentTypeCodex {
+		compactBytes = codex.SanitizePortableTranscript(compactBytes)
+	}
+	s.writeCompactTranscript(ctx, agentType, startLine, compactBytes, sessionPath, entries)
 
 	return nil
 }

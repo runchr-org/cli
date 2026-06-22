@@ -11,9 +11,10 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/redact"
 
-	// Registers the Claude Code agent so compactAgentName resolves the
-	// "claude-code" slug instead of falling back to the raw agent type.
+	// Registers the Claude Code and Codex agents so compactAgentName resolves
+	// their slugs instead of falling back to the raw agent type.
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
+	_ "github.com/entireio/cli/cmd/entire/cli/agent/codex"
 )
 
 // claudeStyleTranscript returns a Claude Code-format JSONL transcript with two
@@ -196,6 +197,86 @@ func TestWriteCommitted_NonCompactableTranscriptPointsAtFull(t *testing.T) {
 	wantTranscript := "/" + sessionPath + paths.TranscriptFileName
 	if summary.Sessions[0].Transcript != wantTranscript {
 		t.Errorf("sessions[0].transcript = %q, want %q", summary.Sessions[0].Transcript, wantTranscript)
+	}
+}
+
+// codexTranscriptWithCompactionBeforeStart returns a Codex-format JSONL
+// transcript whose line 1 is a `compaction` entry that
+// codex.SanitizePortableTranscript drops. With a checkpoint start of line 2,
+// slicing the raw (unsanitized) transcript yields [beta, gamma] while slicing
+// the sanitized transcript (compaction removed) yields only [gamma] — so the
+// compact transcript diverges unless the finalize path sanitizes like the
+// initial-write path does.
+func codexTranscriptWithCompactionBeforeStart() []byte {
+	lines := []string{
+		`{"timestamp":"2026-01-01T00:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"alpha"}]}}`,
+		`{"timestamp":"2026-01-01T00:00:01Z","type":"response_item","payload":{"type":"compaction","encrypted_content":"REDACTED"}}`,
+		`{"timestamp":"2026-01-01T00:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"beta"}]}}`,
+		`{"timestamp":"2026-01-01T00:00:03Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"gamma"}]}}`,
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+// TestUpdateCommitted_CodexCompactSanitizedLikeInitialWrite guards against the
+// finalize path compacting raw Codex bytes while the initial-write path
+// compacts sanitized bytes. Both must produce the same checkpoint-scoped
+// compact transcript.
+func TestUpdateCommitted_CodexCompactSanitizedLikeInitialWrite(t *testing.T) {
+	t.Parallel()
+	repo, _ := setupTestRepo(t)
+	store := NewGitStore(repo, DefaultV1Refs())
+	cpID := id.MustCheckpointID("e5f6a1b2c3d4")
+
+	raw := codexTranscriptWithCompactionBeforeStart()
+	compactPath := cpID.Path() + "/0/" + paths.CompactTranscriptFileName
+
+	// Initial write sanitizes before compaction. With start=2 the dropped
+	// compaction line shifts the window so only "gamma" survives.
+	err := store.WriteCommitted(context.Background(), WriteCommittedOptions{
+		CheckpointID:              cpID,
+		SessionID:                 "session-001",
+		Strategy:                  "manual-commit",
+		Transcript:                redact.AlreadyRedacted(raw),
+		Agent:                     agent.AgentTypeCodex,
+		CheckpointTranscriptStart: 2,
+		AuthorName:                "Test",
+		AuthorEmail:               "test@test.com",
+	})
+	if err != nil {
+		t.Fatalf("WriteCommitted() error = %v", err)
+	}
+	initialCompact, ok := readBranchFile(t, store, compactPath)
+	if !ok {
+		t.Fatal("transcript.jsonl missing after WriteCommitted")
+	}
+	if strings.Contains(initialCompact, "beta") {
+		t.Errorf("initial compact contains pre-start content:\n%s", initialCompact)
+	}
+	if !strings.Contains(initialCompact, "gamma") {
+		t.Errorf("initial compact missing checkpoint-scoped content:\n%s", initialCompact)
+	}
+
+	// Finalize with the same raw transcript. replaceTranscript must sanitize
+	// before compaction; otherwise the raw slice at line 2 would reintroduce
+	// "beta".
+	err = store.UpdateCommitted(context.Background(), UpdateCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-001",
+		Transcript:   redact.AlreadyRedacted(raw),
+		Agent:        agent.AgentTypeCodex,
+	})
+	if err != nil {
+		t.Fatalf("UpdateCommitted() error = %v", err)
+	}
+	finalizeCompact, ok := readBranchFile(t, store, compactPath)
+	if !ok {
+		t.Fatal("transcript.jsonl missing after UpdateCommitted")
+	}
+	if strings.Contains(finalizeCompact, "beta") {
+		t.Errorf("finalize compact contains pre-start content (raw bytes not sanitized):\n%s", finalizeCompact)
+	}
+	if finalizeCompact != initialCompact {
+		t.Errorf("finalize compact diverges from initial write:\ninitial:  %s\nfinalize: %s", initialCompact, finalizeCompact)
 	}
 }
 
