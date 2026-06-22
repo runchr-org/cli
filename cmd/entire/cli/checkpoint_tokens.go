@@ -85,7 +85,7 @@ func runCheckpointTokens(ctx context.Context, cmd *cobra.Command, checkpointIDPr
 	return nil
 }
 
-func readCheckpointTokenSessionMetadata(ctx context.Context, store *checkpoint.GitStore, cpID id.CheckpointID, sessionCount int) ([]*checkpoint.CommittedMetadata, int, error) {
+func readCheckpointTokenSessionMetadata(ctx context.Context, store checkpoint.CommittedListReader, cpID id.CheckpointID, sessionCount int) ([]*checkpoint.CommittedMetadata, int, error) {
 	metas := make([]*checkpoint.CommittedMetadata, 0, sessionCount)
 	var warnings int
 	for i := range sessionCount {
