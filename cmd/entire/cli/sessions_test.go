@@ -2188,6 +2188,50 @@ func TestBuildCheckpointMetricDeltaClampsChangeOverflow(t *testing.T) {
 	}
 }
 
+func TestSaturatingIntSubHandlesMinIntSubtrahend(t *testing.T) {
+	t.Parallel()
+
+	maxInt := int(^uint(0) >> 1)
+	minInt := -maxInt - 1
+
+	tests := []struct {
+		name string
+		a    int
+		want int
+	}{
+		{
+			name: "clamps non-negative minuend",
+			a:    0,
+			want: maxInt,
+		},
+		{
+			name: "keeps max exact result",
+			a:    -1,
+			want: maxInt,
+		},
+		{
+			name: "keeps representable result",
+			a:    -2,
+			want: maxInt - 1,
+		},
+		{
+			name: "keeps zero exact result",
+			a:    minInt,
+			want: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := saturatingIntSub(tt.a, minInt); got != tt.want {
+				t.Fatalf("saturatingIntSub(%d, minInt) = %d, want %d", tt.a, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCheckpointTokensCmd_ComparisonUnavailableWhenBaselineTokenDataMissing(t *testing.T) {
 	repo, _ := runExplainAutoTestRepo(t)
 	ctx := context.Background()

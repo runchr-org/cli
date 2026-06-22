@@ -413,8 +413,16 @@ func buildCheckpointMetricDelta(baseline, current int) *checkpointTokensMetricDe
 }
 
 func saturatingIntSub(a, b int) int {
-	if b < 0 && a > maxInt()+b {
-		return maxInt()
+	if b < 0 {
+		if b == minInt() {
+			if a >= 0 {
+				return maxInt()
+			}
+			return a - b
+		}
+		if a > maxInt()-(-b) {
+			return maxInt()
+		}
 	}
 	if b > 0 && a < minInt()+b {
 		return minInt()
