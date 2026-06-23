@@ -380,10 +380,13 @@ func runTrailListAllWithClient(ctx context.Context, w io.Writer, client *api.Cli
 		return fmt.Errorf("failed to decode trail list: %w", err)
 	}
 
-	// Convert to metadata for display
+	// Convert to metadata for display, attaching the browser URL (server-provided
+	// when present, locally constructed as a fallback for older servers).
 	trails := make([]*trail.Metadata, 0, len(listResp.Trails))
 	for i := range listResp.Trails {
-		trails = append(trails, listResp.Trails[i].ToMetadata())
+		m := listResp.Trails[i].ToMetadata()
+		m.URL = trailDisplayURL(listResp.Trails[i], forge, owner, repo)
+		trails = append(trails, m)
 	}
 
 	totalMatched := listResp.Total
@@ -572,6 +575,7 @@ func printTrailRows(w io.Writer, trails []*trail.Metadata, showAuthor, showStatu
 	// branch names or logins don't throw off the table.
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	showPhase := trailListHasPhase(trails)
+	showURL := trailListHasURL(trails)
 	columns := []string{"NUM", "BRANCH", "TITLE"}
 	if showStatus {
 		columns = append(columns, "STATUS")
@@ -583,6 +587,9 @@ func printTrailRows(w io.Writer, trails []*trail.Metadata, showAuthor, showStatu
 		columns = append(columns, "AUTHOR")
 	}
 	columns = append(columns, "UPDATED")
+	if showURL {
+		columns = append(columns, "URL")
+	}
 	fmt.Fprintln(tw, "  "+strings.Join(columns, "\t"))
 	for _, t := range trails {
 		number := "-"
@@ -604,6 +611,9 @@ func printTrailRows(w io.Writer, trails []*trail.Metadata, showAuthor, showStatu
 			fields = append(fields, t.AuthorLogin())
 		}
 		fields = append(fields, timeAgo(t.UpdatedAt))
+		if showURL {
+			fields = append(fields, t.URL)
+		}
 		fmt.Fprintln(tw, "  "+strings.Join(fields, "\t"))
 	}
 	_ = tw.Flush()
@@ -612,6 +622,15 @@ func printTrailRows(w io.Writer, trails []*trail.Metadata, showAuthor, showStatu
 func trailListHasPhase(trails []*trail.Metadata) bool {
 	for _, t := range trails {
 		if t != nil && strings.TrimSpace(t.Phase) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func trailListHasURL(trails []*trail.Metadata) bool {
+	for _, t := range trails {
+		if t != nil && strings.TrimSpace(t.URL) != "" {
 			return true
 		}
 	}

@@ -893,6 +893,35 @@ func TestPrintTrailListYourTrailsRelabelsAndSurfacesGhLogin(t *testing.T) {
 	}
 }
 
+func TestPrintTrailListShowsURLColumnWhenPresent(t *testing.T) {
+	t.Parallel()
+	alice := trailListTestAuthorAlice
+	var out bytes.Buffer
+	printTrailList(&out, []*trail.Metadata{
+		{Number: 5, Branch: "feat/a", Status: trail.StatusOpen, URL: "https://entire.io/gh/acme/repo/trails/5", Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
+	}, trailListDisplayOptions{StatusFilters: []trail.Status{trail.StatusOpen}})
+
+	text := out.String()
+	if !strings.Contains(text, "URL") || !strings.Contains(text, "https://entire.io/gh/acme/repo/trails/5") {
+		t.Fatalf("expected a URL column with the trail url, got:\n%s", text)
+	}
+}
+
+func TestPrintTrailListOmitsURLColumnWhenAbsent(t *testing.T) {
+	t.Parallel()
+	alice := trailListTestAuthorAlice
+	var out bytes.Buffer
+	printTrailList(&out, []*trail.Metadata{
+		{Number: 5, Branch: "feat/a", Status: trail.StatusOpen, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
+	}, trailListDisplayOptions{StatusFilters: []trail.Status{trail.StatusOpen}})
+
+	// The column header must not appear when no trail carries a URL (e.g. an
+	// older server that omits the field and no local fallback was attached).
+	if text := out.String(); strings.Contains(text, "URL") {
+		t.Fatalf("expected URL column omitted when no trail has a url, got:\n%s", text)
+	}
+}
+
 func TestPrintTrailListAnyStatusShowsStatusColumn(t *testing.T) {
 	t.Parallel()
 	alice := trailListTestAuthorAlice
