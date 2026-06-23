@@ -55,7 +55,7 @@ func resolveOpenRefs(ctx context.Context, opts OpenOptions) PersistentRefs {
 }
 
 // Ephemeral returns the git-backed shadow-branch (temporary) store.
-func (s *Stores) Ephemeral() EphemeralStore { return s.ephemeral } //nolint:ireturn // ephemeral store capability is the abstraction boundary
+func (s *Stores) Ephemeral() EphemeralStore { return s.ephemeral }
 
 // Refs returns the resolved committed-ref topology.
 func (s *Stores) Refs() PersistentRefs { return s.refs }
