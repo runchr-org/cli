@@ -217,7 +217,8 @@ func addTokensProfileTokenSignals(signals map[string]*tokensProfileSignal, check
 	if tokens == nil {
 		return
 	}
-	if tokens.Total > 0 && tokenPercent(tokens.CacheRead, tokens.Total) >= 80 {
+	topLevelTotal := topLevelSessionTokenTotal(tokens)
+	if topLevelTotal > 0 && tokenPercent(tokens.CacheRead, topLevelTotal) >= recommendationHighCacheReadPercent {
 		addTokensProfileSignal(signals, "context-replay-hotspot", checkpointID, denominator)
 	}
 	if tokens.APICalls >= 20 {

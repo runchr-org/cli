@@ -29,6 +29,25 @@ func TestAddTokensProfileTokenSignalsSubagentHeavyAvoidsOverflow(t *testing.T) {
 	}
 }
 
+func TestAddTokensProfileTokenSignalsCacheReplayUsesTopLevelTokenTotal(t *testing.T) {
+	t.Parallel()
+
+	signals := map[string]*tokensProfileSignal{}
+	addTokensProfileTokenSignals(signals, id.MustCheckpointID("999aaa000002"), &sessionTokensUsage{
+		Total:         10000,
+		Input:         100,
+		CacheRead:     800,
+		CacheWrite:    50,
+		Output:        50,
+		APICalls:      20,
+		SubagentTotal: 9000,
+	}, 1)
+
+	if signals["context-replay-hotspot"] == nil {
+		t.Fatalf("expected context-replay-hotspot signal, got %+v", signals)
+	}
+}
+
 func TestTokensProfileCmd_TextOutputAggregatesCommittedCheckpoints(t *testing.T) {
 	repo, _ := runExplainAutoTestRepo(t)
 	ctx := context.Background()
