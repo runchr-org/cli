@@ -213,10 +213,7 @@ func buildCheckpointTokensReport(cpID id.CheckpointID, summary *checkpoint.Check
 		report.Branch = firstCheckpointBranch(metas)
 	}
 
-	usage := aggregateCheckpointTokenUsage(metas)
-	if summary != nil && summary.TokenUsage != nil && (usage == nil || metadataWarnings > 0) {
-		usage = summary.TokenUsage
-	}
+	usage := checkpointTokenUsage(summary, metas, metadataWarnings > 0)
 	if tokens := buildSessionTokensUsage(usage); tokens != nil {
 		report.Tokens = tokens
 		if tokens.SubagentTotal > 0 {
@@ -347,6 +344,17 @@ func aggregateCheckpointTokenUsage(metas []*checkpoint.CommittedMetadata) *agent
 		total = addCheckpointTokenUsage(total, meta.TokenUsage)
 	}
 	return total
+}
+
+func checkpointTokenUsage(summary *checkpoint.CheckpointSummary, metas []*checkpoint.CommittedMetadata, metadataReadWarning bool) *agent.TokenUsage {
+	sessionUsage := aggregateCheckpointTokenUsage(metas)
+	if !metadataReadWarning && sessionUsage != nil {
+		return sessionUsage
+	}
+	if summary != nil && summary.TokenUsage != nil {
+		return summary.TokenUsage
+	}
+	return sessionUsage
 }
 
 func addCheckpointTokenUsage(a, b *agent.TokenUsage) *agent.TokenUsage {

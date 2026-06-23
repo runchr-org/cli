@@ -1815,6 +1815,47 @@ func TestTokensCmd_DefaultsToCurrentSession(t *testing.T) {
 	}
 }
 
+func TestTokensCmd_CurrentDoesNotFallbackToOtherWorktree(t *testing.T) {
+	setupStopTestRepo(t)
+
+	ctx := context.Background()
+	now := time.Now()
+	other := makeSessionState("test-tokens-other-only", session.PhaseActive)
+	other.WorktreePath = testOtherWorktreePath
+	other.LastInteractionTime = &now
+	other.TokenUsage = &agent.TokenUsage{InputTokens: 9999}
+
+	if err := strategy.SaveSessionState(ctx, other); err != nil {
+		t.Fatalf("SaveSessionState() error = %v", err)
+	}
+
+	defaultCmd := newTokensCmd()
+	var defaultStdout bytes.Buffer
+	defaultCmd.SetOut(&defaultStdout)
+	defaultCmd.SetArgs([]string{})
+	if err := defaultCmd.ExecuteContext(ctx); err != nil {
+		t.Fatalf("expected default command to fall back, got: %v", err)
+	}
+	if !strings.Contains(defaultStdout.String(), "Session: test-tokens-other-only") {
+		t.Fatalf("expected default command to fall back to other worktree session, got:\n%s", defaultStdout.String())
+	}
+
+	currentCmd := newTokensCmd()
+	var currentStdout bytes.Buffer
+	currentCmd.SetOut(&currentStdout)
+	currentCmd.SetArgs([]string{"--current"})
+	if err := currentCmd.ExecuteContext(ctx); err != nil {
+		t.Fatalf("expected --current command to avoid fallback without error, got: %v", err)
+	}
+	out := currentStdout.String()
+	if !strings.Contains(out, "No active session found in this worktree.") {
+		t.Fatalf("expected --current command to report no current worktree session, got:\n%s", out)
+	}
+	if strings.Contains(out, "test-tokens-other-only") {
+		t.Fatalf("expected --current command not to fall back to other worktree, got:\n%s", out)
+	}
+}
+
 func TestTokensCmd_CurrentAndSessionIDAreMutuallyExclusive(t *testing.T) {
 	setupStopTestRepo(t)
 

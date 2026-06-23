@@ -210,14 +210,7 @@ func tokensProfileCheckpointUsage(ctx context.Context, store *checkpoint.GitStor
 		}
 		metas = append(metas, meta)
 	}
-	sessionUsage := aggregateCheckpointTokenUsage(metas)
-	if !metadataReadWarning && sessionUsage != nil {
-		return sessionUsage, false, nil
-	}
-	if summary.TokenUsage != nil {
-		return summary.TokenUsage, metadataReadWarning, nil
-	}
-	return sessionUsage, metadataReadWarning, nil
+	return checkpointTokenUsage(summary, metas, metadataReadWarning), metadataReadWarning, nil
 }
 
 func addTokensProfileTokenSignals(signals map[string]*tokensProfileSignal, checkpointID id.CheckpointID, tokens *sessionTokensUsage, denominator int) {
