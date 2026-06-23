@@ -351,7 +351,8 @@ type UpdateOptions struct {
 }
 
 // PrecomputedTranscriptBlobs holds blob hashes for a transcript that was
-// chunked and written to the object store once, for reuse across multiple// transcript-backfill writes sharing the same transcript content.
+// chunked and written to the object store once, for reuse across multiple
+// transcript-backfill writes sharing the same transcript content.
 // Callers should avoid constructing this for empty transcripts; agent.ChunkTranscript
 // would otherwise produce a single zero-length chunk and a hash for an empty
 // blob, which downstream stores would never reference.

@@ -21,7 +21,7 @@ import (
 )
 
 // SaveStep saves a checkpoint to the shadow branch.
-// Uses checkpoint.EphemeralStore.WriteTemporary for git operations.
+// Uses checkpoint.EphemeralStore.Write with a checkpoint.WriteCheckpoint request.
 func (s *ManualCommitStrategy) SaveStep(ctx context.Context, step StepContext) error {
 	_, openRepoSpan := perf.Start(ctx, "open_repository")
 	repo, err := OpenRepository(ctx)
@@ -168,7 +168,7 @@ func (s *ManualCommitStrategy) ensureSessionInitialized(ctx context.Context, rep
 }
 
 // SaveTaskStep saves a task step checkpoint to the shadow branch.
-// Uses checkpoint.EphemeralStore.WriteTemporaryTask for git operations.
+// Uses checkpoint.EphemeralStore.Write with a checkpoint.WriteTask request.
 func (s *ManualCommitStrategy) SaveTaskStep(ctx context.Context, step TaskStepContext) error {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
