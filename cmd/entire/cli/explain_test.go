@@ -527,7 +527,7 @@ func writeTemporaryCheckpointForExplainTest(t *testing.T) string {
 
 	require.NoError(t, os.WriteFile(testFile, []byte("updated content"), 0o644))
 
-	result, err := checkpoint.NewEphemeralStore(repo, checkpoint.DefaultV1Refs()).Write(context.Background(), checkpoint.WriteCheckpoint{
+	result, err := checkpoint.NewEphemeralStore(repo, checkpoint.DefaultV1Refs()).Write(context.Background(), checkpoint.Step{
 		SessionID:         sessionID,
 		BaseCommit:        initialCommit.String()[:7],
 		ModifiedFiles:     []string{"temp.txt"},
@@ -2522,7 +2522,7 @@ func writeExternalTemporaryCheckpointForExplainTest(
 	head, err := repo.Head()
 	require.NoError(t, err)
 
-	result, err := checkpoint.NewEphemeralStore(repo, checkpoint.DefaultV1Refs()).Write(context.Background(), checkpoint.WriteCheckpoint{
+	result, err := checkpoint.NewEphemeralStore(repo, checkpoint.DefaultV1Refs()).Write(context.Background(), checkpoint.Step{
 		SessionID:         sessionID,
 		BaseCommit:        head.Hash().String()[:7],
 		ModifiedFiles:     []string{"test.txt"},
@@ -3903,7 +3903,7 @@ func TestGetBranchCheckpoints_ReadsPromptFromShadowBranch(t *testing.T) {
 	// Create first checkpoint (baseline copy) - this one gets filtered out
 	store := checkpoint.NewEphemeralStore(repo, checkpoint.DefaultV1Refs())
 	baseCommit := initialCommit.String()[:7]
-	_, err = store.Write(context.Background(), checkpoint.WriteCheckpoint{
+	_, err = store.Write(context.Background(), checkpoint.Step{
 		SessionID:         sessionID,
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{"test.txt"},
@@ -3924,7 +3924,7 @@ func TestGetBranchCheckpoints_ReadsPromptFromShadowBranch(t *testing.T) {
 	}
 
 	// Create second checkpoint (has code changes, won't be filtered)
-	_, err = store.Write(context.Background(), checkpoint.WriteCheckpoint{
+	_, err = store.Write(context.Background(), checkpoint.Step{
 		SessionID:         sessionID,
 		BaseCommit:        baseCommit,
 		ModifiedFiles:     []string{"test.txt"},
@@ -4031,7 +4031,7 @@ func TestGetReachableTemporaryCheckpoints_FiltersByWorktree(t *testing.T) {
 		t.Helper()
 		metaDirAbs := filepath.Join(tmpDir, ".entire", "metadata", sessionID)
 		// Baseline
-		if _, err := store.Write(context.Background(), checkpoint.WriteCheckpoint{
+		if _, err := store.Write(context.Background(), checkpoint.Step{
 			SessionID: sessionID, BaseCommit: baseCommit, WorktreeID: worktreeID,
 			ModifiedFiles: []string{"test.txt"}, MetadataDir: ".entire/metadata/" + sessionID,
 			MetadataDirAbs: metaDirAbs, CommitMessage: "baseline", AuthorName: "Test",
@@ -4043,7 +4043,7 @@ func TestGetReachableTemporaryCheckpoints_FiltersByWorktree(t *testing.T) {
 		if err := os.WriteFile(testFile, []byte(sessionID+" changes"), 0o644); err != nil {
 			t.Fatalf("failed to modify test file: %v", err)
 		}
-		if _, err := store.Write(context.Background(), checkpoint.WriteCheckpoint{
+		if _, err := store.Write(context.Background(), checkpoint.Step{
 			SessionID: sessionID, BaseCommit: baseCommit, WorktreeID: worktreeID,
 			ModifiedFiles: []string{"test.txt"}, MetadataDir: ".entire/metadata/" + sessionID,
 			MetadataDirAbs: metaDirAbs, CommitMessage: "code changes", AuthorName: "Test",

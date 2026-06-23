@@ -12,24 +12,24 @@ type EphemeralWriteRequest interface {
 	isEphemeralWriteRequest()
 }
 
-// WriteCheckpoint captures working-tree changes as a shadow-branch checkpoint.
-// (Former WriteTemporary.)
-type WriteCheckpoint WriteEphemeralOptions
+// Step captures working-tree changes as an ephemeral (shadow-branch) checkpoint
+// for a session step.
+type Step WriteEphemeralOptions
 
-// WriteTask records a completed subagent task as a shadow-branch checkpoint.
-// (Former WriteTemporaryTask.)
-type WriteTask WriteEphemeralTaskOptions
+// TaskStep captures a completed subagent task as an ephemeral (shadow-branch)
+// checkpoint for a task step.
+type TaskStep WriteEphemeralTaskOptions
 
-func (WriteCheckpoint) isEphemeralWriteRequest() {}
-func (WriteTask) isEphemeralWriteRequest()       {}
+func (Step) isEphemeralWriteRequest()     {}
+func (TaskStep) isEphemeralWriteRequest() {}
 
 // Write dispatches an ephemeral write request to the matching shadow-branch
 // operation. The result carries the created (or existing) commit hash.
 func (s *ephemeralStore) Write(ctx context.Context, req EphemeralWriteRequest) (WriteEphemeralResult, error) {
 	switch r := req.(type) {
-	case WriteCheckpoint:
+	case Step:
 		return s.writeCheckpoint(ctx, WriteEphemeralOptions(r))
-	case WriteTask:
+	case TaskStep:
 		hash, err := s.writeTask(ctx, WriteEphemeralTaskOptions(r))
 		return WriteEphemeralResult{CommitHash: hash}, err
 	default:

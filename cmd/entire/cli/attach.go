@@ -62,7 +62,7 @@ func (opts attachOptions) committedRefs(ctx context.Context) cpkg.PersistentRefs
 
 // openAttachStore opens the committed store for the resolved topology. refs is
 // passed explicitly so attach preserves PrimaryAsRead() pinning.
-func openAttachStore(ctx context.Context, repo *git.Repository, refs cpkg.PersistentRefs) (cpkg.PersistentStore, error) { //nolint:ireturn // committed store capability preserves attach's read-ref override
+func openAttachStore(ctx context.Context, repo *git.Repository, refs cpkg.PersistentRefs) (cpkg.PersistentStore, error) {
 	stores, err := cpkg.Open(ctx, repo, cpkg.OpenOptions{Refs: &refs})
 	if err != nil {
 		return nil, fmt.Errorf("open checkpoint store: %w", err)

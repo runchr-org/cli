@@ -21,7 +21,7 @@ import (
 )
 
 // SaveStep saves a checkpoint to the shadow branch.
-// Uses checkpoint.EphemeralStore.Write with a checkpoint.WriteCheckpoint request.
+// Uses checkpoint.EphemeralStore.Write with a checkpoint.Step request.
 func (s *ManualCommitStrategy) SaveStep(ctx context.Context, step StepContext) error {
 	_, openRepoSpan := perf.Start(ctx, "open_repository")
 	repo, err := OpenRepository(ctx)
@@ -79,7 +79,7 @@ func (s *ManualCommitStrategy) SaveStep(ctx context.Context, step StepContext) e
 
 		_, writeCheckpointSpan := perf.Start(ctx, "write_temporary_checkpoint")
 		isFirstCheckpointOfSession := state.StepCount == 0
-		result, err := store.Write(ctx, checkpoint.WriteCheckpoint{
+		result, err := store.Write(ctx, checkpoint.Step{
 			SessionID:         sessionID,
 			BaseCommit:        state.BaseCommit,
 			WorktreeID:        state.WorktreeID,
@@ -168,7 +168,7 @@ func (s *ManualCommitStrategy) ensureSessionInitialized(ctx context.Context, rep
 }
 
 // SaveTaskStep saves a task step checkpoint to the shadow branch.
-// Uses checkpoint.EphemeralStore.Write with a checkpoint.WriteTask request.
+// Uses checkpoint.EphemeralStore.Write with a checkpoint.TaskStep request.
 func (s *ManualCommitStrategy) SaveTaskStep(ctx context.Context, step TaskStepContext) error {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
@@ -220,7 +220,7 @@ func (s *ManualCommitStrategy) SaveTaskStep(ctx context.Context, step TaskStepCo
 			step.SessionID,
 		)
 
-		if _, err := store.Write(ctx, checkpoint.WriteTask{
+		if _, err := store.Write(ctx, checkpoint.TaskStep{
 			SessionID:              step.SessionID,
 			BaseCommit:             state.BaseCommit,
 			WorktreeID:             state.WorktreeID,

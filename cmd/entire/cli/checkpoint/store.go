@@ -41,7 +41,7 @@ func newEphemeralStore(repo *git.Repository, refs PersistentRefs) *ephemeralStor
 // store. Most callers reach it via Open(...).Ephemeral(); this direct
 // constructor exists for benchmarks and tests that exercise the shadow-branch
 // surface without the full facade.
-func NewEphemeralStore(repo *git.Repository, refs PersistentRefs) EphemeralStore { //nolint:ireturn // temporary store capability is the abstraction boundary
+func NewEphemeralStore(repo *git.Repository, refs PersistentRefs) EphemeralStore {
 	return newEphemeralStore(repo, refs)
 }
 
