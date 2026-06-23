@@ -197,7 +197,7 @@ func buildCheckpointTokensReport(cpID id.CheckpointID, summary *checkpoint.Check
 	}
 
 	usage := aggregateCheckpointTokenUsage(metas)
-	if usage == nil && summary != nil {
+	if summary != nil && summary.TokenUsage != nil && (usage == nil || metadataWarnings > 0) {
 		usage = summary.TokenUsage
 	}
 	if tokens := buildSessionTokensUsage(usage); tokens != nil {
