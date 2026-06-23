@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -685,6 +686,35 @@ func TestResolveLatestCheckpointReturnsUnsupportedWhenNoReadableCheckpointExists
 	}
 }
 
+func TestResolveLatestCheckpointReturnsErrorWhenAnyCheckpointCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	missingID := id.MustCheckpointID("aaa111bbb222")
+	newID := id.MustCheckpointID("ccc333ddd444")
+	reader := &resumeCheckpointInfoReaderStub{
+		summaries: map[id.CheckpointID]*checkpoint.CheckpointSummary{
+			newID: {Sessions: []checkpoint.SessionFilePaths{{Metadata: "new"}}},
+		},
+		metadata: map[id.CheckpointID][]checkpoint.CommittedMetadata{
+			newID: {{
+				SessionID: "new-session",
+				CreatedAt: time.Date(2025, 1, 1, 11, 0, 0, 0, time.UTC),
+			}},
+		},
+	}
+
+	_, found, err := resolveLatestCheckpoint(context.Background(), reader, []id.CheckpointID{missingID, newID})
+	if err == nil {
+		t.Fatal("resolveLatestCheckpoint() error = nil, want read error")
+	}
+	if found {
+		t.Fatal("resolveLatestCheckpoint() found = true")
+	}
+	if !errors.Is(err, checkpoint.ErrCheckpointNotFound) {
+		t.Fatalf("resolveLatestCheckpoint() error = %v, want checkpoint not found", err)
+	}
+}
+
 type resumeCheckpointInfoReaderStub struct {
 	summaries map[id.CheckpointID]*checkpoint.CheckpointSummary
 	metadata  map[id.CheckpointID][]checkpoint.CommittedMetadata
@@ -891,7 +921,7 @@ func TestFindBranchCheckpoint_SquashMergeMultipleCheckpoints(t *testing.T) {
 	}
 }
 
-func TestResumeFromCurrentBranch_MultipleCheckpointsSaysLatestReadable(t *testing.T) {
+func TestResumeFromCurrentBranch_MultipleCheckpointsSaysLatest(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 	t.Setenv("ENTIRE_TEST_CLAUDE_PROJECT_DIR", filepath.Join(tmpDir, "claude-projects"))
@@ -920,7 +950,7 @@ func TestResumeFromCurrentBranch_MultipleCheckpointsSaysLatestReadable(t *testin
 		t.Fatalf("resumeFromCurrentBranch() error = %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
 	}
 
-	want := "resuming from the latest readable checkpoint"
+	want := "resuming from the latest checkpoint"
 	if !strings.Contains(stdout.String(), want) {
 		t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
 	}
