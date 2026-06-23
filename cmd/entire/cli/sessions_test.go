@@ -2009,6 +2009,21 @@ func TestReadCheckpointTokenSessionMetadataStopsBetweenReadsWhenContextCanceled(
 	}
 }
 
+func TestReadCheckpointTokenSessionMetadataChecksCanceledContextBeforeAllocation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	metas, warnings, err := readCheckpointTokenSessionMetadata(ctx, nil, id.MustCheckpointID("abc123abc123"), 0)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got metas=%+v warnings=%d err=%v", metas, warnings, err)
+	}
+	if metas != nil || warnings != 0 {
+		t.Fatalf("expected canceled read to return no results, got metas=%+v warnings=%d", metas, warnings)
+	}
+}
+
 func TestCheckpointTokensCmd_TextOutputWithComparison(t *testing.T) {
 	repo, _ := runExplainAutoTestRepo(t)
 	ctx := context.Background()
