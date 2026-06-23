@@ -350,7 +350,7 @@ func resolveLatestCheckpoint(ctx context.Context, store checkpointInfoReader, ch
 }
 
 type checkpointInfoReader interface {
-	checkpoint.PersistentReader
+	checkpoint.CheckpointReader
 	ReadSessionMetadata(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*checkpoint.Metadata, error)
 }
 

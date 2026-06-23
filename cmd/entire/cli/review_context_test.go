@@ -467,6 +467,14 @@ func (r *countingReviewContextReader) Read(
 	return nil, checkpoint.ErrCheckpointNotFound
 }
 
+func (r *countingReviewContextReader) ReadSessionPrompts(
+	context.Context,
+	checkpointid.CheckpointID,
+	int,
+) (string, error) {
+	return "", checkpoint.ErrCheckpointNotFound
+}
+
 func (r *countingReviewContextReader) ReadSessionContent(
 	context.Context,
 	checkpointid.CheckpointID,

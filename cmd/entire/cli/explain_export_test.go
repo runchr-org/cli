@@ -498,8 +498,28 @@ type stubCommittedReader struct {
 	err      error                              // err returned for indexes not in contents
 }
 
+//nolint:unparam // test stub; signature matches CheckpointReader.Read.
 func (s *stubCommittedReader) Read(_ context.Context, _ id.CheckpointID) (*checkpoint.CheckpointSummary, error) {
 	return s.summary, nil
+}
+
+func (s *stubCommittedReader) ReadSessionMetadata(_ context.Context, _ id.CheckpointID, idx int) (*checkpoint.Metadata, error) {
+	if c, ok := s.contents[idx]; ok && c != nil {
+		m := c.Metadata
+		return &m, nil
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	return nil, errors.New("stub: session not configured")
+}
+
+func (s *stubCommittedReader) ReadSessionPrompts(_ context.Context, _ id.CheckpointID, _ int) (string, error) {
+	return "", errors.New("stub: ReadSessionPrompts not configured")
+}
+
+func (s *stubCommittedReader) ReadSessionMetadataAndPrompts(_ context.Context, _ id.CheckpointID, _ int) (*checkpoint.SessionContent, error) {
+	return nil, errors.New("stub: ReadSessionMetadataAndPrompts not configured")
 }
 
 func (s *stubCommittedReader) ReadSessionContent(_ context.Context, _ id.CheckpointID, idx int) (*checkpoint.SessionContent, error) {

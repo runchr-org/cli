@@ -2159,7 +2159,7 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 	return points, nil
 }
 
-func readLatestCommittedSessionPrompt(ctx context.Context, store checkpoint.PersistentListReader, cpID id.CheckpointID, sessionCount int) string {
+func readLatestCommittedSessionPrompt(ctx context.Context, store checkpoint.SessionReader, cpID id.CheckpointID, sessionCount int) string {
 	if sessionCount <= 0 {
 		return ""
 	}

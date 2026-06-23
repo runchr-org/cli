@@ -273,7 +273,7 @@ func formatReviewSessionLine(worktreeRoot string, st *session.State) string {
 
 func reviewCheckpointDetail(
 	ctx context.Context,
-	reader checkpoint.PersistentReader,
+	reader checkpoint.SessionReader,
 	cpID checkpointid.CheckpointID,
 	summary *checkpoint.CheckpointSummary,
 ) string {
@@ -307,7 +307,7 @@ type reviewContextSessionDetail struct {
 
 func readReviewContextSessionMetadata(
 	ctx context.Context,
-	reader checkpoint.PersistentReader,
+	reader checkpoint.SessionReader,
 	cpID checkpointid.CheckpointID,
 	sessionIndex int,
 ) (*checkpoint.Metadata, error) {
@@ -326,7 +326,7 @@ func readReviewContextSessionMetadata(
 
 func readReviewContextSessionPrompts(
 	ctx context.Context,
-	reader checkpoint.PersistentReader,
+	reader checkpoint.SessionReader,
 	cpID checkpointid.CheckpointID,
 	sessionIndex int,
 ) (string, error) {

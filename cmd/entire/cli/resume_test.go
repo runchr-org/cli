@@ -632,6 +632,10 @@ func (r *resumeCheckpointInfoReaderStub) Read(_ context.Context, checkpointID id
 	return r.summaries[checkpointID], nil
 }
 
+func (r *resumeCheckpointInfoReaderStub) List(context.Context) ([]checkpoint.CheckpointInfo, error) {
+	return nil, nil
+}
+
 func (r *resumeCheckpointInfoReaderStub) ReadSessionContent(_ context.Context, _ id.CheckpointID, _ int) (*checkpoint.SessionContent, error) {
 	return nil, checkpoint.ErrCheckpointNotFound
 }

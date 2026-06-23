@@ -29,7 +29,7 @@ func TestReadCommittedCheckpointWrapsReaderError(t *testing.T) {
 	summary, err := ReadCheckpoint(context.Background(), reader, id.MustCheckpointID("111111111111"))
 	require.Nil(t, summary)
 	require.ErrorIs(t, err, readerErr)
-	require.ErrorContains(t, err, "read committed checkpoint")
+	require.ErrorContains(t, err, "read persistent checkpoint")
 }
 
 func TestReadLatestSessionContentEmptySummaryReturnsNotFound(t *testing.T) {
@@ -92,5 +92,21 @@ func (s *committedReaderStub) Read(context.Context, id.CheckpointID) (*Checkpoin
 }
 
 func (s *committedReaderStub) ReadSessionContent(context.Context, id.CheckpointID, int) (*SessionContent, error) {
+	return nil, ErrCheckpointNotFound
+}
+
+func (s *committedReaderStub) List(context.Context) ([]CheckpointInfo, error) {
+	return nil, nil
+}
+
+func (s *committedReaderStub) ReadSessionMetadata(context.Context, id.CheckpointID, int) (*Metadata, error) {
+	return nil, ErrCheckpointNotFound
+}
+
+func (s *committedReaderStub) ReadSessionPrompts(context.Context, id.CheckpointID, int) (string, error) {
+	return "", ErrCheckpointNotFound
+}
+
+func (s *committedReaderStub) ReadSessionMetadataAndPrompts(context.Context, id.CheckpointID, int) (*SessionContent, error) {
 	return nil, ErrCheckpointNotFound
 }
