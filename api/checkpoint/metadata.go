@@ -11,7 +11,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
-// WriteOptions contains options for writing a committed checkpoint.
+// WriteOptions contains options for writing a persistent checkpoint.
 type WriteOptions struct {
 	// CheckpointID is the stable 12-hex-char identifier
 	CheckpointID id.CheckpointID
@@ -167,7 +167,7 @@ type WriteOptions struct {
 	HasInvestigation bool
 }
 
-// UpdateOptions contains options for updating an existing committed checkpoint.
+// UpdateOptions contains options for updating an existing persistent checkpoint.
 // Uses replace semantics: the transcript and prompts are fully replaced,
 // not appended. At stop time we have the complete session transcript and want every
 // checkpoint to contain it identically.
