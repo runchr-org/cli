@@ -1890,6 +1890,10 @@ func TestCheckpointTokensReport_UsesRootSummaryWhenSessionMetadataIncomplete(t *
 				TokenUsage: &agent.TokenUsage{
 					InputTokens: 100,
 				},
+				SessionMetrics: &checkpoint.SessionMetrics{
+					ContextTokens:     9000,
+					ContextWindowSize: 10000,
+				},
 			},
 		},
 		1,
@@ -1903,6 +1907,14 @@ func TestCheckpointTokensReport_UsesRootSummaryWhenSessionMetadataIncomplete(t *
 	}
 	if report.SessionID != "" || report.Agent != "" || report.Model != "" {
 		t.Fatalf("expected multi-session checkpoint to omit singular session fields, got session_id=%q agent=%q model=%q", report.SessionID, report.Agent, report.Model)
+	}
+	if report.Context != nil {
+		t.Fatalf("expected multi-session checkpoint to omit singular context, got %+v", report.Context)
+	}
+	for _, contributor := range report.Contributors {
+		if contributor.Kind == "context_pressure" {
+			t.Fatalf("expected multi-session checkpoint to omit singular context contributor, got %+v", report.Contributors)
+		}
 	}
 	if len(report.Limitations) == 0 || !strings.Contains(report.Limitations[0], "1 checkpoint session metadata file could not be read") {
 		t.Fatalf("expected incomplete metadata limitation, got %+v", report.Limitations)

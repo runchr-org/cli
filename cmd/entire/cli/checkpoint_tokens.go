@@ -230,7 +230,7 @@ func buildCheckpointTokensReport(cpID id.CheckpointID, summary *checkpoint.Check
 
 	var turnCount int
 	var skillEvents []agent.SkillEvent
-	if len(metas) == 1 && metas[0] != nil {
+	if report.SessionCount == 1 && len(metas) == 1 && metas[0] != nil {
 		meta := metas[0]
 		if metrics := meta.SessionMetrics; metrics != nil {
 			turnCount = metrics.TurnCount
