@@ -1691,7 +1691,7 @@ func (s *GitStore) replaceSkillEvents(skillEvents []agent.SkillEvent, sessionPat
 // checkpoint.
 func (s *GitStore) replaceTranscript(ctx context.Context, transcript redact.RedactedBytes, agentType types.AgentType, startLine int, precomputed *PrecomputedTranscriptBlobs, sessionPath string, entries map[string]object.TreeEntry) error {
 	// Ignore precompute if invariants are violated — fall back to fresh chunking.
-	if precomputed != nil && !precomputed.isUsable() {
+	if precomputed != nil && !precomputed.IsUsable() {
 		precomputed = nil
 	}
 
