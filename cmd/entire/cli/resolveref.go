@@ -65,6 +65,12 @@ func resolveAccountRef(ctx context.Context, c *coreapi.Client, ref string) (stri
 	if err != nil {
 		return "", err
 	}
+	// ResolvedIdentity.AccountId is a plain string, so a handle that resolves to
+	// an identity with no backing account would silently forward "" as the owner
+	// ULID and fail later with an opaque server-side create error. Catch it here.
+	if id.AccountId == "" {
+		return "", fmt.Errorf("handle %q resolved to no account", ref)
+	}
 	return id.AccountId, nil
 }
 
@@ -81,8 +87,10 @@ func parseQualifiedHandle(ref string) (provider, handle string, err error) {
 }
 
 // resolveProjectRef turns a project reference (ULID or name) into its ULID. A
-// ULID is returned unchanged; a name is looked up via the server's exact-name
-// filter (the same call `entire project list --name` uses).
+// ULID is returned unchanged; a name is looked up via the server's name filter
+// (the same call `entire project list --name` uses). Name matching is
+// case-insensitive end to end: the server enforces lower(name) uniqueness and
+// pickProject re-checks with EqualFold, so case-only differences resolve.
 func resolveProjectRef(ctx context.Context, c *coreapi.Client, ref string) (string, error) {
 	if looksLikeULID(ref) {
 		return ref, nil
@@ -97,11 +105,12 @@ func resolveProjectRef(ctx context.Context, c *coreapi.Client, ref string) (stri
 // pickOrg selects the single org named name. Org names are unique, so a name
 // matches at most one org; zero matches is an error pointing at `org list`, and
 // (defensively) multiple matches list the colliding ids so the user can fall
-// back to a ULID.
+// back to a ULID. Matching is case-insensitive (EqualFold): pickOrg filters the
+// full ListOrgs result client-side, so a case-only typo should still resolve.
 func pickOrg(orgs []coreapi.Org, name string) (string, error) {
 	var matches []coreapi.Org
 	for _, o := range orgs {
-		if o.Name == name {
+		if strings.EqualFold(o.Name, name) {
 			matches = append(matches, o)
 		}
 	}
@@ -124,11 +133,13 @@ func pickOrg(orgs []coreapi.Org, name string) (string, error) {
 // different orgs/accounts; on ambiguity the candidates (id + owner) are listed
 // so the user can pass the intended ULID. (We can't suggest re-scoping the
 // failing command: resolveProjectRef's callers — repo create/list, grant
-// project … — have no --org flag; only `entire project list` does.)
+// project … — have no --org flag; only `entire project list` does.) Matching is
+// case-insensitive (EqualFold) so the client-side re-check never drops a row the
+// server returned, regardless of whether the server's name filter folds case.
 func pickProject(projects []coreapi.Project, name string) (string, error) {
 	var matches []coreapi.Project
 	for _, p := range projects {
-		if p.Name == name {
+		if strings.EqualFold(p.Name, name) {
 			matches = append(matches, p)
 		}
 	}
@@ -146,16 +157,18 @@ func pickProject(projects []coreapi.Project, name string) (string, error) {
 	}
 }
 
-// filterProjectsByName narrows projects to exact name matches, returning all of
-// them when name is empty. Used by `project list --org` to apply --name
-// client-side, since the org-scoped list endpoint has no name parameter.
+// filterProjectsByName narrows projects to name matches, returning all of them
+// when name is empty. Used by `project list --org` to apply --name client-side,
+// since the org-scoped list endpoint has no name parameter. Matching is
+// case-insensitive (EqualFold), consistent with pickProject and the server's
+// lower(name) uniqueness guarantee.
 func filterProjectsByName(projects []coreapi.Project, name string) []coreapi.Project {
 	if name == "" {
 		return projects
 	}
 	var out []coreapi.Project
 	for _, p := range projects {
-		if p.Name == name {
+		if strings.EqualFold(p.Name, name) {
 			out = append(out, p)
 		}
 	}
