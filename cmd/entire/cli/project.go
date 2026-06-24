@@ -93,28 +93,44 @@ func newProjectListCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runCoreList(cmd, projectColumns, projectRow, func(ctx context.Context, c *coreapi.Client) ([]coreapi.Project, error) {
-				// --org scopes to one org's projects via the org-scoped
-				// endpoint, which has no name parameter, so --name is applied
-				// client-side. Without --org we use the global list, where the
-				// server filters by name for us.
+				// Both the global and org-scoped list endpoints filter by name
+				// server-side (case-insensitive), returning the single match
+				// under the response's `project` field or 404. Listing by a name
+				// that doesn't exist is an empty result, not an error.
 				if org != "" {
 					orgID, err := resolveOrgRef(ctx, c, org)
 					if err != nil {
 						return nil, err
 					}
-					out, err := c.ListOrgProjects(ctx, coreapi.ListOrgProjectsParams{OrgId: orgID})
+					params := coreapi.ListOrgProjectsParams{OrgId: orgID}
+					if name != "" {
+						params.Name = coreapi.NewOptString(name)
+					}
+					out, err := c.ListOrgProjects(ctx, params)
 					if err != nil {
+						if name != "" && isCoreNotFound(err) {
+							return nil, nil
+						}
 						return nil, err
 					}
-					return filterProjectsByName(out.Projects, name), nil
+					if name != "" {
+						return toProjectList(out.Project), nil
+					}
+					return out.Projects, nil
 				}
-				var params coreapi.ListProjectsParams
+				params := coreapi.ListProjectsParams{}
 				if name != "" {
 					params.Name = coreapi.NewOptString(name)
 				}
 				out, err := c.ListProjects(ctx, params)
 				if err != nil {
+					if name != "" && isCoreNotFound(err) {
+						return nil, nil
+					}
 					return nil, err
+				}
+				if name != "" {
+					return toProjectList(out.Project), nil
 				}
 				return out.Projects, nil
 			})

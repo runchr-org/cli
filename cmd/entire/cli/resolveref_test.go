@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -43,10 +44,6 @@ func resolveTestClient(t *testing.T, h http.HandlerFunc) (*coreapi.Client, *atom
 
 func TestResolveOrgRef(t *testing.T) {
 	t.Parallel()
-	orgs := &coreapi.ListOrgsOutputBody{Orgs: []coreapi.Org{
-		{ID: ulidOrgAcme, Name: "acme"},
-		{ID: ulidOrgGlobex, Name: "globex"},
-	}}
 
 	t.Run("ULID passes through without a network call", func(t *testing.T) {
 		t.Parallel()
@@ -66,11 +63,13 @@ func TestResolveOrgRef(t *testing.T) {
 		}
 	})
 
-	t.Run("name resolves via exactly one list call", func(t *testing.T) {
+	t.Run("name is resolved server-side in one call", func(t *testing.T) {
 		t.Parallel()
-		c, calls := resolveTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-			if err := writeJSON(w, orgs); err != nil {
-				t.Errorf("encode orgs: %v", err)
+		var gotName string
+		c, calls := resolveTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			gotName = r.URL.Query().Get("name")
+			if err := writeJSON(w, &coreapi.ListOrgsOutputBody{Org: coreapi.NewOptOrg(coreapi.Org{ID: ulidOrgGlobex, Name: "globex"})}); err != nil {
+				t.Errorf("encode org: %v", err)
 			}
 		})
 		got, err := resolveOrgRef(context.Background(), c, "globex")
@@ -80,33 +79,31 @@ func TestResolveOrgRef(t *testing.T) {
 		if got != ulidOrgGlobex {
 			t.Errorf("resolveOrgRef = %q, want globex id", got)
 		}
+		if gotName != "globex" {
+			t.Errorf("server received name=%q, want %q (filtering must be server-side)", gotName, "globex")
+		}
 		if n := calls.Load(); n != 1 {
 			t.Errorf("name ref made %d HTTP calls, want 1", n)
 		}
 	})
 
-	t.Run("name match is case-insensitive", func(t *testing.T) {
+	t.Run("unknown name is a friendly error", func(t *testing.T) {
 		t.Parallel()
 		c, _ := resolveTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-			if err := writeJSON(w, orgs); err != nil {
-				t.Errorf("encode orgs: %v", err)
+			if err := writeJSON(w, &coreapi.ListOrgsOutputBody{}); err != nil {
+				t.Errorf("encode empty: %v", err)
 			}
 		})
-		got, err := resolveOrgRef(context.Background(), c, "ACME")
-		if err != nil {
-			t.Fatalf("resolveOrgRef: %v", err)
-		}
-		if got != ulidOrgAcme {
-			t.Errorf("resolveOrgRef(ACME) = %q, want acme id", got)
+		_, err := resolveOrgRef(context.Background(), c, "nope")
+		if err == nil || !strings.Contains(err.Error(), "no org named") {
+			t.Errorf("resolveOrgRef unknown name: err = %v, want a \"no org named\" error", err)
 		}
 	})
 }
 
 func TestResolveProjectRef(t *testing.T) {
 	t.Parallel()
-	projects := &coreapi.ListProjectsOutputBody{Projects: []coreapi.Project{
-		{ID: ulidProjectWidgets, Name: "widgets", OwnerId: ulidOrgAcme, OwnerType: coreapi.ProjectOwnerTypeOrg},
-	}}
+	matched := coreapi.NewOptProject(coreapi.Project{ID: ulidProjectWidgets, Name: "widgets", OwnerId: ulidOrgAcme, OwnerType: coreapi.ProjectOwnerTypeOrg})
 
 	t.Run("ULID passes through without a network call", func(t *testing.T) {
 		t.Parallel()
@@ -126,11 +123,13 @@ func TestResolveProjectRef(t *testing.T) {
 		}
 	})
 
-	t.Run("name resolves via exactly one list call", func(t *testing.T) {
+	t.Run("name is resolved server-side in one call", func(t *testing.T) {
 		t.Parallel()
-		c, calls := resolveTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-			if err := writeJSON(w, projects); err != nil {
-				t.Errorf("encode projects: %v", err)
+		var gotName string
+		c, calls := resolveTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			gotName = r.URL.Query().Get("name")
+			if err := writeJSON(w, &coreapi.ListProjectsOutputBody{Project: matched}); err != nil {
+				t.Errorf("encode project: %v", err)
 			}
 		})
 		got, err := resolveProjectRef(context.Background(), c, "widgets")
@@ -140,24 +139,24 @@ func TestResolveProjectRef(t *testing.T) {
 		if got != ulidProjectWidgets {
 			t.Errorf("resolveProjectRef = %q, want widgets id", got)
 		}
+		if gotName != "widgets" {
+			t.Errorf("server received name=%q, want %q (filtering must be server-side)", gotName, "widgets")
+		}
 		if n := calls.Load(); n != 1 {
 			t.Errorf("name ref made %d HTTP calls, want 1", n)
 		}
 	})
 
-	t.Run("name match is case-insensitive", func(t *testing.T) {
+	t.Run("unknown name is a friendly error", func(t *testing.T) {
 		t.Parallel()
 		c, _ := resolveTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-			if err := writeJSON(w, projects); err != nil {
-				t.Errorf("encode projects: %v", err)
+			if err := writeJSON(w, &coreapi.ListProjectsOutputBody{}); err != nil {
+				t.Errorf("encode empty: %v", err)
 			}
 		})
-		got, err := resolveProjectRef(context.Background(), c, "Widgets")
-		if err != nil {
-			t.Fatalf("resolveProjectRef: %v", err)
-		}
-		if got != ulidProjectWidgets {
-			t.Errorf("resolveProjectRef(Widgets) = %q, want widgets id", got)
+		_, err := resolveProjectRef(context.Background(), c, "nope")
+		if err == nil || !strings.Contains(err.Error(), "no project named") {
+			t.Errorf("resolveProjectRef unknown name: err = %v, want a \"no project named\" error", err)
 		}
 	})
 }
@@ -292,112 +291,21 @@ func TestParseQualifiedHandle(t *testing.T) {
 	}
 }
 
-func TestPickOrg(t *testing.T) {
+func TestToProjectList(t *testing.T) {
 	t.Parallel()
-	orgs := []coreapi.Org{
-		{ID: ulidOrgAcme, Name: "acme"},
-		{ID: ulidOrgGlobex, Name: "globex"},
-	}
 
-	t.Run("unique match", func(t *testing.T) {
+	t.Run("set project yields one element", func(t *testing.T) {
 		t.Parallel()
-		got, err := pickOrg(orgs, "globex")
-		if err != nil {
-			t.Fatalf("pickOrg: %v", err)
-		}
-		if got != ulidOrgGlobex {
-			t.Errorf("pickOrg = %q, want globex id", got)
+		got := toProjectList(coreapi.NewOptProject(coreapi.Project{ID: ulidProjectWidgets, Name: "widgets"}))
+		if len(got) != 1 || got[0].ID != ulidProjectWidgets {
+			t.Errorf("toProjectList = %+v, want one widgets project", got)
 		}
 	})
 
-	t.Run("no match", func(t *testing.T) {
+	t.Run("unset project yields empty", func(t *testing.T) {
 		t.Parallel()
-		if _, err := pickOrg(orgs, "missing"); err == nil {
-			t.Error("pickOrg expected error for unknown name")
-		}
-	})
-
-	t.Run("ambiguous", func(t *testing.T) {
-		t.Parallel()
-		dupes := []coreapi.Org{
-			{ID: "01J0ORG000000000000000000A", Name: "dup"},
-			{ID: "01J0ORG000000000000000000B", Name: "dup"},
-		}
-		if _, err := pickOrg(dupes, "dup"); err == nil {
-			t.Error("pickOrg expected error for ambiguous name")
-		}
-	})
-}
-
-func TestPickProject(t *testing.T) {
-	t.Parallel()
-	projects := []coreapi.Project{
-		{ID: ulidProjectWidgets, Name: "widgets", OwnerId: ulidOrgAcme, OwnerType: coreapi.ProjectOwnerTypeOrg},
-		{ID: "01J0PRJ0000000000000000002", Name: "gadgets", OwnerId: ulidOrgAcme},
-	}
-
-	t.Run("unique match", func(t *testing.T) {
-		t.Parallel()
-		got, err := pickProject(projects, "gadgets")
-		if err != nil {
-			t.Fatalf("pickProject: %v", err)
-		}
-		if got != "01J0PRJ0000000000000000002" {
-			t.Errorf("pickProject = %q, want gadgets id", got)
-		}
-	})
-
-	t.Run("no match", func(t *testing.T) {
-		t.Parallel()
-		if _, err := pickProject(projects, "missing"); err == nil {
-			t.Error("pickProject expected error for unknown name")
-		}
-	})
-
-	t.Run("ambiguous across owners", func(t *testing.T) {
-		t.Parallel()
-		dupes := []coreapi.Project{
-			{ID: "01J0PRJ000000000000000000A", Name: "shared", OwnerId: ulidOrgAcme},
-			{ID: "01J0PRJ000000000000000000B", Name: "shared", OwnerId: ulidOrgGlobex},
-		}
-		if _, err := pickProject(dupes, "shared"); err == nil {
-			t.Error("pickProject expected error for ambiguous name")
-		}
-	})
-}
-
-func TestFilterProjectsByName(t *testing.T) {
-	t.Parallel()
-	projects := []coreapi.Project{
-		{ID: "1", Name: "a"},
-		{ID: "2", Name: "b"},
-		{ID: "3", Name: "a"},
-	}
-
-	t.Run("empty name returns all", func(t *testing.T) {
-		t.Parallel()
-		if got := filterProjectsByName(projects, ""); len(got) != 3 {
-			t.Errorf("len = %d, want 3", len(got))
-		}
-	})
-
-	t.Run("exact filter", func(t *testing.T) {
-		t.Parallel()
-		got := filterProjectsByName(projects, "a")
-		if len(got) != 2 {
-			t.Fatalf("len = %d, want 2", len(got))
-		}
-		for _, p := range got {
-			if p.Name != "a" {
-				t.Errorf("unexpected project %q", p.Name)
-			}
-		}
-	})
-
-	t.Run("no match", func(t *testing.T) {
-		t.Parallel()
-		if got := filterProjectsByName(projects, "z"); len(got) != 0 {
-			t.Errorf("len = %d, want 0", len(got))
+		if got := toProjectList(coreapi.OptProject{}); len(got) != 0 {
+			t.Errorf("toProjectList(unset) = %+v, want empty", got)
 		}
 	})
 }
