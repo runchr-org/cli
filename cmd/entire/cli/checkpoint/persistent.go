@@ -1580,6 +1580,32 @@ func (s *GitStore) backfillTranscript(ctx context.Context, opts UpdateOptions) e
 		if err := s.replaceTranscript(ctx, opts.Transcript, agentType, startLine, opts.PrecomputedBlobs, sessionPath, entries); err != nil {
 			return fmt.Errorf("failed to replace transcript: %w", err)
 		}
+
+		// Keep the root metadata.json compact_transcript pointer consistent with
+		// the finalized tree. replaceTranscript may have written transcript.jsonl
+		// that the initial write lacked (e.g. compaction was skipped then and
+		// succeeds now), so re-derive the pointer from the tree entry and rewrite
+		// the root summary when it changed.
+		compactPath := ""
+		if _, ok := entries[sessionPath+paths.CompactTranscriptFileName]; ok {
+			compactPath = "/" + sessionPath + paths.CompactTranscriptFileName
+		}
+		if checkpointSummary.Sessions[sessionIndex].CompactTranscript != compactPath {
+			checkpointSummary.Sessions[sessionIndex].CompactTranscript = compactPath
+			summaryJSON, err := jsonutil.MarshalIndentWithNewline(checkpointSummary, "", "  ")
+			if err != nil {
+				return fmt.Errorf("failed to marshal checkpoint summary: %w", err)
+			}
+			summaryHash, err := CreateBlobFromContent(s.repo, summaryJSON)
+			if err != nil {
+				return fmt.Errorf("failed to create checkpoint summary blob: %w", err)
+			}
+			entries[rootMetadataPath] = object.TreeEntry{
+				Name: rootMetadataPath,
+				Mode: filemode.Regular,
+				Hash: summaryHash,
+			}
+		}
 	}
 
 	// Replace prompts with 7-layer-redacted content.

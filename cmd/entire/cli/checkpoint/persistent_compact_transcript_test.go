@@ -166,6 +166,59 @@ func TestWriteCommitted_NonCompactableTranscriptPointsAtFull(t *testing.T) {
 	}
 }
 
+// TestUpdateCommitted_RefreshesCompactTranscriptPointer guards against the
+// finalize path writing transcript.jsonl without updating the root
+// metadata.json. When the initial write produced no compact transcript but a
+// later backfill does, sessions[].compact_transcript must be refreshed to point
+// at it rather than staying omitted.
+func TestUpdateCommitted_RefreshesCompactTranscriptPointer(t *testing.T) {
+	t.Parallel()
+	repo, _ := setupTestRepo(t)
+	store := NewGitStore(repo, DefaultV1Refs())
+	cpID := id.MustCheckpointID("f6a1b2c3d4e5")
+
+	// Initial write with a non-compactable transcript: full.jsonl is written but
+	// no transcript.jsonl, so compact_transcript is omitted.
+	err := store.Write(context.Background(), Session{
+		CheckpointID: cpID,
+		SessionID:    "session-001",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte("not json at all\nstill not json\n")),
+		Agent:        agent.AgentTypeClaudeCode,
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	if err != nil {
+		t.Fatalf("WriteCommitted() error = %v", err)
+	}
+	summary := readSummaryFromBranch(t, repo, cpID)
+	if summary.Sessions[0].CompactTranscript != "" {
+		t.Fatalf("precondition: compact_transcript = %q, want empty", summary.Sessions[0].CompactTranscript)
+	}
+
+	// Finalize with a compactable transcript: transcript.jsonl is now written and
+	// the root summary's compact_transcript must be refreshed to match.
+	err = store.Write(context.Background(), SessionTranscript{
+		CheckpointID: cpID,
+		SessionID:    "session-001",
+		Transcript:   redact.AlreadyRedacted(claudeStyleTranscript()),
+		Agent:        agent.AgentTypeClaudeCode,
+	})
+	if err != nil {
+		t.Fatalf("UpdateCommitted() error = %v", err)
+	}
+
+	sessionPath := cpID.Path() + "/0/"
+	if _, ok := readBranchFile(t, store, sessionPath+paths.CompactTranscriptFileName); !ok {
+		t.Fatal("transcript.jsonl missing after finalize")
+	}
+	summary = readSummaryFromBranch(t, repo, cpID)
+	wantCompact := "/" + sessionPath + paths.CompactTranscriptFileName
+	if summary.Sessions[0].CompactTranscript != wantCompact {
+		t.Errorf("sessions[0].compact_transcript = %q, want %q", summary.Sessions[0].CompactTranscript, wantCompact)
+	}
+}
+
 // codexTranscriptWithCompactionBeforeStart returns a Codex-format JSONL
 // transcript whose line 1 is a `compaction` entry that
 // codex.SanitizePortableTranscript drops. With a checkpoint start of line 2,
