@@ -93,6 +93,15 @@ func Sync(ctx context.Context, repo *git.Repository, target Target) (State, erro
 		return baseline, nil
 	}
 
+	baselineAncestor, err := isAncestorOf(ctx, repo, baseline.Hash, local.Hash)
+	if err != nil {
+		return State{}, err
+	}
+	if baselineAncestor {
+		local.RemoteHash = baseline.RemoteHash
+		return local, nil
+	}
+
 	local.Source = SourceLocalDiverged
 	local.RemoteHash = baseline.RemoteHash
 	return local, nil

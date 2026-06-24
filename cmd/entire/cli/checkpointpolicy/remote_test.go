@@ -55,7 +55,7 @@ func TestSyncRemotePolicyDoesNotLeaveTempRefWhenSHAAlreadyMatches(t *testing.T) 
 	require.Equal(t, checkpointpolicy.SourceRemote, got.Source)
 	require.Equal(t, localHash, got.Hash)
 	require.Equal(t, localHash, got.RemoteHash)
-	requireNoRef(t, repo, "refs/entire/policies/checkpoint-fetch")
+	requireNoPolicyFetchRef(t, repo)
 }
 
 func TestSyncRemotePolicyKeepsDivergedLocalRef(t *testing.T) {
@@ -86,7 +86,31 @@ func TestSyncRemotePolicyKeepsDivergedLocalRef(t *testing.T) {
 	localState, err := checkpointpolicy.ReadLocal(t.Context(), localRepo)
 	require.NoError(t, err)
 	require.Equal(t, localHash, localState.Hash)
-	requireNoRef(t, localRepo, "refs/entire/policies/checkpoint-fetch")
+	requireNoPolicyFetchRef(t, localRepo)
+}
+
+func TestSyncRemotePolicyKeepsLocalRefAheadOfRemote(t *testing.T) {
+	remoteDir, remoteRepo, bareDir := initPolicyRemoteFixture(t)
+	baseHash, err := checkpointpolicy.WriteLocal(t.Context(), remoteRepo, plumbing.ZeroHash, checkpointpolicy.DefaultPolicy())
+	require.NoError(t, err)
+	pushPolicyRefWithGit(t, remoteDir, bareDir)
+
+	localDir, localRepo := initPolicyRepoWithDir(t)
+	_, err = checkpointpolicy.Sync(t.Context(), localRepo, checkpointpolicy.Target{Remote: bareDir, Dir: localDir})
+	require.NoError(t, err)
+	localHash, err := checkpointpolicy.WriteLocal(t.Context(), localRepo, baseHash, checkpointpolicy.DefaultPolicy())
+	require.NoError(t, err)
+
+	got, err := checkpointpolicy.Sync(t.Context(), localRepo, checkpointpolicy.Target{Remote: bareDir, Dir: localDir})
+	require.NoError(t, err)
+	require.Equal(t, checkpointpolicy.SourceLocal, got.Source)
+	require.Equal(t, localHash, got.Hash)
+	require.Equal(t, baseHash, got.RemoteHash)
+
+	localState, err := checkpointpolicy.ReadLocal(t.Context(), localRepo)
+	require.NoError(t, err)
+	require.Equal(t, localHash, localState.Hash)
+	requireNoPolicyFetchRef(t, localRepo)
 }
 
 func TestSyncRemotePolicyRemovesTempRefWhenFetchedPolicyCannotBeRead(t *testing.T) {
@@ -97,7 +121,7 @@ func TestSyncRemotePolicyRemovesTempRefWhenFetchedPolicyCannotBeRead(t *testing.
 	localDir, localRepo := initPolicyRepoWithDir(t)
 	_, err := checkpointpolicy.Sync(t.Context(), localRepo, checkpointpolicy.Target{Remote: bareDir, Dir: localDir})
 	require.ErrorContains(t, err, "parse policy.json")
-	requireNoRef(t, localRepo, "refs/entire/policies/checkpoint-fetch")
+	requireNoPolicyFetchRef(t, localRepo)
 }
 
 func TestPushPolicyRejectsNonFastForward(t *testing.T) {
@@ -192,8 +216,8 @@ func runPolicyGit(t *testing.T, dir string, args ...string) {
 	require.NoError(t, err, string(output))
 }
 
-func requireNoRef(t *testing.T, repo *git.Repository, refName plumbing.ReferenceName) {
+func requireNoPolicyFetchRef(t *testing.T, repo *git.Repository) {
 	t.Helper()
-	_, err := repo.Reference(refName, true)
+	_, err := repo.Reference("refs/entire/policies/checkpoint-fetch", true)
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound)
 }
