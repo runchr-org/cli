@@ -48,10 +48,11 @@ func availableMirrorRow(m coreapi.AvailableMirror) []string {
 	return []string{m.Owner + "/" + m.Repo, string(m.Access), string(m.Status)}
 }
 
-// defaultClusterHost is the cluster the mirror commands target when the
-// caller omits the <cluster-host> argument. A pragmatic single-region
-// default for now — once multi-cluster selection lands this should come
-// from config/context rather than a constant.
+// defaultClusterHost is the cluster the positional-arg mirror commands target
+// when the caller omits the <cluster-host> argument. The no-arg create wizard
+// instead enumerates real clusters from the catalog (GET /api/v1/clusters, see
+// availableRegions in repo_mirror_create_wizard.go); this stays as the
+// single-region fallback for the explicit `create <github-url>` form.
 const defaultClusterHost = "aws-us-east-2.entire.io"
 
 // clusterArg returns the cluster host from the optional second positional
@@ -136,18 +137,25 @@ func newRepoMirrorCreateCmd() *cobra.Command {
 		waitTimeout time.Duration
 	)
 	cmd := &cobra.Command{
-		Use:   "create <github-url> [cluster-host]",
+		Use:   "create [github-url] [cluster-host]",
 		Short: "Register a GitHub mirror on a cluster",
-		Long: "Registers a mirror placement for a GitHub repo on the target " +
-			"cluster, then waits for the initial GitHub→EntireDB clone to " +
-			"finish so `git clone` works on return. Pass --no-wait to return " +
+		Long: "With no arguments, launches an interactive wizard: pick repos to " +
+			"mirror, pick one or more regions, then creates every (repo, region) " +
+			"mirror in parallel and prints the clone URLs.\n\n" +
+			"With a <github-url>, registers a mirror placement for that repo on " +
+			"the target cluster, then waits for the initial GitHub→EntireDB clone " +
+			"to finish so `git clone` works on return. Pass --no-wait to return " +
 			"as soon as the placement is registered. Idempotent on " +
 			"(upstream, cluster). The cluster-host defaults to " +
 			defaultClusterHost + " when omitted.",
-		Example: "  entire repo mirror create github.com/octocat/hello-world\n" +
+		Example: "  entire repo mirror create\n" +
+			"  entire repo mirror create github.com/octocat/hello-world\n" +
 			"  entire repo mirror create github.com/octocat/hello-world eu-west-1.entire.io",
-		Args: cobra.RangeArgs(1, 2),
+		Args: cobra.RangeArgs(0, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return runMirrorCreateWizard(cmd, noWait, waitTimeout)
+			}
 			owner, repo, err := parseGitHubURL(args[0])
 			if err != nil {
 				cmd.SilenceUsage = true
