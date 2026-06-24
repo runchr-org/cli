@@ -80,9 +80,8 @@ func TestWriteCommitted_WritesCompactTranscript(t *testing.T) {
 		t.Error("compact transcript missing assistant content")
 	}
 
-	// Root metadata.json still points at full.jsonl via transcript; the compact
-	// transcript is written into the tree (and pushed) and pointed at by
-	// compact_transcript.
+	// Root metadata.json: transcript points at full.jsonl, compact_transcript
+	// at transcript.jsonl.
 	summary := readSummaryFromBranch(t, repo, cpID)
 	if len(summary.Sessions) != 1 {
 		t.Fatalf("session count = %d, want 1", len(summary.Sessions))

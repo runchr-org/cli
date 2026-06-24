@@ -404,10 +404,9 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteOpt
 		}
 	}
 
-	// Write transcript. The Transcript pointer targets full.jsonl, which CLI
-	// rewind/resume/explain read by filename. The compact transcript.jsonl is
-	// also written into the tree (so it is pushed) and pointed at by
-	// CompactTranscript below for external readers.
+	// Write transcript. Transcript points at full.jsonl (CLI
+	// rewind/resume/explain read it by filename); the compact transcript.jsonl,
+	// when written, is also pushed and pointed at by CompactTranscript.
 	wroteTranscript, err := s.writeTranscript(ctx, opts, sessionPath, entries)
 	if err != nil {
 		return filePaths, err
@@ -415,10 +414,8 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteOpt
 	if wroteTranscript {
 		filePaths.Transcript = "/" + sessionPath + paths.TranscriptFileName
 		filePaths.ContentHash = "/" + sessionPath + paths.ContentHashFileName
-		// Point at the compact transcript.jsonl when writeTranscript wrote one
-		// into the tree (best-effort; skipped for non-compactable, empty, or
-		// oversized transcripts). Derived from the actual tree entry so the
-		// pointer can never dangle.
+		// Point at the compact transcript only when it was actually written
+		// (best-effort), deriving from the tree entry so the path can't dangle.
 		if _, ok := entries[sessionPath+paths.CompactTranscriptFileName]; ok {
 			filePaths.CompactTranscript = "/" + sessionPath + paths.CompactTranscriptFileName
 		}

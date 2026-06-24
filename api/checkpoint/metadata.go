@@ -384,9 +384,8 @@ type SessionFilePaths struct {
 	// (rewind/resume/explain) resolve by filename.
 	Transcript string `json:"transcript,omitempty"`
 	// CompactTranscript points at the compact transcript.jsonl when one was
-	// generated and written into this session's directory alongside full.jsonl.
-	// Omitted for non-compactable, empty, or oversized transcripts and for
-	// checkpoints written by older CLI versions.
+	// generated alongside full.jsonl. Omitted otherwise (non-compactable,
+	// empty, or oversized transcripts, and older CLI versions).
 	CompactTranscript string `json:"compact_transcript,omitempty"`
 	ContentHash       string `json:"content_hash,omitempty"`
 	Prompt            string `json:"prompt"`
