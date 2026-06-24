@@ -2,17 +2,23 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/gitremote"
+	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
+	"github.com/entireio/cli/cmd/entire/cli/validation"
 )
 
 const (
@@ -30,31 +36,36 @@ const (
 )
 
 type trailEnablementScope struct {
-	Forge     string
-	Owner     string
-	Repo      string
-	RepoKey   string
-	APIBase   string
-	AuthKey   string
-	Supported bool
+	Forge     string `json:"forge"`
+	Owner     string `json:"owner"`
+	Repo      string `json:"repo"`
+	RepoKey   string `json:"repo_key"`
+	APIBase   string `json:"api_base"`
+	AuthKey   string `json:"auth_key"`
+	Supported bool   `json:"supported"`
 }
 
-// trailsEnabledForRepo reads the local cache only.
+// trailsEnabledForRepo reports cached enablement for the current repo.
 func trailsEnabledForRepo(ctx context.Context) bool {
 	return cachedTrailsEnablementForRepo(ctx, time.Now()) == trailEnablementCacheEnabled
 }
 
 func cachedTrailsEnablementForRepo(ctx context.Context, now time.Time) trailEnablementCacheStatus {
+	scope, err := currentTrailEnablementScope(ctx)
+	if err != nil {
+		return trailEnablementCacheUnknown
+	}
+	return cachedTrailsEnablementForScope(ctx, scope, now)
+}
+
+func cachedTrailsEnablementForScope(ctx context.Context, scope trailEnablementScope, now time.Time) trailEnablementCacheStatus {
 	prefs, err := settings.LoadClonePreferences(ctx)
 	if err != nil || prefs.TrailsEnabled == nil || prefs.TrailsEnabledCheckedAt == nil {
 		return trailEnablementCacheUnknown
 	}
-
-	scope, err := currentTrailEnablementScope(ctx)
-	if err != nil || !trailEnablementCacheMatchesScope(prefs, scope) || trailEnablementCacheExpired(*prefs.TrailsEnabledCheckedAt, now) {
+	if !trailEnablementCacheMatchesScope(prefs, scope) || trailEnablementCacheExpired(*prefs.TrailsEnabledCheckedAt, now) {
 		return trailEnablementCacheUnknown
 	}
-
 	if *prefs.TrailsEnabled {
 		return trailEnablementCacheEnabled
 	}
@@ -108,6 +119,54 @@ func trailEnablementRepoKey(forge, owner, repo string) string {
 	return strings.Join([]string{forge, owner, repo}, "/")
 }
 
+func saveTrailEnablementScopeHint(ctx context.Context, sessionID string, scope trailEnablementScope) error {
+	path, err := trailEnablementScopeHintPath(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return fmt.Errorf("create session state dir: %w", err)
+	}
+	data, err := jsonutil.MarshalIndentWithNewline(scope, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal trail scope hint: %w", err)
+	}
+	if err := jsonutil.WriteFileAtomic(path, data, 0o600); err != nil {
+		return fmt.Errorf("write trail scope hint: %w", err)
+	}
+	return nil
+}
+
+func loadTrailEnablementScopeHint(ctx context.Context, sessionID string) (trailEnablementScope, bool, error) {
+	path, err := trailEnablementScopeHintPath(ctx, sessionID)
+	if err != nil {
+		return trailEnablementScope{}, false, err
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // path is derived from validated session ID
+	if err != nil {
+		if os.IsNotExist(err) {
+			return trailEnablementScope{}, false, nil
+		}
+		return trailEnablementScope{}, false, fmt.Errorf("read trail scope hint: %w", err)
+	}
+	var scope trailEnablementScope
+	if err := json.Unmarshal(data, &scope); err != nil {
+		return trailEnablementScope{}, false, fmt.Errorf("parse trail scope hint: %w", err)
+	}
+	return scope, true, nil
+}
+
+func trailEnablementScopeHintPath(ctx context.Context, sessionID string) (string, error) {
+	if err := validation.ValidateSessionID(sessionID); err != nil {
+		return "", fmt.Errorf("invalid session ID: %w", err)
+	}
+	commonDir, err := session.GetGitCommonDir(ctx)
+	if err != nil {
+		return "", fmt.Errorf("resolve git common dir: %w", err)
+	}
+	return filepath.Join(commonDir, session.SessionStateDirName, sessionID+".trail-scope.json"), nil
+}
+
 func saveTrailsEnabledForRepo(ctx context.Context, enabled bool) error {
 	scope, err := currentTrailEnablementScope(ctx)
 	if err != nil {
@@ -149,13 +208,9 @@ func saveTrailsEnabledForScope(ctx context.Context, scope trailEnablementScope, 
 	return nil
 }
 
-func refreshTrailsEnabledCacheIfStale(ctx context.Context) error {
-	if cachedTrailsEnablementForRepo(ctx, time.Now()) != trailEnablementCacheUnknown {
+func refreshTrailsEnabledCacheIfStaleForScope(ctx context.Context, scope trailEnablementScope) error {
+	if cachedTrailsEnablementForScope(ctx, scope, time.Now()) != trailEnablementCacheUnknown {
 		return nil
-	}
-	scope, err := currentTrailEnablementScope(ctx)
-	if err != nil {
-		return err
 	}
 	if !scope.Supported {
 		return saveTrailsEnabledForScope(ctx, scope, false, time.Now())

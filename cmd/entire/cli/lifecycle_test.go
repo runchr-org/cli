@@ -1200,6 +1200,9 @@ func TestHandleLifecycleTurnStart_ContextInjectionFreshTrueMarksDecided(t *testi
 
 	ag := &mockContextInjectorAgent{mockLifecycleAgent: *newMockAgent()}
 	sessionID := "test-trail-inject-true"
+	scope, err := currentTrailEnablementScope(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, saveTrailEnablementScopeHint(context.Background(), sessionID, scope))
 	event := &agent.Event{Type: agent.TurnStart, SessionID: sessionID, Prompt: "hello", Timestamp: time.Now()}
 
 	require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, event))

@@ -146,11 +146,20 @@ func handleLifecycleSessionStart(ctx context.Context, ag agent.Agent, event *age
 			slog.String("error", hintErr.Error()))
 	}
 
-	// Refresh before the TurnStart prompt path.
+	// Resolve scope before the TurnStart prompt path.
 	refreshCtx, refreshCancel := context.WithTimeout(ctx, trailEnablementSessionStartRefreshTimeout)
-	if refreshErr := refreshTrailsEnabledCacheIfStale(refreshCtx); refreshErr != nil {
+	if scope, scopeErr := currentTrailEnablementScope(refreshCtx); scopeErr != nil {
 		logging.Debug(logCtx, "trails enablement refresh skipped",
-			slog.String("error", refreshErr.Error()))
+			slog.String("error", scopeErr.Error()))
+	} else {
+		if hintErr := saveTrailEnablementScopeHint(ctx, event.SessionID, scope); hintErr != nil {
+			logging.Debug(logCtx, "failed to cache trails scope hint",
+				slog.String("error", hintErr.Error()))
+		}
+		if refreshErr := refreshTrailsEnabledCacheIfStaleForScope(refreshCtx, scope); refreshErr != nil {
+			logging.Debug(logCtx, "trails enablement refresh skipped",
+				slog.String("error", refreshErr.Error()))
+		}
 	}
 	refreshCancel()
 
@@ -393,6 +402,12 @@ func emitContextInjection(ctx context.Context, ag agent.Agent, event *agent.Even
 	logCtx := logging.WithAgent(logging.WithComponent(ctx, "lifecycle"), ag.Name())
 
 	// Unknown cache leaves the session retryable.
+	scope, scopeOK, scopeErr := loadTrailEnablementScopeHint(ctx, event.SessionID)
+	if scopeErr != nil {
+		logging.Warn(logCtx, "failed to load trails scope hint",
+			slog.String("error", scopeErr.Error()))
+		return
+	}
 	decision := trailEnablementCacheUnknown
 	mutated := false
 	mutErr := strategy.MutateSessionState(ctx, event.SessionID, func(state *strategy.SessionState) error {
@@ -405,7 +420,10 @@ func emitContextInjection(ctx context.Context, ag agent.Agent, event *agent.Even
 		if state.Kind != "" {
 			return strategy.ErrMutationSkip
 		}
-		decision = cachedTrailsEnablementForRepo(ctx, time.Now())
+		if !scopeOK {
+			return strategy.ErrMutationSkip
+		}
+		decision = cachedTrailsEnablementForScope(ctx, scope, time.Now())
 		if decision == trailEnablementCacheUnknown {
 			return strategy.ErrMutationSkip
 		}
