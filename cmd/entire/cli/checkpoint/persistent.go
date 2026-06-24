@@ -1070,9 +1070,6 @@ func (s *GitStore) Read(ctx context.Context, checkpointID id.CheckpointID) (*Che
 	return normalizeCheckpointSummary(&summary), nil
 }
 
-// ReadSessionMetadata reads only the metadata.json for a specific session within a checkpoint.
-// This is a lightweight read that avoids fetching transcript/prompt blobs.
-// sessionIndex is 0-based.
 // getSessionTree resolves the FetchingTree for a single session within a
 // checkpoint. It returns ErrCheckpointNotFound when the checkpoint or session
 // is missing; all session-level reads share this navigation.
@@ -1098,6 +1095,9 @@ func (s *GitStore) getSessionTree(ctx context.Context, checkpointID id.Checkpoin
 	return sessionTree, nil
 }
 
+// ReadSessionMetadata reads only the metadata.json for a specific session within a checkpoint.
+// This is a lightweight read that avoids fetching transcript/prompt blobs.
+// sessionIndex is 0-based.
 func (s *GitStore) ReadSessionMetadata(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*Metadata, error) {
 	sessionTree, err := s.getSessionTree(ctx, checkpointID, sessionIndex)
 	if err != nil {
