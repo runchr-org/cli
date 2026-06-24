@@ -381,18 +381,15 @@ func (m Metadata) GetTranscriptStart() int {
 type SessionFilePaths struct {
 	Metadata string `json:"metadata"`
 	// Transcript points at the raw full.jsonl, which CLI read paths
-	// (rewind/resume/explain) resolve by filename. When a compact
-	// transcript.jsonl is also generated it is written into the same session
-	// directory alongside full.jsonl and signalled by HasCompactTranscript.
-	Transcript  string `json:"transcript,omitempty"`
-	ContentHash string `json:"content_hash,omitempty"`
-	Prompt      string `json:"prompt"`
-	// HasCompactTranscript is true when a compact transcript.jsonl was
+	// (rewind/resume/explain) resolve by filename.
+	Transcript string `json:"transcript,omitempty"`
+	// CompactTranscript points at the compact transcript.jsonl when one was
 	// generated and written into this session's directory alongside full.jsonl.
-	// Omitted (false) for non-compactable, empty, or oversized transcripts and
-	// for checkpoints written by older CLI versions. When set, the compact file
-	// lives next to Transcript, named transcript.jsonl.
-	HasCompactTranscript bool `json:"has_compact_transcript,omitempty"`
+	// Omitted for non-compactable, empty, or oversized transcripts and for
+	// checkpoints written by older CLI versions.
+	CompactTranscript string `json:"compact_transcript,omitempty"`
+	ContentHash       string `json:"content_hash,omitempty"`
+	Prompt            string `json:"prompt"`
 }
 
 // CheckpointSummary is the root-level metadata.json for a checkpoint.

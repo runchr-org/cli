@@ -216,8 +216,8 @@ checkpoint's own portion (`compact.Compact` is called with
 It is written into the checkpoint tree and pushed alongside `full.jsonl`. The
 root `metadata.json` `sessions[].transcript` pointer keeps targeting
 `full.jsonl`; when a compact transcript was generated the session entry also
-carries `has_compact_transcript: true` (omitted otherwise) so external readers
-can find `transcript.jsonl` next to it.
+carries a `compact_transcript` path pointing at `transcript.jsonl` (omitted
+otherwise) so external readers can find it next to `full.jsonl`.
 CLI read paths (rewind/resume/explain) read `full.jsonl` by filename. Compact
 generation is best-effort: failures are logged but never fail the checkpoint
 write, and during finalization a failed regeneration keeps the previous
@@ -237,9 +237,9 @@ write, and during finalization a failed regeneration keeps the previous
     {
       "metadata": "/ab/c123def456/0/metadata.json",
       "transcript": "/ab/c123def456/0/full.jsonl",
+      "compact_transcript": "/ab/c123def456/0/transcript.jsonl",
       "content_hash": "/ab/c123def456/0/content_hash.txt",
-      "prompt": "/ab/c123def456/0/prompt.txt",
-      "has_compact_transcript": true
+      "prompt": "/ab/c123def456/0/prompt.txt"
     }
   ],
   "token_usage": {

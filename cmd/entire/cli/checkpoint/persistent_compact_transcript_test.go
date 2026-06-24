@@ -80,8 +80,9 @@ func TestWriteCommitted_WritesCompactTranscript(t *testing.T) {
 		t.Error("compact transcript missing assistant content")
 	}
 
-	// Root metadata.json still points at full.jsonl; the compact transcript is
-	// written into the tree (and pushed) and flagged via has_compact_transcript.
+	// Root metadata.json still points at full.jsonl via transcript; the compact
+	// transcript is written into the tree (and pushed) and pointed at by
+	// compact_transcript.
 	summary := readSummaryFromBranch(t, repo, cpID)
 	if len(summary.Sessions) != 1 {
 		t.Fatalf("session count = %d, want 1", len(summary.Sessions))
@@ -94,8 +95,9 @@ func TestWriteCommitted_WritesCompactTranscript(t *testing.T) {
 	if summary.Sessions[0].ContentHash != wantHash {
 		t.Errorf("sessions[0].content_hash = %q, want %q", summary.Sessions[0].ContentHash, wantHash)
 	}
-	if !summary.Sessions[0].HasCompactTranscript {
-		t.Error("sessions[0].has_compact_transcript = false, want true")
+	wantCompact := "/" + sessionPath + paths.CompactTranscriptFileName
+	if summary.Sessions[0].CompactTranscript != wantCompact {
+		t.Errorf("sessions[0].compact_transcript = %q, want %q", summary.Sessions[0].CompactTranscript, wantCompact)
 	}
 }
 
@@ -160,8 +162,8 @@ func TestWriteCommitted_NonCompactableTranscriptPointsAtFull(t *testing.T) {
 	if summary.Sessions[0].Transcript != wantTranscript {
 		t.Errorf("sessions[0].transcript = %q, want %q", summary.Sessions[0].Transcript, wantTranscript)
 	}
-	if summary.Sessions[0].HasCompactTranscript {
-		t.Error("sessions[0].has_compact_transcript = true for non-compactable transcript, want false")
+	if summary.Sessions[0].CompactTranscript != "" {
+		t.Errorf("sessions[0].compact_transcript = %q for non-compactable transcript, want empty", summary.Sessions[0].CompactTranscript)
 	}
 }
 
