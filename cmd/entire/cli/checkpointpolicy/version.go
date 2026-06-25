@@ -26,7 +26,6 @@ func EnsureCanReadVersion(checkpointID, version string) error {
 		return unsupportedVersionError{
 			CheckpointID: checkpointID,
 			Version:      version,
-			Err:          errUnsupportedVersion,
 		}
 	}
 	return nil
@@ -35,13 +34,12 @@ func EnsureCanReadVersion(checkpointID, version string) error {
 type unsupportedVersionError struct {
 	CheckpointID string
 	Version      string
-	Err          error
 }
 
 func (e unsupportedVersionError) Error() string {
-	return fmt.Sprintf("checkpoint %s uses unsupported checkpoint_version %q: %v", e.CheckpointID, e.Version, e.Err)
+	return fmt.Sprintf("checkpoint %s uses unsupported checkpoint_version %q: %v", e.CheckpointID, e.Version, errUnsupportedVersion)
 }
 
 func (e unsupportedVersionError) Unwrap() error {
-	return e.Err
+	return errUnsupportedVersion
 }
