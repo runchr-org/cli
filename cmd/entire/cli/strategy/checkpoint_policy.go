@@ -53,6 +53,11 @@ func syncCheckpointPolicyForPrePush(ctx context.Context, ps pushSettings) bool {
 	state, err := checkpointpolicy.Sync(ctx, repo, target)
 	if err != nil {
 		warnOrLogCheckpointPolicySyncFailure(ctx, err)
+		localState, readErr := checkpointpolicy.ReadLocal(ctx, repo)
+		if readErr == nil && checkpointpolicy.UnsupportedWrite(localState.Policy) {
+			warnOrLogUnsupportedCheckpointWrite(ctx, localState.Policy)
+			return false
+		}
 		return true
 	}
 	if state.Source == checkpointpolicy.SourceLocalDiverged {

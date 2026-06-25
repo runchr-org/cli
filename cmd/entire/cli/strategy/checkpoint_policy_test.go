@@ -185,6 +185,36 @@ func TestPrePushSkipsCheckpointPushWhenPolicyDiverged(t *testing.T) {
 	require.Empty(t, strings.TrimSpace(out))
 }
 
+func TestPrePushSkipsCheckpointPushWhenSyncFailsAndLocalPolicyWriteUnsupported(t *testing.T) {
+	workDir := setupRepoWithCheckpointBranch(t)
+	bareDir := filepath.Join(t.TempDir(), "remote.git")
+	_, err := git.PlainInit(bareDir, true)
+	require.NoError(t, err)
+	runCheckpointPolicyGit(t, workDir, "remote", "add", "origin", bareDir)
+
+	repo, err := git.PlainOpen(workDir)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = repo.Close()
+	})
+	writeUnsupportedCheckpointPolicy(t, repo)
+
+	t.Chdir(workDir)
+	paths.ClearWorktreeRootCache()
+	t.Setenv(interactive.EnvTestTTY, "1")
+	oldWriter := stderrWriter
+	var stderr bytes.Buffer
+	stderrWriter = &stderr
+	t.Cleanup(func() { stderrWriter = oldWriter })
+
+	require.NoError(t, os.RemoveAll(bareDir))
+
+	err = NewManualCommitStrategy().PrePush(context.Background(), "origin")
+	require.NoError(t, err)
+	require.Contains(t, stderr.String(), "Could not refresh checkpoint policy")
+	require.Contains(t, stderr.String(), "requires checkpoint support newer than this Entire CLI")
+}
+
 func TestSyncCheckpointPolicyForPrePushUsesPushTarget(t *testing.T) {
 	workDir := setupGitRepo(t)
 	originBareDir := filepath.Join(t.TempDir(), "origin.git")
