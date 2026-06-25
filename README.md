@@ -271,6 +271,7 @@ table.
 | `--project`                                 | Write settings to `settings.json` even if it already exists                                                       |
 | `--skip-push-sessions`                      | Disable automatic pushing of session logs on git push                                                             |
 | `--checkpoint-remote <provider:owner/repo>` | Push checkpoint branches to a separate repo (e.g., `github:org/checkpoints-repo`)                                 |
+| `--search-skill`                            | Install the optional Entire search skill for the selected agent(s)                                                 |
 | `--telemetry=false`                         | Disable anonymous usage analytics                                                                                 |
 
 **Examples:**
@@ -284,6 +285,9 @@ entire enable
 
 # Re-enable and refresh hooks
 entire enable --force
+
+# Install the optional search skill for an agent
+entire enable --agent claude-code --search-skill
 
 # Save settings locally (not committed to git)
 entire enable --local

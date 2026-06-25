@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -10,35 +11,36 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
-func TestScaffoldSearchSubagent_CreatesManagedFiles(t *testing.T) {
+func TestScaffoldSearchSkill_CreatesManagedFiles(t *testing.T) {
 	testCases := []struct {
 		name        string
-		scaffoldFn  func() (searchSubagentScaffoldResult, error)
+		scaffoldFn  func() (searchSkillScaffoldResult, error)
 		relPath     string
 		wantSnippet string
 	}{
 		{
 			name: "claude",
-			scaffoldFn: func() (searchSubagentScaffoldResult, error) {
-				return scaffoldSearchSubagent(context.Background(), claudecode.NewClaudeCodeAgent())
+			scaffoldFn: func() (searchSkillScaffoldResult, error) {
+				return scaffoldSearchSkill(context.Background(), claudecode.NewClaudeCodeAgent())
 			},
 			relPath:     filepath.Join(".claude", "agents", "entire-search.md"),
 			wantSnippet: "tools: Bash",
 		},
 		{
 			name: "codex",
-			scaffoldFn: func() (searchSubagentScaffoldResult, error) {
-				return scaffoldSearchSubagent(context.Background(), codex.NewCodexAgent())
+			scaffoldFn: func() (searchSkillScaffoldResult, error) {
+				return scaffoldSearchSkill(context.Background(), codex.NewCodexAgent())
 			},
 			relPath:     filepath.Join(".codex", "agents", "entire-search.toml"),
 			wantSnippet: `sandbox_mode = "read-only"`,
 		},
 		{
 			name: "gemini",
-			scaffoldFn: func() (searchSubagentScaffoldResult, error) {
-				return scaffoldSearchSubagent(context.Background(), geminicli.NewGeminiCLIAgent())
+			scaffoldFn: func() (searchSkillScaffoldResult, error) {
+				return scaffoldSearchSkill(context.Background(), geminicli.NewGeminiCLIAgent())
 			},
 			relPath:     filepath.Join(".gemini", "agents", "entire-search.md"),
 			wantSnippet: "- run_shell_command",
@@ -51,13 +53,13 @@ func TestScaffoldSearchSubagent_CreatesManagedFiles(t *testing.T) {
 
 			result, err := tc.scaffoldFn()
 			if err != nil {
-				t.Fatalf("scaffoldSearchSubagent() error = %v", err)
+				t.Fatalf("scaffoldSearchSkill() error = %v", err)
 			}
-			if result.Status != searchSubagentCreated {
-				t.Fatalf("scaffoldSearchSubagent() status = %q, want %q", result.Status, searchSubagentCreated)
+			if result.Status != searchSkillCreated {
+				t.Fatalf("scaffoldSearchSkill() status = %q, want %q", result.Status, searchSkillCreated)
 			}
 			if result.RelPath != tc.relPath {
-				t.Fatalf("scaffoldSearchSubagent() relPath = %q, want %q", result.RelPath, tc.relPath)
+				t.Fatalf("scaffoldSearchSkill() relPath = %q, want %q", result.RelPath, tc.relPath)
 			}
 
 			data, err := os.ReadFile(filepath.Join(tmpDir, tc.relPath))
@@ -65,7 +67,7 @@ func TestScaffoldSearchSubagent_CreatesManagedFiles(t *testing.T) {
 				t.Fatalf("failed to read scaffolded file: %v", err)
 			}
 			content := string(data)
-			if !strings.Contains(content, entireManagedSearchSubagentMarker) {
+			if !strings.Contains(content, entireManagedSearchSkillMarker) {
 				t.Fatal("scaffolded file should contain Entire-managed marker")
 			}
 			assertStrictJSONSearchInstructions(t, content)
@@ -76,47 +78,47 @@ func TestScaffoldSearchSubagent_CreatesManagedFiles(t *testing.T) {
 	}
 }
 
-func TestScaffoldSearchSubagent_IdempotentManagedFile(t *testing.T) {
+func TestScaffoldSearchSkill_IdempotentManagedFile(t *testing.T) {
 	setupTestDir(t)
 
 	ag := claudecode.NewClaudeCodeAgent()
-	if _, err := scaffoldSearchSubagent(context.Background(), ag); err != nil {
-		t.Fatalf("first scaffoldSearchSubagent() error = %v", err)
+	if _, err := scaffoldSearchSkill(context.Background(), ag); err != nil {
+		t.Fatalf("first scaffoldSearchSkill() error = %v", err)
 	}
 
-	result, err := scaffoldSearchSubagent(context.Background(), ag)
+	result, err := scaffoldSearchSkill(context.Background(), ag)
 	if err != nil {
-		t.Fatalf("second scaffoldSearchSubagent() error = %v", err)
+		t.Fatalf("second scaffoldSearchSkill() error = %v", err)
 	}
-	if result.Status != searchSubagentUnchanged {
-		t.Fatalf("second scaffoldSearchSubagent() status = %q, want %q", result.Status, searchSubagentUnchanged)
+	if result.Status != searchSkillUnchanged {
+		t.Fatalf("second scaffoldSearchSkill() status = %q, want %q", result.Status, searchSkillUnchanged)
 	}
 }
 
-func TestScaffoldSearchSubagent_UpdatesManagedFile(t *testing.T) {
+func TestScaffoldSearchSkill_UpdatesManagedFile(t *testing.T) {
 	tmpDir := setupTestDir(t)
 
 	ag := claudecode.NewClaudeCodeAgent()
-	relPath, _, ok := searchSubagentTemplate(ag.Name())
+	relPath, _, ok := searchSkillTemplate(ag.Name())
 	if !ok {
-		t.Fatal("searchSubagentTemplate() unexpectedly unsupported for claude")
+		t.Fatal("searchSkillTemplate() unexpectedly unsupported for claude")
 	}
 
 	targetPath := filepath.Join(tmpDir, relPath)
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 		t.Fatalf("failed to create target dir: %v", err)
 	}
-	oldContent := "<!-- " + entireManagedSearchSubagentMarker + " -->\noutdated\n"
+	oldContent := "<!-- " + legacyEntireManagedSearchSubagentMarker + " -->\noutdated\n"
 	if err := os.WriteFile(targetPath, []byte(oldContent), 0o644); err != nil {
 		t.Fatalf("failed to write old managed content: %v", err)
 	}
 
-	result, err := scaffoldSearchSubagent(context.Background(), ag)
+	result, err := scaffoldSearchSkill(context.Background(), ag)
 	if err != nil {
-		t.Fatalf("scaffoldSearchSubagent() error = %v", err)
+		t.Fatalf("scaffoldSearchSkill() error = %v", err)
 	}
-	if result.Status != searchSubagentUpdated {
-		t.Fatalf("scaffoldSearchSubagent() status = %q, want %q", result.Status, searchSubagentUpdated)
+	if result.Status != searchSkillUpdated {
+		t.Fatalf("scaffoldSearchSkill() status = %q, want %q", result.Status, searchSkillUpdated)
 	}
 
 	data, err := os.ReadFile(targetPath)
@@ -129,13 +131,13 @@ func TestScaffoldSearchSubagent_UpdatesManagedFile(t *testing.T) {
 	assertStrictJSONSearchInstructions(t, string(data))
 }
 
-func TestScaffoldSearchSubagent_PreservesUserOwnedFile(t *testing.T) {
+func TestScaffoldSearchSkill_PreservesUserOwnedFile(t *testing.T) {
 	tmpDir := setupTestDir(t)
 
 	ag := claudecode.NewClaudeCodeAgent()
-	relPath, _, ok := searchSubagentTemplate(ag.Name())
+	relPath, _, ok := searchSkillTemplate(ag.Name())
 	if !ok {
-		t.Fatal("searchSubagentTemplate() unexpectedly unsupported for claude")
+		t.Fatal("searchSkillTemplate() unexpectedly unsupported for claude")
 	}
 
 	targetPath := filepath.Join(tmpDir, relPath)
@@ -147,12 +149,12 @@ func TestScaffoldSearchSubagent_PreservesUserOwnedFile(t *testing.T) {
 		t.Fatalf("failed to write user-owned file: %v", err)
 	}
 
-	result, err := scaffoldSearchSubagent(context.Background(), ag)
+	result, err := scaffoldSearchSkill(context.Background(), ag)
 	if err != nil {
-		t.Fatalf("scaffoldSearchSubagent() error = %v", err)
+		t.Fatalf("scaffoldSearchSkill() error = %v", err)
 	}
-	if result.Status != searchSubagentSkippedConflict {
-		t.Fatalf("scaffoldSearchSubagent() status = %q, want %q", result.Status, searchSubagentSkippedConflict)
+	if result.Status != searchSkillSkippedConflict {
+		t.Fatalf("scaffoldSearchSkill() status = %q, want %q", result.Status, searchSkillSkippedConflict)
 	}
 
 	data, err := os.ReadFile(targetPath)
@@ -161,6 +163,32 @@ func TestScaffoldSearchSubagent_PreservesUserOwnedFile(t *testing.T) {
 	}
 	if string(data) != userContent {
 		t.Fatal("user-owned file should not be overwritten")
+	}
+}
+
+func TestSetupAgentHooksNonInteractive_SearchSkillOptInOnly(t *testing.T) {
+	tmpDir := setupTestDir(t)
+	testutil.InitRepo(t, tmpDir)
+	ag := claudecode.NewClaudeCodeAgent()
+
+	var out bytes.Buffer
+	if err := setupAgentHooksNonInteractive(context.Background(), &out, ag, EnableOptions{}); err != nil {
+		t.Fatalf("setupAgentHooksNonInteractive(default) error = %v", err)
+	}
+	searchPath := filepath.Join(tmpDir, ".claude", "agents", "entire-search.md")
+	if _, err := os.Stat(searchPath); !os.IsNotExist(err) {
+		t.Fatalf("default setup should not install search skill, stat err = %v", err)
+	}
+
+	out.Reset()
+	if err := setupAgentHooksNonInteractive(context.Background(), &out, ag, EnableOptions{SearchSkill: true}); err != nil {
+		t.Fatalf("setupAgentHooksNonInteractive(search skill) error = %v", err)
+	}
+	if _, err := os.Stat(searchPath); err != nil {
+		t.Fatalf("opt-in setup should install search skill: %v", err)
+	}
+	if !strings.Contains(out.String(), "Installed Claude Code search skill") {
+		t.Fatalf("output should mention installed search skill, got: %s", out.String())
 	}
 }
 
