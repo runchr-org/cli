@@ -38,7 +38,7 @@ func TestParseFormat(t *testing.T) {
 	}
 }
 
-func TestCanReadFormat(t *testing.T) {
+func TestSupportedFormats(t *testing.T) {
 	t.Parallel()
 
 	branchV1, err := checkpointpolicy.ParseFormat(checkpoint.CheckpointVersionBranchV1)
@@ -49,6 +49,14 @@ func TestCanReadFormat(t *testing.T) {
 	require.NoError(t, err)
 
 	require.True(t, checkpointpolicy.CanRead(branchV1))
+	require.True(t, checkpointpolicy.CanWrite(branchV1))
+	require.Equal(t, checkpoint.CheckpointVersionBranchV1, branchV1.String())
+
 	require.False(t, checkpointpolicy.CanRead(refsV1))
+	require.False(t, checkpointpolicy.CanWrite(refsV1))
+	require.Negative(t, checkpointpolicy.Compare(branchV1, refsV1))
+
 	require.False(t, checkpointpolicy.CanRead(unknownV1))
+	require.False(t, checkpointpolicy.CanWrite(unknownV1))
+	require.Negative(t, checkpointpolicy.Compare(refsV1, unknownV1))
 }
