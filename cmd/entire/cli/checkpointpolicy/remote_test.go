@@ -218,6 +218,6 @@ func runPolicyGit(t *testing.T, dir string, args ...string) {
 
 func requireNoPolicyFetchRef(t *testing.T, repo *git.Repository) {
 	t.Helper()
-	_, err := repo.Reference("refs/entire/policies/checkpoint-fetch", true)
+	_, err := repo.Reference(plumbing.ReferenceName("refs/entire/policies/checkpoint-fetch"), true)
 	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound)
 }
