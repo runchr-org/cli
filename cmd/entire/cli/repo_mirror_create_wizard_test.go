@@ -2,12 +2,34 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"testing"
+	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
 	"github.com/entireio/cli/internal/coreapi"
 )
+
+func TestRunMirrorCreateWizard_RequiresTTY(t *testing.T) {
+	t.Parallel()
+	// In-process tests are non-interactive, so the wizard must refuse before
+	// touching auth or the network, pointing at the non-interactive form.
+	cmd := &cobra.Command{}
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetContext(context.Background())
+
+	err := runMirrorCreateWizard(cmd, false, time.Minute)
+
+	var silent *SilentError
+	require.ErrorAs(t, err, &silent)
+	require.Empty(t, out.String(), "stdout must stay clean")
+	require.Contains(t, errOut.String(), "interactive terminal")
+	require.Contains(t, errOut.String(), "entire repo mirror create <github-url>")
+}
 
 func TestSelectableAvailableRepos(t *testing.T) {
 	t.Parallel()

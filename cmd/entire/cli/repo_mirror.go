@@ -217,7 +217,25 @@ func createAndAwaitMirror(ctx context.Context, c *coreapi.Client, owner, repo, c
 		return mirrorCreateOutcome{}, err
 	}
 	outcome := mirrorCreateOutcome{created: created}
-	if noWait || created.Empty {
+	if created.Empty {
+		// An empty upstream has nothing to clone, so don't poll for "ready" — it
+		// never would. But an *existing* placement can be suspended even when
+		// empty, and one status read surfaces that (a fresh create can't be
+		// suspended — suspension follows upstream access loss). Mirrors the old
+		// finishMirrorCreate behavior; the read is best-effort, so a transient
+		// GetMirror error just falls through to the benign "nothing to clone".
+		if !created.Created {
+			if m, gerr := c.GetMirror(ctx, coreapi.GetMirrorParams{MirrorId: created.MirrorId}); gerr == nil {
+				if s, ok := m.Status.Get(); ok && s == coreapi.MirrorStatusSuspended {
+					outcome.status = s
+					outcome.polled = true
+					return outcome, errMirrorSuspended
+				}
+			}
+		}
+		return outcome, nil
+	}
+	if noWait {
 		return outcome, nil
 	}
 	status, werr := awaitMirrorReady(ctx, c, created.MirrorId, timeout, onStatus)

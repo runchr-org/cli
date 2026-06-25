@@ -148,10 +148,19 @@ func newAuthTokenCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Refresh may exchange/refresh over the network; honor the
 			// plain-HTTP opt-in before resolving so local dev cores work.
-			applyInsecureHTTPAuth(insecureHTTPAuth)
+			insecure := applyInsecureHTTPAuth(insecureHTTPAuth)
 			target, err := resolveAuthStatusTarget(cmd.Context(), auth.Contexts, auth.RefreshedLoginToken)
 			if err != nil {
 				return err
+			}
+			// Don't mint/print a bearer for an insecure core unless explicitly
+			// opted in — the token would otherwise be usable over plain HTTP.
+			// Mirrors `auth status`.
+			if !insecure && target.coreURL != "" {
+				if err := api.RequireSecureURL(target.coreURL); err != nil {
+					cmd.SilenceUsage = true
+					return fmt.Errorf("login server URL check: %w", err)
+				}
 			}
 			if target.token == "" {
 				cmd.SilenceUsage = true

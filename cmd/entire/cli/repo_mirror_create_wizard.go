@@ -242,6 +242,15 @@ func runMirrorCreateWizard(cmd *cobra.Command, noWait bool, waitTimeout time.Dur
 	outW := cmd.OutOrStdout()
 	errW := cmd.ErrOrStderr()
 
+	// The wizard drives interactive huh pickers, so it needs a real terminal.
+	// Without one (CI, pipes), fail fast with a clear pointer at the
+	// non-interactive form rather than letting huh error obscurely.
+	if !interactive.CanPromptInteractively() {
+		fmt.Fprintln(errW, "The mirror create wizard needs an interactive terminal.")
+		fmt.Fprintln(errW, "Run 'entire repo mirror create <github-url> [cluster-host]' to create one non-interactively.")
+		return NewSilentError(errors.New("not an interactive terminal"))
+	}
+
 	insecure := insecureHTTPRequested(cmd)
 	if insecure {
 		auth.EnableInsecureHTTP()
@@ -271,7 +280,7 @@ func runMirrorCreateWizard(cmd *cobra.Command, noWait bool, waitTimeout time.Dur
 		fmt.Fprintln(errW, "Run 'entire repo mirror list --show-available' to see what's onboardable.")
 		return nil
 	}
-	selectedRepos, err := pickRepos(outW, repos)
+	selectedRepos, err := pickRepos(ctx, outW, repos)
 	if err != nil || len(selectedRepos) == 0 {
 		return err
 	}
@@ -287,7 +296,7 @@ func runMirrorCreateWizard(cmd *cobra.Command, noWait bool, waitTimeout time.Dur
 	if len(regions) == 0 {
 		return errors.New("no regions available to mirror into")
 	}
-	selectedRegions, err := pickRegions(outW, regions, jurisdiction)
+	selectedRegions, err := pickRegions(ctx, outW, regions, jurisdiction)
 	if err != nil || len(selectedRegions) == 0 {
 		return err
 	}
@@ -296,6 +305,11 @@ func runMirrorCreateWizard(cmd *cobra.Command, noWait bool, waitTimeout time.Dur
 	targets := mirrorTargets(selectedRepos, selectedRegions)
 	results := createMirrors(ctx, errW, targets, noWait, waitTimeout)
 
+	// A cancelled run (Ctrl+C) leaves in-flight mirrors looking like errors;
+	// exit quietly instead of reporting them as "N mirror(s) failed".
+	if ctx.Err() != nil {
+		return NewSilentError(ctx.Err())
+	}
 	return reportMirrorResults(outW, errW, results)
 }
 
@@ -336,8 +350,8 @@ func ensureMirrorWizardAuth(ctx context.Context, errW io.Writer, insecure bool) 
 }
 
 // pickRepos runs the repo multi-select and returns the chosen available
-// mirrors. A clean cancel (Ctrl+C) returns (nil, nil).
-func pickRepos(w io.Writer, repos []coreapi.AvailableMirror) ([]coreapi.AvailableMirror, error) {
+// mirrors. A clean cancel (Ctrl+C / cancelled ctx) returns (nil, nil).
+func pickRepos(ctx context.Context, w io.Writer, repos []coreapi.AvailableMirror) ([]coreapi.AvailableMirror, error) {
 	repoByKey := make(map[string]coreapi.AvailableMirror, len(repos))
 	options := make([]huh.Option[string], len(repos))
 	for i, m := range repos {
@@ -363,7 +377,7 @@ func pickRepos(w io.Writer, repos []coreapi.AvailableMirror) ([]coreapi.Availabl
 				Value(&selected),
 		),
 	)
-	if err := form.Run(); err != nil {
+	if err := form.RunWithContext(ctx); err != nil {
 		return nil, handleFormCancellation(w, "Mirror create", err)
 	}
 
@@ -378,7 +392,7 @@ func pickRepos(w io.Writer, repos []coreapi.AvailableMirror) ([]coreapi.Availabl
 
 // pickRegions runs the region multi-select, pre-selecting the default cluster
 // for the caller's jurisdiction. A clean cancel returns (nil, nil).
-func pickRegions(w io.Writer, regions []regionChoice, jurisdiction string) ([]regionChoice, error) {
+func pickRegions(ctx context.Context, w io.Writer, regions []regionChoice, jurisdiction string) ([]regionChoice, error) {
 	opts, defaults := clusterChoices(regions, jurisdiction)
 	regionByHost := make(map[string]regionChoice, len(regions))
 	for _, r := range regions {
@@ -403,7 +417,7 @@ func pickRegions(w io.Writer, regions []regionChoice, jurisdiction string) ([]re
 				Value(&selected),
 		),
 	)
-	if err := form.Run(); err != nil {
+	if err := form.RunWithContext(ctx); err != nil {
 		return nil, handleFormCancellation(w, "Mirror create", err)
 	}
 
@@ -521,9 +535,13 @@ func createOneMirror(ctx context.Context, t mirrorTarget, c *coreapi.Client, cli
 	case coreapi.MirrorStatusReady:
 		res.status = mirrorStatusReady
 	case coreapi.MirrorStatusSuspended:
-		res.status, res.err = mirrorStatusSuspended, err
+		// Carry the mirror id + resume command so the failure summary is
+		// actionable, matching the one-shot's explainSuspendedMirror guidance.
+		res.status, res.err = mirrorStatusSuspended,
+			fmt.Errorf("suspended — an operator can resume it: entire-core admin mirrors resume %s", outcome.created.MirrorId)
 	case coreapi.MirrorStatusFailed:
-		res.status, res.err = mirrorStatusFailed, err
+		res.status, res.err = mirrorStatusFailed,
+			fmt.Errorf("initial clone failed (mirror %s)", outcome.created.MirrorId)
 	case coreapi.MirrorStatusProcessing:
 		nonTerminal()
 	default:
