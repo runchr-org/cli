@@ -7,9 +7,10 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 )
 
+var errUnsupportedVersion = errors.New("not read-supported by this Entire CLI")
+
 func IsUnsupportedVersion(err error) bool {
-	var unsupported *unsupportedVersionError
-	return errors.As(err, &unsupported)
+	return errors.Is(err, errUnsupportedVersion)
 }
 
 func EnsureCanReadVersion(checkpointID, version string) error {
@@ -22,10 +23,10 @@ func EnsureCanReadVersion(checkpointID, version string) error {
 		return fmt.Errorf("checkpoint %s has invalid checkpoint_version %q: %w", checkpointID, version, err)
 	}
 	if !CanRead(format) {
-		return &unsupportedVersionError{
+		return unsupportedVersionError{
 			CheckpointID: checkpointID,
 			Version:      version,
-			Err:          errors.New("not read-supported by this Entire CLI"),
+			Err:          errUnsupportedVersion,
 		}
 	}
 	return nil
