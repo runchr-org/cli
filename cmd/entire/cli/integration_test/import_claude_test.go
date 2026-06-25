@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/entireio/cli/cmd/entire/cli/importclaude"
+	"github.com/entireio/cli/cmd/entire/cli/agentimport"
 )
 
 func TestImportClaudeCode_EndToEnd(t *testing.T) {
@@ -44,7 +44,7 @@ func TestImportClaudeCode_EndToEnd(t *testing.T) {
 
 	// 4. explain resolves an imported checkpoint by ID (regression: explain once
 	//    only consulted the committed/shadow paths and missed imports).
-	importedID := importclaude.DeriveCheckpointID(sessionID, "u1").String()
+	importedID := agentimport.DeriveCheckpointID(sessionID, "u1").String()
 	explainOut := env.RunCLI("checkpoint", "explain", importedID)
 	require.Contains(t, explainOut, "first", "explain should show the imported turn's prompt; got: %s", explainOut)
 

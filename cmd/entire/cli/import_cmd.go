@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/entireio/cli/cmd/entire/cli/importclaude"
+	"github.com/entireio/cli/cmd/entire/cli/agentimport"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
@@ -17,21 +17,25 @@ func newImportCmd() *cobra.Command {
 		Hidden: true,
 		RunE:   func(c *cobra.Command, _ []string) error { return c.Help() },
 	}
-	cmd.AddCommand(newImportClaudeCodeCmd())
+	// One subcommand per registered importer, so adding an agent is just a new
+	// agentimport.Importer registration — no command wiring needed here.
+	for _, imp := range agentimport.All() {
+		cmd.AddCommand(newImportAgentCmd(imp))
+	}
 	return cmd
 }
 
-func newImportClaudeCodeCmd() *cobra.Command {
+func newImportAgentCmd(imp agentimport.Importer) *cobra.Command {
 	var pathFlag string
 	var dryRun bool
 	var sessions []string
 
 	cmd := &cobra.Command{
-		Use:   "claude-code",
-		Short: "Import existing Claude Code transcripts as local, read-only checkpoints",
-		Long: `Import pre-existing Claude Code transcripts for this repo (the past month)
-as local-only, read-only checkpoints. Imported history is searchable and
-explainable but is never pushed and not rewindable.`,
+		Use:   imp.Name(),
+		Short: fmt.Sprintf("Import existing %s transcripts as read-only checkpoints", imp.AgentType()),
+		Long: fmt.Sprintf(`Import pre-existing %s transcripts for this repo (the past month) as
+read-only checkpoints. Imported history is searchable and explainable but is
+not rewindable.`, imp.AgentType()),
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			ctx := c.Context()
@@ -47,12 +51,12 @@ explainable but is never pushed and not rewindable.`,
 			}
 			defer repo.Close()
 
-			res, err := importclaude.Run(ctx, repo, importclaude.Options{
+			res, err := agentimport.Run(ctx, repo, imp, agentimport.Options{
 				RepoRoot: repoRoot, OverridePath: pathFlag, SessionFilter: sessions,
 				Now: time.Now(), DryRun: dryRun,
 			})
 			if err != nil {
-				return fmt.Errorf("import claude-code: %w", err)
+				return fmt.Errorf("import %s: %w", imp.Name(), err)
 			}
 			verb := "Imported"
 			if dryRun {
@@ -63,7 +67,7 @@ explainable but is never pushed and not rewindable.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&pathFlag, "path", "", "Override the Claude projects directory to import from")
+	cmd.Flags().StringVar(&pathFlag, "path", "", "Override the transcript directory to import from")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Report what would be imported without writing")
 	cmd.Flags().StringSliceVar(&sessions, "session", nil, "Import only these session IDs (repeatable)")
 	return cmd

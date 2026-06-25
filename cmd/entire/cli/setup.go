@@ -14,7 +14,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/gitremote"
-	"github.com/entireio/cli/cmd/entire/cli/importclaude"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -1172,10 +1171,6 @@ func runEnableInteractive(ctx context.Context, w io.Writer, agents []agent.Agent
 		return nil
 	}
 
-	if err := promptImportClaudeContext(ctx, w, opts); err != nil {
-		return err
-	}
-
 	fmt.Fprintln(w, "\nReady.")
 
 	// Note about empty repos at the end, after setup is complete
@@ -1867,68 +1862,6 @@ func appendShellCompletion(rcFile, completionLine string) error {
 	if err != nil {
 		return fmt.Errorf("writing completion: %w", err)
 	}
-	return nil
-}
-
-// promptImportClaudeContext offers, at enable time, to import the repo's
-// existing Claude Code transcripts (past month) as local, read-only history.
-// No-op when non-interactive, under --yes, or when nothing is found.
-func promptImportClaudeContext(ctx context.Context, w io.Writer, opts EnableOptions) error {
-	if opts.Yes || !interactive.CanPromptInteractively() {
-		return nil
-	}
-	repoRoot, err := paths.WorktreeRoot(ctx)
-	if err != nil {
-		return nil
-	}
-	now := time.Now()
-	files, err := importclaude.DiscoverSessions(repoRoot, "", now, nil)
-	if err != nil || len(files) == 0 {
-		return nil
-	}
-	turnCount := 0
-	for _, f := range files {
-		data, rerr := os.ReadFile(f) //nolint:gosec // G304: f is a discovered .jsonl in the user's own Claude transcript dir
-		if rerr != nil {
-			continue
-		}
-		turns, terr := importclaude.SplitTurns(data, "")
-		if terr != nil {
-			continue
-		}
-		turnCount += len(turns)
-	}
-	if turnCount == 0 {
-		return nil
-	}
-
-	doImport := false
-	form := NewAccessibleForm(
-		huh.NewGroup(
-			huh.NewConfirm().
-				Title(fmt.Sprintf("Found %d past Claude session turn(s) for this repo from the past month.", turnCount)).
-				Description("Import them as local, read-only history? It stays on your machine and is never pushed.").
-				Affirmative("Yes").
-				Negative("No").
-				Value(&doImport),
-		),
-	)
-	if err := form.Run(); err != nil {
-		return fmt.Errorf("import prompt: %w", err)
-	}
-	if !doImport {
-		return nil
-	}
-	repo, err := strategy.OpenRepository(ctx)
-	if err != nil {
-		return fmt.Errorf("open repository: %w", err)
-	}
-	defer repo.Close()
-	res, err := importclaude.Run(ctx, repo, importclaude.Options{RepoRoot: repoRoot, Now: now})
-	if err != nil {
-		return fmt.Errorf("import claude history: %w", err)
-	}
-	fmt.Fprintf(w, "  ✓ Imported %d turn(s) of Claude history (local, read-only)\n", res.TurnsImported)
 	return nil
 }
 

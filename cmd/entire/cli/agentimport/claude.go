@@ -1,44 +1,79 @@
-package importclaude
+package agentimport
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 )
 
-// Turn is one user-prompt turn extracted from a session transcript. Line
-// offsets are in raw-line space (newline-counted), matching the offsets used by
-// transcript.SliceFromLine and the agent token-usage helpers.
-type Turn struct {
-	LineStart, LineEnd int
-	UUID, ParentUUID   string
-	Prompt, Model      string
-	CreatedAt          time.Time
-	Tokens             *types.TokenUsage
-	ContentHash        string
-}
+// claudeImporter imports Claude Code transcripts (~/.claude/projects/<slug>/*.jsonl).
+type claudeImporter struct{}
 
-// extraFields are line fields not modeled by transcript.Line.
-type extraFields struct {
-	ParentUUID string `json:"parentUuid"`
-	Timestamp  string `json:"timestamp"`
-	Message    struct {
-		Model string `json:"model"`
-	} `json:"message"`
+func (claudeImporter) Name() string { return "claude-code" }
+
+func (claudeImporter) AgentType() types.AgentType { return agent.AgentTypeClaudeCode }
+
+// Discover returns Claude transcript files for the repo modified within the
+// lookback window. overridePath replaces the default ~/.claude/projects/<slug>
+// dir; sessionFilter, when non-empty, keeps only matching session IDs (the
+// file stem).
+func (claudeImporter) Discover(repoRoot, overridePath string, now time.Time, sessionFilter []string) ([]SessionFile, error) {
+	dir := overridePath
+	if dir == "" {
+		ag := &claudecode.ClaudeCodeAgent{}
+		d, err := ag.GetSessionDir(repoRoot)
+		if err != nil {
+			return nil, fmt.Errorf("resolve claude session dir: %w", err)
+		}
+		dir = d
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // no transcripts for this repo
+		}
+		return nil, fmt.Errorf("read claude session dir: %w", err)
+	}
+	cutoff := now.AddDate(0, 0, -LookbackDays)
+	var out []SessionFile
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		stem := strings.TrimSuffix(e.Name(), ".jsonl")
+		if len(sessionFilter) > 0 && !slices.Contains(sessionFilter, stem) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			continue
+		}
+		out = append(out, SessionFile{Path: filepath.Join(dir, e.Name()), SessionID: stem})
+	}
+	slices.SortFunc(out, func(a, b SessionFile) int { return strings.Compare(a.Path, b.Path) })
+	return out, nil
 }
 
 // SplitTurns produces one Turn per user-prompt line. Token usage for each turn
 // is computed on the slice [LineStart, LineEnd) so turns don't double-count
 // later turns. tool_result lines (Type == "user" but no text content) do not
 // start a turn.
-func SplitTurns(full []byte, subagentsDir string) ([]Turn, error) {
+func (claudeImporter) SplitTurns(sf SessionFile, full []byte) ([]Turn, error) {
+	subagentsDir := filepath.Join(filepath.Dir(sf.Path), sf.SessionID, "subagents")
 	rawLines := splitRawLines(full)
 
 	// Identify user-prompt turn starts in raw-line space.
@@ -99,6 +134,15 @@ func SplitTurns(full []byte, subagentsDir string) ([]Turn, error) {
 	return turns, nil
 }
 
+// claudeExtraFields are line fields not modeled by transcript.Line.
+type claudeExtraFields struct {
+	ParentUUID string `json:"parentUuid"`
+	Timestamp  string `json:"timestamp"`
+	Message    struct {
+		Model string `json:"model"`
+	} `json:"message"`
+}
+
 // modelInRange returns the model from the first assistant message within
 // [start, end), or "" when none carries one. The model lives on assistant
 // lines, not the user-prompt line.
@@ -111,7 +155,7 @@ func modelInRange(rawLines [][]byte, start, end int) string {
 		if line.Type != "assistant" {
 			continue
 		}
-		var ex extraFields
+		var ex claudeExtraFields
 		if err := json.Unmarshal(rawLines[i], &ex); err != nil {
 			continue
 		}

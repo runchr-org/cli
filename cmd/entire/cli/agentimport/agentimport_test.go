@@ -1,4 +1,4 @@
-package importclaude
+package agentimport
 
 import (
 	"context"
@@ -14,6 +14,36 @@ import (
 	cp "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
+
+func TestDeriveCheckpointID_StableAndDistinct(t *testing.T) {
+	t.Parallel()
+	a := DeriveCheckpointID("sess", "turn-1")
+	b := DeriveCheckpointID("sess", "turn-1")
+	c := DeriveCheckpointID("sess", "turn-2")
+	if a != b {
+		t.Errorf("not deterministic: %s != %s", a, b)
+	}
+	if a == c {
+		t.Errorf("collision across turns: %s == %s", a, c)
+	}
+	if a.IsEmpty() {
+		t.Error("derived id is empty")
+	}
+}
+
+func TestRegistry_HasClaude(t *testing.T) {
+	t.Parallel()
+	imp, ok := Get("claude-code")
+	if !ok {
+		t.Fatal("claude-code importer not registered")
+	}
+	if imp.Name() != "claude-code" {
+		t.Fatalf("unexpected name %q", imp.Name())
+	}
+	if len(All()) == 0 {
+		t.Fatal("All() returned no importers")
+	}
+}
 
 func initRepoWithCommit(t *testing.T) (*git.Repository, string) {
 	t.Helper()
@@ -58,8 +88,9 @@ func TestRun_ImportsAndIsIdempotent(t *testing.T) {
 	writeFixtureSession(t, claudeDir, "sess1.jsonl")
 
 	opts := Options{RepoRoot: repoDir, OverridePath: claudeDir, Now: time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC)}
+	imp := claudeImporter{}
 
-	res, err := Run(context.Background(), repo, opts)
+	res, err := Run(context.Background(), repo, imp, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +98,7 @@ func TestRun_ImportsAndIsIdempotent(t *testing.T) {
 		t.Fatalf("want 2 imported, got %+v", res)
 	}
 
-	res2, err := Run(context.Background(), repo, opts)
+	res2, err := Run(context.Background(), repo, imp, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +130,7 @@ func TestRun_DryRunWritesNothing(t *testing.T) {
 	claudeDir := t.TempDir()
 	writeFixtureSession(t, claudeDir, "sess1.jsonl")
 
-	res, err := Run(context.Background(), repo, Options{
+	res, err := Run(context.Background(), repo, claudeImporter{}, Options{
 		RepoRoot: repoDir, OverridePath: claudeDir, DryRun: true,
 		Now: time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
 	})
