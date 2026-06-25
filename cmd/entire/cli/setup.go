@@ -436,13 +436,17 @@ func runManageAgents(ctx context.Context, w io.Writer, opts EnableOptions, selec
 	// When no selectFn is provided, check if we can prompt interactively.
 	// A selectFn (e.g. from --yes) bypasses the interactive prompt entirely.
 	if selectFn == nil && !interactive.CanPromptInteractively() {
-		if opts.SearchSkill && len(installedNames) > 0 {
-			external.DiscoverAndRegisterAlways(ctx)
-			selectedAgentNames := make([]string, 0, len(installedNames))
-			for _, name := range installedNames {
-				selectedAgentNames = append(selectedAgentNames, string(name))
+		if opts.SearchSkill {
+			if len(installedNames) > 0 {
+				external.DiscoverAndRegisterAlways(ctx)
+				selectedAgentNames := make([]string, 0, len(installedNames))
+				for _, name := range installedNames {
+					selectedAgentNames = append(selectedAgentNames, string(name))
+				}
+				return applyAgentChanges(ctx, w, selectedAgentNames, installedNames, opts)
 			}
-			return applyAgentChanges(ctx, w, selectedAgentNames, installedNames, opts)
+			printSearchSkillNonInteractiveNoAgentsGuidance(w)
+			return NewSilentError(errors.New("search skill requires an agent in non-interactive mode"))
 		}
 		fmt.Fprintln(w, "Cannot show agent selection in non-interactive mode.")
 		fmt.Fprintln(w, "Use: entire agent add <name>")

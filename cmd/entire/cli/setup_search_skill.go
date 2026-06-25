@@ -136,6 +136,14 @@ func isManagedSearchSkill(data []byte) bool {
 		bytes.Contains(data, []byte(legacyEntireManagedSearchSubagentMarker))
 }
 
+func printSearchSkillNonInteractiveNoAgentsGuidance(w io.Writer) {
+	fmt.Fprintln(w, "Cannot install the search skill in non-interactive mode because no agents are enabled.")
+	fmt.Fprintln(w, "Install it for a specific agent with:")
+	fmt.Fprintln(w, "  entire enable --agent <name> --search-skill")
+	fmt.Fprintln(w, "or:")
+	fmt.Fprintln(w, "  entire agent add <name> --search-skill")
+}
+
 func reportSearchSkillScaffold(w io.Writer, ag agent.Agent, result searchSkillScaffoldResult) {
 	switch result.Status {
 	case searchSkillCreated:

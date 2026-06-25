@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -189,6 +190,32 @@ func TestSetupAgentHooksNonInteractive_SearchSkillOptInOnly(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Installed Claude Code search skill") {
 		t.Fatalf("output should mention installed search skill, got: %s", out.String())
+	}
+}
+
+func TestManageAgentsNonInteractive_SearchSkillWithoutAgentsShowsInstallGuidance(t *testing.T) {
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+
+	var out bytes.Buffer
+	err := runManageAgents(context.Background(), &out, EnableOptions{SearchSkill: true}, nil)
+	if err == nil {
+		t.Fatal("expected error when --search-skill cannot choose an agent non-interactively")
+	}
+	var silentErr *SilentError
+	if !errors.As(err, &silentErr) {
+		t.Fatalf("error = %T %v, want SilentError", err, err)
+	}
+
+	output := out.String()
+	for _, want := range []string{
+		"Cannot install the search skill in non-interactive mode because no agents are enabled.",
+		"entire enable --agent <name> --search-skill",
+		"entire agent add <name> --search-skill",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output missing %q, got: %s", want, output)
+		}
 	}
 }
 
