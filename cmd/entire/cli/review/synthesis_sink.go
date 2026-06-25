@@ -61,8 +61,12 @@ func (p AgentSynthesisProvider) Synthesize(ctx context.Context, prompt string) (
 // unconditionally (no y/N prompt). AgentEvent is a no-op; all work happens in
 // RunFinished.
 type SynthesisSink struct {
-	Provider        SynthesisProvider
-	Writer          io.Writer
+	Provider SynthesisProvider
+	Writer   io.Writer
+	// RenderWriter is the writer whose terminal capabilities should be used for
+	// markdown rendering. It defaults to Writer. TTY review runs use this when
+	// Writer is a post-run buffer that will later flush to the real terminal.
+	RenderWriter    io.Writer
 	PerRunPrompt    string // if non-empty, included in the synthesis prompt for context
 	ProfileName     string
 	Task            string
@@ -129,7 +133,7 @@ func (s SynthesisSink) RunFinished(summary reviewtypes.RunSummary) {
 	// already ends with a newline, and the raw-markdown fallback path has its
 	// own terminal newline from the LLM response. Adding Fprintln would double
 	// the trailing blank line.
-	rendered, err := mdrender.RenderForWriter(s.Writer, result)
+	rendered, err := mdrender.RenderForWriter(s.renderWriter(), result)
 	if err != nil {
 		rendered = result
 	}
@@ -137,6 +141,13 @@ func (s SynthesisSink) RunFinished(summary reviewtypes.RunSummary) {
 	if s.OnComplete != nil {
 		s.OnComplete(nil)
 	}
+}
+
+func (s SynthesisSink) renderWriter() io.Writer {
+	if s.RenderWriter != nil {
+		return s.RenderWriter
+	}
+	return s.Writer
 }
 
 func (s SynthesisSink) runContext() context.Context {
