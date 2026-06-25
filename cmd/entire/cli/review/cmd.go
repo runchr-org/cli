@@ -17,6 +17,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/huh/v2"
@@ -1482,8 +1483,12 @@ func reviewSummaryTokenEnricher(worktreeRoot, headSHA string) func(context.Conte
 }
 
 func reviewAgentRunTokenEnricher(worktreeRoot, headSHA string) func(context.Context, reviewtypes.AgentRun) reviewtypes.AgentRun {
+	var mu sync.Mutex
+	usedSessions := map[string]bool{}
 	return func(ctx context.Context, run reviewtypes.AgentRun) reviewtypes.AgentRun {
-		enriched, err := hydrateReviewAgentRunTokensFromCurrentState(ctx, worktreeRoot, headSHA, run, agent.GetByAgentType)
+		mu.Lock()
+		defer mu.Unlock()
+		enriched, err := hydrateReviewAgentRunTokensFromCurrentStateWithUsed(ctx, worktreeRoot, headSHA, run, agent.GetByAgentType, usedSessions)
 		if err != nil {
 			logging.Debug(ctx, "review agent token hydration skipped", slog.String("error", err.Error()))
 			return run

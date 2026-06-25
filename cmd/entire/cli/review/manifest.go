@@ -251,12 +251,13 @@ func hydrateReviewSummaryTokensFromCurrentState(
 	return hydrateReviewSummaryTokensFromStates(ctx, worktreeRoot, headSHA, summary, states, lookup), nil
 }
 
-func hydrateReviewAgentRunTokensFromCurrentState(
+func hydrateReviewAgentRunTokensFromCurrentStateWithUsed(
 	ctx context.Context,
 	worktreeRoot string,
 	headSHA string,
 	run reviewtypes.AgentRun,
 	lookup agentTypeLookup,
+	usedSessions map[string]bool,
 ) (reviewtypes.AgentRun, error) {
 	store, err := session.NewStateStore(ctx)
 	if err != nil {
@@ -266,7 +267,7 @@ func hydrateReviewAgentRunTokensFromCurrentState(
 	if err != nil {
 		return run, fmt.Errorf("list session states: %w", err)
 	}
-	return hydrateReviewAgentRunTokensFromStates(ctx, worktreeRoot, headSHA, run, states, lookup), nil
+	return hydrateReviewAgentRunTokensFromStatesWithUsed(ctx, worktreeRoot, headSHA, run, states, lookup, usedSessions), nil
 }
 
 func hydrateReviewAgentRunTokensFromStates(
@@ -277,10 +278,26 @@ func hydrateReviewAgentRunTokensFromStates(
 	states []*session.State,
 	lookup agentTypeLookup,
 ) reviewtypes.AgentRun {
-	st := matchReviewSessionState(worktreeRoot, headSHA, run.StartedAt, agentNameForRun(run), run.Model, states, map[string]bool{})
+	return hydrateReviewAgentRunTokensFromStatesWithUsed(ctx, worktreeRoot, headSHA, run, states, lookup, map[string]bool{})
+}
+
+func hydrateReviewAgentRunTokensFromStatesWithUsed(
+	ctx context.Context,
+	worktreeRoot string,
+	headSHA string,
+	run reviewtypes.AgentRun,
+	states []*session.State,
+	lookup agentTypeLookup,
+	usedSessions map[string]bool,
+) reviewtypes.AgentRun {
+	if usedSessions == nil {
+		usedSessions = map[string]bool{}
+	}
+	st := matchReviewSessionState(worktreeRoot, headSHA, run.StartedAt, agentNameForRun(run), run.Model, states, usedSessions)
 	if st == nil || st.SessionID == "" {
 		return run
 	}
+	usedSessions[st.SessionID] = true
 	tokens := reviewTokensFromTokenUsage(reviewTokenUsageForSession(ctx, st, lookup))
 	if tokens.In == 0 && tokens.Out == 0 {
 		return run

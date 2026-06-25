@@ -838,6 +838,58 @@ func TestComponentsEqualAtBoundsChecks(t *testing.T) {
 	}
 }
 
+func TestHydrateReviewAgentRunTokensFromStatesWithUsedDisambiguatesDuplicateSlots(t *testing.T) {
+	t.Parallel()
+	started := time.Date(2026, 5, 7, 10, 0, 0, 0, time.UTC)
+	run := reviewtypes.AgentRun{
+		Name:      "claude-code",
+		AgentName: "claude-code",
+		Model:     "opus",
+		StartedAt: started,
+	}
+	states := []*session.State{
+		{
+			SessionID:    "sess-older",
+			Kind:         session.KindAgentReview,
+			WorktreePath: "/repo",
+			BaseCommit:   "abc123",
+			StartedAt:    started.Add(time.Second),
+			AgentType:    agenttypes.AgentType("Claude Code"),
+			ModelName:    "claude-opus-4-1",
+			TokenUsage:   &agent.TokenUsage{InputTokens: 20, OutputTokens: 2},
+		},
+		{
+			SessionID:    "sess-newer",
+			Kind:         session.KindAgentReview,
+			WorktreePath: "/repo",
+			BaseCommit:   "abc123",
+			StartedAt:    started.Add(2 * time.Second),
+			AgentType:    agenttypes.AgentType("Claude Code"),
+			ModelName:    "claude-opus-4-1",
+			TokenUsage:   &agent.TokenUsage{InputTokens: 10, OutputTokens: 1},
+		},
+	}
+
+	freshA := hydrateReviewAgentRunTokensFromStates(context.Background(), "/repo", "abc123", run, states, nil)
+	freshB := hydrateReviewAgentRunTokensFromStates(context.Background(), "/repo", "abc123", run, states, nil)
+	if freshA.Tokens.In != 10 || freshB.Tokens.In != 10 {
+		t.Fatalf("fresh-map setup changed: tokens = %d/%d, want both newest session token count 10", freshA.Tokens.In, freshB.Tokens.In)
+	}
+
+	used := map[string]bool{}
+	first := hydrateReviewAgentRunTokensFromStatesWithUsed(context.Background(), "/repo", "abc123", run, states, nil, used)
+	second := hydrateReviewAgentRunTokensFromStatesWithUsed(context.Background(), "/repo", "abc123", run, states, nil, used)
+	if first.Tokens.In != 10 || first.Tokens.Out != 1 {
+		t.Fatalf("first tokens = %+v, want newer session tokens 10/1", first.Tokens)
+	}
+	if second.Tokens.In != 20 || second.Tokens.Out != 2 {
+		t.Fatalf("second tokens = %+v, want older distinct session tokens 20/2", second.Tokens)
+	}
+	if !used["sess-newer"] || !used["sess-older"] || len(used) != 2 {
+		t.Fatalf("used sessions = %#v, want both sessions claimed", used)
+	}
+}
+
 func TestBuildLocalReviewManifestFromSummary_DisambiguatesSameModelDifferentThinking(t *testing.T) {
 	started := time.Date(2026, 5, 7, 10, 0, 0, 0, time.UTC)
 	summary := reviewtypes.RunSummary{
