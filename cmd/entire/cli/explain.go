@@ -2150,6 +2150,9 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 	tempPoints := getReachableTemporaryCheckpoints(ctx, repo, stores.Ephemeral(), head.Hash(), isOnDefault, limit)
 	points = append(points, tempPoints...)
 
+	// Add imported (read-only, commit-less) checkpoints from entire/imports/v1.
+	points = append(points, getImportedRewindPoints(ctx, repo)...)
+
 	// Sort by date, most recent first
 	sort.Slice(points, func(i, j int) bool {
 		return points[i].Date.After(points[j].Date)
@@ -2161,6 +2164,39 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 	}
 
 	return points, nil
+}
+
+// getImportedRewindPoints returns read-only imported checkpoints from
+// entire/imports/v1 as RewindPoint entries (flagged Imported, not rewindable).
+// Best-effort: returns nil when the imports ref is absent or unreadable.
+func getImportedRewindPoints(ctx context.Context, repo *git.Repository) []strategy.RewindPoint {
+	importsRefs := checkpoint.ImportsRefs()
+	stores, err := checkpoint.Open(ctx, repo, checkpoint.OpenOptions{Refs: &importsRefs})
+	if err != nil {
+		return nil
+	}
+	infos, err := stores.Persistent.List(ctx)
+	if err != nil {
+		return nil
+	}
+	points := make([]strategy.RewindPoint, 0, len(infos))
+	for _, info := range infos {
+		point := strategy.RewindPoint{
+			ID:           info.CheckpointID.String(),
+			Message:      readLatestCommittedSessionPrompt(ctx, stores.Persistent, info.CheckpointID, info.SessionCount),
+			Date:         info.CreatedAt,
+			IsLogsOnly:   true,
+			Imported:     true,
+			CheckpointID: info.CheckpointID,
+			SessionID:    info.SessionID,
+			SessionCount: info.SessionCount,
+			SessionIDs:   info.SessionIDs,
+			Agent:        info.Agent,
+		}
+		point.SessionPrompt = point.Message
+		points = append(points, point)
+	}
+	return points
 }
 
 func readLatestCommittedSessionPrompt(ctx context.Context, store checkpoint.SessionReader, cpID id.CheckpointID, sessionCount int) string {
@@ -2634,6 +2670,7 @@ type checkpointGroup struct {
 	prompt       string
 	isTemporary  bool // true if any commit is not logs-only (can be rewound)
 	isTask       bool // true if this is a task checkpoint
+	imported     bool // true for read-only imported (commit-less) checkpoints
 	commits      []commitEntry
 }
 
@@ -2674,6 +2711,7 @@ func groupByCheckpointID(points []strategy.RewindPoint) []checkpointGroup {
 				prompt:       point.SessionPrompt,
 				isTemporary:  !point.IsLogsOnly,
 				isTask:       point.IsTaskCheckpoint,
+				imported:     point.Imported,
 			}
 			groupMap[cpID] = group
 			order = append(order, cpID)
@@ -2749,6 +2787,9 @@ func formatCheckpointGroup(sb *strings.Builder, group checkpointGroup, styles st
 	}
 	if group.isTemporary && cpID != "temporary" {
 		indicators = append(indicators, "[temporary]")
+	}
+	if group.imported {
+		indicators = append(indicators, "[imported]")
 	}
 
 	// Prompt cascade: SessionPrompt → latest commit message → dimmed placeholder.

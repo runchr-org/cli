@@ -120,7 +120,23 @@ func runTokensProfile(ctx context.Context, cmd *cobra.Command, jsonOutput bool, 
 		return fmt.Errorf("failed to list checkpoints: %w", err)
 	}
 
-	report, err := buildTokensProfileReport(ctx, store, infos, limit)
+	refs := make([]tokensCheckpointRef, 0, len(infos))
+	for _, info := range infos {
+		refs = append(refs, tokensCheckpointRef{store: store, info: info})
+	}
+	// Include read-only imported checkpoints from entire/imports/v1, read from
+	// their own store. Best-effort: skipped when the ref is absent.
+	importsRefs := checkpoint.ImportsRefs()
+	if importsStore := checkpoint.NewGitStore(repo, importsRefs); importsStore != nil {
+		importsStore.SetBlobFetcher(FetchBlobsByHash)
+		if importInfos, listErr := importsStore.List(ctx); listErr == nil {
+			for _, info := range importInfos {
+				refs = append(refs, tokensCheckpointRef{store: importsStore, info: info})
+			}
+		}
+	}
+
+	report, err := buildTokensProfileReport(ctx, refs, limit)
 	if err != nil {
 		return err
 	}
@@ -132,19 +148,28 @@ func runTokensProfile(ctx context.Context, cmd *cobra.Command, jsonOutput bool, 
 	return nil
 }
 
-func buildTokensProfileReport(ctx context.Context, store *checkpoint.GitStore, infos []checkpoint.CheckpointInfo, limit int) (tokensProfileReport, error) {
-	checkpointsAvailable := len(infos)
-	infos = limitTokensProfileCheckpoints(infos, limit)
+// tokensCheckpointRef binds a checkpoint info to the store that owns it, so the
+// profile can read both committed (v1) and imported (entire/imports/v1) sources.
+type tokensCheckpointRef struct {
+	store *checkpoint.GitStore
+	info  checkpoint.CheckpointInfo
+}
+
+func buildTokensProfileReport(ctx context.Context, refs []tokensCheckpointRef, limit int) (tokensProfileReport, error) {
+	checkpointsAvailable := len(refs)
+	refs = limitTokensProfileCheckpoints(refs, limit)
 	report := tokensProfileReport{
 		Source:               "committed_checkpoints",
 		UsageScope:           tokensProfileUsageScopeCheckpointObserved,
 		CheckpointsAvailable: checkpointsAvailable,
-		CheckpointsAnalyzed:  len(infos),
+		CheckpointsAnalyzed:  len(refs),
 	}
 	signals := make(map[string]*tokensProfileSignal, len(tokensProfileSignalDefinitions))
 	var aggregate *agent.TokenUsage
 
-	for _, info := range infos {
+	for _, ref := range refs {
+		store := ref.store
+		info := ref.info
 		if err := ctx.Err(); err != nil {
 			return tokensProfileReport{}, err //nolint:wrapcheck // Propagating context cancellation.
 		}
@@ -185,11 +210,11 @@ func buildTokensProfileReport(ctx context.Context, store *checkpoint.GitStore, i
 	return report, nil
 }
 
-func limitTokensProfileCheckpoints(infos []checkpoint.CheckpointInfo, limit int) []checkpoint.CheckpointInfo {
-	if limit <= 0 || len(infos) <= limit {
-		return infos
+func limitTokensProfileCheckpoints(refs []tokensCheckpointRef, limit int) []tokensCheckpointRef {
+	if limit <= 0 || len(refs) <= limit {
+		return refs
 	}
-	return infos[:limit]
+	return refs[:limit]
 }
 
 func tokensProfileCheckpointUsage(ctx context.Context, store *checkpoint.GitStore, checkpointID id.CheckpointID, summary *checkpoint.CheckpointSummary) (*agent.TokenUsage, bool, error) {

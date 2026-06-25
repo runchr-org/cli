@@ -330,12 +330,46 @@ func checkpointInfosFromCommitted(committed []checkpoint.CheckpointInfo) []Check
 			ToolUseID:        c.ToolUseID,
 			SessionCount:     c.SessionCount,
 			SessionIDs:       c.SessionIDs,
+			Imported:         c.Imported,
 		})
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].CreatedAt.After(result[j].CreatedAt)
 	})
 	return result
+}
+
+// ListCheckpointsWithImports returns committed v1 checkpoints plus imported
+// (local-only) checkpoints from entire/imports/v1, the latter flagged
+// Imported=true. Use this in read/inspect commands that should surface imported
+// history; lifecycle/cleanup paths keep using ListCheckpoints (v1 only).
+func ListCheckpointsWithImports(ctx context.Context) ([]CheckpointInfo, error) {
+	base, err := ListCheckpoints(ctx)
+	if err != nil {
+		return nil, err
+	}
+	repo, err := OpenRepository(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open git repository: %w", err)
+	}
+	defer repo.Close()
+
+	importsRefs := checkpoint.ImportsRefs()
+	imports, err := checkpoint.Open(ctx, repo, checkpoint.OpenOptions{Refs: &importsRefs})
+	if err != nil {
+		return base, nil //nolint:nilerr // imports are best-effort; v1 results stay valid
+	}
+	committed, err := imports.Persistent.List(ctx)
+	if err != nil {
+		return base, nil //nolint:nilerr // imports are best-effort
+	}
+	imp := checkpointInfosFromCommitted(committed)
+	for i := range imp {
+		imp[i].Imported = true
+	}
+	all := append(base, imp...)
+	sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
+	return all, nil
 }
 
 const (
