@@ -1,13 +1,16 @@
 package review
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
 
+	agenttypes "github.com/entireio/cli/cmd/entire/cli/agent/types"
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -23,6 +26,14 @@ func configureTestDeps(adapter ...string) Deps {
 		set[a] = struct{}{}
 	}
 	return Deps{
+		GetAgentsWithHooksInstalled: func(context.Context) []agenttypes.AgentName {
+			out := make([]agenttypes.AgentName, 0, len(set))
+			for name := range set {
+				out = append(out, agenttypes.AgentName(name))
+			}
+			return out
+		},
+		NewSilentError: func(err error) error { return err },
 		ReviewerFor: func(name string) reviewtypes.AgentReviewer {
 			if _, ok := set[name]; ok {
 				return &stubReviewer{name: name}
@@ -346,6 +357,100 @@ func TestSaveReviewProfile_ScopeProjectVsLocal(t *testing.T) {
 	}
 	if _, ok := projOnly["general"]; !ok {
 		t.Error("project profile 'general' missing from project settings file")
+	}
+}
+
+func TestRunReviewConfigureScriptedPreservesProjectDefault(t *testing.T) {
+	tmp := t.TempDir()
+	testutil.InitRepo(t, tmp)
+	t.Chdir(tmp)
+	ctx := context.Background()
+
+	general := settings.ReviewProfileConfig{
+		Task:   "General task.",
+		Agents: map[string]settings.ReviewConfig{tAgentClaude: {Agent: tAgentClaude}},
+	}
+	if err := saveReviewProfile(ctx, DefaultProfileName, general, true, reviewScopeProject); err != nil {
+		t.Fatalf("seed general profile: %v", err)
+	}
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	deps := configureTestDeps(tAgentClaude, tAgentCodex)
+	if err := runReviewConfigure(ctx, cmd, "security", reviewConfigureOptions{Agents: []string{tAgentCodex}}, deps); err != nil {
+		t.Fatalf("runReviewConfigure: %v", err)
+	}
+
+	s, err := settings.Load(ctx)
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if s.ReviewDefaultProfile != DefaultProfileName {
+		t.Fatalf("default profile = %q, want %s", s.ReviewDefaultProfile, DefaultProfileName)
+	}
+	if _, ok := s.ReviewProfiles["security"]; !ok {
+		t.Fatalf("security profile was not saved: %#v", s.ReviewProfiles)
+	}
+}
+
+func TestRunReviewConfigureScriptedLocalPreservesProjectDefault(t *testing.T) {
+	tmp := t.TempDir()
+	testutil.InitRepo(t, tmp)
+	t.Chdir(tmp)
+	ctx := context.Background()
+
+	general := settings.ReviewProfileConfig{
+		Task:   "General task.",
+		Agents: map[string]settings.ReviewConfig{tAgentClaude: {Agent: tAgentClaude}},
+	}
+	if err := saveReviewProfile(ctx, DefaultProfileName, general, true, reviewScopeProject); err != nil {
+		t.Fatalf("seed general profile: %v", err)
+	}
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	deps := configureTestDeps(tAgentClaude, tAgentCodex)
+	if err := runReviewConfigure(ctx, cmd, "security", reviewConfigureOptions{Agents: []string{tAgentCodex}, Local: true}, deps); err != nil {
+		t.Fatalf("runReviewConfigure: %v", err)
+	}
+
+	s, err := settings.Load(ctx)
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if s.ReviewDefaultProfile != DefaultProfileName {
+		t.Fatalf("effective default profile = %q, want %s", s.ReviewDefaultProfile, DefaultProfileName)
+	}
+	_, localRaw, localExists, err := settings.LoadLocalRaw(ctx)
+	if err != nil || !localExists {
+		t.Fatalf("local raw: exists=%v err=%v", localExists, err)
+	}
+	if got := decodeRawReviewDefault(localRaw); got != "" {
+		t.Fatalf("local review_default_profile = %q, want empty so project default remains effective", got)
+	}
+}
+
+func TestSaveReviewProfileFirstProfileSetsDefault(t *testing.T) {
+	tmp := t.TempDir()
+	testutil.InitRepo(t, tmp)
+	t.Chdir(tmp)
+	ctx := context.Background()
+
+	profile := settings.ReviewProfileConfig{
+		Task:   "First task.",
+		Agents: map[string]settings.ReviewConfig{tAgentClaude: {Agent: tAgentClaude}},
+	}
+	if err := saveReviewProfile(ctx, DefaultProfileName, profile, false, reviewScopeProject); err != nil {
+		t.Fatalf("save first profile: %v", err)
+	}
+	s, err := settings.Load(ctx)
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if s.ReviewDefaultProfile != DefaultProfileName {
+		t.Fatalf("default profile = %q, want %s", s.ReviewDefaultProfile, DefaultProfileName)
 	}
 }
 

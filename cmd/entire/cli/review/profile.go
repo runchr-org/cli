@@ -426,12 +426,47 @@ func saveReviewProfile(ctx context.Context, profileName string, profile settings
 	if err != nil {
 		return err
 	}
+	hadProfiles := len(profiles) > 0
 	profiles[profileName] = profile
-	defaultName := decodeRawString(raw, "review_default_profile")
-	if makeDefault || strings.TrimSpace(defaultName) == "" {
+	defaultName := decodeRawReviewDefault(raw)
+	switch {
+	case makeDefault:
 		defaultName = profileName
+	case strings.TrimSpace(defaultName) == "" && !hadProfiles:
+		hasLower, err := lowerReviewDefaultOrProfiles(ctx, scope)
+		if err != nil {
+			return err
+		}
+		if !hasLower {
+			defaultName = profileName
+		}
 	}
 	return writeRawReviewProfiles(path, raw, profiles, defaultName)
+}
+
+func lowerReviewDefaultOrProfiles(ctx context.Context, scope reviewSettingsScope) (bool, error) {
+	if scope != reviewScopeLocal {
+		return false, nil
+	}
+	_, raw, exists, err := settings.LoadProjectRaw(ctx)
+	if err != nil {
+		return false, fmt.Errorf("load project settings before local default check: %w", err)
+	}
+	if !exists || raw == nil {
+		return false, nil
+	}
+	return rawHasReviewDefaultOrProfiles(raw)
+}
+
+func rawHasReviewDefaultOrProfiles(raw map[string]json.RawMessage) (bool, error) {
+	if strings.TrimSpace(decodeRawReviewDefault(raw)) != "" {
+		return true, nil
+	}
+	profiles, err := decodeRawReviewProfiles(raw)
+	if err != nil {
+		return false, err
+	}
+	return len(profiles) > 0, nil
 }
 
 // loadReviewSettingsRaw reads the raw JSON object for the chosen settings file.
@@ -468,8 +503,8 @@ func decodeRawReviewProfiles(raw map[string]json.RawMessage) (map[string]setting
 	return profiles, nil
 }
 
-func decodeRawString(raw map[string]json.RawMessage, key string) string {
-	if msg, ok := raw[key]; ok && len(msg) > 0 {
+func decodeRawReviewDefault(raw map[string]json.RawMessage) string {
+	if msg, ok := raw["review_default_profile"]; ok && len(msg) > 0 {
 		var s string
 		if err := json.Unmarshal(msg, &s); err == nil {
 			return s

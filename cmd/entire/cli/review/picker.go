@@ -963,7 +963,7 @@ func saveReviewProfileConfig(ctx context.Context, profileName string, agents map
 		profile.Task = profileTask(profileName, settings.ReviewProfileConfig{})
 	}
 	profiles[profileName] = profile
-	defaultName := decodeRawString(raw, "review_default_profile")
+	defaultName := decodeRawReviewDefault(raw)
 	if strings.TrimSpace(defaultName) == "" {
 		defaultName = profileName
 	}

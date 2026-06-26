@@ -301,7 +301,7 @@ func runReviewConfigure(ctx context.Context, cmd *cobra.Command, profileOverride
 		if opts.Local {
 			scope = reviewScopeLocal
 		}
-		if err := saveReviewProfile(ctx, profileName, profile, true, scope); err != nil {
+		if err := saveReviewProfile(ctx, profileName, profile, false, scope); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "Review profile %q saved to %s with %s.\n", profileName, scope.file(), strings.Join(sortedMapKeys(profile.Agents), ", "))
@@ -322,7 +322,7 @@ func runReviewConfigure(ctx context.Context, cmd *cobra.Command, profileOverride
 		if scopeErr != nil {
 			return handlePickerError(cmd, silentErr, scopeErr)
 		}
-		if err := saveReviewProfile(ctx, name, profile, true, scope); err != nil {
+		if err := saveReviewProfile(ctx, name, profile, false, scope); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "Review profile %q saved to %s. Run `entire review`, or `entire review %s`, to start.\n", name, scope.file(), name)
