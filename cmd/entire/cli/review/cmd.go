@@ -1396,8 +1396,19 @@ func maybePostReviewToTrail(
 	}
 	// On success the hook prints its own confirmation and trail link.
 	if err := deps.PostReviewToTrail(ctx, out, profileName, verdict); err != nil {
-		fmt.Fprintf(out, "Could not post the review to the trail: %v\n", err)
+		if !userMessageAlreadyPrinted(err) {
+			fmt.Fprintf(out, "Could not post the review to the trail: %v\n", err)
+		}
 	}
+}
+
+type alreadyPrintedError interface {
+	AlreadyPrinted() bool
+}
+
+func userMessageAlreadyPrinted(err error) bool {
+	var printed alreadyPrintedError
+	return errors.As(err, &printed) && printed.AlreadyPrinted()
 }
 
 // combinedReviewNarratives joins the reviewers' narratives into one document,

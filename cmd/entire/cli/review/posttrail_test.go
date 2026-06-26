@@ -12,6 +12,22 @@ import (
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
 )
 
+type postTrailAlreadyPrintedError struct {
+	err error
+}
+
+func (e postTrailAlreadyPrintedError) Error() string {
+	return e.err.Error()
+}
+
+func (e postTrailAlreadyPrintedError) Unwrap() error {
+	return e.err
+}
+
+func (e postTrailAlreadyPrintedError) AlreadyPrinted() bool {
+	return true
+}
+
 func postTrailSummary(narrative string) reviewtypes.RunSummary {
 	var buf []reviewtypes.Event
 	if narrative != "" {
@@ -93,6 +109,23 @@ func TestMaybePostReviewToTrail(t *testing.T) {
 		maybePostReviewToTrail(context.Background(), &out, deps, ReviewOutputTrail, "general", postTrailSummary("a finding"), "")
 		if !strings.Contains(out.String(), "Could not post the review to the trail") {
 			t.Errorf("expected an error confirmation, got %q", out.String())
+		}
+	})
+
+	t.Run("trail mode does not double print already-rendered auth errors", func(t *testing.T) {
+		t.Parallel()
+		var out bytes.Buffer
+		deps := Deps{PostReviewToTrail: func(_ context.Context, w io.Writer, _, _ string) error {
+			fmt.Fprintln(w, "Not logged in. Run 'entire login' to authenticate.")
+			return postTrailAlreadyPrintedError{err: errors.New("not logged in")}
+		}}
+		maybePostReviewToTrail(context.Background(), &out, deps, ReviewOutputTrail, "general", postTrailSummary("a finding"), "")
+		got := out.String()
+		if strings.Count(got, "Not logged in") != 1 {
+			t.Fatalf("login hint count in output = %d, want 1; output: %q", strings.Count(got, "Not logged in"), got)
+		}
+		if strings.Contains(got, "Could not post the review to the trail") {
+			t.Fatalf("already-rendered auth error was double printed: %q", got)
 		}
 	})
 
